@@ -42,7 +42,7 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Literal output-count bounds, simple write-after-SetMeshOutputCounts ordering, and if/switch branch dominance for post-branch output writes are validated. Remaining gaps are loop-sensitive dominance analysis and multi-payload pipeline shapes.",
+      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Literal output-count bounds, simple write-after-SetMeshOutputCounts ordering, if/switch branch dominance, and provable loop-exit dominance for post-branch/output writes are validated. Remaining gaps are symbolic loop iteration analysis and multi-payload pipeline shapes.",
       "status": "partial"
     },
     {
@@ -419,11 +419,16 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_rejects_non_dominating_branch_counts",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_switch_dominance_handles_breaks",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_rejects_non_exhaustive_switch_counts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_loop_break_dominance_allows_post_loop_writes",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_while_true_break_dominance_allows_post_loop_writes",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_do_while_false_dominates_post_loop_writes",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_rejects_skippable_loop_counts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_rejects_uncounted_loop_break_path",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_output_signature_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_payload_dispatch_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_object_stages_compile_with_metal3"
           ],
-          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Literal output-count bounds, simple write-after-SetMeshOutputCounts ordering, and if/switch branch dominance for post-branch output writes are validated. Remaining gaps are loop-sensitive dominance analysis and multi-payload pipeline shapes.",
+          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Literal output-count bounds, simple write-after-SetMeshOutputCounts ordering, if/switch branch dominance, and provable loop-exit dominance for post-branch/output writes are validated. Remaining gaps are symbolic loop iteration analysis and multi-payload pipeline shapes.",
           "status": "partial"
         },
         "opengl": {

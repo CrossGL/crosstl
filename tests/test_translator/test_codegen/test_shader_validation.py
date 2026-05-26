@@ -352,8 +352,25 @@ shader SpirvGlslBufferBlockValidation {
 
     Std140Block std140Block @glsl_buffer_block(std140) @binding(6);
 
+    struct Std140Leaf {
+        float value;
+        float weights[2];
+    };
+
+    struct Std140Aggregate {
+        Std140Leaf item;
+        Std140Leaf items[2];
+    };
+
+    Std140Leaf std140Scratch;
+    Std140Aggregate std140Aggregate @glsl_buffer_block(std140) @binding(7);
+
     float readMass(ParticleBlock block @glsl_buffer_block(std430), uint index) {
         return block.particles[index].mass;
+    }
+
+    Std140Leaf readStd140Leaf() {
+        return std140Aggregate.item;
     }
 
     void writeMass(
@@ -380,7 +397,78 @@ shader SpirvGlslBufferBlockValidation {
             std140Block.basis = basis;
             std140Block.weights[1] = weight + dynamicValue;
             std140Block.values[index] = weight + dynamicValue;
+            std140Scratch = readStd140Leaf();
+            std140Aggregate.items[1] = std140Scratch;
             buffer_store(outValues, 0u, mass);
+        }
+    }
+}
+"""
+
+
+SPIRV_SCALAR_BUFFER_BLOCK_COMPUTE_SHADER = """
+shader SpirvScalarBufferBlockValidation {
+    struct ScalarBlock {
+        float a;
+        vec2 b;
+        vec2 c;
+        vec3 packed;
+        float tail;
+        mat2 basis;
+        float weights[3];
+        vec3 vectors[2];
+    };
+
+    ScalarBlock scalarBlock @glsl_buffer_block(scalar) @binding(11);
+
+    compute {
+        void main() {
+            vec2 b = scalarBlock.b;
+            mat2 basis = scalarBlock.basis;
+            float weight = scalarBlock.weights[2];
+            vec3 vectorValue = scalarBlock.vectors[1];
+            scalarBlock.c = b;
+            scalarBlock.basis = basis;
+            scalarBlock.weights[1] = weight;
+            scalarBlock.vectors[0] = vectorValue;
+        }
+    }
+}
+"""
+
+
+SPIRV_GLSL_BUFFER_BLOCK_ARRAY_COMPUTE_SHADER = """
+shader SpirvGlslBufferBlockArrayValidation {
+    struct Particle {
+        vec4 position;
+        float mass;
+    };
+
+    struct ParticleBlock {
+        uint count;
+        Particle particles[];
+    };
+
+    struct FixedBlock {
+        float a;
+        vec3 packed;
+        float tail;
+        vec3 values[2];
+    };
+
+    ParticleBlock runtimeBlocks[] @glsl_buffer_block(std430)
+        @binding(18) @readonly;
+    ParticleBlock mutableRuntimeBlocks[] @glsl_buffer_block(std430) @binding(20);
+    FixedBlock fixedBlocks[2] @glsl_buffer_block(scalar) @binding(19);
+
+    compute {
+        void main() {
+            uint index = runtimeBlocks[0].count;
+            float mass = runtimeBlocks[0].particles[index].mass;
+            Particle particle = runtimeBlocks[0].particles[index];
+            mutableRuntimeBlocks[0].particles[index] = particle;
+            vec3 value = fixedBlocks[1].values[1];
+            fixedBlocks[0].packed = value + vec3(mass, mass, mass);
         }
     }
 }
@@ -433,6 +521,19 @@ shader SpirvResourceMemoryQualifierValidation {
     RWStructuredBuffer<float> writeOnlyValues @binding(4) @writeonly;
     uimage2D counters @r32ui @binding(5);
 
+    struct QualifiedReadBlock {
+        float values[];
+    };
+
+    struct QualifiedWriteBlock {
+        float values[];
+    };
+
+    QualifiedReadBlock qualifiedReadBlocks[2] @glsl_buffer_block(std430)
+        @binding(6) @readonly @coherent @volatile @restrict;
+    QualifiedWriteBlock qualifiedWriteBlocks[2] @glsl_buffer_block(std430)
+        @binding(7) @writeonly @coherent;
+
     vec4 readLeaf(image2D image @rgba32f, ivec2 pixel) {
         return imageLoad(image, pixel);
     }
@@ -457,6 +558,23 @@ shader SpirvResourceMemoryQualifierValidation {
         buffer_store(data, index, value);
     }
 
+    float readBlock(
+        QualifiedReadBlock blocks[] @glsl_buffer_block(std430) @readonly,
+        uint blockIndex,
+        uint valueIndex
+    ) {
+        return blocks[blockIndex].values[valueIndex];
+    }
+
+    void writeBlock(
+        QualifiedWriteBlock blocks[] @glsl_buffer_block(std430) @writeonly,
+        uint blockIndex,
+        uint valueIndex,
+        float value
+    ) {
+        blocks[blockIndex].values[valueIndex] = value;
+    }
+
     compute {
         void main() {
             ivec2 pixel = ivec2(0, 1);
@@ -467,6 +585,8 @@ shader SpirvResourceMemoryQualifierValidation {
             float value = readBuffer(readOnlyValues, 0u);
             writeBuffer(writeOnlyValues, 1u, value + texel.x);
             writeBuffer(coherentValues, 2u, value);
+            float blockValue = readBlock(qualifiedReadBlocks, 1u, 0u);
+            writeBlock(qualifiedWriteBlocks, 0u, 1u, blockValue + value);
         }
     }
 }
@@ -1526,16 +1646,11 @@ shader MetalMeshOutputSignatureValidation {
             @indices out uvec3 tris[1],
             @primitives out MeshPrimitive prims[1]
         ) @numthreads(32, 1, 1) @outputtopology(triangle) {
-            MeshVertex outVertex;
-            outVertex.position = vec4(0.0, 0.0, 0.0, 1.0);
-            outVertex.uv = vec2(0.0);
-            MeshPrimitive outPrimitive;
-            outPrimitive.layer = 0u;
-
             SetMeshOutputCounts(3, 1);
-            verts[0] = outVertex;
+            verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+            verts[0].uv = vec2(0.0);
             tris[0] = uvec3(0u, 1u, 2u);
-            prims[0] = outPrimitive;
+            prims[0].layer = 0u;
         }
     }
 }
@@ -2726,7 +2841,9 @@ def run_validator(command):
     )
 
 
-def validate_spirv_shader_source(tmp_path, stem, shader_source):
+def validate_spirv_shader_source(
+    tmp_path, stem, shader_source, validator_args=None, target_env=None
+):
     spirv_as = shutil.which("spirv-as")
     spirv_val = shutil.which("spirv-val")
     if spirv_as is None or spirv_val is None:
@@ -2738,8 +2855,9 @@ def validate_spirv_shader_source(tmp_path, stem, shader_source):
     assert "WARNING" not in code
     source.write_text(code, encoding="utf-8")
 
-    run_validator([spirv_as, str(source), "-o", str(output)])
-    run_validator([spirv_val, str(output)])
+    target_args = ["--target-env", target_env] if target_env is not None else []
+    run_validator([spirv_as, *target_args, str(source), "-o", str(output)])
+    run_validator([spirv_val, *target_args, *(validator_args or []), str(output)])
 
 
 def metal_supports_mesh_object_stage_attributes(xcrun, tmp_path):
@@ -2843,6 +2961,29 @@ def test_generated_spirv_glsl_buffer_block_compute_validates_with_spirv_tools(
         tmp_path,
         "glsl_buffer_block_compute",
         SPIRV_GLSL_BUFFER_BLOCK_COMPUTE_SHADER,
+    )
+
+
+def test_generated_spirv_scalar_buffer_block_compute_validates_with_spirv_tools(
+    tmp_path,
+):
+    validate_spirv_shader_source(
+        tmp_path,
+        "scalar_buffer_block_compute",
+        SPIRV_SCALAR_BUFFER_BLOCK_COMPUTE_SHADER,
+        validator_args=["--scalar-block-layout"],
+    )
+
+
+def test_generated_spirv_glsl_buffer_block_arrays_validate_with_spirv_tools(
+    tmp_path,
+):
+    validate_spirv_shader_source(
+        tmp_path,
+        "glsl_buffer_block_array_compute",
+        SPIRV_GLSL_BUFFER_BLOCK_ARRAY_COMPUTE_SHADER,
+        validator_args=["--scalar-block-layout"],
+        target_env="vulkan1.1",
     )
 
 
@@ -3548,6 +3689,8 @@ def test_generated_metal_mesh_output_signature_compiles_with_metal3(tmp_path):
     assert "MeshVertex verts[3]" not in code
     assert "uint3 tris[1]" not in code
     assert "MeshPrimitive prims[1]" not in code
+    assert "MeshVertex _crossglMeshVertices_verts_i_0 = {};" in code
+    assert "_crossglMeshVertices_verts_i_0.uv = float2(0.0);" in code
 
     run_validator(
         [

@@ -359,6 +359,100 @@ def test_compute_stage_local_helper_functions_emit_before_entry_point():
     assert "var y: Float32 = helper(1.0)" in generated_code
 
 
+@pytest.mark.parametrize(
+    "stage_name",
+    [
+        "geometry",
+        "tessellation_control",
+        "tessellation_evaluation",
+        "task",
+        "amplification",
+        "object",
+        "mesh",
+        "ray_generation",
+        "ray_intersection",
+        "ray_closest_hit",
+        "ray_any_hit",
+        "ray_miss",
+        "ray_callable",
+    ],
+)
+def test_unsupported_shader_stages_are_rejected_for_mojo_codegen(stage_name):
+    code = f"""
+    shader UnsupportedStage {{
+        {stage_name} {{
+            void main() {{}}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=rf"Unsupported {stage_name} shader stage for Mojo codegen",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_synchronization_builtins_lower_to_compile_smoke_helpers(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    void sync() {
+        barrier();
+        workgroupBarrier();
+        memoryBarrier();
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn _crossgl_workgroup_barrier():" in generated_code
+    assert "fn _crossgl_memory_barrier():" in generated_code
+    assert generated_code.count("_crossgl_workgroup_barrier()") == 3
+    assert generated_code.count("_crossgl_memory_barrier()") == 2
+    assert "\n    barrier()" not in generated_code
+    assert "workgroupBarrier()" not in generated_code
+    assert "memoryBarrier()" not in generated_code
+    generated_code += "\nfn main():\n    sync()\n"
+
+    source_path = tmp_path / "synchronization_builtins.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_user_defined_synchronization_names_are_not_lowered():
+    code = """
+    void barrier() {
+    }
+
+    void memoryBarrier() {
+    }
+
+    shader SyncMojo {
+        compute {
+            void main() {
+                barrier();
+                memoryBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn barrier() -> None:" in generated_code
+    assert "fn memoryBarrier() -> None:" in generated_code
+    assert "_crossgl_workgroup_barrier" not in generated_code
+    assert "_crossgl_memory_barrier" not in generated_code
+
+
 def test_if_statement():
     code = """
     shader main {
@@ -862,6 +956,270 @@ def test_resource_arrays_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_resource_binding_metadata_comments_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    @set(2) @binding(5) sampler2D colorMap;
+    sampler linearSampler @binding(1);
+    @binding(3) RWStructuredBuffer<int> counters[2];
+    Texture2D hlslTexture : register(t7, space3);
+
+    @binding(6)
+    cbuffer Camera {
+        float exposure;
+    }
+
+    image2D outImage;
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=colorMap kind=texture set=2 "
+        "binding=5 binding_source=explicit" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=linearSampler kind=sampler set=0 "
+        "binding=1 binding_source=explicit" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=counters kind=buffer set=0 "
+        "binding=3 binding_source=explicit count=2" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=hlslTexture kind=texture set=3 "
+        "binding=7 binding_source=explicit register=t7,space3" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=outImage kind=image set=0 "
+        "binding=0 binding_source=automatic" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=Camera kind=cbuffer set=0 "
+        "binding=6 binding_source=explicit" in generated_code
+    )
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "resource_binding_metadata.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_duplicate_resource_bindings_are_rejected_for_mojo_codegen():
+    duplicate_texture_binding = """
+    @binding(2) sampler2D firstTexture;
+    @binding(2) sampler2D secondTexture;
+    """
+
+    with pytest.raises(ValueError, match="Conflicting Mojo resource binding"):
+        generate_code(parse_code(tokenize_code(duplicate_texture_binding)))
+
+    overlapping_buffer_range = """
+    @binding(3) RWStructuredBuffer<int> counters[2];
+    @binding(4)
+    cbuffer Camera {
+        float exposure;
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting Mojo resource binding"):
+        generate_code(parse_code(tokenize_code(overlapping_buffer_range)))
+
+
+def test_resource_memory_qualifier_metadata_and_access_validation_for_mojo_codegen():
+    code = """
+    coherent readonly uniform uimage2D counters;
+    volatile writeonly uniform image2D outImage;
+
+    uint readCounter(ivec2 pixel) {
+        return imageLoad(counters, pixel);
+    }
+
+    void writeOutput(ivec2 pixel, vec4 value) {
+        imageStore(outImage, pixel, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=counters kind=image set=0 binding=0 "
+        "binding_source=automatic access=readonly memory=coherent" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=outImage kind=image set=0 binding=1 "
+        "binding_source=automatic access=writeonly memory=volatile" in generated_code
+    )
+    assert "return image_load(counters, pixel)" in generated_code
+    assert "image_store(outImage, pixel, value)" in generated_code
+
+    invalid_read = """
+    writeonly uniform image2D outImage;
+
+    vec4 invalidRead(ivec2 pixel) {
+        return imageLoad(outImage, pixel);
+    }
+    """
+    with pytest.raises(ValueError, match="imageLoad.*writeonly"):
+        generate_code(parse_code(tokenize_code(invalid_read)))
+
+    invalid_write = """
+    readonly uniform image2D source;
+
+    void invalidWrite(ivec2 pixel, vec4 value) {
+        imageStore(source, pixel, value);
+    }
+    """
+    with pytest.raises(ValueError, match="imageStore.*readonly"):
+        generate_code(parse_code(tokenize_code(invalid_write)))
+
+
+def test_resource_array_access_qualifiers_apply_to_indexed_mojo_resources():
+    invalid_image_read = """
+    writeonly uniform image2D images[2];
+
+    vec4 invalidRead(int slot, ivec2 pixel) {
+        return imageLoad(images[slot], pixel);
+    }
+    """
+    with pytest.raises(ValueError, match="imageLoad.*images.*writeonly"):
+        generate_code(parse_code(tokenize_code(invalid_image_read)))
+
+    invalid_image_write = """
+    readonly uniform image2D images[2];
+
+    void invalidWrite(int slot, ivec2 pixel, vec4 value) {
+        imageStore(images[slot], pixel, value);
+    }
+    """
+    with pytest.raises(ValueError, match="imageStore.*images.*readonly"):
+        generate_code(parse_code(tokenize_code(invalid_image_write)))
+
+    invalid_buffer_read = """
+    writeonly RWStructuredBuffer<int> buffers[2];
+
+    int invalidRead(int slot, uint index) {
+        return buffer_load(buffers[slot], index);
+    }
+    """
+    with pytest.raises(ValueError, match="buffer_load.*buffers.*writeonly"):
+        generate_code(parse_code(tokenize_code(invalid_buffer_read)))
+
+    invalid_buffer_write = """
+    readonly RWStructuredBuffer<int> buffers[2];
+
+    void invalidWrite(int slot, uint index, int value) {
+        buffer_store(buffers[slot], index, value);
+    }
+    """
+    with pytest.raises(ValueError, match="buffer_store.*buffers.*readonly"):
+        generate_code(parse_code(tokenize_code(invalid_buffer_write)))
+
+    invalid_raw_method_write = """
+    readonly RWByteAddressBuffer rawBuffers[2];
+
+    void invalidMethodWrite(int slot, uint offset, uint value) {
+        rawBuffers[slot].Store(offset, value);
+    }
+    """
+    with pytest.raises(ValueError, match="Store.*rawBuffers.*readonly"):
+        generate_code(parse_code(tokenize_code(invalid_raw_method_write)))
+
+
+def test_glsl_buffer_block_metadata_comments_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    layout(std430, set = 1, binding = 2) readonly buffer ParticleBlock {
+        vec4 positions[2];
+        uint count;
+    } particles;
+
+    layout(std430, binding = 5) writeonly buffer OutputBlock {
+        vec4 colors[2];
+    } outputs;
+
+    vec4 readParticle(uint index) {
+        return particles.positions[index];
+    }
+
+    void writeOutput(uint index, vec4 value) {
+        outputs.colors[index] = value;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=particles kind=glsl_buffer_block "
+        "set=1 binding=2 binding_source=explicit layout=std430 access=readonly"
+        in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=outputs kind=glsl_buffer_block "
+        "set=0 binding=5 binding_source=explicit layout=std430 access=writeonly"
+        in generated_code
+    )
+    assert "return particles.positions[int(index)]" in generated_code
+    assert "outputs.colors[int(index)] = value" in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "glsl_buffer_block_metadata.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen():
+    direct_array_block = """
+    layout(std430, binding = 3) readonly buffer float values[];
+    """
+    generated_code = generate_code(parse_code(tokenize_code(direct_array_block)))
+
+    assert (
+        "# CrossGL resource metadata: name=values kind=glsl_buffer_block "
+        "set=0 binding=3 binding_source=explicit layout=std430 access=readonly"
+        in generated_code
+    )
+    assert "var values = List[Float32]()" in generated_code
+
+    invalid_write = """
+    layout(std430, binding = 2) readonly buffer ParticleBlock {
+        vec4 positions[2];
+    } particles;
+
+    void writeParticle(uint index, vec4 value) {
+        particles.positions[index] = value;
+    }
+    """
+    with pytest.raises(ValueError, match="assignment.*readonly"):
+        generate_code(parse_code(tokenize_code(invalid_write)))
+
+    overlapping_binding = """
+    layout(std430, binding = 4) buffer ParticleBlock {
+        vec4 positions[2];
+    } particles;
+
+    @binding(4)
+    cbuffer Camera {
+        float exposure;
+    }
+    """
+    with pytest.raises(ValueError, match="Conflicting Mojo resource binding"):
+        generate_code(parse_code(tokenize_code(overlapping_binding)))
+
+
 def test_structured_buffer_placeholders_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -1279,6 +1637,40 @@ def test_advanced_texture_placeholder_builtins_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_advanced_texture_builtins_reject_invalid_mojo_resources():
+    image_resource = """
+    image2D colorImage;
+
+    vec4 invalidImage(image2D image, vec2 uv) {
+        return textureGather(image, uv, 0);
+    }
+    """
+    with pytest.raises(ValueError, match="texture_gather.*texture resource required"):
+        generate_code(parse_code(tokenize_code(image_resource)))
+
+    non_shadow_compare = """
+    sampler2D colorMap;
+
+    float invalidCompare(sampler2D tex, vec2 uv, float depth) {
+        return textureCompare(tex, uv, depth);
+    }
+    """
+    with pytest.raises(ValueError, match="texture_compare.*shadow texture required"):
+        generate_code(parse_code(tokenize_code(non_shadow_compare)))
+
+    multisample_resource = """
+    sampler2DMS msTex;
+
+    vec4 invalidMultisample(sampler2DMS tex, vec2 uv) {
+        return textureGather(tex, uv, 0);
+    }
+    """
+    with pytest.raises(
+        ValueError, match="texture_gather.*non-multisample texture required"
+    ):
+        generate_code(parse_code(tokenize_code(multisample_resource)))
+
+
 def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -1389,6 +1781,30 @@ def test_float_image_atomics_are_rejected_for_mojo_codegen():
 
     with pytest.raises(ValueError, match="integer image required"):
         generate_code(parse_code(tokenize_code(code)))
+
+
+def test_image_atomics_require_read_write_access_for_mojo_codegen():
+    readonly_code = """
+    readonly uniform uimage2D counters;
+
+    uint invalidReadonly(ivec2 pixel, uint value) {
+        return imageAtomicAdd(counters, pixel, value);
+    }
+    """
+
+    with pytest.raises(ValueError, match="image_atomic_add.*readonly"):
+        generate_code(parse_code(tokenize_code(readonly_code)))
+
+    writeonly_code = """
+    writeonly uniform uimage2D counters;
+
+    uint invalidWriteonly(ivec2 pixel, uint value) {
+        return imageAtomicAdd(counters, pixel, value);
+    }
+    """
+
+    with pytest.raises(ValueError, match="image_atomic_add.*writeonly"):
+        generate_code(parse_code(tokenize_code(writeonly_code)))
 
 
 def test_for_statement():

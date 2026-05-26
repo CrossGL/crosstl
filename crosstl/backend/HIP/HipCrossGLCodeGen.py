@@ -1658,6 +1658,13 @@ class HipToCrossGLConverter:
                     f"options: {args[2]}, option keys: {args[3]}, "
                     f"option values: {args[4]}"
                 ]
+        elif name == "hipModuleLoadFatBinary":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP module load fat binary: output: {output}, "
+                    f"fat binary: {args[1]}"
+                ]
         elif name == "hipModuleUnload":
             if args:
                 return [f"// HIP module unload: {args[0]}"]
@@ -1668,6 +1675,13 @@ class HipToCrossGLConverter:
                     f"// HIP module get function: output: {output}, "
                     f"module: {args[1]}, name: {args[2]}"
                 ]
+        elif name == "hipModuleGetFunctionCount":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP module get function count: output: {output}, "
+                    f"module: {args[1]}"
+                ]
         elif name == "hipModuleGetGlobal":
             if len(args) >= 4:
                 pointer_output = self.format_runtime_pointer_target(node.args[0])
@@ -1675,6 +1689,140 @@ class HipToCrossGLConverter:
                 return [
                     f"// HIP module get global: pointer output: {pointer_output}, "
                     f"size output: {size_output}, module: {args[2]}, name: {args[3]}"
+                ]
+        elif name == "hipModuleGetTexRef":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP module get texture reference: output: {output}, "
+                    f"module: {args[1]}, name: {args[2]}"
+                ]
+        elif name == "hipGetDriverEntryPoint":
+            if len(args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[1])
+                status_output = self.format_runtime_pointer_target(node.args[3])
+                return [
+                    f"// HIP get driver entry point: symbol: {args[0]}, "
+                    f"output: {output}, flags: {args[2]}, "
+                    f"status output: {status_output}"
+                ]
+        elif name in {"hipLibraryLoadData", "hipLibraryLoadFromFile"}:
+            if len(args) >= 8:
+                output = self.format_runtime_pointer_target(node.args[0])
+                source_label = "file" if name == "hipLibraryLoadFromFile" else "code"
+                return [
+                    f"// HIP library load: output: {output}, "
+                    f"{source_label}: {args[1]}, jit options: {args[2]}, "
+                    f"jit option values: {args[3]}, jit option count: {args[4]}, "
+                    f"library options: {args[5]}, "
+                    f"library option values: {args[6]}, "
+                    f"library option count: {args[7]}"
+                ]
+        elif name == "hipLibraryUnload":
+            if args:
+                return [f"// HIP library unload: {args[0]}"]
+        elif name == "hipLibraryGetKernel":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP library get kernel: output: {output}, "
+                    f"library: {args[1]}, name: {args[2]}"
+                ]
+        elif name == "hipLibraryGetKernelCount":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP library get kernel count: output: {output}, "
+                    f"library: {args[1]}"
+                ]
+        elif name == "hipLibraryEnumerateKernels":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP library enumerate kernels: output: {output}, "
+                    f"max kernels: {args[1]}, library: {args[2]}"
+                ]
+        elif name == "hipKernelGetLibrary":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP kernel get library: output: {output}, "
+                    f"kernel: {args[1]}"
+                ]
+        elif name == "hipKernelGetName":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// HIP kernel get name: output: {output}, kernel: {args[1]}"]
+        elif name == "hipKernelGetParamInfo":
+            if len(args) >= 4:
+                offset_output = self.format_runtime_pointer_target(node.args[2])
+                size_output = self.format_runtime_pointer_target(node.args[3])
+                return [
+                    f"// HIP kernel get parameter info: kernel: {args[0]}, "
+                    f"param index: {args[1]}, offset output: {offset_output}, "
+                    f"size output: {size_output}"
+                ]
+        elif name == "hipKernelGetFunction":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP kernel get function: output: {output}, "
+                    f"kernel: {args[1]}"
+                ]
+        elif name == "hipKernelGetAttribute":
+            if len(args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP kernel get attribute: output: {output}, "
+                    f"attribute: {args[1]}, kernel: {args[2]}, device: {args[3]}"
+                ]
+        elif name == "hipKernelSetAttribute":
+            if len(args) >= 4:
+                return [
+                    f"// HIP kernel set attribute: attribute: {args[0]}, "
+                    f"value: {args[1]}, kernel: {args[2]}, device: {args[3]}"
+                ]
+        elif name == "hipLinkCreate":
+            if len(args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[3])
+                return [
+                    f"// HIP link create: options: {args[0]}, "
+                    f"option keys: {args[1]}, option values: {args[2]}, "
+                    f"state output: {output}"
+                ]
+        elif name == "hipLinkAddFile":
+            if len(args) >= 6:
+                return [
+                    f"// HIP link add file: state: {args[0]}, input type: {args[1]}, "
+                    f"path: {args[2]}, options: {args[3]}, option keys: {args[4]}, "
+                    f"option values: {args[5]}"
+                ]
+        elif name == "hipLinkAddData":
+            if len(args) >= 8:
+                return [
+                    f"// HIP link add data: state: {args[0]}, input type: {args[1]}, "
+                    f"image: {args[2]}, bytes: {args[3]}, name: {args[4]}, "
+                    f"options: {args[5]}, option keys: {args[6]}, "
+                    f"option values: {args[7]}"
+                ]
+        elif name == "hipLinkComplete":
+            if len(args) >= 3:
+                binary_output = self.format_runtime_pointer_target(node.args[1])
+                size_output = self.format_runtime_pointer_target(node.args[2])
+                return [
+                    f"// HIP link complete: state: {args[0]}, "
+                    f"binary output: {binary_output}, size output: {size_output}"
+                ]
+        elif name == "hipLinkDestroy":
+            if args:
+                return [f"// HIP link destroy: state: {args[0]}"]
+        elif name == "hipMemGetHandleForAddressRange":
+            if len(args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP memory get handle for address range: output: {output}, "
+                    f"device pointer: {args[1]}, bytes: {args[2]}, "
+                    f"handle type: {args[3]}, flags: {args[4]}"
                 ]
         elif name == "hipModuleLaunchKernel":
             if len(args) >= 11:

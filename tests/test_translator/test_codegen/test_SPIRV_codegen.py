@@ -107,6 +107,26 @@ def assert_matrix_constructs_have_exact_column_operands(spv_code):
         )
 
 
+def assert_spirv_stores_use_matching_value_types(spv_code):
+    result_types = {
+        result_id: result_type
+        for result_id, result_type in re.findall(r"(%\d+) = Op\w+ (%\d+)\b", spv_code)
+    }
+    pointer_pointees = {
+        pointer_type: pointee_type
+        for pointer_type, pointee_type in re.findall(
+            r"(%\d+) = OpTypePointer \w+ (%\d+)\b", spv_code
+        )
+    }
+
+    for pointer_id, value_id in re.findall(r"OpStore (%\d+) (%\d+)", spv_code):
+        pointer_type = result_types.get(pointer_id)
+        expected_type = pointer_pointees.get(pointer_type)
+        actual_type = result_types.get(value_id)
+        if expected_type is not None and actual_type is not None:
+            assert actual_type == expected_type
+
+
 def spirv_named_parameters(spv_code, name, pointer_type=None):
     pointer_pattern = re.escape(pointer_type) if pointer_type else r"%\d+"
     return [
@@ -3489,6 +3509,435 @@ class TestVulkanSPIRVCodeGen:
         assert "ArrayStride 16" in spv_code
         assert "WARNING" not in spv_code
 
+    def test_glsl_buffer_block_scalar_layout_emits_scalar_offsets_and_strides(
+        self,
+    ):
+        source_code = """
+        shader StorageBuffers {
+            struct ScalarBlock {
+                float a;
+                vec2 b;
+                vec2 c;
+                vec3 packed;
+                float tail;
+                mat2 basis;
+                float weights[3];
+                vec3 vectors[2];
+            };
+
+            ScalarBlock scalarBlock @glsl_buffer_block(scalar) @binding(11);
+
+            compute {
+                void main() {
+                    vec2 b = scalarBlock.b;
+                    mat2 basis = scalarBlock.basis;
+                    float weight = scalarBlock.weights[2];
+                    vec3 vectorValue = scalarBlock.vectors[1];
+                    scalarBlock.c = b;
+                    scalarBlock.basis = basis;
+                    scalarBlock.weights[1] = weight;
+                    scalarBlock.vectors[0] = vectorValue;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        block_match = re.search(r'OpName (%\d+) "ScalarBlock_scalar_\d+"', spv_code)
+        assert block_match is not None
+        block_type = block_match.group(1)
+        block_var = spirv_named_variable(
+            spv_code, "scalarBlock", storage_class="Uniform"
+        )
+
+        assert f"OpDecorate {block_type} BufferBlock" in spv_code
+        assert f"OpMemberDecorate {block_type} 0 Offset 0" in spv_code
+        assert f"OpMemberDecorate {block_type} 1 Offset 4" in spv_code
+        assert f"OpMemberDecorate {block_type} 2 Offset 12" in spv_code
+        assert f"OpMemberDecorate {block_type} 3 Offset 20" in spv_code
+        assert f"OpMemberDecorate {block_type} 4 Offset 32" in spv_code
+        assert f"OpMemberDecorate {block_type} 5 Offset 36" in spv_code
+        assert f"OpMemberDecorate {block_type} 5 MatrixStride 8" in spv_code
+        assert f"OpMemberDecorate {block_type} 6 Offset 52" in spv_code
+        assert f"OpMemberDecorate {block_type} 7 Offset 64" in spv_code
+        assert "ArrayStride 4" in spv_code
+        assert "ArrayStride 12" in spv_code
+        assert f"OpDecorate {block_var} Binding 11" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_glsl_buffer_block_mixed_std430_scalar_layouts_do_not_conflict(self):
+        source_code = """
+        shader StorageBuffers {
+            struct VectorBlock {
+                float a;
+                vec3 packed;
+                float tail;
+                vec3 values[2];
+            };
+
+            VectorBlock block430 @glsl_buffer_block(std430) @binding(12);
+            VectorBlock blockScalar @glsl_buffer_block(scalar) @binding(13);
+
+            compute {
+                void main() {
+                    vec3 a = block430.values[1];
+                    vec3 b = blockScalar.values[1];
+                    block430.packed = a;
+                    blockScalar.packed = b;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        std430_block = spirv_named_id(spv_code, "VectorBlock")
+        scalar_match = re.search(r'OpName (%\d+) "VectorBlock_scalar_\d+"', spv_code)
+        assert scalar_match is not None
+        scalar_block = scalar_match.group(1)
+
+        assert f"OpDecorate {std430_block} BufferBlock" in spv_code
+        assert f"OpDecorate {scalar_block} BufferBlock" in spv_code
+        assert f"OpMemberDecorate {std430_block} 1 Offset 16" in spv_code
+        assert f"OpMemberDecorate {std430_block} 2 Offset 28" in spv_code
+        assert f"OpMemberDecorate {std430_block} 3 Offset 32" in spv_code
+        assert f"OpMemberDecorate {scalar_block} 1 Offset 4" in spv_code
+        assert f"OpMemberDecorate {scalar_block} 2 Offset 16" in spv_code
+        assert f"OpMemberDecorate {scalar_block} 3 Offset 20" in spv_code
+        assert "ArrayStride 16" in spv_code
+        assert "ArrayStride 12" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_glsl_buffer_block_std140_aggregate_load_store_converts_layout_types(
+        self,
+    ):
+        source_code = """
+        shader StorageBuffers {
+            struct Inner {
+                float value;
+                float weights[2];
+            };
+
+            struct AggregateBlock {
+                Inner item;
+                Inner items[2];
+            };
+
+            Inner scratch;
+            AggregateBlock block140 @glsl_buffer_block(std140) @binding(9);
+
+            compute {
+                void main() {
+                    scratch = block140.item;
+                    block140.items[1] = scratch;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        inner_type = spirv_named_id(spv_code, "Inner")
+        inner_std140_match = re.search(r'OpName (%\d+) "Inner_std140_\d+"', spv_code)
+        assert inner_std140_match is not None
+        inner_std140_type = inner_std140_match.group(1)
+        scratch_var = spirv_named_variable(spv_code, "scratch", storage_class="Private")
+
+        inner_constructs = re.findall(
+            rf"(%\d+) = OpCompositeConstruct {re.escape(inner_type)}\b",
+            spv_code,
+        )
+        std140_constructs = re.findall(
+            rf"(%\d+) = OpCompositeConstruct {re.escape(inner_std140_type)}\b",
+            spv_code,
+        )
+        assert inner_constructs
+        assert std140_constructs
+        assert any(
+            f"OpStore {scratch_var} {construct_id}" in spv_code
+            for construct_id in inner_constructs
+        )
+        assert any(
+            re.search(rf"OpStore %\d+ {re.escape(construct_id)}\b", spv_code)
+            for construct_id in std140_constructs
+        )
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert "WARNING" not in spv_code
+
+    def test_glsl_buffer_block_std140_aggregate_return_converts_layout_type(self):
+        source_code = """
+        shader StorageBuffers {
+            struct Inner {
+                float value;
+                float weights[2];
+            };
+
+            struct AggregateBlock {
+                Inner item;
+            };
+
+            Inner scratch;
+            AggregateBlock block140 @glsl_buffer_block(std140) @binding(10);
+
+            compute {
+                Inner readItem() {
+                    return block140.item;
+                }
+
+                void main() {
+                    scratch = readItem();
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        inner_type = spirv_named_id(spv_code, "Inner")
+        inner_constructs = re.findall(
+            rf"(%\d+) = OpCompositeConstruct {re.escape(inner_type)}\b",
+            spv_code,
+        )
+        assert inner_constructs
+        assert any(
+            f"OpReturnValue {construct_id}" in spv_code
+            for construct_id in inner_constructs
+        )
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert "WARNING" not in spv_code
+
+    def test_glsl_buffer_block_fixed_arrays_preserve_layout_specific_types(self):
+        source_code = """
+        shader StorageBuffers {
+            struct VectorBlock {
+                float a;
+                vec3 packed;
+                float tail;
+                vec3 values[2];
+            };
+
+            VectorBlock blocks430[2] @glsl_buffer_block(std430) @binding(14);
+            VectorBlock blocks140[2] @glsl_buffer_block(std140) @binding(15);
+            VectorBlock blocksScalar[2] @glsl_buffer_block(scalar) @binding(16);
+
+            compute {
+                void main() {
+                    vec3 a = blocks430[1].values[1];
+                    vec3 b = blocks140[1].values[1];
+                    vec3 c = blocksScalar[1].values[1];
+                    blocks430[0].packed = a;
+                    blocks140[0].packed = b;
+                    blocksScalar[0].packed = c;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        std430_block = spirv_named_id(spv_code, "VectorBlock")
+        std140_match = re.search(r'OpName (%\d+) "VectorBlock_std140_\d+"', spv_code)
+        scalar_match = re.search(r'OpName (%\d+) "VectorBlock_scalar_\d+"', spv_code)
+        assert std140_match is not None
+        assert scalar_match is not None
+        std140_block = std140_match.group(1)
+        scalar_block = scalar_match.group(1)
+
+        for block_type, variable_name, binding in [
+            (std430_block, "blocks430", 14),
+            (std140_block, "blocks140", 15),
+            (scalar_block, "blocksScalar", 16),
+        ]:
+            assert f"OpDecorate {block_type} BufferBlock" in spv_code
+            array_match = re.search(
+                rf"(%\d+) = OpTypeArray {re.escape(block_type)} %\d+",
+                spv_code,
+            )
+            assert array_match is not None
+            pointer_match = re.search(
+                rf"(%\d+) = OpTypePointer Uniform "
+                rf"{re.escape(array_match.group(1))}\b",
+                spv_code,
+            )
+            assert pointer_match is not None
+            variable = spirv_named_variable(
+                spv_code,
+                variable_name,
+                pointer_type=pointer_match.group(1),
+                storage_class="Uniform",
+            )
+            assert f"OpDecorate {variable} Binding {binding}" in spv_code
+            assert re.search(
+                rf"OpAccessChain %\d+ {re.escape(variable)} %\d+",
+                spv_code,
+            )
+
+        assert f"OpMemberDecorate {std430_block} 1 Offset 16" in spv_code
+        assert f"OpMemberDecorate {std430_block} 3 Offset 32" in spv_code
+        assert f"OpMemberDecorate {std140_block} 1 Offset 16" in spv_code
+        assert f"OpMemberDecorate {std140_block} 3 Offset 48" in spv_code
+        assert f"OpMemberDecorate {scalar_block} 1 Offset 4" in spv_code
+        assert f"OpMemberDecorate {scalar_block} 3 Offset 20" in spv_code
+        assert "ArrayStride 16" in spv_code
+        assert "ArrayStride 12" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_glsl_buffer_block_runtime_arrays_request_descriptor_indexing(self):
+        source_code = """
+        shader StorageBuffers {
+            struct Particle {
+                vec4 position;
+                float mass;
+            };
+
+            struct ParticleBlock {
+                uint count;
+                Particle particles[];
+            };
+
+            ParticleBlock runtimeBlocks[] @glsl_buffer_block(std430)
+                @binding(17) @readonly;
+
+            compute {
+                void main() {
+                    uint index = runtimeBlocks[0].count;
+                    float mass = runtimeBlocks[0].particles[index].mass;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        block_type = spirv_named_id(spv_code, "ParticleBlock")
+        blocks_var = spirv_named_variable(
+            spv_code, "runtimeBlocks", storage_class="Uniform"
+        )
+
+        assert "OpCapability RuntimeDescriptorArray" in spv_code
+        assert 'OpExtension "SPV_EXT_descriptor_indexing"' in spv_code
+        assert f"OpDecorate {block_type} BufferBlock" in spv_code
+        assert re.search(
+            rf"%\d+ = OpTypeRuntimeArray {re.escape(block_type)}\b",
+            spv_code,
+        )
+        assert f"OpMemberDecorate {block_type} 0 NonWritable" in spv_code
+        assert f"OpMemberDecorate {block_type} 1 NonWritable" in spv_code
+        assert f"OpDecorate {blocks_var} Binding 17" in spv_code
+        assert re.search(rf"OpAccessChain %\d+ {re.escape(blocks_var)} %\d+", spv_code)
+        assert "WARNING" not in spv_code
+
+    def test_glsl_buffer_block_runtime_array_aggregate_values_emit_diagnostics(self):
+        source_code = """
+        shader StorageBuffers {
+            struct Particle {
+                vec4 position;
+                float mass;
+            };
+
+            struct ParticleBlock {
+                uint count;
+                Particle particles[];
+            };
+
+            ParticleBlock sourceBlock @glsl_buffer_block(std430) @binding(20);
+            ParticleBlock targetBlock @glsl_buffer_block(std430) @binding(21);
+
+            compute {
+                void main() {
+                    ParticleBlock localBlock = sourceBlock;
+                    Particle localParticles[] = sourceBlock.particles;
+                    targetBlock = sourceBlock;
+                    targetBlock.particles = sourceBlock.particles;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        block_type = spirv_named_id(spv_code, "ParticleBlock")
+        runtime_array_match = re.search(r"(%\d+) = OpTypeRuntimeArray %\d+", spv_code)
+        assert runtime_array_match is not None
+        runtime_array_type = runtime_array_match.group(1)
+        target_var = spirv_named_variable(
+            spv_code, "targetBlock", storage_class="Uniform"
+        )
+
+        assert (
+            "local variable localBlock has a runtime-array aggregate type "
+            "that cannot be materialized in SPIR-V"
+        ) in spv_code
+        assert (
+            "local variable localParticles has a runtime-array aggregate type "
+            "that cannot be materialized in SPIR-V"
+        ) in spv_code
+        assert (
+            "runtime-array aggregate values cannot be loaded as SPIR-V values"
+        ) in spv_code
+        assert (
+            "runtime-array aggregate values cannot be stored as SPIR-V values"
+        ) in spv_code
+        assert f"OpTypePointer Function {block_type}" not in spv_code
+        assert f"OpTypePointer Function {runtime_array_type}" not in spv_code
+        assert not re.search(rf"OpLoad {re.escape(block_type)}\b", spv_code)
+        assert not re.search(rf"OpLoad {re.escape(runtime_array_type)}\b", spv_code)
+        assert not re.search(rf"OpStore {re.escape(target_var)}\b", spv_code)
+
+    def test_glsl_buffer_block_runtime_array_element_aggregate_copy_is_supported(self):
+        source_code = """
+        shader StorageBuffers {
+            struct Particle {
+                vec4 position;
+                float mass;
+            };
+
+            struct ParticleBlock {
+                uint count;
+                Particle particles[];
+            };
+
+            ParticleBlock sourceBlock @glsl_buffer_block(std430) @binding(22);
+            ParticleBlock targetBlock @glsl_buffer_block(std430) @binding(23);
+
+            compute {
+                void main() {
+                    Particle particle = sourceBlock.particles[0];
+                    targetBlock.particles[1] = particle;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        particle_type = spirv_named_id(spv_code, "Particle")
+        particle_variable = spirv_named_variable(
+            spv_code, "particle", storage_class="Function"
+        )
+        assert re.search(rf"OpLoad {re.escape(particle_type)} %\d+", spv_code)
+        assert re.search(rf"OpStore {re.escape(particle_variable)} %\d+", spv_code)
+        assert re.search(rf"OpStore %\d+ %\d+", spv_code)
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert "WARNING" not in spv_code
+
     def test_glsl_buffer_array_declarations_lower_to_buffer_blocks(self):
         source_code = """
         shader StorageBuffers {
@@ -3642,6 +4091,137 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFunctionCall" not in spv_code
         assert "WARNING: storage buffer load requires a readable buffer" in spv_code
         assert "WARNING: storage buffer store requires a writable buffer" in spv_code
+
+    def test_glsl_buffer_block_single_member_descriptor_arrays_preserve_accesses(self):
+        source_code = """
+        shader StorageBuffers {
+            struct ReadBlock {
+                float values[];
+            };
+
+            struct WriteBlock {
+                float values[];
+            };
+
+            ReadBlock readBlocks[2] @glsl_buffer_block(std430) @binding(31)
+                @readonly @coherent @volatile @restrict;
+            WriteBlock writeBlocks[2] @glsl_buffer_block(std430) @binding(32)
+                @writeonly @coherent;
+
+            float readFromBlocks(
+                ReadBlock blocks[] @glsl_buffer_block(std430) @readonly,
+                uint blockIndex,
+                uint valueIndex
+            ) {
+                return blocks[blockIndex].values[valueIndex];
+            }
+
+            void writeToBlocks(
+                WriteBlock blocks[] @glsl_buffer_block(std430) @writeonly,
+                uint blockIndex,
+                uint valueIndex,
+                float value
+            ) {
+                blocks[blockIndex].values[valueIndex] = value;
+            }
+
+            compute {
+                void main() {
+                    float directValue = readBlocks[0].values[1];
+                    float helperValue = readFromBlocks(readBlocks, 1u, 0u);
+                    writeToBlocks(writeBlocks, 0u, 1u, directValue + helperValue);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        read_block = spirv_named_id(spv_code, "ReadBlock")
+        write_block = spirv_named_id(spv_code, "WriteBlock")
+        read_blocks_var = spirv_named_variable(
+            spv_code, "readBlocks", storage_class="Uniform"
+        )
+        write_blocks_var = spirv_named_variable(
+            spv_code, "writeBlocks", storage_class="Uniform"
+        )
+
+        assert f"OpMemberDecorate {read_block} 0 NonWritable" in spv_code
+        assert f"OpMemberDecorate {read_block} 0 Coherent" in spv_code
+        assert f"OpMemberDecorate {read_block} 0 Volatile" in spv_code
+        assert f"OpMemberDecorate {read_block} 0 Restrict" in spv_code
+        assert f"OpMemberDecorate {write_block} 0 NonReadable" in spv_code
+        assert f"OpMemberDecorate {write_block} 0 Coherent" in spv_code
+        assert f"OpDecorate {read_blocks_var} Binding 31" in spv_code
+        assert f"OpDecorate {write_blocks_var} Binding 32" in spv_code
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(read_blocks_var)} %\d+", spv_code
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(write_blocks_var)} %\d+", spv_code
+        )
+        assert "readFromBlocks" not in spv_code
+        assert "writeToBlocks" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_glsl_buffer_block_single_member_descriptor_arrays_access_diagnostics(self):
+        source_code = """
+        shader StorageBuffers {
+            struct ReadBlock {
+                float values[];
+            };
+
+            struct WriteBlock {
+                float values[];
+            };
+
+            ReadBlock readBlocks[2] @glsl_buffer_block(std430) @readonly;
+            WriteBlock writeBlocks[2] @glsl_buffer_block(std430) @writeonly;
+
+            float readFromBlocks(
+                WriteBlock blocks[] @glsl_buffer_block(std430) @writeonly,
+                uint index
+            ) {
+                return blocks[0].values[index];
+            }
+
+            void writeToBlocks(
+                ReadBlock blocks[] @glsl_buffer_block(std430) @readonly,
+                uint index,
+                float value
+            ) {
+                blocks[0].values[index] = value;
+            }
+
+            compute {
+                void main() {
+                    float rejectedDirect = writeBlocks[0].values[0];
+                    readBlocks[0].values[0] = rejectedDirect;
+                    float rejectedHelper = readFromBlocks(writeBlocks, 1u);
+                    writeToBlocks(readBlocks, 1u, rejectedHelper);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count("WARNING: storage buffer load requires a readable buffer")
+            == 2
+        )
+        assert (
+            spv_code.count("WARNING: storage buffer store requires a writable buffer")
+            == 2
+        )
+        assert "Could not find member values in float" not in spv_code
+        assert "Could not determine array element type" not in spv_code
+        assert "OpFunctionCall" not in spv_code
 
     def test_glsl_buffer_block_atomics_emit_spirv_atomic_operations(self):
         source_code = """

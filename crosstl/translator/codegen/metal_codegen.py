@@ -25,6 +25,8 @@ from ..ast import (
     RayTracingOpNode,
     RangeNode,
     ReturnNode,
+    PointerType,
+    ReferenceType,
     StructNode,
     SwitchNode,
     TernaryOpNode,
@@ -2903,7 +2905,11 @@ class MetalCodeGen:
     def type_name_string(self, vtype):
         if vtype is None:
             return None
-        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+        if (
+            hasattr(vtype, "name")
+            or hasattr(vtype, "element_type")
+            or isinstance(vtype, (PointerType, ReferenceType))
+        ):
             return self.convert_type_node_to_string(vtype)
         return str(vtype)
 
@@ -6018,7 +6024,12 @@ class MetalCodeGen:
         )
 
     def metal_mesh_output_flow_state(
-        self, counts_seen=False, counts=None, falls_through=True, terminator=None
+        self,
+        counts_seen=False,
+        counts=None,
+        falls_through=True,
+        terminator=None,
+        exits=None,
     ):
         normalized_counts = None
         if counts is not None:
@@ -6031,10 +6042,11 @@ class MetalCodeGen:
             "counts": normalized_counts,
             "falls_through": falls_through,
             "terminator": None if falls_through else terminator,
+            "exits": list(exits or []),
         }
 
     def copy_metal_mesh_output_flow_state(
-        self, state, falls_through=None, terminator=None
+        self, state, falls_through=None, terminator=None, exits=None
     ):
         copied_falls_through = (
             state.get("falls_through", True) if falls_through is None else falls_through
@@ -6048,20 +6060,42 @@ class MetalCodeGen:
                 if copied_falls_through
                 else (state.get("terminator") if terminator is None else terminator)
             ),
+            exits=(list(state.get("exits", [])) if exits is None else exits),
+        )
+
+    def metal_mesh_output_exit_state(self, state, terminator=None):
+        return self.metal_mesh_output_flow_state(
+            counts_seen=state.get("counts_seen", False),
+            counts=state.get("counts"),
+            falls_through=False,
+            terminator=(
+                terminator if terminator is not None else state.get("terminator")
+            ),
         )
 
     def merge_metal_mesh_output_flow_states(self, states, fallthrough_terminators=()):
         fallthrough_states = []
+        propagated_exits = []
         for state in states or []:
+            propagated_exits.extend(state.get("exits", []))
             if (
                 state.get("falls_through", True)
                 or state.get("terminator") in fallthrough_terminators
             ):
                 fallthrough_states.append(
-                    self.copy_metal_mesh_output_flow_state(state, falls_through=True)
+                    self.copy_metal_mesh_output_flow_state(
+                        state,
+                        falls_through=True,
+                        exits=[],
+                    )
                 )
+            elif state.get("terminator") is not None:
+                propagated_exits.append(self.metal_mesh_output_exit_state(state))
         if not fallthrough_states:
-            return self.metal_mesh_output_flow_state(falls_through=False)
+            return self.metal_mesh_output_flow_state(
+                falls_through=False,
+                exits=propagated_exits,
+            )
 
         counts_seen = all(
             state.get("counts_seen", False) for state in fallthrough_states
@@ -6086,7 +6120,21 @@ class MetalCodeGen:
             counts_seen=counts_seen,
             counts=counts,
             falls_through=True,
+            exits=propagated_exits,
         )
+
+    def metal_mesh_output_states_for_terminator(self, state, terminator):
+        states = [
+            exit_state
+            for exit_state in state.get("exits", [])
+            if exit_state.get("terminator") == terminator
+        ]
+        if (
+            not state.get("falls_through", True)
+            and state.get("terminator") == terminator
+        ):
+            states.append(self.metal_mesh_output_exit_state(state, terminator))
+        return states
 
     def metal_mesh_statement_list(self, body):
         if body is None:
@@ -6143,6 +6191,7 @@ class MetalCodeGen:
                 counts_seen=True,
                 counts=mesh_counts,
                 falls_through=current.get("falls_through", True),
+                exits=current.get("exits", []),
             )
 
         if isinstance(expr, AssignmentNode):
@@ -6205,11 +6254,75 @@ class MetalCodeGen:
         )
 
     def validate_metal_mesh_loop_output_flow(self, stmt, state):
-        self.validate_metal_mesh_output_statement_sequence(
+        body_state = self.validate_metal_mesh_output_statement_sequence(
             self.metal_mesh_statement_list(getattr(stmt, "body", [])),
             state,
         )
-        return self.copy_metal_mesh_output_flow_state(state)
+        break_states = self.metal_mesh_output_states_for_terminator(body_state, "break")
+        continue_states = self.metal_mesh_output_states_for_terminator(
+            body_state, "continue"
+        )
+        return_states = self.metal_mesh_output_states_for_terminator(
+            body_state, "return"
+        )
+
+        loop_exits = list(return_states)
+        if isinstance(stmt, LoopNode) or self.metal_mesh_loop_condition_is_true(stmt):
+            fallthrough_states = break_states
+        elif isinstance(stmt, DoWhileNode):
+            fallthrough_states = list(break_states)
+            if body_state.get("falls_through", True):
+                fallthrough_states.append(
+                    self.copy_metal_mesh_output_flow_state(body_state, exits=[])
+                )
+            fallthrough_states.extend(continue_states)
+        else:
+            fallthrough_states = [self.copy_metal_mesh_output_flow_state(state)]
+            if body_state.get("falls_through", True):
+                fallthrough_states.append(
+                    self.copy_metal_mesh_output_flow_state(body_state, exits=[])
+                )
+            fallthrough_states.extend(break_states)
+            fallthrough_states.extend(continue_states)
+
+        if not fallthrough_states:
+            return self.metal_mesh_output_flow_state(
+                falls_through=False,
+                exits=loop_exits,
+            )
+
+        merged = self.merge_metal_mesh_output_flow_states(
+            fallthrough_states,
+            fallthrough_terminators={"break", "continue"},
+        )
+        return self.copy_metal_mesh_output_flow_state(
+            merged,
+            exits=loop_exits + merged.get("exits", []),
+        )
+
+    def metal_mesh_loop_condition_is_true(self, stmt):
+        if isinstance(stmt, LoopNode):
+            return True
+        if isinstance(stmt, ForNode) and getattr(stmt, "condition", None) is None:
+            return True
+
+        condition = getattr(stmt, "condition", None)
+        literal_value = self.metal_literal_bool_value(condition)
+        return literal_value is True
+
+    def metal_literal_bool_value(self, value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered == "true":
+                return True
+            if lowered == "false":
+                return False
+            return None
+        if hasattr(value, "value"):
+            return self.metal_literal_bool_value(getattr(value, "value"))
+        return None
 
     def metal_mesh_set_output_counts(self, expr):
         if not isinstance(expr, MeshOpNode) or expr.operation != "SetMeshOutputCounts":

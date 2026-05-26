@@ -2087,6 +2087,14 @@ class HLSLCodeGen:
                         f"{indent_str}{declaration};\n"
                         f"{self.generate_statement_code(atomic_init, indent)}"
                     )
+                if self.hlsl_expression_contains_typed_buffer_atomic(initial_value):
+                    code, init_expr = (
+                        self.render_hlsl_typed_buffer_atomic_value_expression(
+                            initial_value, vtype, indent
+                        )
+                    )
+                    code += f"{indent_str}{declaration} = {init_expr};\n"
+                    return code
                 lifted_init = self.hlsl_typed_buffer_atomic_lifted_expression(
                     initial_value
                 )
@@ -2122,6 +2130,13 @@ class HLSLCodeGen:
             )
             if ternary_assignment is not None:
                 return ternary_assignment
+            atomic_assignment = (
+                self.generate_hlsl_typed_buffer_atomic_value_assignment_statement(
+                    stmt, indent
+                )
+            )
+            if atomic_assignment is not None:
+                return atomic_assignment
             return self.generate_statement_code(self.generate_assignment(stmt), indent)
 
         elif isinstance(stmt, BlockNode):
@@ -2182,6 +2197,16 @@ class HLSLCodeGen:
                     )
                     if atomic_return is not None:
                         return atomic_return
+                    if self.hlsl_expression_contains_typed_buffer_atomic(stmt.value):
+                        code, return_expr = (
+                            self.render_hlsl_typed_buffer_atomic_value_expression(
+                                stmt.value,
+                                self.current_function_return_type,
+                                indent,
+                            )
+                        )
+                        code += f"{indent_str}return {return_expr};\n"
+                        return code
                     lifted_return = self.hlsl_typed_buffer_atomic_lifted_expression(
                         stmt.value
                     )
@@ -2214,6 +2239,11 @@ class HLSLCodeGen:
                     )
                     if ternary_assignment is not None:
                         return ternary_assignment
+                    atomic_assignment = self.generate_hlsl_typed_buffer_atomic_value_assignment_statement(
+                        stmt.expression, indent
+                    )
+                    if atomic_assignment is not None:
+                        return atomic_assignment
                 atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(
                     stmt.expression
                 )
@@ -10167,9 +10197,121 @@ class HLSLCodeGen:
             return False
         return self.hlsl_expression_contains_typed_buffer_atomic(expr)
 
+    def render_hlsl_typed_buffer_atomic_call_value(self, parts, indent):
+        original_arg = parts["original_arg"]
+        indent_str = "    " * indent
+        if original_arg is not None:
+            original = self.generate_expression(original_arg)
+            code = ""
+        else:
+            original = self.next_hlsl_temp_variable("atomic_expr")
+            code = f"{indent_str}{self.map_type(parts['target_type'])} {original};\n"
+
+        call_args = [parts["target"], *parts["values"], original]
+        code += f"{indent_str}{parts['intrinsic']}({', '.join(call_args)});\n"
+        return code, original
+
+    def render_hlsl_typed_buffer_atomic_embedded_expression(
+        self, expr, expected_type, indent
+    ):
+        if expr is None or not self.hlsl_expression_contains_typed_buffer_atomic(expr):
+            return None
+
+        if self.hlsl_typed_buffer_atomic_ternary_expression(expr):
+            temp_type = (
+                self.type_name_string(expected_type)
+                or self.expression_result_type(expr)
+                or "uint"
+            )
+            temp_name = self.next_hlsl_temp_variable("atomic_ternary")
+            indent_str = "    " * indent
+            code = f"{indent_str}{self.map_type(temp_type)} {temp_name};\n"
+            code += self.generate_hlsl_typed_buffer_atomic_ternary_assignment(
+                expr, temp_name, "=", temp_type, indent
+            )
+            return code, temp_name
+
+        if isinstance(expr, FunctionCallNode) or (
+            hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__)
+        ):
+            func_name = self.function_call_name(expr)
+            args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if isinstance(func_name, str):
+                parts = self.hlsl_typed_buffer_atomic_parts(func_name, args)
+                if parts is not None:
+                    return self.render_hlsl_typed_buffer_atomic_call_value(
+                        parts, indent
+                    )
+
+                if self.value_component_count(func_name) is not None:
+                    code = ""
+                    rendered_args = []
+                    changed = False
+                    for arg in args:
+                        arg_code, rendered_arg = (
+                            self.render_hlsl_typed_buffer_atomic_value_expression(
+                                arg, None, indent
+                            )
+                        )
+                        code += arg_code
+                        rendered_args.append(rendered_arg)
+                        changed = changed or bool(arg_code)
+                    if changed:
+                        return (
+                            code,
+                            self.hlsl_constructor_expression_from_rendered_args(
+                                func_name, args, rendered_args
+                            ),
+                        )
+
+        if hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
+            left_expr = getattr(expr, "left", "")
+            right_expr = getattr(expr, "right", "")
+            left_code, rendered_left = (
+                self.render_hlsl_typed_buffer_atomic_value_expression(
+                    left_expr, self.expression_result_type(left_expr), indent
+                )
+            )
+            right_code, rendered_right = (
+                self.render_hlsl_typed_buffer_atomic_value_expression(
+                    right_expr, self.expression_result_type(right_expr), indent
+                )
+            )
+            if left_code or right_code:
+                op = self.map_operator(
+                    getattr(expr, "operator", getattr(expr, "op", "+"))
+                )
+                return (
+                    left_code + right_code,
+                    f"({rendered_left} {op} {rendered_right})",
+                )
+
+        if hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
+            operand_expr = getattr(expr, "operand", "")
+            operand_code, rendered_operand = (
+                self.render_hlsl_typed_buffer_atomic_value_expression(
+                    operand_expr, self.expression_result_type(operand_expr), indent
+                )
+            )
+            if operand_code:
+                op = self.map_operator(
+                    getattr(expr, "operator", getattr(expr, "op", "+"))
+                )
+                if getattr(expr, "is_postfix", False):
+                    return operand_code, f"{rendered_operand}{op}"
+                return operand_code, f"{op}{rendered_operand}"
+
+        return None
+
     def render_hlsl_typed_buffer_atomic_value_expression(
         self, expr, expected_type, indent
     ):
+        rendered = self.render_hlsl_typed_buffer_atomic_embedded_expression(
+            expr, expected_type, indent
+        )
+        if rendered is not None:
+            return rendered
+
         lifted = self.hlsl_typed_buffer_atomic_lifted_expression(expr)
         if lifted is not None:
             lift_statements, rendered_expr = lifted
@@ -10183,6 +10325,46 @@ class HLSLCodeGen:
             )
 
         return "", self.generate_expression_with_expected(expr, expected_type)
+
+    def generate_hlsl_typed_buffer_atomic_value_assignment_statement(
+        self, stmt, indent
+    ):
+        if hasattr(stmt, "target") and hasattr(stmt, "value"):
+            target = stmt.target
+            value = stmt.value
+            op = getattr(stmt, "operator", "=")
+        else:
+            target = stmt.left
+            value = stmt.right
+            op = getattr(stmt, "operator", "=")
+
+        if not self.hlsl_expression_contains_typed_buffer_atomic(value):
+            return None
+
+        if (
+            op == "="
+            and (
+                isinstance(value, FunctionCallNode)
+                or (
+                    hasattr(value, "__class__")
+                    and "FunctionCall" in str(value.__class__)
+                )
+            )
+            and self.hlsl_typed_buffer_atomic_parts(
+                self.function_call_name(value),
+                getattr(value, "arguments", getattr(value, "args", [])),
+            )
+            is not None
+        ):
+            return None
+
+        return self.generate_hlsl_typed_buffer_atomic_assignment_from_expression(
+            value,
+            self.generate_expression(target),
+            op,
+            self.expression_result_type(target),
+            indent,
+        )
 
     def generate_hlsl_typed_buffer_atomic_assignment_from_expression(
         self, expr, target, op, expected_type, indent

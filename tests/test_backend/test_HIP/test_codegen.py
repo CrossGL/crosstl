@@ -2926,18 +2926,40 @@ class TestHipCodeGen:
             hipModule_t module;
             hipFunction_t function;
             hipFunction_t symbolFunction;
+            hipFunction_t libraryFunction;
             hipFuncAttributes attrs;
+            hipLibrary_t library;
+            hipLibrary_t libraryFromKernel;
+            hipKernel_t libraryKernel;
+            hipKernel_t* libraryKernels;
             int attrValue;
+            int device;
+            unsigned int moduleFunctionCount;
+            unsigned int libraryKernelCount;
             void* globalPtr;
             size_t globalBytes;
+            size_t paramOffset;
+            size_t paramSize;
             void** params;
             void** extra;
             void* launchParams;
             void* image;
+            void* fatBinary;
+            void* driverEntry;
+            void* addressHandle;
+            void* linkedImage;
+            hipDeviceptr_t devicePtr;
             hipJitOption options;
+            hipLibraryOption libraryOptions;
             void* optionValues;
+            void* libraryOptionValues;
             hipEvent_t startEvent;
             hipEvent_t stopEvent;
+            hipDriverEntryPointQueryResult driverStatus;
+            textureReference* texRef;
+            const char* kernelName;
+            hipLinkState_t runtimeLinkState;
+            hipJitInputType runtimeInputType;
             hiprtcProgram program;
             hiprtcLinkState linkState;
             hiprtcJIT_option jitOptions;
@@ -2959,7 +2981,9 @@ class TestHipCodeGen:
             hipModuleLoad(&module, "kernel.hsaco");
             hipModuleLoadData(&module, image);
             hipModuleLoadDataEx(&module, image, 1, &options, &optionValues);
+            hipModuleLoadFatBinary(&module, fatBinary);
             hipModuleGetFunction(&function, module, "kernel");
+            hipModuleGetFunctionCount(&moduleFunctionCount, module);
             hipGetFuncBySymbol(&symbolFunction, function);
             hipFuncGetAttribute(
                 &attrValue, HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, function
@@ -2971,6 +2995,46 @@ class TestHipCodeGen:
             hipFuncSetCacheConfig(function, hipFuncCachePreferL1);
             hipFuncSetSharedMemConfig(function, hipSharedMemBankSizeEightByte);
             hipModuleGetGlobal(&globalPtr, &globalBytes, module, "symbol");
+            hipModuleGetTexRef(&texRef, module, "tex");
+            hipGetDriverEntryPoint("hipMalloc", &driverEntry, 0, &driverStatus);
+            hipLibraryLoadFromFile(
+                &library, "kernel.hipfb", &options, &optionValues, 1,
+                &libraryOptions, &libraryOptionValues, 1
+            );
+            hipLibraryLoadData(
+                &library, image, &options, &optionValues, 1, &libraryOptions,
+                &libraryOptionValues, 1
+            );
+            hipLibraryGetKernel(&libraryKernel, library, "kernel");
+            hipLibraryGetKernelCount(&libraryKernelCount, library);
+            hipLibraryEnumerateKernels(libraryKernels, libraryKernelCount, library);
+            hipKernelGetLibrary(&libraryFromKernel, libraryKernel);
+            hipKernelGetName(&kernelName, libraryKernel);
+            hipKernelGetParamInfo(libraryKernel, 0, &paramOffset, &paramSize);
+            hipKernelGetFunction(&libraryFunction, libraryKernel);
+            hipKernelGetAttribute(
+                &attrValue, HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, libraryKernel,
+                device
+            );
+            hipKernelSetAttribute(
+                HIP_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, 2048,
+                libraryKernel, device
+            );
+            hipLinkCreate(1, &options, &optionValues, &runtimeLinkState);
+            hipLinkAddFile(
+                runtimeLinkState, runtimeInputType, "kernel.bc", 0, &options,
+                &optionValues
+            );
+            hipLinkAddData(
+                runtimeLinkState, runtimeInputType, rtcCode, codeSize, "kernel", 0,
+                &options, &optionValues
+            );
+            hipLinkComplete(runtimeLinkState, &linkedImage, &globalBytes);
+            hipLinkDestroy(runtimeLinkState);
+            hipMemGetHandleForAddressRange(
+                addressHandle, devicePtr, globalBytes, hipMemRangeHandleTypeDmaBuf, 0
+            );
+            hipLibraryUnload(library);
             hipModuleLaunchKernel(
                 function, 8, 1, 1, 64, 1, 1, 0, stream, params, extra
             );
@@ -3014,6 +3078,7 @@ class TestHipCodeGen:
             hiprtcLinkDestroy(linkState);
             hiprtcDestroyProgram(&program);
             hipError_t err = hipModuleGetFunction(&function, module, "kernel");
+            err = hipLibraryGetKernel(&libraryKernel, library, "kernel");
             err = hipModuleLaunchKernel(
                 function, 8, 1, 1, 64, 1, 1, 0, stream, params, extra
             );
@@ -3044,12 +3109,20 @@ class TestHipCodeGen:
             "option keys: (&options), option values: (&optionValues)"
         ) in result
         assert (
+            "// HIP module load fat binary: output: module, fat binary: fatBinary"
+            in result
+        )
+        assert (
             result.count(
                 "// HIP module get function: output: function, module: module, "
                 'name: "kernel"'
             )
             == 2
         )
+        assert (
+            "// HIP module get function count: output: moduleFunctionCount, "
+            "module: module"
+        ) in result
         assert (
             "// HIP get function by symbol: output: symbolFunction, symbol: function"
             in result
@@ -3078,6 +3151,93 @@ class TestHipCodeGen:
             "// HIP module get global: pointer output: globalPtr, "
             'size output: globalBytes, module: module, name: "symbol"'
         ) in result
+        assert (
+            "// HIP module get texture reference: output: texRef, module: module, "
+            'name: "tex"'
+        ) in result
+        assert (
+            '// HIP get driver entry point: symbol: "hipMalloc", output: driverEntry, '
+            "flags: 0, status output: driverStatus"
+        ) in result
+        assert (
+            '// HIP library load: output: library, file: "kernel.hipfb", '
+            "jit options: (&options), jit option values: (&optionValues), "
+            "jit option count: 1, library options: (&libraryOptions), "
+            "library option values: (&libraryOptionValues), library option count: 1"
+        ) in result
+        assert (
+            "// HIP library load: output: library, code: image, "
+            "jit options: (&options), jit option values: (&optionValues), "
+            "jit option count: 1, library options: (&libraryOptions), "
+            "library option values: (&libraryOptionValues), library option count: 1"
+        ) in result
+        assert (
+            result.count(
+                "// HIP library get kernel: output: libraryKernel, "
+                'library: library, name: "kernel"'
+            )
+            == 2
+        )
+        assert (
+            "// HIP library get kernel count: output: libraryKernelCount, "
+            "library: library"
+        ) in result
+        assert (
+            "// HIP library enumerate kernels: output: libraryKernels, "
+            "max kernels: libraryKernelCount, library: library"
+        ) in result
+        assert (
+            "// HIP kernel get library: output: libraryFromKernel, "
+            "kernel: libraryKernel"
+        ) in result
+        assert (
+            "// HIP kernel get name: output: kernelName, kernel: libraryKernel"
+            in result
+        )
+        assert (
+            "// HIP kernel get parameter info: kernel: libraryKernel, "
+            "param index: 0, offset output: paramOffset, size output: paramSize"
+        ) in result
+        assert (
+            "// HIP kernel get function: output: libraryFunction, "
+            "kernel: libraryKernel"
+        ) in result
+        assert (
+            "// HIP kernel get attribute: output: attrValue, "
+            "attribute: HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, "
+            "kernel: libraryKernel, device: device"
+        ) in result
+        assert (
+            "// HIP kernel set attribute: "
+            "attribute: HIP_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, "
+            "value: 2048, kernel: libraryKernel, device: device"
+        ) in result
+        assert (
+            "// HIP link create: options: 1, option keys: (&options), "
+            "option values: (&optionValues), state output: runtimeLinkState"
+        ) in result
+        assert (
+            "// HIP link add file: state: runtimeLinkState, "
+            'input type: runtimeInputType, path: "kernel.bc", options: 0, '
+            "option keys: (&options), option values: (&optionValues)"
+        ) in result
+        assert (
+            "// HIP link add data: state: runtimeLinkState, "
+            "input type: runtimeInputType, image: rtcCode, bytes: codeSize, "
+            'name: "kernel", options: 0, option keys: (&options), '
+            "option values: (&optionValues)"
+        ) in result
+        assert (
+            "// HIP link complete: state: runtimeLinkState, "
+            "binary output: linkedImage, size output: globalBytes"
+        ) in result
+        assert "// HIP link destroy: state: runtimeLinkState" in result
+        assert (
+            "// HIP memory get handle for address range: output: addressHandle, "
+            "device pointer: devicePtr, bytes: globalBytes, "
+            "handle type: hipMemRangeHandleTypeDmaBuf, flags: 0"
+        ) in result
+        assert "// HIP library unload: library" in result
         assert (
             result.count(
                 "// HIP module launch kernel: function: function, "
@@ -3189,7 +3349,9 @@ class TestHipCodeGen:
         assert "hipModuleLoad(" not in result
         assert "hipModuleLoadData(" not in result
         assert "hipModuleLoadDataEx(" not in result
+        assert "hipModuleLoadFatBinary(" not in result
         assert "hipModuleGetFunction(" not in result
+        assert "hipModuleGetFunctionCount(" not in result
         assert "hipGetFuncBySymbol(" not in result
         assert "hipFuncGetAttribute(" not in result
         assert "hipFuncGetAttributes(" not in result
@@ -3197,6 +3359,26 @@ class TestHipCodeGen:
         assert "hipFuncSetCacheConfig(" not in result
         assert "hipFuncSetSharedMemConfig(" not in result
         assert "hipModuleGetGlobal(" not in result
+        assert "hipModuleGetTexRef(" not in result
+        assert "hipGetDriverEntryPoint(" not in result
+        assert "hipLibraryLoadFromFile(" not in result
+        assert "hipLibraryLoadData(" not in result
+        assert "hipLibraryGetKernel(" not in result
+        assert "hipLibraryGetKernelCount(" not in result
+        assert "hipLibraryEnumerateKernels(" not in result
+        assert "hipKernelGetLibrary(" not in result
+        assert "hipKernelGetName(" not in result
+        assert "hipKernelGetParamInfo(" not in result
+        assert "hipKernelGetFunction(" not in result
+        assert "hipKernelGetAttribute(" not in result
+        assert "hipKernelSetAttribute(" not in result
+        assert "hipLinkCreate(" not in result
+        assert "hipLinkAddFile(" not in result
+        assert "hipLinkAddData(" not in result
+        assert "hipLinkComplete(" not in result
+        assert "hipLinkDestroy(" not in result
+        assert "hipMemGetHandleForAddressRange(" not in result
+        assert "hipLibraryUnload(" not in result
         assert "hipModuleLaunchKernel(" not in result
         assert "hipExtModuleLaunchKernel(" not in result
         assert "hipHccModuleLaunchKernel(" not in result

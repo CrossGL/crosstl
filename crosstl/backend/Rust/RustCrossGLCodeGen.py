@@ -226,6 +226,8 @@ class RustToCrossGLConverter:
             "trunc": "trunc",
             "round_even": "roundEven",
             "sqrt": "sqrt",
+            "rsqrt": "inversesqrt",
+            "fract": "fract",
             "pow": "pow",
             "fma": "fma",
             "ldexp": "ldexp",

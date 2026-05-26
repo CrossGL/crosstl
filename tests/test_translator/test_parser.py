@@ -1812,6 +1812,9 @@ def test_duplicate_matching_user_builtin_and_specialization_metadata_values_are_
 
         struct VertexOut {
             vec4 position @builtin(position) @builtin(position);
+            vec4 clipPosition @builtin(position) @gl_Position;
+            vec4 metalPosition [[position]] @builtin(position);
+            uint vertexID @builtin(vertex_index) @SV_VertexID;
             vec2 uv [[user(texcoord0)]] @user(texcoord0);
         };
     }
@@ -1819,7 +1822,7 @@ def test_duplicate_matching_user_builtin_and_specialization_metadata_values_are_
 
     ast = parse_code(tokenize_code(code))
     scale, mode = ast.global_variables
-    position, uv = ast.structs[0].members
+    position, clip_position, metal_position, vertex_id, uv = ast.structs[0].members
 
     assert [attr.name for attr in scale.attributes] == [
         "function_constant",
@@ -1832,6 +1835,18 @@ def test_duplicate_matching_user_builtin_and_specialization_metadata_values_are_
     assert [attr.arguments[0].name for attr in position.attributes] == [
         "position",
         "position",
+    ]
+    assert [attr.name for attr in clip_position.attributes] == [
+        "builtin",
+        "gl_Position",
+    ]
+    assert [attr.name for attr in metal_position.attributes] == [
+        "position",
+        "builtin",
+    ]
+    assert [attr.name for attr in vertex_id.attributes] == [
+        "builtin",
+        "SV_VertexID",
     ]
     assert [attr.name for attr in uv.attributes] == ["user", "user"]
     assert [attr.arguments[0].name for attr in uv.attributes] == [
@@ -1876,6 +1891,18 @@ def test_conflicting_specialization_metadata_values_fail_validation(
         (
             "vec2 uv [[user(texcoord0)]] @user(color0);",
             "Conflicting user metadata",
+        ),
+        (
+            "vec4 position @builtin(vertex_index) @gl_Position;",
+            "Conflicting builtin metadata.*@builtin\\(vertex_index\\).*@gl_Position",
+        ),
+        (
+            "vec4 position @builtin(position) @gl_PointSize;",
+            "Conflicting builtin metadata.*@builtin\\(position\\).*@gl_PointSize",
+        ),
+        (
+            "uint vertexID @builtin(instance_index) @SV_VertexID;",
+            "Conflicting builtin metadata.*(@builtin\\(instance_index\\).*@SV_VertexID|@SV_VertexID.*@builtin\\(instance_index\\))",
         ),
     ],
 )

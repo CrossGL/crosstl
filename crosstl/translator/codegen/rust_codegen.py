@@ -858,6 +858,58 @@ class RustCodeGen:
             traits.append("Default")
         return ", ".join(traits)
 
+    def derive_traits_for_enum(self, node, generic_owner=None, include_default=False):
+        traits = ["Debug", "Clone"]
+        generic_names = set(self.generic_param_names(generic_owner or node))
+        if self.enum_payloads_are_copy_derivable(node, generic_names):
+            traits.append("Copy")
+        if include_default:
+            traits.append("Default")
+        return ", ".join(traits)
+
+    def enum_payloads_are_copy_derivable(self, node, generic_names):
+        for variant in getattr(node, "variants", []) or []:
+            for field_type in self.enum_variant_payload_types(variant):
+                if not self.type_is_copy_derivable(field_type, generic_names):
+                    return False
+        return True
+
+    def enum_variant_payload_types(self, variant):
+        field_types = []
+        for item in self.enum_variant_data(variant):
+            if isinstance(item, tuple) and len(item) == 2:
+                field_types.append(item[1])
+            else:
+                field_types.append(item)
+        return field_types
+
+    def type_is_copy_derivable(self, type_name, generic_names=None):
+        generic_names = generic_names or set()
+        type_name = self.convert_type_node_to_string(type_name)
+
+        if type_name in generic_names:
+            return True
+
+        if self.is_array_type_name(type_name):
+            base_type, size = parse_array_type(str(type_name))
+            return size is not None and self.type_is_copy_derivable(
+                base_type,
+                generic_names,
+            )
+
+        rust_type = self.unqualify_runtime_type_name(self.map_type(type_name))
+        if rust_type.startswith("Vec<"):
+            return False
+
+        base_type, generic_args = self.generic_type_parts(type_name)
+        if generic_args:
+            return all(
+                self.type_is_copy_derivable(generic_arg, generic_names)
+                for generic_arg in generic_args
+            )
+
+        return True
+
     def members_have_unsized_arrays(self, members):
         return any(self.member_has_unsized_array(member) for member in members)
 
@@ -999,10 +1051,10 @@ class RustCodeGen:
                 wrapper_enum,
                 enum_name=node.name,
                 generic_owner=node,
-                derive_traits=(
-                    "Debug, Clone, Copy, Default"
-                    if self.enum_has_unit_variant(wrapper_enum)
-                    else "Debug, Clone, Copy"
+                derive_traits=self.derive_traits_for_enum(
+                    wrapper_enum,
+                    generic_owner=node,
+                    include_default=self.enum_has_unit_variant(wrapper_enum),
                 ),
                 default_variant_name=self.enum_default_variant_name(wrapper_enum),
             )
@@ -1129,10 +1181,10 @@ class RustCodeGen:
         """Render a CrossGL enum declaration as a Rust enum."""
         if derive_traits is None:
             default_variant_name = self.enum_default_variant_name(node)
-            derive_traits = (
-                "Debug, Clone, Copy, Default"
-                if default_variant_name is not None
-                else "Debug, Clone, Copy"
+            derive_traits = self.derive_traits_for_enum(
+                node,
+                generic_owner=generic_owner,
+                include_default=default_variant_name is not None,
             )
 
         derived_traits = {
@@ -2548,7 +2600,12 @@ class RustCodeGen:
                 guard,
                 body,
             )
-            arm_pattern = self.generate_match_pattern(pattern, unused_bindings)
+            mutable_bindings = self.mutable_match_pattern_binding_names(pattern, body)
+            arm_pattern = self.generate_match_pattern(
+                pattern,
+                unused_bindings,
+                mutable_bindings,
+            )
             saved_variable_types = self.variable_types.copy()
             saved_local_variable_names = self.local_variable_names.copy()
             try:
@@ -2563,7 +2620,7 @@ class RustCodeGen:
                     arm_pattern = f"{arm_pattern} if {self.generate_expression(guard)}"
 
                 code += f"{arm_indent}{arm_pattern} => {{\n"
-                code += self.generate_switch_case_body(body, indent + 2)
+                code += self.generate_match_arm_body(body, indent + 2)
                 code += f"{arm_indent}}},\n"
             finally:
                 self.variable_types = saved_variable_types
@@ -2893,6 +2950,14 @@ class RustCodeGen:
         used_names = self.collect_referenced_names([guard, body])
         return binding_names - used_names
 
+    def mutable_match_pattern_binding_names(self, pattern, body):
+        """Return pattern bindings that are reassigned inside the arm body."""
+        binding_names = self.match_pattern_binding_names(pattern)
+        if not binding_names:
+            return set()
+
+        return binding_names & self.collect_mutated_binding_names(body)
+
     def match_pattern_binding_names(self, pattern):
         """Collect identifiers introduced by a match pattern."""
         if isinstance(pattern, IdentifierPatternNode):
@@ -3051,14 +3116,29 @@ class RustCodeGen:
         collect(node)
         return names
 
-    def format_match_binding_identifier(self, name, unused_bindings):
+    def format_match_binding_identifier(
+        self,
+        name,
+        unused_bindings,
+        mutable_bindings=None,
+    ):
         """Prefix unused pattern bindings to suppress Rust warnings."""
+        mutable_bindings = mutable_bindings or set()
+        binding_name = name
         if name in unused_bindings and not name.startswith("_"):
-            return f"_{name}"
-        return name
+            binding_name = f"_{name}"
+        if name in mutable_bindings:
+            return f"mut {binding_name}"
+        return binding_name
 
-    def generate_match_pattern(self, pattern, unused_bindings=None):
+    def generate_match_pattern(
+        self,
+        pattern,
+        unused_bindings=None,
+        mutable_bindings=None,
+    ):
         unused_bindings = unused_bindings or set()
+        mutable_bindings = mutable_bindings or set()
         if isinstance(pattern, WildcardPatternNode):
             return "_"
         if isinstance(pattern, LiteralPatternNode):
@@ -3068,11 +3148,12 @@ class RustCodeGen:
                 return self.format_match_binding_identifier(
                     pattern.name,
                     unused_bindings,
+                    mutable_bindings,
                 )
             return pattern.name
         if isinstance(pattern, ConstructorPatternNode):
             args = ", ".join(
-                self.generate_match_pattern(arg, unused_bindings)
+                self.generate_match_pattern(arg, unused_bindings, mutable_bindings)
                 for arg in pattern.arguments
             )
             return f"{pattern.type_name}({args})"
@@ -3082,6 +3163,7 @@ class RustCodeGen:
                 field_pattern_code = self.generate_match_pattern(
                     field_pattern,
                     unused_bindings,
+                    mutable_bindings,
                 )
                 if (
                     isinstance(field_pattern, IdentifierPatternNode)
@@ -3104,6 +3186,10 @@ class RustCodeGen:
                 continue
             code += self.generate_statement(stmt, indent)
         return code
+
+    def generate_match_arm_body(self, body, indent):
+        statements = self.statement_list(body)
+        return "".join(self.generate_statement(stmt, indent) for stmt in statements)
 
     def statement_list(self, body):
         if hasattr(body, "statements"):

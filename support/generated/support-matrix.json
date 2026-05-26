@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 513
+        "test_count": 514
       },
       "translator_codegen": {
         "exists": true,
@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 706
+        "test_count": 714
       },
       "translator_codegen": {
         "exists": true,
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 474
+        "test_count": 479
       },
       "translator_codegen": {
         "exists": true,
@@ -433,7 +433,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 354
+        "test_count": 364
       },
       "translator_codegen": {
         "exists": true,
@@ -547,7 +547,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 249
+        "test_count": 252
       },
       "translator_codegen": {
         "exists": true,
@@ -649,11 +649,43 @@
         "path": "crosstl/backend/Mojo"
       },
       "signals": {
-        "unsupported_marker_count": 6,
+        "unsupported_marker_count": 17,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "f\"Unsupported {stage_name} shader stage for Mojo codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
             "text": "f\"Unsupported {operation} for Mojo codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "f\"Unsupported {operation} for Mojo codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "f\"Unsupported {operation} for Mojo codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for Mojo codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for Mojo codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "f\"Unsupported {shader_type or 'function'} {semantic} \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "f\"Unsupported {semantic} return semantic for Mojo codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for Mojo {shader_type} stage; \""
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
@@ -673,6 +705,18 @@
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "f\"Unsupported {helper_base} for Mojo codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "f\"Unsupported {helper_base} for Mojo codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "f\"Unsupported {helper_base} for Mojo codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
             "text": "\"Unsupported image atomic for Mojo codegen; integer image required: \""
           }
         ]
@@ -683,7 +727,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 258
+        "test_count": 269
       },
       "translator_codegen": {
         "exists": true,
@@ -797,7 +841,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 476
+        "test_count": 480
       },
       "translator_codegen": {
         "exists": true,
@@ -821,7 +865,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 45,
+        "unsupported_marker_count": 54,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -838,6 +882,42 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "\"Unsupported match arm for Slang codegen; only unguarded \""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "def unsupported_structured_buffer_call(self, operation, reason, result_type=None):"
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "return f\"/* unsupported Slang structured buffer: {operation} {reason} */\""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"/* unsupported Slang structured buffer: {operation} {reason} */ \""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "return self.unsupported_structured_buffer_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "return self.unsupported_structured_buffer_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "return self.unsupported_structured_buffer_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "return self.unsupported_structured_buffer_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "return self.unsupported_structured_buffer_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "return self.unsupported_structured_buffer_call("
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -866,42 +946,6 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_offset_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_texture_offset_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "def unsupported_texture_offset_call(self, func_name, reason):"
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "f\"/* unsupported Slang texture offset: {func_name} {reason} */ float4(0.0)\""
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_texture_projected_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_texture_projected_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_texture_projected_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_texture_projected_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_texture_projected_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_texture_projected_call("
           }
         ]
       },
@@ -911,7 +955,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 288
+        "test_count": 294
       },
       "translator_codegen": {
         "exists": true,
@@ -953,8 +997,8 @@
       "category": "source",
       "feature": "Native preprocessor handling",
       "feature_id": "source.preprocessing",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Mojo source has no C-style preprocessor expansion in this frontend; # lines are treated as comments and native import/from-import declarations are parsed separately.",
+      "status": "unsupported"
     },
     {
       "backend": "Rust",
@@ -971,7 +1015,7 @@
       "category": "source",
       "feature": "Native preprocessor handling",
       "feature_id": "source.preprocessing",
-      "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, and native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
+      "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated, and RayQuery methods emit native Slang calls with receiver/argument validation and result type inference. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
       "status": "partial"
     },
     {
@@ -1088,8 +1132,8 @@
       "category": "stages",
       "feature": "Geometry stage",
       "feature_id": "stage.geometry",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Mojo codegen rejects geometry stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
+      "status": "unsupported"
     },
     {
       "backend": "Rust",
@@ -1151,8 +1195,8 @@
       "category": "stages",
       "feature": "Tessellation stages",
       "feature_id": "stage.tessellation",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Mojo codegen rejects tessellation stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
+      "status": "unsupported"
     },
     {
       "backend": "Rust",
@@ -1196,7 +1240,7 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Literal output-count bounds, simple write-after-SetMeshOutputCounts ordering, and if/switch branch dominance for post-branch output writes are validated. Remaining gaps are loop-sensitive dominance analysis and multi-payload pipeline shapes.",
+      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Literal output-count bounds, simple write-after-SetMeshOutputCounts ordering, if/switch branch dominance, and provable loop-exit dominance for post-branch/output writes are validated. Remaining gaps are symbolic loop iteration analysis and multi-payload pipeline shapes.",
       "status": "partial"
     },
     {
@@ -1232,8 +1276,8 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Mojo codegen rejects mesh/task/object stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
+      "status": "unsupported"
     },
     {
       "backend": "Rust",
@@ -1313,8 +1357,8 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Mojo codegen rejects ray tracing stages explicitly; no Mojo ray pipeline ABI is implemented in this repo.",
+      "status": "unsupported"
     },
     {
       "backend": "Rust",
@@ -1511,8 +1555,8 @@
       "category": "resources",
       "feature": "Explicit and automatic resource bindings",
       "feature_id": "resources.bindings",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Global texture, sampler, image, structured-buffer/resource-array, and cbuffer declarations emit deterministic CrossGL resource metadata comments with explicit @set/@group/@binding and HLSL register-space preservation, automatic per-namespace binding assignment, and duplicate/range-overlap diagnostics. Mojo still uses compile-smoke placeholders rather than a native GPU resource ABI.",
+      "status": "partial"
     },
     {
       "backend": "Rust",
@@ -1522,15 +1566,6 @@
       "feature_id": "resources.bindings",
       "notes": "",
       "status": "unknown"
-    },
-    {
-      "backend": "Slang",
-      "backend_id": "slang",
-      "category": "resources",
-      "feature": "Explicit and automatic resource bindings",
-      "feature_id": "resources.bindings",
-      "notes": "",
-      "status": "partial"
     },
     {
       "backend": "CUDA",
@@ -1664,7 +1699,7 @@
       "category": "resources",
       "feature": "Resource arrays",
       "feature_id": "resources.resource_arrays",
-      "notes": "Fixed resource arrays lower to InlineArray placeholders for textures, images, and buffers; unsized/resource-binding semantics are not complete.",
+      "notes": "Fixed resource arrays lower to InlineArray placeholders for textures, images, and buffers, and indexed image/buffer access honors readonly/writeonly validation. Unsized/resource-binding semantics are not complete.",
       "status": "partial"
     },
     {
@@ -1763,7 +1798,7 @@
       "category": "resources",
       "feature": "GLSL buffer block lowering",
       "feature_id": "resources.glsl_buffer_blocks",
-      "notes": "GLSL-style layout(...) buffer blocks, explicit @glsl_buffer_block declarations, and buffer-qualified runtime-array declarations lower to SPIR-V BufferBlock Uniform descriptors with descriptor set/binding decorations, std430 and std140 member offsets/array strides for scalar/vector/matrix/fixed-array/runtime-array members, direct block member access, inlined helper parameters, buffer_load/buffer_store helper lowering, scalar int/uint member and runtime-array atomics, and spirv-as/spirv-val coverage. Scalar layout, broader block-array coverage, aggregate std140/std430 value conversion, and complete memory-qualifier decorations remain incomplete.",
+      "notes": "GLSL-style layout(...) buffer blocks, explicit @glsl_buffer_block declarations, and buffer-qualified runtime-array declarations lower to SPIR-V BufferBlock Uniform descriptors with descriptor set/binding decorations, std430/std140/scalar member offsets and array/matrix strides for scalar/vector/matrix/fixed-array/runtime-array members, direct block member access, fixed block descriptor arrays across layouts, runtime block descriptor arrays with RuntimeDescriptorArray/SPV_EXT_descriptor_indexing, single-member descriptor arrays, inlined helper parameters, buffer_load/buffer_store helper lowering, layout-compatible fixed aggregate load/store/return conversion, runtime-array element aggregate copy, readonly/writeonly/coherent/volatile/restrict member decorations with direct/helper diagnostics, deterministic diagnostics for invalid whole runtime-array aggregate values, scalar int/uint member and runtime-array atomics, and spirv-as/spirv-val coverage.",
       "status": "partial"
     },
     {
@@ -1790,8 +1825,8 @@
       "category": "resources",
       "feature": "GLSL buffer block lowering",
       "feature_id": "resources.glsl_buffer_blocks",
-      "notes": "",
-      "status": "unknown"
+      "notes": "GLSL layout(...) buffer blocks, direct buffer array declarations, and explicit @glsl_buffer_block variables emit compile-safe Mojo value placeholders with resource metadata comments for layout, set/binding, and access. Fixed-array member access compile-smokes, readonly assignment diagnostics, and buffer-namespace binding collision diagnostics are covered; std140/std430 layout conversion, runtime-array storage semantics, atomics, and native GPU buffer ABI remain incomplete.",
+      "status": "partial"
     },
     {
       "backend": "Rust",
@@ -1817,7 +1852,7 @@
       "category": "resources",
       "feature": "Resource memory qualifiers",
       "feature_id": "resources.memory_qualifiers",
-      "notes": "Storage-image readonly/writeonly/coherent/volatile/restrict qualifiers lower to validated SPIR-V variable decorations with direct and interprocedural invalid read/write/atomic diagnostics; StructuredBuffer, RWStructuredBuffer, and GLSL buffer-block helper parameters inline to avoid invalid Uniform pointer calls while preserving read/write access diagnostics; GLSL buffer-block qualifiers lower to BufferBlock member decorations with direct/helper/atomic access diagnostics. Remaining gaps are std140/scalar layout parity and broader block-array coverage.",
+      "notes": "Storage-image readonly/writeonly/coherent/volatile/restrict qualifiers lower to validated SPIR-V variable decorations with direct and interprocedural invalid read/write/atomic diagnostics; StructuredBuffer, RWStructuredBuffer, and GLSL buffer-block helper parameters inline to avoid invalid Uniform pointer calls while preserving read/write access diagnostics; GLSL buffer-block qualifiers lower to BufferBlock member decorations with direct/helper/atomic access diagnostics.",
       "status": "partial"
     },
     {
@@ -1844,8 +1879,8 @@
       "category": "resources",
       "feature": "Resource memory qualifiers",
       "feature_id": "resources.memory_qualifiers",
-      "notes": "",
-      "status": "unknown"
+      "notes": "readonly/writeonly access metadata is preserved in resource metadata comments and validated for Mojo image, indexed image arrays, image-atomic, buffer, indexed buffer arrays, byte-address member calls, and GLSL buffer-block placeholder reads/writes; coherent/globallycoherent/volatile/restrict are preserved as metadata comments because Mojo has no target-native equivalent in this placeholder backend.",
+      "status": "partial"
     },
     {
       "backend": "Rust",
@@ -2258,7 +2293,7 @@
       "category": "textures",
       "feature": "Multisample texture operations",
       "feature_id": "texture.multisample",
-      "notes": "Multisample texture fetch and query forms lower to compile-smoke Mojo placeholder helpers; compare/gather validation and real multisample memory semantics remain incomplete.",
+      "notes": "Multisample texture fetch and query forms lower to compile-smoke Mojo placeholder helpers; advanced sampling/gather/compare forms on multisample textures emit deterministic diagnostics. Real multisample memory semantics remain incomplete.",
       "status": "partial"
     },
     {
@@ -2339,7 +2374,7 @@
       "category": "textures",
       "feature": "Advanced texture operations",
       "feature_id": "texture.advanced_sampling",
-      "notes": "Advanced texture operations lower to compile-smoke Mojo placeholder helpers across LOD, gradients, offsets, projection, gather, compare, and query families; real target texture semantics are still placeholders.",
+      "notes": "Advanced texture operations lower to compile-smoke Mojo placeholder helpers across LOD, gradients, offsets, projection, gather, compare, and query families; image/non-texture targets, multisample targets for advanced sampling, and non-shadow compare targets emit deterministic diagnostics. Real target texture semantics are still placeholders.",
       "status": "partial"
     },
     {
@@ -2429,7 +2464,7 @@
       "category": "images",
       "feature": "Image atomics",
       "feature_id": "image.atomics",
-      "notes": "Integer image atomic add/min/max/bitwise/exchange/compare-exchange forms lower to compile-smoke Mojo placeholder helpers and float-image atomics are rejected; native atomic memory semantics are not implemented.",
+      "notes": "Integer image atomic add/min/max/bitwise/exchange/compare-exchange forms lower to compile-smoke Mojo placeholder helpers, float-image atomics are rejected, and readonly/writeonly image atomics emit deterministic diagnostics. Native atomic memory semantics are not implemented.",
       "status": "partial"
     },
     {
@@ -2555,8 +2590,8 @@
       "category": "language",
       "feature": "Synchronization and memory barriers",
       "feature_id": "language.synchronization",
-      "notes": "",
-      "status": "unknown"
+      "notes": "barrier/workgroupBarrier and memoryBarrier lower to compile-smoke Mojo placeholder helpers, while user-defined functions with those names are preserved.",
+      "status": "partial"
     },
     {
       "backend": "Rust",
@@ -2934,9 +2969,12 @@
           "status": "supported"
         },
         "mojo": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_backend/test_mojo/test_lexer.py::def test_comments_tokenization",
+            "tests/test_backend/test_mojo/test_parser.py::def test_import_parsing"
+          ],
+          "notes": "Mojo source has no C-style preprocessor expansion in this frontend; # lines are treated as comments and native import/from-import declarations are parsed separately.",
+          "status": "unsupported"
         },
         "opengl": {
           "evidence": [
@@ -2957,9 +2995,10 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_builtins_lower_to_slang_intrinsics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_local_interface_variables_become_slang_parameters",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes"
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_query_methods_emit_native_calls_and_infer_results"
           ],
-          "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, and native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
+          "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated, and RayQuery methods emit native Slang calls with receiver/argument validation and result type inference. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
           "status": "partial"
         },
         "vulkan": {
@@ -3164,9 +3203,11 @@
           "status": "unsupported"
         },
         "mojo": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"
+          ],
+          "notes": "Mojo codegen rejects geometry stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
+          "status": "unsupported"
         },
         "opengl": {
           "evidence": [],
@@ -3219,9 +3260,11 @@
           "status": "unsupported"
         },
         "mojo": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"
+          ],
+          "notes": "Mojo codegen rejects tessellation stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
+          "status": "unsupported"
         },
         "opengl": {
           "evidence": [],
@@ -3288,17 +3331,24 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_rejects_non_dominating_branch_counts",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_switch_dominance_handles_breaks",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_rejects_non_exhaustive_switch_counts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_loop_break_dominance_allows_post_loop_writes",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_while_true_break_dominance_allows_post_loop_writes",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_do_while_false_dominates_post_loop_writes",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_rejects_skippable_loop_counts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_rejects_uncounted_loop_break_path",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_output_signature_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_payload_dispatch_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_object_stages_compile_with_metal3"
           ],
-          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Literal output-count bounds, simple write-after-SetMeshOutputCounts ordering, and if/switch branch dominance for post-branch output writes are validated. Remaining gaps are loop-sensitive dominance analysis and multi-payload pipeline shapes.",
+          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Literal output-count bounds, simple write-after-SetMeshOutputCounts ordering, if/switch branch dominance, and provable loop-exit dominance for post-branch/output writes are validated. Remaining gaps are symbolic loop iteration analysis and multi-payload pipeline shapes.",
           "status": "partial"
         },
         "mojo": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"
+          ],
+          "notes": "Mojo codegen rejects mesh/task/object stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
+          "status": "unsupported"
         },
         "opengl": {
           "evidence": [
@@ -3395,9 +3445,11 @@
           "status": "partial"
         },
         "mojo": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"
+          ],
+          "notes": "Mojo codegen rejects ray tracing stages explicitly; no Mojo ray pipeline ABI is implemented in this repo.",
+          "status": "unsupported"
         },
         "opengl": {
           "evidence": [
@@ -3619,9 +3671,12 @@
           "status": "supported"
         },
         "mojo": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_binding_metadata_comments_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_duplicate_resource_bindings_are_rejected_for_mojo_codegen"
+          ],
+          "notes": "Global texture, sampler, image, structured-buffer/resource-array, and cbuffer declarations emit deterministic CrossGL resource metadata comments with explicit @set/@group/@binding and HLSL register-space preservation, automatic per-namespace binding assignment, and duplicate/range-overlap diagnostics. Mojo still uses compile-smoke placeholders rather than a native GPU resource ABI.",
+          "status": "partial"
         },
         "opengl": {
           "evidence": [],
@@ -3634,9 +3689,14 @@
           "status": "unknown"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_binding_metadata_emits_slang_vk_and_register_decorations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_metadata_raises",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_ranges_raise"
+          ],
+          "notes": "Global resources and cbuffers receive deterministic automatic [[vk::binding(binding, set)]] and HLSL register(space) decorations, explicit @set/@group/@space/@binding and register metadata is preserved on globals, cbuffers, arrays, acceleration structures, storage images, samplers, sampled textures, and resource parameters, fixed resource arrays reserve binding ranges, and conflicting binding/register, set/space, duplicate, and range-overlap metadata raises deterministic diagnostics.",
+          "status": "supported"
         },
         "vulkan": {
           "evidence": [
@@ -3831,9 +3891,10 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_arrays_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_structured_buffer_placeholders_compile_with_mojo",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_buffer_placeholders_compile_with_mojo"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_buffer_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_array_access_qualifiers_apply_to_indexed_mojo_resources"
           ],
-          "notes": "Fixed resource arrays lower to InlineArray placeholders for textures, images, and buffers; unsized/resource-binding semantics are not complete.",
+          "notes": "Fixed resource arrays lower to InlineArray placeholders for textures, images, and buffers, and indexed image/buffer access honors readonly/writeonly validation. Unsized/resource-binding semantics are not complete.",
           "status": "partial"
         },
         "opengl": {
@@ -4020,9 +4081,12 @@
           "status": "partial"
         },
         "mojo": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_glsl_buffer_block_metadata_comments_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen"
+          ],
+          "notes": "GLSL layout(...) buffer blocks, direct buffer array declarations, and explicit @glsl_buffer_block variables emit compile-safe Mojo value placeholders with resource metadata comments for layout, set/binding, and access. Fixed-array member access compile-smokes, readonly assignment diagnostics, and buffer-namespace binding collision diagnostics are covered; std140/std430 layout conversion, runtime-array storage semantics, atomics, and native GPU buffer ABI remain incomplete.",
+          "status": "partial"
         },
         "opengl": {
           "evidence": [],
@@ -4044,13 +4108,24 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_blocks_emit_spirv_buffer_block_layout",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_std140_layout_emits_spirv_offsets_and_strides",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_mixed_std430_std140_array_strides_do_not_conflict",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_scalar_layout_emits_scalar_offsets_and_strides",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_mixed_std430_scalar_layouts_do_not_conflict",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_std140_aggregate_load_store_converts_layout_types",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_std140_aggregate_return_converts_layout_type",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_fixed_arrays_preserve_layout_specific_types",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_runtime_arrays_request_descriptor_indexing",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_runtime_array_aggregate_values_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_runtime_array_element_aggregate_copy_is_supported",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_array_declarations_lower_to_buffer_blocks",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_parameters_inline_with_accesses",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_single_member_descriptor_arrays_preserve_accesses",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_atomics_emit_spirv_atomic_operations",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_glsl_buffer_block_compute_validates_with_spirv_tools",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_scalar_buffer_block_compute_validates_with_spirv_tools",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_glsl_buffer_block_arrays_validate_with_spirv_tools",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_storage_buffer_atomics_validate_with_spirv_tools"
           ],
-          "notes": "GLSL-style layout(...) buffer blocks, explicit @glsl_buffer_block declarations, and buffer-qualified runtime-array declarations lower to SPIR-V BufferBlock Uniform descriptors with descriptor set/binding decorations, std430 and std140 member offsets/array strides for scalar/vector/matrix/fixed-array/runtime-array members, direct block member access, inlined helper parameters, buffer_load/buffer_store helper lowering, scalar int/uint member and runtime-array atomics, and spirv-as/spirv-val coverage. Scalar layout, broader block-array coverage, aggregate std140/std430 value conversion, and complete memory-qualifier decorations remain incomplete.",
+          "notes": "GLSL-style layout(...) buffer blocks, explicit @glsl_buffer_block declarations, and buffer-qualified runtime-array declarations lower to SPIR-V BufferBlock Uniform descriptors with descriptor set/binding decorations, std430/std140/scalar member offsets and array/matrix strides for scalar/vector/matrix/fixed-array/runtime-array members, direct block member access, fixed block descriptor arrays across layouts, runtime block descriptor arrays with RuntimeDescriptorArray/SPV_EXT_descriptor_indexing, single-member descriptor arrays, inlined helper parameters, buffer_load/buffer_store helper lowering, layout-compatible fixed aggregate load/store/return conversion, runtime-array element aggregate copy, readonly/writeonly/coherent/volatile/restrict member decorations with direct/helper diagnostics, deterministic diagnostics for invalid whole runtime-array aggregate values, scalar int/uint member and runtime-array atomics, and spirv-as/spirv-val coverage.",
           "status": "partial"
         }
       }
@@ -4090,9 +4165,14 @@
           "status": "supported"
         },
         "mojo": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_memory_qualifier_metadata_and_access_validation_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_array_access_qualifiers_apply_to_indexed_mojo_resources",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_image_atomics_require_read_write_access_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen"
+          ],
+          "notes": "readonly/writeonly access metadata is preserved in resource metadata comments and validated for Mojo image, indexed image arrays, image-atomic, buffer, indexed buffer arrays, byte-address member calls, and GLSL buffer-block placeholder reads/writes; coherent/globallycoherent/volatile/restrict are preserved as metadata comments because Mojo has no target-native equivalent in this placeholder backend.",
+          "status": "partial"
         },
         "opengl": {
           "evidence": [
@@ -4121,10 +4201,12 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_helper_parameters_inline_with_accesses",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_helper_parameter_access_contracts_emit_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_parameter_access_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_single_member_descriptor_arrays_preserve_accesses",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_single_member_descriptor_arrays_access_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_atomics_emit_diagnostics_for_invalid_targets",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_resource_memory_qualifiers_validate_with_spirv_tools"
           ],
-          "notes": "Storage-image readonly/writeonly/coherent/volatile/restrict qualifiers lower to validated SPIR-V variable decorations with direct and interprocedural invalid read/write/atomic diagnostics; StructuredBuffer, RWStructuredBuffer, and GLSL buffer-block helper parameters inline to avoid invalid Uniform pointer calls while preserving read/write access diagnostics; GLSL buffer-block qualifiers lower to BufferBlock member decorations with direct/helper/atomic access diagnostics. Remaining gaps are std140/scalar layout parity and broader block-array coverage.",
+          "notes": "Storage-image readonly/writeonly/coherent/volatile/restrict qualifiers lower to validated SPIR-V variable decorations with direct and interprocedural invalid read/write/atomic diagnostics; StructuredBuffer, RWStructuredBuffer, and GLSL buffer-block helper parameters inline to avoid invalid Uniform pointer calls while preserving read/write access diagnostics; GLSL buffer-block qualifiers lower to BufferBlock member decorations with direct/helper/atomic access diagnostics.",
           "status": "partial"
         }
       }
@@ -4673,9 +4755,10 @@
         },
         "mojo": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_builtins_reject_invalid_mojo_resources"
           ],
-          "notes": "Multisample texture fetch and query forms lower to compile-smoke Mojo placeholder helpers; compare/gather validation and real multisample memory semantics remain incomplete.",
+          "notes": "Multisample texture fetch and query forms lower to compile-smoke Mojo placeholder helpers; advanced sampling/gather/compare forms on multisample textures emit deterministic diagnostics. Real multisample memory semantics remain incomplete.",
           "status": "partial"
         },
         "opengl": {
@@ -4737,9 +4820,10 @@
         },
         "mojo": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_placeholder_builtins_compile_with_mojo"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_placeholder_builtins_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_builtins_reject_invalid_mojo_resources"
           ],
-          "notes": "Advanced texture operations lower to compile-smoke Mojo placeholder helpers across LOD, gradients, offsets, projection, gather, compare, and query families; real target texture semantics are still placeholders.",
+          "notes": "Advanced texture operations lower to compile-smoke Mojo placeholder helpers across LOD, gradients, offsets, projection, gather, compare, and query families; image/non-texture targets, multisample targets for advanced sampling, and non-shadow compare targets emit deterministic diagnostics. Real target texture semantics are still placeholders.",
           "status": "partial"
         },
         "opengl": {
@@ -4879,9 +4963,10 @@
         "mojo": {
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_integer_image_atomic_placeholders_compile_with_mojo",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_image_atomics_require_read_write_access_for_mojo_codegen"
           ],
-          "notes": "Integer image atomic add/min/max/bitwise/exchange/compare-exchange forms lower to compile-smoke Mojo placeholder helpers and float-image atomics are rejected; native atomic memory semantics are not implemented.",
+          "notes": "Integer image atomic add/min/max/bitwise/exchange/compare-exchange forms lower to compile-smoke Mojo placeholder helpers, float-image atomics are rejected, and readonly/writeonly image atomics emit deterministic diagnostics. Native atomic memory semantics are not implemented.",
           "status": "partial"
         },
         "opengl": {
@@ -5227,9 +5312,12 @@
           "status": "supported"
         },
         "mojo": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_synchronization_builtins_lower_to_compile_smoke_helpers",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_user_defined_synchronization_names_are_not_lowered"
+          ],
+          "notes": "barrier/workgroupBarrier and memoryBarrier lower to compile-smoke Mojo placeholder helpers, while user-defined functions with those names are preserved.",
+          "status": "partial"
         },
         "opengl": {
           "evidence": [
@@ -5513,7 +5601,7 @@
   },
   "summary": {
     "backend_count": 9,
-    "backlog_count": 196,
+    "backlog_count": 195,
     "feature_count": 42,
     "status_counts": {
       "cuda": {
@@ -5550,10 +5638,10 @@
       },
       "mojo": {
         "diagnostic": 0,
-        "partial": 23,
+        "partial": 27,
         "supported": 10,
-        "unknown": 9,
-        "unsupported": 0,
+        "unknown": 0,
+        "unsupported": 5,
         "validated_rejection": 0
       },
       "opengl": {
@@ -5574,8 +5662,8 @@
       },
       "slang": {
         "diagnostic": 0,
-        "partial": 9,
-        "supported": 13,
+        "partial": 8,
+        "supported": 14,
         "unknown": 20,
         "unsupported": 0,
         "validated_rejection": 0

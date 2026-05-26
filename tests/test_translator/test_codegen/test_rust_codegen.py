@@ -578,29 +578,42 @@ mod math {
         }
     }
 
-    pub fn sqrt(value: f32) -> f32 {
-        value.sqrt()
+    macro_rules! same_shape_unary_function {
+        ($trait_name:ident, $method_name:ident, $function_name:ident) => {
+            pub trait $trait_name {
+                type Output;
+
+                fn $method_name(self) -> Self::Output;
+            }
+
+            pub fn $function_name<T: $trait_name>(value: T) -> T::Output {
+                value.$method_name()
+            }
+
+            impl $trait_name for f32 {
+                type Output = f32;
+
+                fn $method_name(self) -> Self::Output {
+                    self
+                }
+            }
+
+            impl $trait_name for Vec3<f32> {
+                type Output = Vec3<f32>;
+
+                fn $method_name(self) -> Self::Output {
+                    self
+                }
+            }
+        };
     }
 
-    pub fn rsqrt(value: f32) -> f32 {
-        1.0 / value.sqrt()
-    }
-
-    pub fn abs(value: f32) -> f32 {
-        value.abs()
-    }
-
-    pub fn floor(value: f32) -> f32 {
-        value.floor()
-    }
-
-    pub fn ceil(value: f32) -> f32 {
-        value.ceil()
-    }
-
-    pub fn round(value: f32) -> f32 {
-        value.round()
-    }
+    same_shape_unary_function!(SqrtValue, sqrt_value, sqrt);
+    same_shape_unary_function!(RsqrtValue, rsqrt_value, rsqrt);
+    same_shape_unary_function!(AbsValue, abs_value, abs);
+    same_shape_unary_function!(FloorValue, floor_value, floor);
+    same_shape_unary_function!(CeilValue, ceil_value, ceil);
+    same_shape_unary_function!(RoundValue, round_value, round);
 
     pub trait TruncValue {
         type Output;
@@ -654,33 +667,13 @@ mod math {
         }
     }
 
-    pub fn fract(value: f32) -> f32 {
-        value.fract()
-    }
-
-    pub fn sin(value: f32) -> f32 {
-        value.sin()
-    }
-
-    pub fn cos(value: f32) -> f32 {
-        value.cos()
-    }
-
-    pub fn tan(value: f32) -> f32 {
-        value.tan()
-    }
-
-    pub fn asin(value: f32) -> f32 {
-        value.asin()
-    }
-
-    pub fn acos(value: f32) -> f32 {
-        value.acos()
-    }
-
-    pub fn atan(value: f32) -> f32 {
-        value.atan()
-    }
+    same_shape_unary_function!(FractValue, fract_value, fract);
+    same_shape_unary_function!(SinValue, sin_value, sin);
+    same_shape_unary_function!(CosValue, cos_value, cos);
+    same_shape_unary_function!(TanValue, tan_value, tan);
+    same_shape_unary_function!(AsinValue, asin_value, asin);
+    same_shape_unary_function!(AcosValue, acos_value, acos);
+    same_shape_unary_function!(AtanValue, atan_value, atan);
 
     pub trait Atan2Value<Rhs> {
         type Output;
@@ -727,41 +720,15 @@ mod math {
         }
     }
 
-    pub fn sinh(value: f32) -> f32 {
-        value.sinh()
-    }
-
-    pub fn cosh(value: f32) -> f32 {
-        value.cosh()
-    }
-
-    pub fn tanh(value: f32) -> f32 {
-        value.tanh()
-    }
-
-    pub fn exp(value: f32) -> f32 {
-        value.exp()
-    }
-
-    pub fn exp2(value: f32) -> f32 {
-        value.exp2()
-    }
-
-    pub fn log(value: f32) -> f32 {
-        value.ln()
-    }
-
-    pub fn log2(value: f32) -> f32 {
-        value.log2()
-    }
-
-    pub fn degrees(value: f32) -> f32 {
-        value.to_degrees()
-    }
-
-    pub fn radians(value: f32) -> f32 {
-        value.to_radians()
-    }
+    same_shape_unary_function!(SinhValue, sinh_value, sinh);
+    same_shape_unary_function!(CoshValue, cosh_value, cosh);
+    same_shape_unary_function!(TanhValue, tanh_value, tanh);
+    same_shape_unary_function!(ExpValue, exp_value, exp);
+    same_shape_unary_function!(Exp2Value, exp2_value, exp2);
+    same_shape_unary_function!(LogValue, log_value, log);
+    same_shape_unary_function!(Log2Value, log2_value, log2);
+    same_shape_unary_function!(DegreesValue, degrees_value, degrees);
+    same_shape_unary_function!(RadiansValue, radians_value, radians);
 
     pub trait ModuloValue<Rhs> {
         type Output;
@@ -5984,6 +5951,83 @@ def test_common_math_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_pat
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_unary_math_intrinsics_preserve_vector_shape_and_smoke_compile(tmp_path):
+    code = """
+    shader UnaryMathVectorInference {
+        fragment {
+            vec4 main(vec3 value, float scalar) {
+                let root = sqrt(value);
+                let inv_root = inversesqrt(value);
+                let magnitude = abs(value);
+                let rounded = floor(value) + ceil(value) + round(value)
+                    + trunc(value) + roundEven(value) + fract(value);
+                let trig = sin(value) + cos(value) + tan(value)
+                    + asin(value) + acos(value) + atan(value);
+                let hyper = sinh(value) + cosh(value) + tanh(value);
+                let exponentials = exp(value) + exp2(value);
+                let logs = log(abs(value) + vec3(1.0, 1.0, 1.0))
+                    + log2(abs(value) + vec3(1.0, 1.0, 1.0));
+                let angles = degrees(value) + radians(value);
+                let scalar_math = sqrt(scalar) + inversesqrt(scalar) + abs(scalar)
+                    + floor(scalar) + ceil(scalar) + round(scalar)
+                    + trunc(scalar) + roundEven(scalar) + fract(scalar)
+                    + sin(scalar) + cos(scalar) + tan(scalar)
+                    + asin(scalar) + acos(scalar) + atan(scalar)
+                    + sinh(scalar) + cosh(scalar) + tanh(scalar)
+                    + exp(scalar) + exp2(scalar) + log(abs(scalar) + 1.0)
+                    + log2(abs(scalar) + 1.0) + degrees(scalar) + radians(scalar);
+                return vec4(
+                    root + inv_root + magnitude + rounded + trig + hyper
+                        + exponentials + logs + angles,
+                    scalar_math
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let root: Vec3<f32> = sqrt(value);" in generated_code
+    assert "let inv_root: Vec3<f32> = rsqrt(value);" in generated_code
+    assert "let magnitude: Vec3<f32> = abs(value);" in generated_code
+    assert "let rounded: Vec3<f32> =" in generated_code
+    assert "floor(value)" in generated_code
+    assert "ceil(value)" in generated_code
+    assert "round(value)" in generated_code
+    assert "trunc(value)" in generated_code
+    assert "round_even(value)" in generated_code
+    assert "fract(value)" in generated_code
+    assert "let trig: Vec3<f32> =" in generated_code
+    assert "sin(value)" in generated_code
+    assert "cos(value)" in generated_code
+    assert "tan(value)" in generated_code
+    assert "asin(value)" in generated_code
+    assert "acos(value)" in generated_code
+    assert "atan(value)" in generated_code
+    assert "let hyper: Vec3<f32> =" in generated_code
+    assert "sinh(value)" in generated_code
+    assert "cosh(value)" in generated_code
+    assert "tanh(value)" in generated_code
+    assert "let exponentials: Vec3<f32> = (exp(value) + exp2(value));" in generated_code
+    assert "let logs: Vec3<f32> =" in generated_code
+    assert "log((abs(value) + Vec3::<f32>::new(1.0, 1.0, 1.0)))" in generated_code
+    assert "log2((abs(value) + Vec3::<f32>::new(1.0, 1.0, 1.0)))" in generated_code
+    assert (
+        "let angles: Vec3<f32> = (degrees(value) + radians(value));" in generated_code
+    )
+    assert "let scalar_math: f32 =" in generated_code
+    assert "sqrt(scalar)" in generated_code
+    assert "rsqrt(scalar)" in generated_code
+    assert "round_even(scalar)" in generated_code
+    assert "fract(scalar)" in generated_code
+    assert "log((abs(scalar) + 1.0))" in generated_code
+    assert "log2((abs(scalar) + 1.0))" in generated_code
+    assert "let root: f32 = sqrt(value)" not in generated_code
+    assert "let scalar_math: Vec3<f32>" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_rounding_intrinsics_preserve_float_input_shape_and_smoke_compile(tmp_path):
     code = """
     shader RoundingIntrinsicInference {
@@ -8770,6 +8814,63 @@ def test_match_statement_emits_rust_match():
     assert "MatchArmNode" not in generated_code
 
 
+def test_match_arm_break_and_continue_preserve_loop_control_flow_and_smoke_compile(
+    tmp_path,
+):
+    code = """
+    shader MatchLoopControlFlow {
+        compute {
+            int main(int mode) {
+                int total = 0;
+                for (int i = 0; i < 4; i++) {
+                    match mode {
+                        0 => {
+                            continue;
+                        }
+                        1 => {
+                            break;
+                        }
+                        _ => {
+                            total += i;
+                        }
+                    }
+                    total += 1;
+                }
+                loop {
+                    match mode {
+                        2 => {
+                            break;
+                        }
+                        _ => {
+                            total += 1;
+                            break;
+                        }
+                    }
+                }
+                return total;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "match mode" in generated_code
+    assert (
+        "0 => {\n                i += 1;\n                continue;\n            },"
+        in generated_code
+    )
+    assert "1 => {\n                break;\n            }," in generated_code
+    assert "2 => {\n                break;\n            }," in generated_code
+    assert (
+        "_ => {\n                total += 1;\n                break;\n            },"
+        in generated_code
+    )
+    assert "0 => {\n        }" not in generated_code
+    assert "1 => {\n        }" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_match_path_constructor_struct_and_guarded_patterns_emit_rust_match():
     code = """
     shader PatternCases {
@@ -8850,6 +8951,60 @@ def test_unused_match_pattern_bindings_are_prefixed_but_used_bindings_are_preser
     )
     assert "Command::Draw { payload: _payload, amount } =>" in generated_code
     assert "amount: _amount" not in generated_code
+
+
+def test_mutated_match_pattern_bindings_emit_mut_and_smoke_compile(tmp_path):
+    code = """
+    shader MutablePatternBindings {
+        generic<T, E> struct Result {
+            enum ResultType {
+                Ok(T),
+                Err(E)
+            }
+            ResultType variant;
+        }
+
+        enum Error {
+            Bad
+        }
+
+        enum Command {
+            Draw {
+                payload: int,
+                amount: int
+            },
+            Skip
+        }
+
+        fn bump(result: Result<int, Error>) -> int {
+            match result {
+                Result::Ok(value) => {
+                    value += 1;
+                    value
+                },
+                Result::Err(_) => 0,
+            }
+        }
+
+        fn adjust(command: Command) -> int {
+            match command {
+                Command::Draw { payload, amount } => {
+                    payload += amount;
+                    payload
+                },
+                Command::Skip => 0,
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Result::Ok(mut value) =>" in generated_code
+    assert "Command::Draw { payload: mut payload, amount } =>" in generated_code
+    assert "Result::Ok(value) =>" not in generated_code
+    assert "payload += amount;" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_match_arm_block_tail_expression_emits_without_semicolon():

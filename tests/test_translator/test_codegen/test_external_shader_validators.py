@@ -45,6 +45,8 @@ shader ExternalValidatorTypedBufferAtomics {
 
     RWBuffer<uint> counters @register(u1);
     RWStructuredBuffer<Counter> structuredCounters @register(u2);
+    RWBuffer<uint> counterArrays[2] @register(u4);
+    RWStructuredBuffer<int> signedCounters @register(u6);
 
     uint fetchAndAdd(uint index) {
         return atomicAdd(counters[index], 1u);
@@ -54,6 +56,10 @@ shader ExternalValidatorTypedBufferAtomics {
         return atomicCompareExchange(counters[index], 2u, 3u);
     }
 
+    uint addWithBias(uint index) {
+        return atomicAdd(counters[index], 5u) + 3u;
+    }
+
     compute {
         @numthreads(1, 1, 1)
         void main(uvec3 tid @gl_GlobalInvocationID) {
@@ -61,7 +67,13 @@ shader ExternalValidatorTypedBufferAtomics {
             original = atomicCompareExchange(counters[tid.x], 2u, 3u);
             atomicXor(counters[tid.x], 4u, original);
             atomicMin(structuredCounters[tid.x].signedValue, -1);
+            atomicAdd(counterArrays[1][tid.x], 1u, original);
+            int oldSigned = atomicMax(signedCounters[tid.x], -1);
+            uint combined = atomicAdd(counters[tid.x], 5u)
+                + atomicCompareExchange(counters[tid.x], 2u, 3u);
+            original = atomicAdd(counterArrays[1][tid.x], 2u) + 4u;
             original = fetchAndAdd(tid.x) + compareAndSwap(tid.x);
+            original += addWithBias(tid.x) + combined;
         }
     }
 }
@@ -201,6 +213,32 @@ void main() {
         EmitVertex();
     }
     EndPrimitive();
+}
+"""
+
+
+GLSL_GEOMETRY_INTERFACE_BLOCK_VALIDATOR_SHADER = """
+shader GLSLGeometryInterfaceBlockValidator {
+    @glsl_interface_block(in) @glsl_interface_instance(vertexIn) @glsl_interface_array
+    struct VertexIn {
+        flat vec2 inputUv;
+    };
+
+    @glsl_interface_block(out) @glsl_interface_instance(fragmentOut)
+    struct FragmentOut {
+        noperspective vec2 outUv;
+    };
+
+    geometry {
+        layout(points) in;
+        layout(points, max_vertices = 1) out;
+
+        void main() {
+            fragmentOut.outUv = vertexIn[0].inputUv;
+            gl_Position = gl_in[0].gl_Position;
+            EmitVertex();
+        }
+    }
 }
 """
 
@@ -718,10 +756,21 @@ def test_generated_hlsl_typed_buffer_atomics_compile_with_dxc(tmp_path):
     )
     assert "InterlockedAdd(counters[tid.x], 1u, original);" in code
     assert "InterlockedCompareExchange(counters[tid.x], 2u, 3u, original);" in code
+    assert "InterlockedAdd(counterArrays[1][tid.x], 1u, original);" in code
+    assert "InterlockedMax(signedCounters[tid.x], -1, oldSigned);" in code
     assert "InterlockedAdd(counters[index], 1u, __crossgl_atomic_return_0);" in code
     assert (
         "InterlockedCompareExchange(counters[index], 2u, 3u, __crossgl_atomic_return_1);"
         in code
+    )
+    assert "InterlockedAdd(counters[index], 5u, __crossgl_atomic_expr_2);" in code
+    assert "InterlockedAdd(counters[tid.x], 5u, __crossgl_atomic_expr_3);" in code
+    assert (
+        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, "
+        "__crossgl_atomic_expr_4);"
+    ) in code
+    assert (
+        "InterlockedAdd(counterArrays[1][tid.x], 2u, __crossgl_atomic_expr_5);" in code
     )
     assert "atomicCompareExchange(counters" not in code
     shader_path.write_text(code, encoding="utf-8")
@@ -1035,6 +1084,28 @@ def test_mixed_glsl_geometry_tessellation_interfaces_validate_with_glslangvalida
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", validator_stage, str(shader_path)])
+
+
+def test_generated_glsl_geometry_interface_blocks_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "geometry_interface_block.geom"
+
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_GEOMETRY_INTERFACE_BLOCK_VALIDATOR_SHADER),
+        "geometry",
+    )
+    assert "in VertexIn {" in code
+    assert "flat vec2 inputUv;" in code
+    assert "} vertexIn[];" in code
+    assert "out FragmentOut {" in code
+    assert "noperspective vec2 outUv;" in code
+    assert "} fragmentOut;" in code
+    assert "in VertexIn vertexIn[]" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "geom", str(shader_path)])
 
 
 @pytest.mark.parametrize(

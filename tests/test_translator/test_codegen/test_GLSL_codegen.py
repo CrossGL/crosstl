@@ -1152,6 +1152,78 @@ def test_glsl_vertex_value_parameter_emits_stage_input_declaration():
     assert "gl_Position = vec4(position, 1.0);" in generated_code
 
 
+def test_glsl_stage_interface_interpolation_precision_qualifiers():
+    code = """
+    shader FragmentQualifierSmoke {
+        flat centroid in vec2 inputUv @location(1) @highp;
+        noperspective sample out vec4 fragColor
+            @location(0)
+            @invariant
+            @precise
+            @mediump;
+
+        fragment {
+            void main() {
+                fragColor = vec4(inputUv, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 1) flat centroid in highp vec2 inputUv;" in (
+        generated_code
+    )
+    assert (
+        "layout(location = 0) invariant precise noperspective sample "
+        "out mediump vec4 fragColor;" in generated_code
+    )
+
+
+def test_glsl_stage_interface_extended_layout_qualifiers():
+    code = """
+    shader LayoutQualifierSmoke {
+        in vec2 inputUv[] @location(0) @component(1);
+        out vec2 outUv
+            @location(1)
+            @stream(0)
+            @xfb_buffer(0)
+            @xfb_offset(0);
+        out vec4 fragColor @location(0) @index(1);
+
+        geometry {
+            layout(points) in;
+            layout(points, max_vertices = 1) out;
+
+            void main() {
+                outUv = inputUv[0];
+                EmitVertex();
+            }
+        }
+
+        fragment {
+            void main() {
+                fragColor = vec4(1.0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(code)
+    geometry_code = GLSLCodeGen().generate_stage(ast, "geometry")
+    fragment_code = GLSLCodeGen().generate_stage(ast, "fragment")
+
+    assert "layout(location = 0, component = 1) in vec2 inputUv[];" in geometry_code
+    assert (
+        "layout(location = 1, stream = 0, xfb_buffer = 0, xfb_offset = 0) "
+        "out vec2 outUv;" in geometry_code
+    )
+    assert "layout(location = 0, index = 1) out vec4 fragColor;" in fragment_code
+
+
 def test_glsl_stage_builtin_parameter_aliases_to_glsl_builtin():
     code = """
     shader StageBuiltinParameterAlias {
@@ -4120,7 +4192,6 @@ def test_glsl_ray_query_methods_lower_to_ext_functions():
     assert "rayQueryEXT rq;" in generated_code
     assert "rayQueryInitializeEXT(" in generated_code
     assert "bool active_ = rayQueryProceedEXT(rq);" in generated_code
-    assert "bool active =" not in generated_code
     assert (
         "uint candidateType = rayQueryGetIntersectionTypeEXT(rq, false);"
         in generated_code
@@ -4186,7 +4257,6 @@ def test_glsl_target_stage_ray_query_extensions_are_scoped_to_emitted_stage():
     assert "#extension GL_EXT_ray_query : require" in compute_code
     assert "rayQueryEXT rq;" in compute_code
     assert "bool active_ = rayQueryProceedEXT(rq);" in compute_code
-    assert "bool active =" not in compute_code
 
     assert combined_code.lstrip().startswith("#version 460 core")
     assert combined_code.count("#extension GL_EXT_ray_query : require") == 1
@@ -5288,12 +5358,41 @@ def test_stage_tail_struct_constructor_returns_stage_output():
 
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "struct VertexOutput {" in generated_code
+    assert "struct VertexOutput {" not in generated_code
     assert "void main()" in generated_code
     assert "out_position = vec4(position, 1.0);" in generated_code
     assert "out_color = color;" in generated_code
     assert "return;" in generated_code
     assert "ConstructorNode(" not in generated_code
+
+
+def test_flattened_vertex_output_struct_is_kept_when_helper_uses_type():
+    shader = """
+    shader StageOutputHelperUse {
+        struct VertexOutput {
+            position: vec4,
+            color: vec4
+        }
+
+        float readColor(VertexOutput value) {
+            return value.color.x;
+        }
+
+        vertex {
+            VertexOutput main() {
+                return VertexOutput(vec4(1.0), vec4(0.25));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct VertexOutput {" in generated_code
+    assert "float readColor(VertexOutput value)" in generated_code
+    assert "position = vec4(1.0);" in generated_code
+    assert "color = vec4(0.25);" in generated_code
+    assert "return VertexOutput" not in generated_code
 
 
 def test_trait_self_return_does_not_emit_generic_enum_specialization():

@@ -258,6 +258,48 @@ DECLARATION_ROLE_METADATA_NAMES = {
     "primitives": "mesh_primitives",
 }
 
+BUILTIN_SEMANTIC_METADATA_NAMES = {
+    "position": "position",
+    "gl_position": "position",
+    "sv_position": "position",
+    "point_size": "point_size",
+    "gl_pointsize": "point_size",
+    "vertex_index": "vertex_index",
+    "vertexid": "vertex_index",
+    "gl_vertexid": "vertex_index",
+    "sv_vertexid": "vertex_index",
+    "instance_index": "instance_index",
+    "instanceid": "instance_index",
+    "gl_instanceid": "instance_index",
+    "sv_instanceid": "instance_index",
+    "front_facing": "front_facing",
+    "gl_frontfacing": "front_facing",
+    "sv_isfrontface": "front_facing",
+    "frag_coord": "frag_coord",
+    "gl_fragcoord": "frag_coord",
+    "point_coord": "point_coord",
+    "gl_pointcoord": "point_coord",
+    "frag_depth": "frag_depth",
+    "gl_fragdepth": "frag_depth",
+    "sv_depth": "frag_depth",
+    "primitive_id": "primitive_id",
+    "primitiveid": "primitive_id",
+    "gl_primitiveid": "primitive_id",
+    "sv_primitiveid": "primitive_id",
+    "global_invocation_id": "global_invocation_id",
+    "gl_globalinvocationid": "global_invocation_id",
+    "sv_dispatchthreadid": "global_invocation_id",
+    "local_invocation_id": "local_invocation_id",
+    "gl_localinvocationid": "local_invocation_id",
+    "sv_groupthreadid": "local_invocation_id",
+    "workgroup_id": "workgroup_id",
+    "gl_workgroupid": "workgroup_id",
+    "sv_groupid": "workgroup_id",
+    "local_invocation_index": "local_invocation_index",
+    "gl_localinvocationindex": "local_invocation_index",
+    "sv_groupindex": "local_invocation_index",
+}
+
 FUNCTION_STAGE_ATTRIBUTE_NAMES = {
     "domain": "domain",
     "local_size": "threadgroup_size",
@@ -934,6 +976,13 @@ def validate_node_metadata(node, context):
             f"{_metadata_name_phrase(declaration_roles)}"
         )
 
+    builtin_semantics = _node_builtin_semantic_metadata(node)
+    if len(set(builtin_semantics.values())) > 1:
+        raise ValueError(
+            f"Conflicting builtin metadata on {context}: "
+            f"{_metadata_name_phrase(builtin_semantics)}"
+        )
+
     access_names = _node_resource_access_names(node)
     if len(access_names) > 1:
         access_list = ", ".join(sorted(f"@{name}" for name in access_names))
@@ -1508,6 +1557,37 @@ def _node_memory_layout_names(node):
                 MEMORY_LAYOUT_METADATA_NAMES[block_layout]
             )
     return memory_layouts
+
+
+def _node_builtin_semantic_metadata(node):
+    metadata = {}
+    for attr in getattr(node, "attributes", []) or []:
+        raw_name = getattr(attr, "name", None)
+        attr_name = _normalized_metadata_name(raw_name)
+        if attr_name == "builtin":
+            builtin_name = _normalized_metadata_name(_attribute_metadata_value(attr))
+            if not builtin_name:
+                continue
+            metadata[f"builtin({builtin_name})"] = BUILTIN_SEMANTIC_METADATA_NAMES.get(
+                builtin_name, builtin_name
+            )
+            continue
+
+        builtin_name = _builtin_semantic_attribute_name(raw_name)
+        if builtin_name is not None:
+            metadata[str(raw_name)] = builtin_name
+    return metadata
+
+
+def _builtin_semantic_attribute_name(name):
+    attr_name = _normalized_metadata_name(name)
+    if attr_name not in BUILTIN_SEMANTIC_METADATA_NAMES:
+        return None
+
+    raw_name = str(name)
+    if raw_name == attr_name or attr_name.startswith(("gl_", "sv_")):
+        return BUILTIN_SEMANTIC_METADATA_NAMES[attr_name]
+    return None
 
 
 def validate_hlsl_semantic_metadata(node, context):

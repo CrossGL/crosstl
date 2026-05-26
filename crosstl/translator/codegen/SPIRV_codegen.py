@@ -99,6 +99,7 @@ class VulkanSPIRVCodeGen:
         self.array_types = {}
         self.layout_array_types = {}
         self.layout_struct_types = {}
+        self.layout_struct_source_types = {}
         self.resource_types = {}
         self.resource_image_types = {}
 
@@ -430,6 +431,7 @@ class VulkanSPIRVCodeGen:
 
         spirv_id = SpirvId(id_value, SpirvType(type_name), type_name)
         self.layout_struct_types[key] = spirv_id
+        self.layout_struct_source_types[id_value] = source_type
         self.current_struct_members[type_name] = members
         return spirv_id
 
@@ -547,23 +549,16 @@ class VulkanSPIRVCodeGen:
             "Sample": 6,
             "MinLod": 7,
         }
-        parsed_operands = []
+        mask_values = {}
         for operand in operands:
             if not operand:
                 continue
             parts = operand.split()
-            parsed_operands.append((parts[0], parts[1:]))
-        if not parsed_operands:
+            mask_values[parts[0]] = parts[1:]
+        if not mask_values:
             return ""
-        parsed_operands.sort(
-            key=lambda item: operand_order.get(item[0], len(operand_order))
-        )
-        masks = [mask for mask, _values in parsed_operands]
-        values = [
-            value
-            for _mask, operand_values in parsed_operands
-            for value in operand_values
-        ]
+        masks = sorted(mask_values, key=lambda mask: operand_order.get(mask, 100))
+        values = [value for mask in masks for value in mask_values[mask]]
         return " ".join(["|".join(masks)] + values)
 
     def create_variable(
@@ -597,6 +592,14 @@ class VulkanSPIRVCodeGen:
             self.emit("; WARNING: storage buffer store requires a writable buffer")
             return
 
+        target_type = self.pointer_pointee_type(variable_id)
+        if self.type_contains_runtime_array(target_type):
+            self.emit(
+                "; WARNING: runtime-array aggregate values cannot be stored "
+                "as SPIR-V values"
+            )
+            return
+
         value_id = self.convert_value_for_store(variable_id, value_id)
         self.emit(f"OpStore %{variable_id.id} %{value_id.id}")
 
@@ -606,6 +609,11 @@ class VulkanSPIRVCodeGen:
         if storage_metadata is not None and storage_metadata.get("writeonly"):
             self.emit("; WARNING: storage buffer load requires a readable buffer")
             return self.default_value_for_type(result_type)
+
+        if self.type_contains_runtime_array(result_type):
+            return self.runtime_array_aggregate_fallback(
+                "runtime-array aggregate values cannot be loaded as SPIR-V values"
+            )
 
         id_value = self.get_id()
         self.emit(f"%{id_value} = OpLoad %{result_type.id} %{variable_id.id}")
@@ -621,15 +629,19 @@ class VulkanSPIRVCodeGen:
         self, variable_id: SpirvId, value_id: SpirvId
     ) -> SpirvId:
         """Convert a stored value to the pointer's known pointee type when possible."""
+        target_type = self.pointer_pointee_type(variable_id)
+        if target_type is None:
+            return value_id
+
+        return self.convert_value_to_type(value_id, target_type)
+
+    def pointer_pointee_type(self, variable_id: SpirvId) -> Optional[SpirvId]:
         target_type = self.variable_value_types.get(variable_id.id)
         if target_type is None and variable_id.type.storage_class:
             target_type = self.find_registered_type_by_base(
                 variable_id.type.base_type.replace("ptr_", "", 1)
             )
-        if target_type is None:
-            return value_id
-
-        return self.convert_value_to_type(value_id, target_type)
+        return target_type
 
     def convert_value_to_type(self, value_id: SpirvId, target_type: SpirvId) -> SpirvId:
         """Convert scalar values to a compatible scalar or vector target type."""
@@ -642,6 +654,13 @@ class VulkanSPIRVCodeGen:
             and source_type.type.base_type == target_type.type.base_type
         ):
             return value_id
+
+        if source_type is not None:
+            aggregate_value = self.convert_aggregate_value_to_type(
+                value_id, source_type, target_type
+            )
+            if aggregate_value is not None:
+                return aggregate_value
 
         target_vector = self.vector_component_type_and_count(target_type.type.base_type)
         source_vector = self.vector_component_type_and_count(value_id.type.base_type)
@@ -681,6 +700,106 @@ class VulkanSPIRVCodeGen:
         if self.normalize_primitive_name(converted.type.base_type) != target_vector[0]:
             return value_id
         return self.splat_scalar_to_vector(converted, target_type)
+
+    def value_has_type(self, value_id: SpirvId, target_type: SpirvId) -> bool:
+        value_type = self.value_types.get(
+            value_id.id
+        ) or self.find_registered_type_by_base(value_id.type.base_type)
+        if value_type is None:
+            return value_id.type.base_type == target_type.type.base_type
+        return (
+            value_type.id == target_type.id
+            or value_type.type.base_type == target_type.type.base_type
+        )
+
+    def aggregate_canonical_key(self, type_id: SpirvId):
+        source_type = self.layout_struct_source_types.get(type_id.id)
+        if source_type is not None:
+            return ("struct", source_type.id)
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, size = array_info
+            return ("array", self.aggregate_canonical_key(element_type), size)
+
+        if type_id.type.base_type in self.current_struct_members:
+            return ("struct", type_id.id)
+
+        return ("type", type_id.id)
+
+    def aggregate_types_are_layout_compatible(
+        self, source_type: SpirvId, target_type: SpirvId
+    ) -> bool:
+        source_is_struct = source_type.type.base_type in self.current_struct_members
+        target_is_struct = target_type.type.base_type in self.current_struct_members
+        source_is_array = self.array_type_info_from_type(source_type) is not None
+        target_is_array = self.array_type_info_from_type(target_type) is not None
+        if not (
+            (source_is_struct and target_is_struct)
+            or (source_is_array and target_is_array)
+        ):
+            return False
+        return self.aggregate_canonical_key(
+            source_type
+        ) == self.aggregate_canonical_key(target_type)
+
+    def convert_aggregate_value_to_type(
+        self, value_id: SpirvId, source_type: SpirvId, target_type: SpirvId
+    ) -> Optional[SpirvId]:
+        if self.type_contains_runtime_array(
+            source_type
+        ) or self.type_contains_runtime_array(target_type):
+            return None
+
+        if not self.aggregate_types_are_layout_compatible(source_type, target_type):
+            return None
+
+        source_array = self.array_type_info_from_type(source_type)
+        target_array = self.array_type_info_from_type(target_type)
+        if source_array is not None or target_array is not None:
+            if source_array is None or target_array is None:
+                return None
+            source_element_type, source_size = source_array
+            target_element_type, target_size = target_array
+            if source_size is None or target_size is None or source_size != target_size:
+                return None
+
+            elements = []
+            for index in range(int(target_size)):
+                source_element = self.composite_extract(
+                    value_id, source_element_type, index
+                )
+                target_element = self.convert_value_to_type(
+                    source_element, target_element_type
+                )
+                if not self.value_has_type(target_element, target_element_type):
+                    return None
+                elements.append(target_element)
+            return self.composite_construct(target_type, elements)
+
+        source_members = self.current_struct_members.get(source_type.type.base_type)
+        target_members = self.current_struct_members.get(target_type.type.base_type)
+        if source_members is None or target_members is None:
+            return None
+        if len(source_members) != len(target_members):
+            return None
+
+        values = []
+        for index, (
+            (source_member_type, source_name),
+            (target_member_type, target_name),
+        ) in enumerate(zip(source_members, target_members)):
+            if source_name != target_name:
+                return None
+            source_member = self.composite_extract(value_id, source_member_type, index)
+            target_member = self.convert_value_to_type(
+                source_member, target_member_type
+            )
+            if not self.value_has_type(target_member, target_member_type):
+                return None
+            values.append(target_member)
+
+        return self.composite_construct(target_type, values)
 
     def promoted_numeric_type_name(self, type_names: List[str]) -> Optional[str]:
         numeric_types = {"int", "uint", "float", "double"}
@@ -4402,6 +4521,11 @@ class VulkanSPIRVCodeGen:
         layout = self.glsl_buffer_block_layout(node)
         base_type_name = self.array_base_type_name(type_name)
         is_named_block = base_type_name in self.struct_types
+        outer_array = self.split_outer_array_type(type_name)
+        if is_named_block and outer_array is not None and outer_array[1] is None:
+            self.require_capability("RuntimeDescriptorArray")
+            self.require_extension("SPV_EXT_descriptor_indexing")
+
         if is_named_block:
             value_type = self.map_crossgl_type(type_name)
             block_type = self.struct_types[base_type_name]
@@ -4825,12 +4949,14 @@ class VulkanSPIRVCodeGen:
             self.decorations.append(
                 f"OpMemberDecorate %{block_type.id} {member_index} Offset {offset}"
             )
-            if self.uniform_layout_contains_matrix(member_type):
+            matrix_stride = self.storage_matrix_stride_for_member(member_type, layout)
+            if matrix_stride is not None:
                 self.decorations.append(
                     f"OpMemberDecorate %{block_type.id} {member_index} ColMajor"
                 )
                 self.decorations.append(
-                    f"OpMemberDecorate %{block_type.id} {member_index} MatrixStride 16"
+                    f"OpMemberDecorate %{block_type.id} {member_index} "
+                    f"MatrixStride {matrix_stride}"
                 )
             self.decorate_storage_buffer_nested_type(member_type, layout)
 
@@ -4846,12 +4972,16 @@ class VulkanSPIRVCodeGen:
                 self.decorations.append(
                     f"OpMemberDecorate %{type_id.id} {member_index} Offset {offset}"
                 )
-                if self.uniform_layout_contains_matrix(member_type):
+                matrix_stride = self.storage_matrix_stride_for_member(
+                    member_type, layout
+                )
+                if matrix_stride is not None:
                     self.decorations.append(
                         f"OpMemberDecorate %{type_id.id} {member_index} ColMajor"
                     )
                     self.decorations.append(
-                        f"OpMemberDecorate %{type_id.id} {member_index} MatrixStride 16"
+                        f"OpMemberDecorate %{type_id.id} {member_index} "
+                        f"MatrixStride {matrix_stride}"
                     )
                 self.decorate_storage_buffer_nested_type(member_type, layout)
             return
@@ -4886,10 +5016,13 @@ class VulkanSPIRVCodeGen:
     def storage_layout_alignment(self, type_id: SpirvId, layout: str = "std430") -> int:
         if layout == "std140":
             return self.uniform_layout_alignment(type_id)
+        if layout == "scalar":
+            return self.scalar_layout_alignment(type_id)
 
         matrix_info = self.matrix_type_info_from_type(type_id)
         if matrix_info is not None:
-            return 16
+            column_type, _ = matrix_info
+            return self.storage_layout_alignment(column_type, layout)
 
         array_info = self.array_type_info_from_type(type_id)
         if array_info is not None:
@@ -4919,11 +5052,13 @@ class VulkanSPIRVCodeGen:
     def storage_layout_size(self, type_id: SpirvId, layout: str = "std430") -> int:
         if layout == "std140":
             return self.uniform_layout_size(type_id)
+        if layout == "scalar":
+            return self.scalar_layout_size(type_id)
 
         matrix_info = self.matrix_type_info_from_type(type_id)
         if matrix_info is not None:
-            _, column_count = matrix_info
-            return 16 * column_count
+            column_type, column_count = matrix_info
+            return self.storage_array_stride(column_type, layout) * column_count
 
         array_info = self.array_type_info_from_type(type_id)
         if array_info is not None:
@@ -4953,11 +5088,91 @@ class VulkanSPIRVCodeGen:
     ) -> int:
         if layout == "std140":
             return self.uniform_array_stride(element_type)
+        if layout == "scalar":
+            return self.scalar_array_stride(element_type)
 
         return self.align_to(
             self.storage_layout_size(element_type, layout),
             self.storage_layout_alignment(element_type, layout),
         )
+
+    def scalar_layout_alignment(self, type_id: SpirvId) -> int:
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is not None:
+            column_type, _ = matrix_info
+            return self.scalar_layout_alignment(column_type)
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, _ = array_info
+            return self.scalar_layout_alignment(element_type)
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            return max(
+                (
+                    self.scalar_layout_alignment(member_type)
+                    for member_type, _ in struct_members
+                ),
+                default=1,
+            )
+
+        vector_info = self.vector_type_info_from_type(type_id)
+        if vector_info is not None:
+            component_type, _ = vector_info
+            return self.uniform_scalar_size(component_type)
+
+        return self.uniform_scalar_size(type_id)
+
+    def scalar_layout_size(self, type_id: SpirvId) -> int:
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is not None:
+            column_type, column_count = matrix_info
+            return self.scalar_array_stride(column_type) * column_count
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, size = array_info
+            return self.scalar_array_stride(element_type) * int(size or 1)
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            offset = 0
+            max_alignment = 1
+            for member_type, _ in struct_members:
+                alignment = self.scalar_layout_alignment(member_type)
+                max_alignment = max(max_alignment, alignment)
+                offset = self.align_to(offset, alignment)
+                offset += self.scalar_layout_size(member_type)
+            return self.align_to(offset, max_alignment)
+
+        vector_info = self.vector_type_info_from_type(type_id)
+        if vector_info is not None:
+            component_type, component_count = vector_info
+            return self.uniform_scalar_size(component_type) * component_count
+
+        return self.uniform_scalar_size(type_id)
+
+    def scalar_array_stride(self, element_type: SpirvId) -> int:
+        return self.align_to(
+            self.scalar_layout_size(element_type),
+            self.scalar_layout_alignment(element_type),
+        )
+
+    def storage_matrix_stride_for_member(
+        self, type_id: SpirvId, layout: str = "std430"
+    ) -> Optional[int]:
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is not None:
+            column_type, _ = matrix_info
+            return self.storage_array_stride(column_type, layout)
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, _ = array_info
+            return self.storage_matrix_stride_for_member(element_type, layout)
+
+        return None
 
     def process_function_node(self, function_node, stage=None):
         """Process a CrossGL function definition."""
@@ -5110,6 +5325,13 @@ class VulkanSPIRVCodeGen:
         """Process a local CrossGL variable declaration."""
         var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
         var_type = self.map_resource_type_with_format(var_type_source, node)
+        if self.type_contains_runtime_array(var_type):
+            self.emit(
+                f"; WARNING: local variable {node.name} has a runtime-array "
+                "aggregate type that cannot be materialized in SPIR-V"
+            )
+            return
+
         var_id = self.create_variable(var_type, "Function", node.name)
         self.local_variables[node.name] = var_id
         is_precise = self.has_attribute(node, "precise")
@@ -6262,6 +6484,17 @@ class VulkanSPIRVCodeGen:
         if metadata is None:
             return None
 
+        pointee_type = self.variable_value_types.get(buffer_pointer.id)
+        descriptor_array = self.array_type_info_from_type(pointee_type)
+        block_type = metadata.get("block_type")
+        if (
+            descriptor_array is not None
+            and block_type is not None
+            and descriptor_array[0] is not None
+            and descriptor_array[0].id == block_type.id
+        ):
+            return None
+
         element_type = metadata["element_type"]
         int_type = self.primitive_types["int"]
         member_index = self.register_constant(metadata.get("member_index", 0), int_type)
@@ -6326,6 +6559,35 @@ class VulkanSPIRVCodeGen:
 
         return None
 
+    def type_contains_runtime_array(
+        self, type_id: Optional[SpirvId], seen: Optional[set] = None
+    ) -> bool:
+        if type_id is None:
+            return False
+        if seen is None:
+            seen = set()
+        if type_id.id in seen:
+            return False
+        seen.add(type_id.id)
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, size = array_info
+            return size is None or self.type_contains_runtime_array(element_type, seen)
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            return any(
+                self.type_contains_runtime_array(member_type, seen)
+                for member_type, _ in struct_members
+            )
+
+        return False
+
+    def runtime_array_aggregate_fallback(self, reason: str) -> SpirvId:
+        self.emit(f"; WARNING: {reason}")
+        return self.register_constant(0.0, self.register_primitive_type("float"))
+
     def vector_type_info_from_type(self, vector_type: Optional[SpirvId]):
         if vector_type is None:
             return None
@@ -6354,6 +6616,11 @@ class VulkanSPIRVCodeGen:
             return self.register_constant(0, type_id)
         if primitive_name == "bool":
             return self.register_constant(False, type_id)
+        if self.type_contains_runtime_array(type_id):
+            return self.runtime_array_aggregate_fallback(
+                "runtime-array aggregate default values cannot be materialized "
+                "in SPIR-V"
+            )
 
         vector_info = self.vector_type_info_from_type(type_id)
         if vector_info is not None:

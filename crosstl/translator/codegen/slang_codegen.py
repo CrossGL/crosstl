@@ -37,6 +37,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from .array_utils import (
+    evaluate_literal_int_expression,
     format_c_style_array_declaration,
     get_array_size_from_node,
     split_array_type_suffix,
@@ -85,6 +86,8 @@ class SlangCodeGen:
         self.user_struct_names = set()
         self.stage_entry_name_overrides = {}
         self.identifier_aliases = {}
+        self.slang_resource_register_cursors = {}
+        self.slang_used_resource_registers = {}
         self.current_hull_output_rewrite = None
         self._generating = False
         self.semantic_map = {
@@ -153,6 +156,9 @@ class SlangCodeGen:
             self.user_struct_names = self.collect_user_struct_names(ast)
             self.stage_entry_name_overrides = {}
             self.identifier_aliases = {}
+            self.slang_resource_register_cursors = {}
+            self.slang_used_resource_registers = {}
+            self.reserve_explicit_slang_resource_declarations(ast)
 
         if isinstance(ast, list):
             result = ""
@@ -177,21 +183,7 @@ class SlangCodeGen:
 
             cbuffers = getattr(ast, "cbuffers", [])
             for node in cbuffers:
-                if isinstance(node, StructNode):
-                    result += (
-                        "cbuffer " + self.generate_struct_definition(node) + "\n\n"
-                    )
-                elif hasattr(node, "name") and hasattr(node, "members"):
-                    result += f"cbuffer {node.name} {{\n"
-                    for member in node.members:
-                        if hasattr(member, "member_type"):
-                            member_type = str(member.member_type)
-                        else:
-                            member_type = getattr(member, "vtype", "float")
-                        result += (
-                            f"    {self.convert_type(member_type)} {member.name};\n"
-                        )
-                    result += "};\n\n"
+                result += self.generate_cbuffer(node) + "\n\n"
 
             functions = getattr(ast, "functions", [])
             for function in functions:
@@ -368,6 +360,10 @@ class SlangCodeGen:
         global_vars = getattr(node, "global_variables", [])
         for global_var in global_vars:
             result += self.generate_global_variable(global_var)
+
+        cbuffers = getattr(node, "cbuffers", [])
+        for cbuffer in cbuffers:
+            result += self.generate_cbuffer(cbuffer) + "\n\n"
 
         functions = getattr(node, "functions", [])
         for function in functions:
@@ -1051,7 +1047,11 @@ class SlangCodeGen:
         for attr in getattr(node, "attributes", []) or []:
             if skip_stage_attributes and self.slang_stage_attribute_name(attr):
                 continue
-            if self.is_resource_format_attribute(attr):
+            if (
+                self.is_resource_format_attribute(attr)
+                or self.is_resource_binding_attribute(attr)
+                or self.is_resource_memory_attribute(attr)
+            ):
                 continue
             if hasattr(attr, "name"):
                 return attr.name
@@ -1063,6 +1063,35 @@ class SlangCodeGen:
             return False
         attr_name = str(attr_name).lower()
         return attr_name == "format" or attr_name in self.supported_image_formats()
+
+    def is_resource_binding_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return False
+        return str(attr_name).lower() in {
+            "binding",
+            "buffer",
+            "group",
+            "register",
+            "sampler",
+            "set",
+            "space",
+            "texture",
+        }
+
+    def is_resource_memory_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return False
+        return str(attr_name).lower() in {
+            "coherent",
+            "globallycoherent",
+            "readonly",
+            "readwrite",
+            "restrict",
+            "volatile",
+            "writeonly",
+        }
 
     def stage_semantic_map(self, shader_type):
         shader_stage = self.slang_shader_stage_name(shader_type)
@@ -1384,6 +1413,472 @@ class SlangCodeGen:
                 type_name, node
             )
 
+    def binding_index_value(self, value, prefixes=()):
+        if hasattr(value, "value") and value.value is not None:
+            raw_value = value.value
+        elif hasattr(value, "name") and value.name is not None:
+            raw_value = value.name
+        else:
+            raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        for prefix in prefixes:
+            if raw_value.startswith(prefix) and raw_value[len(prefix) :].isdigit():
+                return int(raw_value[len(prefix) :])
+        return None
+
+    def binding_expr_value(self, value, prefixes=()):
+        text = self.attribute_value_to_string(value)
+        if text is None:
+            return None
+        text = str(text).strip()
+        lower_text = text.lower()
+        for prefix in prefixes:
+            if lower_text.startswith(prefix) and text[len(prefix) :]:
+                return text[len(prefix) :]
+        return text
+
+    def register_space_index(self, value):
+        if hasattr(value, "value") and value.value is not None:
+            raw_value = value.value
+        elif hasattr(value, "name") and value.name is not None:
+            raw_value = value.name
+        else:
+            raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        if raw_value.startswith("space") and raw_value[5:].isdigit():
+            return int(raw_value[5:])
+        return None
+
+    def register_space_expr(self, value):
+        text = self.attribute_value_to_string(value)
+        if text is None:
+            return None
+        text = str(text).strip()
+        lower_text = text.lower()
+        if lower_text.startswith("space") and text[5:]:
+            return text[5:]
+        return text
+
+    def explicit_slang_resource_binding(self, node):
+        binding = None
+        binding_expr = None
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = getattr(attr, "arguments", []) or []
+            if attr_name != "binding" or not arguments:
+                continue
+            binding = self.binding_index_value(arguments[0])
+            binding_expr = self.binding_expr_value(arguments[0])
+            break
+        return binding, binding_expr
+
+    def explicit_slang_resource_set(self, node):
+        descriptor_set = None
+        descriptor_set_expr = None
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = getattr(attr, "arguments", []) or []
+            if attr_name not in {"set", "group", "space"} or not arguments:
+                continue
+            descriptor_set = self.binding_index_value(arguments[0])
+            descriptor_set_expr = self.binding_expr_value(arguments[0])
+            break
+        return descriptor_set, descriptor_set_expr
+
+    def explicit_slang_register(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = getattr(attr, "arguments", []) or []
+            if attr_name != "register" or not arguments:
+                continue
+            register_arg = self.attribute_value_to_string(arguments[0])
+            if register_arg is None:
+                return None, None, None, None, None
+            register_arg = str(register_arg).strip()
+            register_prefix = ""
+            for char in register_arg:
+                if not char.isalpha():
+                    break
+                register_prefix += char
+            register_prefix = register_prefix.lower() or None
+            binding = self.binding_index_value(arguments[0], (register_prefix or "",))
+            binding_expr = self.binding_expr_value(
+                arguments[0], (register_prefix or "",)
+            )
+            space = None
+            space_expr = None
+            for argument in arguments[1:]:
+                space = self.register_space_index(argument)
+                space_expr = self.register_space_expr(argument)
+                if space_expr is not None:
+                    break
+            return register_prefix, binding, binding_expr, space, space_expr
+        return None, None, None, None, None
+
+    def slang_register_prefix_for_type(self, type_name, node=None, forced_prefix=None):
+        if forced_prefix:
+            return forced_prefix
+        mapped_type = self.map_resource_type_with_format(type_name, node)
+        base_type = self.resource_base_type(mapped_type)
+        if not isinstance(base_type, str):
+            return None
+        if base_type == "SamplerState":
+            return "s"
+        if base_type.startswith(("RWTexture", "RWBuffer", "RWStructuredBuffer")):
+            return "u"
+        if base_type.startswith(
+            (
+                "Sampler",
+                "Texture",
+                "StructuredBuffer",
+                "ByteAddressBuffer",
+                "RaytracingAccelerationStructure",
+            )
+        ):
+            return "t"
+        if base_type.startswith("ConstantBuffer"):
+            return "b"
+        return None
+
+    def slang_resource_array_count(self, node, type_name):
+        count = self.slang_resource_array_count_from_type_node(
+            getattr(node, "var_type", None)
+        )
+        if count is None:
+            count = self.slang_resource_array_count_from_type_node(
+                getattr(node, "param_type", None)
+            )
+        if count is None:
+            count = self.slang_resource_array_count_from_type_name(type_name)
+        return max(count or 1, 1)
+
+    def slang_resource_array_count_from_type_node(self, type_node):
+        if type_node is None:
+            return None
+        if type_node.__class__.__name__ != "ArrayType":
+            return None
+
+        total = 1
+        current = type_node
+        saw_array = False
+        while current is not None and current.__class__.__name__ == "ArrayType":
+            saw_array = True
+            size = evaluate_literal_int_expression(getattr(current, "size", None))
+            if size is None or size <= 0:
+                return None
+            total *= size
+            current = getattr(current, "element_type", None)
+        return total if saw_array else None
+
+    def slang_resource_array_count_from_type_name(self, type_name):
+        if not isinstance(type_name, str) or "[" not in type_name:
+            return None
+
+        total = 1
+        index = 0
+        saw_array = False
+        while True:
+            start = type_name.find("[", index)
+            if start < 0:
+                break
+            end = type_name.find("]", start + 1)
+            if end < 0:
+                return None
+            saw_array = True
+            size_text = type_name[start + 1 : end].strip()
+            if not size_text or not size_text.isdigit():
+                return None
+            size = int(size_text)
+            if size <= 0:
+                return None
+            total *= size
+            index = end + 1
+        return total if saw_array else None
+
+    def slang_resource_register_space_key(self, descriptor_set, register_space):
+        if descriptor_set is not None:
+            return descriptor_set
+        if register_space is not None:
+            return register_space
+        return 0
+
+    def reserve_explicit_slang_resource_declarations(self, node):
+        for declaration, type_name, forced_prefix in self.slang_resource_declarations(
+            node
+        ):
+            self.reserve_explicit_slang_resource_declaration(
+                declaration, type_name, forced_prefix
+            )
+
+    def slang_resource_declarations(self, node):
+        declarations = []
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+
+            for global_var in getattr(current, "global_variables", []) or []:
+                type_name = self.variable_declaration_type(global_var)
+                declarations.append((global_var, type_name, None))
+
+            for cbuffer in getattr(current, "cbuffers", []) or []:
+                declarations.append((cbuffer, "ConstantBuffer", "b"))
+
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage_type, stage in stages.items():
+                    stage_name = self.get_stage_name(stage_type)
+                    for local_var in self.slang_stage_global_local_variables(
+                        stage_name, getattr(stage, "local_variables", [])
+                    ):
+                        type_name = self.variable_declaration_type(local_var)
+                        declarations.append((local_var, type_name, None))
+
+        collect(node)
+        return declarations
+
+    def reserve_explicit_slang_resource_declaration(
+        self, node, type_name, forced_register_prefix=None
+    ):
+        explicit_binding, _explicit_binding_expr = self.explicit_slang_resource_binding(
+            node
+        )
+        explicit_set, _explicit_set_expr = self.explicit_slang_resource_set(node)
+        (
+            register_prefix,
+            register_binding,
+            _register_binding_expr,
+            register_space,
+            _register_space_expr,
+        ) = self.explicit_slang_register(node)
+        self.validate_slang_resource_binding_consistency(
+            node, explicit_binding, register_binding, explicit_set, register_space
+        )
+        binding = explicit_binding if explicit_binding is not None else register_binding
+        if binding is None:
+            return
+
+        prefix = self.slang_register_prefix_for_type(
+            type_name, node, register_prefix or forced_register_prefix
+        )
+        if prefix is None:
+            return
+
+        space_key = self.slang_resource_register_space_key(explicit_set, register_space)
+        self.reserve_slang_resource_register_range(
+            prefix,
+            binding,
+            self.slang_resource_array_count(node, type_name),
+            self.slang_resource_name(node),
+            space_key,
+        )
+
+    def slang_resource_name(self, node):
+        return getattr(node, "name", getattr(node, "variable_name", "<anonymous>"))
+
+    def next_available_slang_resource_register(self, register_prefix, space, count):
+        count = max(count or 1, 1)
+        binding = self.slang_resource_register_cursors.get((register_prefix, space), 0)
+        ranges = self.slang_used_resource_registers.get((register_prefix, space), [])
+        while True:
+            end = binding + count - 1
+            conflict_end = None
+            for used_start, used_end, _used_name in ranges:
+                if binding <= used_end and used_start <= end:
+                    conflict_end = (
+                        used_end
+                        if conflict_end is None
+                        else max(conflict_end, used_end)
+                    )
+            if conflict_end is None:
+                return binding
+            binding = conflict_end + 1
+
+    def advance_slang_resource_register(self, register_prefix, space, start, count):
+        count = max(count or 1, 1)
+        key = (register_prefix, space)
+        self.slang_resource_register_cursors[key] = max(
+            self.slang_resource_register_cursors.get(key, 0), start + count
+        )
+
+    def reserve_slang_resource_register_range(
+        self, register_prefix, start, count, name, space=0
+    ):
+        count = max(count or 1, 1)
+        end = start + count - 1
+        namespace = (register_prefix, space)
+        ranges = self.slang_used_resource_registers.setdefault(namespace, [])
+        for used_start, used_end, used_name in ranges:
+            if start <= used_end and used_start <= end:
+                if used_start == start and used_end == end and used_name == name:
+                    return
+                raise ValueError(
+                    f"Conflicting Slang resource binding for '{name}': "
+                    f"{self.slang_resource_range_label(register_prefix, start, end, space)} "
+                    f"overlaps '{used_name}' "
+                    f"{self.slang_resource_range_label(register_prefix, used_start, used_end, space)}"
+                )
+        ranges.append((start, end, name))
+
+    def slang_resource_range_label(self, register_prefix, start, end, space=0):
+        if start == end:
+            label = f"{register_prefix}{start}"
+        else:
+            label = f"{register_prefix}{start}-{register_prefix}{end}"
+        if space:
+            return f"{label}, space{space}"
+        return label
+
+    def validate_slang_resource_binding_consistency(
+        self, node, explicit_binding, register_binding, explicit_set, register_space
+    ):
+        name = getattr(node, "name", getattr(node, "variable_name", "<anonymous>"))
+        if (
+            explicit_binding is not None
+            and register_binding is not None
+            and explicit_binding != register_binding
+        ):
+            raise ValueError(
+                "Conflicting Slang resource binding metadata for "
+                f"'{name}': binding {explicit_binding} does not match "
+                f"register binding {register_binding}"
+            )
+        if (
+            explicit_set is not None
+            and register_space is not None
+            and explicit_set != register_space
+        ):
+            raise ValueError(
+                "Conflicting Slang resource set metadata for "
+                f"'{name}': set {explicit_set} does not match "
+                f"register space{register_space}"
+            )
+
+    def slang_resource_binding_decorations(
+        self, node, type_name, forced_register_prefix=None, auto_assign=False
+    ):
+        explicit_binding, explicit_binding_expr = self.explicit_slang_resource_binding(
+            node
+        )
+        explicit_set, explicit_set_expr = self.explicit_slang_resource_set(node)
+        (
+            register_prefix,
+            register_binding,
+            register_binding_expr,
+            register_space,
+            register_space_expr,
+        ) = self.explicit_slang_register(node)
+        self.validate_slang_resource_binding_consistency(
+            node, explicit_binding, register_binding, explicit_set, register_space
+        )
+
+        if register_prefix is None:
+            register_prefix = self.slang_register_prefix_for_type(
+                type_name, node, forced_register_prefix
+            )
+        if register_prefix is None:
+            return "", ""
+
+        binding = explicit_binding if explicit_binding is not None else register_binding
+        binding_expr = explicit_binding_expr or register_binding_expr
+        descriptor_set = explicit_set if explicit_set is not None else register_space
+        descriptor_set_expr = explicit_set_expr or register_space_expr
+        space_key = self.slang_resource_register_space_key(
+            descriptor_set, register_space
+        )
+        resource_count = self.slang_resource_array_count(node, type_name)
+
+        if binding is None and binding_expr is None and auto_assign:
+            binding = self.next_available_slang_resource_register(
+                register_prefix, space_key, resource_count
+            )
+            binding_expr = str(binding)
+
+        if binding_expr is None and binding is not None:
+            binding_expr = str(binding)
+        if descriptor_set_expr is None and descriptor_set is not None:
+            descriptor_set_expr = str(descriptor_set)
+
+        prefix = ""
+        if binding_expr is not None:
+            vk_set_expr = descriptor_set_expr or "0"
+            prefix = f"[[vk::binding({binding_expr}, {vk_set_expr})]] "
+
+        if register_binding is None and binding is not None:
+            register_binding = binding
+        register_space_suffix = ""
+        if descriptor_set is not None:
+            register_space_suffix = f", space{descriptor_set}"
+        elif register_space_expr is not None and register_space_expr.isdigit():
+            register_space_suffix = f", space{register_space_expr}"
+
+        suffix = ""
+        if register_prefix and register_binding is not None:
+            suffix = (
+                f" : register({register_prefix}{register_binding}"
+                f"{register_space_suffix})"
+            )
+        if binding is not None:
+            self.reserve_slang_resource_register_range(
+                register_prefix,
+                binding,
+                resource_count,
+                self.slang_resource_name(node),
+                space_key,
+            )
+            self.advance_slang_resource_register(
+                register_prefix, space_key, binding, resource_count
+            )
+        return prefix, suffix
+
+    def apply_slang_resource_binding_decorations(
+        self,
+        declaration,
+        node,
+        type_name,
+        forced_register_prefix=None,
+        auto_assign=False,
+    ):
+        prefix, suffix = self.slang_resource_binding_decorations(
+            node, type_name, forced_register_prefix, auto_assign
+        )
+        return f"{prefix}{declaration}{suffix}"
+
+    def generate_cbuffer(self, node):
+        name = getattr(node, "name", None)
+        if not name or not hasattr(node, "members"):
+            return ""
+        declaration = self.apply_slang_resource_binding_decorations(
+            f"cbuffer {name}",
+            node,
+            "ConstantBuffer",
+            forced_register_prefix="b",
+            auto_assign=True,
+        )
+        result = f"{declaration} {{\n"
+        for member in node.members:
+            if hasattr(member, "member_type"):
+                member_type = self.convert_type(
+                    self.convert_type_node_to_string(member.member_type)
+                )
+            else:
+                member_type = self.convert_type(getattr(member, "vtype", "float"))
+            result += f"    {self.format_declaration(member_type, member.name)};\n"
+        result += "};"
+        return result
+
     def generate_global_variable(self, node):
         if isinstance(node, ArrayNode):
             self.register_variable_type(node.name, node.element_type)
@@ -1397,6 +1892,9 @@ class SlangCodeGen:
         vtype = self.variable_declaration_type(node, initial_value)
         self.register_variable_type(node.name, vtype, node)
         declaration = self.format_declaration(vtype, node.name, node)
+        declaration = self.apply_slang_resource_binding_decorations(
+            declaration, node, vtype, auto_assign=True
+        )
         if initial_value is not None:
             initial_expr = self.generate_expression_with_expected(
                 initial_value,
@@ -1524,11 +2022,13 @@ class SlangCodeGen:
                             param_type_name, param
                         )
                     elif hasattr(param, "vtype"):
-                        self.register_variable_type(param.name, param.vtype, param)
+                        param_type_name = param.vtype
+                        self.register_variable_type(param.name, param_type_name, param)
                         param_type = self.map_resource_type_with_format(
-                            param.vtype, param
+                            param_type_name, param
                         )
                     else:
+                        param_type_name = "float"
                         param_type = "float"
                     declaration = format_c_style_array_declaration(
                         param_type, param.name
@@ -1539,6 +2039,9 @@ class SlangCodeGen:
                     if ray_declaration is not None:
                         params.append(ray_declaration)
                         continue
+                    declaration = self.apply_slang_resource_binding_decorations(
+                        declaration, param, param_type_name
+                    )
                     params.append(
                         declaration
                         + self.semantic_suffix(
@@ -3266,6 +3769,12 @@ class SlangCodeGen:
                 return self.image_resource_element_type(
                     self.image_resource_type(expr.args[0])
                 )
+            if func_name == "buffer_load" and getattr(expr, "args", None):
+                return self.structured_buffer_element_type(
+                    self.structured_buffer_resource_type(expr.args[0])
+                )
+            if func_name == "buffer_dimensions":
+                return "uint"
             if isinstance(func_name, str) and func_name in {
                 "float",
                 "double",
@@ -3411,16 +3920,10 @@ class SlangCodeGen:
             args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
             return f"{query}.{node.operation}({args})"
         elif isinstance(node, FunctionCallNode):
-            ray_query_call = self.slang_ray_query_call_parts(node)
-            if ray_query_call is not None:
-                operation, query_expr, args = ray_query_call
-                query = self.generate_expression(query_expr)
-                rendered_args = ", ".join(self.generate_expression(arg) for arg in args)
-                return f"{query}.{operation}({rendered_args})"
             func_expr = getattr(node, "function", None)
             if func_expr is None:
                 func_expr = node.name
-            if hasattr(func_expr, "name"):
+            if hasattr(func_expr, "name") and getattr(func_expr, "name", None):
                 callee = func_expr.name
             elif isinstance(func_expr, str):
                 callee = func_expr
@@ -3863,7 +4366,40 @@ class SlangCodeGen:
             "RayQuery": "RayQuery",
         }
 
-        return type_map.get(type_name, type_name)
+        mapped_type = type_map.get(type_name)
+        if mapped_type is not None:
+            return mapped_type
+
+        generic_resource_type = self.map_slang_generic_resource_type(type_name)
+        if generic_resource_type is not None:
+            return generic_resource_type
+
+        return type_name
+
+    def map_slang_generic_resource_type(self, type_name):
+        """Map generic resource element aliases while preserving resource spelling."""
+        if not isinstance(type_name, str):
+            return None
+
+        base_type = self.resource_base_type(type_name)
+        generic_resource_types = {
+            "StructuredBuffer",
+            "RWStructuredBuffer",
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+        }
+        for resource_type in generic_resource_types:
+            prefix = f"{resource_type}<"
+            if not base_type.startswith(prefix) or not base_type.endswith(">"):
+                continue
+            element_type = base_type[len(prefix) : -1].strip()
+            if not element_type:
+                return None
+            mapped_element_type = self.convert_type(element_type)
+            return type_name.replace(
+                base_type, f"{resource_type}<{mapped_element_type}>", 1
+            )
+        return None
 
     def supported_image_formats(self):
         return {
@@ -3954,9 +4490,9 @@ class SlangCodeGen:
             return None
         if isinstance(value, str):
             return value
-        if hasattr(value, "name"):
+        if hasattr(value, "name") and value.name is not None:
             return str(value.name)
-        if hasattr(value, "value"):
+        if hasattr(value, "value") and value.value is not None:
             return str(value.value).strip('"')
         return str(value)
 
@@ -4119,6 +4655,139 @@ class SlangCodeGen:
 
         value = self.image_store_value_expression(args[0], args[2])
         return f"{image_name}[{coord}] = {value}"
+
+    def structured_buffer_resource_type(self, buffer_arg):
+        buffer_type = self.get_expression_type(buffer_arg)
+        if buffer_type is None:
+            buffer_type = self.expression_result_type(buffer_arg)
+        mapped_type = self.map_resource_type_with_format(buffer_type)
+        return self.resource_base_type(mapped_type)
+
+    def is_structured_buffer_resource_type(self, buffer_type):
+        buffer_type = self.resource_base_type(buffer_type)
+        return isinstance(buffer_type, str) and buffer_type.startswith(
+            ("StructuredBuffer<", "RWStructuredBuffer<")
+        )
+
+    def is_writable_structured_buffer_resource_type(self, buffer_type):
+        buffer_type = self.resource_base_type(buffer_type)
+        return isinstance(buffer_type, str) and buffer_type.startswith(
+            "RWStructuredBuffer<"
+        )
+
+    def structured_buffer_element_type(self, buffer_type):
+        buffer_type = self.resource_base_type(buffer_type)
+        if (
+            not isinstance(buffer_type, str)
+            or "<" not in buffer_type
+            or not buffer_type.endswith(">")
+        ):
+            return None
+        element_type = buffer_type[buffer_type.find("<") + 1 : -1].strip()
+        if not element_type:
+            return None
+        return self.convert_type(element_type)
+
+    def unsupported_structured_buffer_call(self, operation, reason, result_type=None):
+        if result_type is None:
+            return f"/* unsupported Slang structured buffer: {operation} {reason} */"
+        return (
+            f"/* unsupported Slang structured buffer: {operation} {reason} */ "
+            f"{self.zero_value_for_type(result_type)}"
+        )
+
+    def zero_value_for_type(self, type_name):
+        type_name = self.convert_type(type_name)
+        if type_name == "bool":
+            return "false"
+        if type_name == "uint":
+            return "0u"
+        if type_name in {"int", "float", "double"}:
+            return "0"
+        if self.is_vector_value_type(type_name):
+            component_zero = self.vector_zero_value(type_name)
+            return f"{type_name}({component_zero})"
+        if type_name in self.user_struct_names:
+            return f"{type_name}()"
+        return "0"
+
+    def buffer_load_expression(self, args):
+        if len(args) < 2:
+            return self.unsupported_structured_buffer_call(
+                "buffer_load", "requires buffer and index arguments", "uint"
+            )
+
+        buffer_type = self.structured_buffer_resource_type(args[0])
+        element_type = self.structured_buffer_element_type(buffer_type) or "uint"
+        if not self.is_structured_buffer_resource_type(buffer_type):
+            return self.unsupported_structured_buffer_call(
+                "buffer_load",
+                "requires StructuredBuffer or RWStructuredBuffer resource",
+                element_type,
+            )
+
+        buffer = self.generate_expression(args[0])
+        index = self.generate_expression(args[1])
+        return f"{buffer}.Load({index})"
+
+    def buffer_store_expression(self, args):
+        if len(args) < 3:
+            return self.unsupported_structured_buffer_call(
+                "buffer_store", "requires buffer, index, and value arguments"
+            )
+
+        buffer_type = self.structured_buffer_resource_type(args[0])
+        if not self.is_writable_structured_buffer_resource_type(buffer_type):
+            return self.unsupported_structured_buffer_call(
+                "buffer_store", "requires RWStructuredBuffer resource"
+            )
+
+        buffer = self.generate_expression(args[0])
+        index = self.generate_expression(args[1])
+        value = self.generate_expression(args[2])
+        return f"{buffer}.Store({index}, {value})"
+
+    def buffer_dimensions_expression(self, args):
+        if not args:
+            return self.unsupported_structured_buffer_call(
+                "buffer_dimensions", "requires a buffer argument", "uint"
+            )
+
+        buffer_type = self.structured_buffer_resource_type(args[0])
+        if not self.is_structured_buffer_resource_type(buffer_type):
+            return self.unsupported_structured_buffer_call(
+                "buffer_dimensions",
+                "requires StructuredBuffer or RWStructuredBuffer resource",
+                "uint",
+            )
+
+        buffer = self.generate_expression(args[0])
+        if len(args) >= 2:
+            dimensions = ", ".join(self.generate_expression(arg) for arg in args[1:])
+            return f"{buffer}.GetDimensions({dimensions})"
+
+        helper_name = self.structured_buffer_dimensions_helper_name(buffer_type)
+        return f"{helper_name}({buffer})"
+
+    def structured_buffer_dimensions_helper_name(self, buffer_type):
+        helper_name = self.helper_function_name(
+            "cgl_bufferDimensions_" f"{self.resource_helper_type_suffix(buffer_type)}"
+        )
+        self.register_helper_function(
+            helper_name,
+            self.build_structured_buffer_dimensions_helper(helper_name, buffer_type),
+        )
+        return helper_name
+
+    def build_structured_buffer_dimensions_helper(self, helper_name, buffer_type):
+        return (
+            f"uint {helper_name}({buffer_type} buffer)\n"
+            "{\n"
+            "    uint count;\n"
+            "    buffer.GetDimensions(count);\n"
+            "    return count;\n"
+            "}"
+        )
 
     def image_atomic_intrinsic(self, operation):
         return {
@@ -4288,6 +4957,15 @@ class SlangCodeGen:
 
         if func_name == "imageStore" and len(args) >= 3:
             return self.image_store_expression(args)
+
+        if func_name == "buffer_load":
+            return self.buffer_load_expression(args)
+
+        if func_name == "buffer_store":
+            return self.buffer_store_expression(args)
+
+        if func_name == "buffer_dimensions":
+            return self.buffer_dimensions_expression(args)
 
         if func_name in {
             "imageAtomicAdd",

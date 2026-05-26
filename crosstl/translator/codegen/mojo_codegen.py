@@ -550,6 +550,74 @@ MOJO_MAPPED_INTEGER_TYPES = {
     "UInt64",
 }
 
+MOJO_SUPPORTED_STAGE_TYPES = {"vertex", "fragment", "compute"}
+
+MOJO_SYNC_BUILTINS = {
+    "barrier": "_crossgl_workgroup_barrier",
+    "workgroupBarrier": "_crossgl_workgroup_barrier",
+    "memoryBarrier": "_crossgl_memory_barrier",
+}
+
+MOJO_RESOURCE_ACCESS_QUALIFIERS = {
+    "access::read": "readonly",
+    "access::read_write": "readwrite",
+    "access::write": "writeonly",
+    "read": "readonly",
+    "read_write": "readwrite",
+    "readonly": "readonly",
+    "readwrite": "readwrite",
+    "write": "writeonly",
+    "writeonly": "writeonly",
+}
+
+MOJO_RESOURCE_MEMORY_QUALIFIERS = {
+    "coherent",
+    "globallycoherent",
+    "restrict",
+    "volatile",
+}
+
+MOJO_NON_SEMANTIC_ATTRIBUTES = {
+    "access",
+    "binding",
+    "buffer",
+    "builtin",
+    "compute",
+    "fragment",
+    "glsl_buffer_block",
+    "group",
+    "layout",
+    "numthreads",
+    "register",
+    "sampler",
+    "set",
+    "space",
+    "std140",
+    "std430",
+    "texture",
+    "threadgroup_size",
+    "uav",
+    "vertex",
+}
+
+MOJO_INPUT_ONLY_RETURN_SEMANTICS = {
+    "gl_fragcoord",
+    "gl_frontfacing",
+    "gl_globalinvocationid",
+    "gl_instanceid",
+    "gl_localinvocationid",
+    "gl_pointcoord",
+    "gl_vertexid",
+    "gl_workgroupid",
+    "sv_dispatchthreadid",
+    "sv_groupid",
+    "sv_groupindex",
+    "sv_groupthreadid",
+    "sv_instanceid",
+    "sv_isfrontface",
+    "sv_vertexid",
+}
+
 MOJO_VECTOR_ARITHMETIC_OPS = {
     "+": "add",
     "-": "sub",
@@ -570,7 +638,11 @@ class MojoCodeGen:
         self.enum_types = {}
         self.enum_variant_aliases = {}
         self.enum_variant_values = {}
+        self.struct_member_semantics = {}
         self.current_enum_value_aliases = {}
+        self.resource_access_qualifiers = {}
+        self.mojo_resource_binding_cursors = {}
+        self.mojo_used_resource_bindings = {}
         self.required_resource_types = set()
         self.required_resource_sample_types = set()
         self.required_resource_lod_types = set()
@@ -590,6 +662,7 @@ class MojoCodeGen:
         self.required_byte_address_vector_load_helpers = set()
         self.required_byte_address_vector_store_helpers = set()
         self.required_reinterpret_helpers = set()
+        self.required_sync_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -696,6 +769,13 @@ class MojoCodeGen:
             "COLOR": "color",
             "COLOR0": "color0",
             "COLOR1": "color1",
+            "SV_Position": "position",
+            "SV_Depth": "depth(any)",
+            "SV_Target": "color(0)",
+            "SV_Target0": "color(0)",
+            "SV_Target1": "color(1)",
+            "SV_Target2": "color(2)",
+            "SV_Target3": "color(3)",
         }
 
         # Function mapping for common shader functions
@@ -730,7 +810,11 @@ class MojoCodeGen:
         self.enum_types = {}
         self.enum_variant_aliases = {}
         self.enum_variant_values = {}
+        self.struct_member_semantics = {}
         self.current_enum_value_aliases = {}
+        self.resource_access_qualifiers = {}
+        self.mojo_resource_binding_cursors = {}
+        self.mojo_used_resource_bindings = {}
         self.required_resource_types = set()
         self.required_resource_sample_types = set()
         self.required_resource_lod_types = set()
@@ -750,6 +834,7 @@ class MojoCodeGen:
         self.required_byte_address_vector_load_helpers = set()
         self.required_byte_address_vector_store_helpers = set()
         self.required_reinterpret_helpers = set()
+        self.required_sync_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -812,14 +897,18 @@ class MojoCodeGen:
                 # Handle both old and new AST variable structures
                 vtype = self.variable_declared_type(node) or "float"
                 self.register_variable_type(node.name, vtype)
+                resource_comment = self.generate_resource_metadata_comment(node, vtype)
                 if self.is_array_type_name(vtype):
+                    code += resource_comment
                     code += (
                         f"var {node.name} = "
                         f"{self.array_initial_value_for_type(vtype)}\n"
                     )
                 elif self.is_struct_type_name(vtype):
+                    code += resource_comment
                     code += f"var {node.name} = {self.zero_value_for_type(vtype)}\n"
                 elif self.is_resource_type_name(vtype):
+                    code += resource_comment
                     mapped_type = self.map_type(vtype)
                     code += (
                         f"var {node.name}: {mapped_type} = "
@@ -858,9 +947,8 @@ class MojoCodeGen:
             emitted_local_functions = set()
             for stage_type, stage in ast.stages.items():
                 if hasattr(stage, "entry_point"):
-                    stage_name = (
-                        str(stage_type).split(".")[-1].lower()
-                    )  # Extract stage name from enum
+                    stage_name = self.stage_type_name(stage_type)
+                    self.validate_stage_type(stage_name)
                     code += f"# {stage_name.title()} Shader\n"
                     for func in getattr(stage, "local_functions", []):
                         if id(func) in emitted_local_functions:
@@ -872,6 +960,20 @@ class MojoCodeGen:
                     )
 
         return header + self.generate_required_helpers() + code
+
+    def stage_type_name(self, stage_type):
+        value = getattr(stage_type, "value", None)
+        if isinstance(value, str):
+            return value
+        return str(stage_type).split(".")[-1].lower()
+
+    def validate_stage_type(self, stage_name):
+        if stage_name not in MOJO_SUPPORTED_STAGE_TYPES:
+            supported = ", ".join(sorted(MOJO_SUPPORTED_STAGE_TYPES))
+            raise ValueError(
+                f"Unsupported {stage_name} shader stage for Mojo codegen; "
+                f"supported compile-smoke stages are {supported}"
+            )
 
     def collect_function_return_types(self, ast):
         functions = list(getattr(ast, "functions", []))
@@ -1011,6 +1113,299 @@ class MojoCodeGen:
         if buffer_type in MOJO_BUFFER_RESOURCE_TYPES:
             self.required_buffer_resource_types.add(buffer_type)
 
+    def attribute_value_to_string(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if hasattr(value, "value") and value.value is not None:
+            return str(value.value).strip('"')
+        if hasattr(value, "name") and value.name is not None:
+            return str(value.name)
+        return str(value)
+
+    def binding_index_value(self, value, prefixes=()):
+        raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        for prefix in prefixes:
+            if raw_value.startswith(prefix) and raw_value[len(prefix) :].isdigit():
+                return int(raw_value[len(prefix) :])
+        return None
+
+    def register_space_index_value(self, value):
+        raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        if raw_value.startswith("space") and raw_value[5:].isdigit():
+            return int(raw_value[5:])
+        return None
+
+    def explicit_resource_binding_index(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = getattr(attr, "arguments", []) or []
+            if not arguments:
+                continue
+            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
+                binding = self.binding_index_value(arguments[0], ("b", "s", "t", "u"))
+            elif attr_name == "register":
+                binding = self.binding_index_value(arguments[0], ("b", "s", "t", "u"))
+            else:
+                binding = None
+            if binding is not None:
+                return binding
+        return None
+
+    def explicit_resource_set_index(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = getattr(attr, "arguments", []) or []
+            if attr_name in {"set", "group"} and arguments:
+                set_index = self.binding_index_value(arguments[0])
+                if set_index is not None:
+                    return set_index
+            if attr_name == "space" and arguments:
+                set_index = self.register_space_index_value(arguments[0])
+                if set_index is not None:
+                    return set_index
+            if attr_name == "register":
+                for argument in arguments[1:]:
+                    set_index = self.register_space_index_value(argument)
+                    if set_index is not None:
+                        return set_index
+        return 0
+
+    def resource_register_metadata(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "register":
+                continue
+            values = [
+                self.attribute_value_to_string(argument)
+                for argument in getattr(attr, "arguments", []) or []
+            ]
+            values = [value for value in values if value]
+            if values:
+                return ",".join(values)
+        return None
+
+    def normalized_resource_access_metadata(self, node):
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            access = MOJO_RESOURCE_ACCESS_QUALIFIERS.get(str(qualifier).lower())
+            if access is not None:
+                return access
+
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name == "access":
+                arguments = getattr(attr, "arguments", []) or []
+                if arguments:
+                    access = MOJO_RESOURCE_ACCESS_QUALIFIERS.get(
+                        str(self.attribute_value_to_string(arguments[0])).lower()
+                    )
+                    if access is not None:
+                        return access
+            access = MOJO_RESOURCE_ACCESS_QUALIFIERS.get(attr_name)
+            if access is not None:
+                return access
+        return None
+
+    def resource_memory_qualifiers(self, node):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+            if str(qualifier).lower() in MOJO_RESOURCE_MEMORY_QUALIFIERS
+        }
+        qualifiers.update(
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+            if str(getattr(attr, "name", "")).lower() in MOJO_RESOURCE_MEMORY_QUALIFIERS
+        )
+        return sorted(qualifiers)
+
+    def resource_base_type_and_count(self, type_name):
+        type_name = self.type_name(type_name)
+        if self.is_array_type_name(type_name):
+            base_type, size = parse_array_type(type_name)
+            return base_type, size or 1
+        return type_name, 1
+
+    def is_glsl_buffer_block_node(self, node):
+        attributes = {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+        }
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if "glsl_buffer_block" in attributes:
+            return True
+        return "buffer" in qualifiers and bool(
+            attributes & {"std140", "std430", "scalar"}
+        )
+
+    def glsl_buffer_block_layout(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name == "glsl_buffer_block":
+                arguments = getattr(attr, "arguments", []) or []
+                if arguments:
+                    return self.attribute_value_to_string(arguments[0])
+            if attr_name in {"std140", "std430", "scalar"}:
+                return attr_name
+        return None
+
+    def mojo_resource_kind(self, type_name, forced_kind=None, node=None):
+        if forced_kind is not None:
+            return forced_kind
+        if node is not None and self.is_glsl_buffer_block_node(node):
+            return "glsl_buffer_block"
+        base_type, _ = self.resource_base_type_and_count(type_name)
+        if self.buffer_resource_info(base_type) is not None:
+            return "buffer"
+        mapped_type = self.type_mapping.get(str(base_type), str(base_type))
+        if mapped_type == "Sampler":
+            return "sampler"
+        if mapped_type.startswith(("Image", "IImage", "UImage")):
+            return "image"
+        if mapped_type.startswith("Texture"):
+            return "texture"
+        return None
+
+    def mojo_resource_binding_namespace(self, kind):
+        if kind in {"cbuffer", "glsl_buffer_block"}:
+            return "buffer"
+        return kind
+
+    def next_available_resource_binding(self, namespace, set_index, count):
+        key = (namespace, set_index)
+        binding = self.mojo_resource_binding_cursors.get(key, 0)
+        while self.resource_binding_range_conflicts(key, binding, count):
+            binding += 1
+        self.mojo_resource_binding_cursors[key] = binding + count
+        return binding
+
+    def resource_binding_range_conflicts(self, key, binding, count):
+        end = binding + count - 1
+        for used_start, used_end, _ in self.mojo_used_resource_bindings.get(key, []):
+            if binding <= used_end and used_start <= end:
+                return True
+        return False
+
+    def reserve_resource_binding(self, namespace, set_index, binding, count, name):
+        key = (namespace, set_index)
+        end = binding + count - 1
+        for used_start, used_end, used_name in self.mojo_used_resource_bindings.get(
+            key, []
+        ):
+            if binding <= used_end and used_start <= end:
+                raise ValueError(
+                    "Conflicting Mojo resource binding for "
+                    f"'{name}': {namespace} set {set_index} binding "
+                    f"{binding}-{end} overlaps '{used_name}' binding "
+                    f"{used_start}-{used_end}"
+                )
+        self.mojo_used_resource_bindings.setdefault(key, []).append(
+            (binding, end, name)
+        )
+        self.mojo_resource_binding_cursors[key] = max(
+            self.mojo_resource_binding_cursors.get(key, 0), end + 1
+        )
+
+    def generate_resource_metadata_comment(self, node, type_name, kind=None):
+        name = getattr(node, "name", None)
+        resource_kind = self.mojo_resource_kind(type_name, kind, node)
+        if not name or resource_kind is None:
+            return ""
+
+        self.register_resource_access_metadata(node, type_name)
+        _, count = self.resource_base_type_and_count(type_name)
+        namespace = self.mojo_resource_binding_namespace(resource_kind)
+        set_index = self.explicit_resource_set_index(node)
+        binding = self.explicit_resource_binding_index(node)
+        if binding is None:
+            binding = self.next_available_resource_binding(namespace, set_index, count)
+            binding_source = "automatic"
+            self.reserve_resource_binding(namespace, set_index, binding, count, name)
+        else:
+            binding_source = "explicit"
+            self.reserve_resource_binding(namespace, set_index, binding, count, name)
+
+        parts = [
+            "# CrossGL resource metadata:",
+            f"name={name}",
+            f"kind={resource_kind}",
+            f"set={set_index}",
+            f"binding={binding}",
+            f"binding_source={binding_source}",
+        ]
+        if count != 1:
+            parts.append(f"count={count}")
+        register_metadata = self.resource_register_metadata(node)
+        if register_metadata:
+            parts.append(f"register={register_metadata}")
+        layout = self.glsl_buffer_block_layout(node)
+        if layout:
+            parts.append(f"layout={layout}")
+        access = self.normalized_resource_access_metadata(node)
+        if access:
+            parts.append(f"access={access}")
+        memory_qualifiers = self.resource_memory_qualifiers(node)
+        if memory_qualifiers:
+            parts.append(f"memory={','.join(memory_qualifiers)}")
+        return " ".join(parts) + "\n"
+
+    def register_resource_access_metadata(self, node, type_name):
+        name = getattr(node, "name", None)
+        if not name or self.mojo_resource_kind(type_name, node=node) is None:
+            return
+        access = self.normalized_resource_access_metadata(node)
+        if access:
+            self.resource_access_qualifiers[name] = access
+
+    def resource_access_root_name(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.resource_access_root_name(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            return self.resource_access_root_name(expr.object)
+        name = getattr(expr, "name", None)
+        if name is not None:
+            return name
+        return None
+
+    def validate_resource_read_access(self, expr, operation):
+        root_name = self.resource_access_root_name(expr)
+        if root_name is None:
+            return
+        access = self.resource_access_qualifiers.get(root_name)
+        if access == "writeonly":
+            raise ValueError(
+                f"Unsupported {operation} for Mojo codegen; "
+                f"resource '{root_name}' is writeonly"
+            )
+
+    def validate_resource_write_access(self, expr, operation):
+        root_name = self.resource_access_root_name(expr)
+        if root_name is None:
+            return
+        access = self.resource_access_qualifiers.get(root_name)
+        if access == "readonly":
+            raise ValueError(
+                f"Unsupported {operation} for Mojo codegen; "
+                f"resource '{root_name}' is readonly"
+            )
+
+    def validate_resource_read_write_access(self, expr, operation):
+        self.validate_resource_read_access(expr, operation)
+        self.validate_resource_write_access(expr, operation)
+
     def byte_address_buffer_value_type(self, buffer_type):
         if buffer_type in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
             return "uint"
@@ -1046,30 +1441,156 @@ class MojoCodeGen:
         return f"{mojo_type}({', '.join([zero] * storage_width)})"
 
     def extract_semantic_from_attributes(self, attributes):
-        """Extract semantic information from new AST attributes."""
-        semantic_attrs = [
-            "position",
-            "color",
-            "texcoord",
-            "normal",
-            "tangent",
-            "binormal",
-            "POSITION",
-            "COLOR",
-            "TEXCOORD",
-            "NORMAL",
-            "TANGENT",
-            "BINORMAL",
-            "TEXCOORD0",
-            "TEXCOORD1",
-            "TEXCOORD2",
-            "TEXCOORD3",
-        ]
-
+        """Extract shader semantic information from AST attributes."""
         for attr in attributes:
-            if hasattr(attr, "name") and attr.name in semantic_attrs:
-                return attr.name
+            name = getattr(attr, "name", None)
+            if self.is_semantic_attribute_name(name):
+                return str(name)
         return None
+
+    def node_semantic(self, node):
+        semantic = getattr(node, "semantic", None)
+        if semantic:
+            return semantic
+        return self.extract_semantic_from_attributes(
+            getattr(node, "attributes", []) or []
+        )
+
+    def function_return_semantic(self, func):
+        return self.extract_semantic_from_attributes(
+            getattr(func, "attributes", []) or []
+        )
+
+    def is_semantic_attribute_name(self, name):
+        if name is None:
+            return False
+
+        semantic = str(name)
+        lower = semantic.lower()
+        upper = semantic.upper()
+        if lower in MOJO_NON_SEMANTIC_ATTRIBUTES:
+            return False
+        if semantic in self.semantic_map:
+            return True
+        if upper in self.semantic_map:
+            return True
+        if re.fullmatch(r"(COLOR|TEXCOORD|NORMAL|TANGENT|BINORMAL)\d*", upper):
+            return True
+        if re.fullmatch(r"SV_TARGET\d*", upper):
+            return True
+        if upper in {
+            "SV_DEPTH",
+            "SV_DISPATCHTHREADID",
+            "SV_GROUPID",
+            "SV_GROUPINDEX",
+            "SV_GROUPTHREADID",
+            "SV_INSTANCEID",
+            "SV_ISFRONTFACE",
+            "SV_POSITION",
+            "SV_VERTEXID",
+        }:
+            return True
+        return lower.startswith("gl_")
+
+    def semantic_output_kind(self, semantic):
+        lower = str(semantic).lower()
+        upper = str(semantic).upper()
+        if lower == "gl_position" or upper == "SV_POSITION":
+            return "position"
+        if re.fullmatch(r"gl_fragcolor\d*", lower) or re.fullmatch(
+            r"SV_TARGET\d*", upper
+        ):
+            return "color"
+        if lower == "gl_fragdepth" or upper == "SV_DEPTH":
+            return "depth"
+        if lower in MOJO_INPUT_ONLY_RETURN_SEMANTICS:
+            return "input_only"
+        return None
+
+    def validate_builtin_semantic_type(self, semantic, type_name, context):
+        kind = self.semantic_output_kind(semantic)
+        if kind is None or kind == "input_only":
+            return
+
+        if kind in {"position", "color"}:
+            if self.is_float_vector_width(type_name, 4):
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Mojo codegen; "
+                "expected vec4-compatible return type"
+            )
+
+        if kind == "depth" and not self.is_float_scalar_type(type_name):
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Mojo codegen; "
+                "expected float return type"
+            )
+
+    def validate_return_semantic(self, shader_type, return_type, semantic):
+        if self.type_name(return_type) == "void":
+            raise ValueError(
+                f"Unsupported {shader_type or 'function'} {semantic} "
+                "return semantic for Mojo codegen; void return type"
+            )
+
+        kind = self.semantic_output_kind(semantic)
+        if kind == "input_only":
+            raise ValueError(
+                f"Unsupported {semantic} return semantic for Mojo codegen; "
+                "input-only builtin semantics cannot be used as return semantics"
+            )
+
+        self.validate_output_semantic_stage(shader_type, semantic, "return semantic")
+        self.validate_builtin_semantic_type(semantic, return_type, "return semantic")
+
+    def validate_struct_return_semantics(self, shader_type, return_type):
+        if shader_type is None:
+            return
+
+        for member_name, semantic in self.struct_member_semantics.get(
+            self.type_name(return_type), {}
+        ).items():
+            self.validate_output_semantic_stage(
+                shader_type,
+                semantic,
+                f"struct return semantic '{return_type}.{member_name}'",
+            )
+
+    def validate_output_semantic_stage(self, shader_type, semantic, context):
+        kind = self.semantic_output_kind(semantic)
+        if kind is None or kind == "input_only" or shader_type is None:
+            return
+
+        allowed_stages = {
+            "position": {"vertex"},
+            "color": {"fragment"},
+            "depth": {"fragment"},
+        }[kind]
+        if shader_type not in allowed_stages:
+            allowed = ", ".join(sorted(allowed_stages))
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Mojo {shader_type} stage; "
+                f"valid stage is {allowed}"
+            )
+
+    def is_float_vector_width(self, type_name, width):
+        vector_info = self.vector_type_info(type_name)
+        return (
+            vector_info is not None
+            and vector_info[0] == "DType.float32"
+            and vector_info[1] == width
+        )
+
+    def is_float_scalar_type(self, type_name):
+        return MOJO_SCALAR_DTYPES.get(self.type_name(type_name)) == "DType.float32"
+
+    def generate_return_semantic_comment(self, shader_type, semantic):
+        mapped_semantic = self.map_semantic(semantic)
+        return (
+            "# CrossGL return semantic: "
+            f"stage={shader_type or 'function'} "
+            f"semantic={mapped_semantic} source={semantic}\n"
+        )
 
     def generate_enum(self, node):
         """Lower a unit/numeric CrossGL enum to Mojo type and value aliases."""
@@ -1221,6 +1742,7 @@ class MojoCodeGen:
     def generate_struct(self, node):
         code = f"@value\nstruct {node.name}:\n"
         self.struct_types[node.name] = {}
+        self.struct_member_semantics[node.name] = {}
 
         members = getattr(node, "members", [])
         for member in members:
@@ -1229,12 +1751,20 @@ class MojoCodeGen:
                     member, "element_type", getattr(member, "vtype", "float")
                 )
                 size = get_array_size_from_node(member)
-                self.struct_types[node.name][member.name] = self.array_type_name(
-                    element_type, size
-                )
+                member_type = self.array_type_name(element_type, size)
+                self.struct_types[node.name][member.name] = member_type
+                semantic = self.node_semantic(member)
+                semantic_comment = ""
+                if semantic:
+                    self.struct_member_semantics[node.name][member.name] = semantic
+                    self.validate_builtin_semantic_type(
+                        semantic, member_type, "struct member semantic"
+                    )
+                    semantic_comment = f"  # {self.map_semantic(semantic)}"
                 code += (
                     f"    var {member.name}: "
-                    f"{self.array_storage_type(element_type, size)}\n"
+                    f"{self.array_storage_type(element_type, size)}"
+                    f"{semantic_comment}\n"
                 )
             else:
                 if hasattr(member, "member_type"):
@@ -1246,15 +1776,14 @@ class MojoCodeGen:
 
                 self.struct_types[node.name][member.name] = member_type
 
-                semantic = None
-                if hasattr(member, "semantic"):
-                    semantic = member.semantic
-                elif hasattr(member, "attributes"):
-                    semantic = self.extract_semantic_from_attributes(member.attributes)
-
-                semantic_comment = (
-                    f"  # {self.map_semantic(semantic)}" if semantic else ""
-                )
+                semantic = self.node_semantic(member)
+                semantic_comment = ""
+                if semantic:
+                    self.struct_member_semantics[node.name][member.name] = semantic
+                    self.validate_builtin_semantic_type(
+                        semantic, member_type, "struct member semantic"
+                    )
+                    semantic_comment = f"  # {self.map_semantic(semantic)}"
                 code += f"    var {member.name}: {self.map_type(member_type)}{semantic_comment}\n"
 
         code += "\n"
@@ -1264,6 +1793,9 @@ class MojoCodeGen:
         code = ""
         cbuffers = getattr(ast, "cbuffers", [])
         for node in cbuffers:
+            code += self.generate_resource_metadata_comment(
+                node, getattr(node, "name", None), kind="cbuffer"
+            )
             if isinstance(node, StructNode):
                 code += f"@value\nstruct {node.name}:\n"
                 members = getattr(node, "members", [])
@@ -1304,6 +1836,7 @@ class MojoCodeGen:
         code = ""
         "    " * indent
         previous_variable_types = self.variable_types.copy()
+        previous_resource_access_qualifiers = self.resource_access_qualifiers.copy()
         previous_return_type = self.current_return_type
 
         param_list = getattr(func, "parameters", getattr(func, "params", []))
@@ -1320,13 +1853,10 @@ class MojoCodeGen:
             else:
                 param_type = "float"
 
-            semantic = None
-            if hasattr(p, "semantic"):
-                semantic = p.semantic
-            elif hasattr(p, "attributes"):
-                semantic = self.extract_semantic_from_attributes(p.attributes)
+            semantic = self.node_semantic(p)
 
             self.register_variable_type(p.name, param_type)
+            self.register_resource_access_metadata(p, param_type)
             param_semantic = f"  # {self.map_semantic(semantic)}" if semantic else ""
             ownership = "owned " if p.name in mutated_params else ""
             params.append(
@@ -1341,6 +1871,10 @@ class MojoCodeGen:
             return_type = "void"
         self.function_return_types[func.name] = return_type
         self.current_return_type = return_type
+        return_semantic = self.function_return_semantic(func)
+        if return_semantic:
+            self.validate_return_semantic(shader_type, return_type, return_semantic)
+        self.validate_struct_return_semantics(shader_type, return_type)
 
         if shader_type == "vertex":
             code += f"@vertex_shader\n"
@@ -1348,6 +1882,8 @@ class MojoCodeGen:
             code += f"@fragment_shader\n"
         elif shader_type == "compute":
             code += f"@compute_shader\n"
+        if return_semantic:
+            code += self.generate_return_semantic_comment(shader_type, return_semantic)
 
         code += f"fn {func.name}({params_str}) -> {self.map_type(return_type)}:\n"
 
@@ -1369,6 +1905,7 @@ class MojoCodeGen:
 
         code += "\n"
         self.variable_types = previous_variable_types
+        self.resource_access_qualifiers = previous_resource_access_qualifiers
         self.current_return_type = previous_return_type
         return code
 
@@ -1468,6 +2005,7 @@ class MojoCodeGen:
 
     def generate_assignment_statement(self, node, indent):
         indent_str = "    " * indent
+        self.validate_resource_write_access(node.left, "assignment")
         left = self.generate_expression(node.left)
         left_type = self.expression_result_type(node.left)
         if isinstance(node.right, ArrayLiteralNode) and self.is_array_type_name(
@@ -1511,6 +2049,7 @@ class MojoCodeGen:
                     stmt.name,
                     var_type or self.expression_result_type(stmt.initial_value),
                 )
+                self.register_resource_access_metadata(stmt, var_type)
                 if (
                     isinstance(stmt.initial_value, ArrayLiteralNode)
                     and var_type is not None
@@ -1542,6 +2081,7 @@ class MojoCodeGen:
 
             var_type = var_type or "float"
             self.register_variable_type(stmt.name, var_type)
+            self.register_resource_access_metadata(stmt, var_type)
             if self.is_array_type_name(var_type):
                 return (
                     f"{indent_str}var {stmt.name} = "
@@ -1783,6 +2323,7 @@ class MojoCodeGen:
         )
 
     def generate_assignment(self, node):
+        self.validate_resource_write_access(node.left, "assignment")
         left = self.generate_expression(node.left)
         left_type = self.expression_result_type(node.left)
         if isinstance(node.right, ArrayLiteralNode) and self.is_array_type_name(
@@ -2307,6 +2848,14 @@ class MojoCodeGen:
                 return self.generate_image_atomic_call(
                     expr.args, MOJO_IMAGE_ATOMIC_BUILTINS[func_name]
                 )
+            if (
+                func_name in MOJO_SYNC_BUILTINS
+                and not expr.args
+                and not self.is_user_defined_function(func_name)
+            ):
+                helper_name = MOJO_SYNC_BUILTINS[func_name]
+                self.required_sync_helpers.add(helper_name)
+                return f"{helper_name}()"
 
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
@@ -2624,6 +3173,7 @@ class MojoCodeGen:
 
     def generate_image_load_call(self, args):
         if args:
+            self.validate_resource_read_access(args[0], "imageLoad")
             resource_type = self.map_type(self.expression_result_type(args[0]))
             if resource_type in MOJO_RESOURCE_TEXEL_COORDS:
                 self.required_image_load_types.add(resource_type)
@@ -2633,6 +3183,7 @@ class MojoCodeGen:
 
     def generate_image_store_call(self, args):
         if args:
+            self.validate_resource_write_access(args[0], "imageStore")
             resource_type = self.map_type(self.expression_result_type(args[0]))
             if resource_type in MOJO_RESOURCE_TEXEL_COORDS:
                 self.required_image_store_types.add(resource_type)
@@ -2642,6 +3193,7 @@ class MojoCodeGen:
 
     def generate_buffer_load_call(self, args):
         if args:
+            self.validate_resource_read_access(args[0], "buffer_load")
             info = self.buffer_resource_info(self.expression_result_type(args[0]))
             if info is not None and self.buffer_helper_element_type(*info) is not None:
                 self.register_buffer_resource_type(info[0])
@@ -2652,6 +3204,7 @@ class MojoCodeGen:
 
     def generate_buffer_store_call(self, args):
         if args:
+            self.validate_resource_write_access(args[0], "buffer_store")
             info = self.buffer_resource_info(self.expression_result_type(args[0]))
             self.validate_buffer_operation(
                 "buffer_store", info, MOJO_BUFFER_STORE_RESOURCE_TYPES
@@ -2665,6 +3218,7 @@ class MojoCodeGen:
 
     def generate_buffer_append_call(self, args):
         if args:
+            self.validate_resource_write_access(args[0], "buffer_append")
             info = self.buffer_resource_info(self.expression_result_type(args[0]))
             if info is not None and info[0] != "AppendStructuredBuffer":
                 raise ValueError(
@@ -2680,6 +3234,7 @@ class MojoCodeGen:
 
     def generate_buffer_consume_call(self, args):
         if args:
+            self.validate_resource_read_access(args[0], "buffer_consume")
             info = self.buffer_resource_info(self.expression_result_type(args[0]))
             if info is not None and info[0] != "ConsumeStructuredBuffer":
                 raise ValueError(
@@ -2716,6 +3271,7 @@ class MojoCodeGen:
 
         if buffer_type in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
             if member in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+                self.validate_resource_read_access(obj_expr, member)
                 width = MOJO_BYTE_ADDRESS_LOAD_METHODS[member]
                 self.register_buffer_resource_type(buffer_type)
                 if width == 1:
@@ -2731,6 +3287,7 @@ class MojoCodeGen:
                 return f"buffer_load{width}({generated_args})"
 
             if member in MOJO_BYTE_ADDRESS_STORE_METHODS:
+                self.validate_resource_write_access(obj_expr, member)
                 self.validate_buffer_operation(
                     member, info, MOJO_BUFFER_STORE_RESOURCE_TYPES
                 )
@@ -2751,6 +3308,7 @@ class MojoCodeGen:
                 return f"buffer_store{width}({generated_args})"
 
         if member == "Load" and element_type is not None:
+            self.validate_resource_read_access(obj_expr, "Load")
             self.register_buffer_resource_type(buffer_type)
             self.required_buffer_load_helpers.add(info)
             generated_args = ", ".join(
@@ -2759,6 +3317,7 @@ class MojoCodeGen:
             return f"buffer_load({generated_args})"
 
         if member == "Store" and element_type is not None:
+            self.validate_resource_write_access(obj_expr, "Store")
             self.validate_buffer_operation(
                 "Store", info, MOJO_BUFFER_STORE_RESOURCE_TYPES
             )
@@ -2770,6 +3329,7 @@ class MojoCodeGen:
             return f"buffer_store({generated_args})"
 
         if member == "Append" and buffer_type == "AppendStructuredBuffer":
+            self.validate_resource_write_access(obj_expr, "Append")
             self.register_buffer_resource_type(buffer_type)
             self.required_buffer_append_helpers.add(info)
             generated_args = ", ".join(
@@ -2778,6 +3338,7 @@ class MojoCodeGen:
             return f"buffer_append({generated_args})"
 
         if member == "Consume" and buffer_type == "ConsumeStructuredBuffer":
+            self.validate_resource_read_access(obj_expr, "Consume")
             self.register_buffer_resource_type(buffer_type)
             self.required_buffer_consume_helpers.add(info)
             return f"buffer_consume({obj})"
@@ -2826,6 +3387,7 @@ class MojoCodeGen:
             return f"{helper_base}()"
 
         args = self.strip_split_sampler_arg(args)
+        self.validate_texture_builtin_resource(args, helper_base)
         arg_types = tuple(self.resource_builtin_arg_type(arg) for arg in args)
         helper_name = self.resource_builtin_helper_name(helper_base, arg_types)
         self.required_resource_builtin_helpers[(helper_name, arg_types)] = {
@@ -2837,10 +3399,35 @@ class MojoCodeGen:
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"{helper_name}({generated_args})"
 
+    def validate_texture_builtin_resource(self, args, helper_base):
+        if not args:
+            return
+
+        resource_type = self.map_type(self.expression_result_type(args[0]))
+        if not self.is_texture_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"texture resource required: {resource_type}"
+            )
+        if self.is_multisample_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"non-multisample texture required: {resource_type}"
+            )
+        if (
+            helper_base.startswith("texture_compare")
+            or helper_base.startswith("texture_gather_compare")
+        ) and not self.is_shadow_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"shadow texture required: {resource_type}"
+            )
+
     def generate_image_atomic_call(self, args, helper_base):
         if not args:
             return f"{helper_base}()"
 
+        self.validate_resource_read_write_access(args[0], helper_base)
         resource_type = self.map_type(self.expression_result_type(args[0]))
         return_type = self.image_value_type(resource_type)
         if return_type not in {"Int32", "UInt32"}:
@@ -3140,6 +3727,7 @@ class MojoCodeGen:
             and not self.required_byte_address_vector_load_helpers
             and not self.required_byte_address_vector_store_helpers
             and not self.required_reinterpret_helpers
+            and not self.required_sync_helpers
         ):
             return ""
 
@@ -3216,6 +3804,12 @@ class MojoCodeGen:
                 code += self.generate_reinterpret_helper(*key)
             code += "\n"
 
+        if self.required_sync_helpers:
+            code += "# CrossGL synchronization placeholders\n"
+            for helper_name in sorted(self.required_sync_helpers):
+                code += self.generate_sync_helper(helper_name)
+            code += "\n"
+
         if self.required_fract_helpers or self.required_saturate_helpers:
             code += "# CrossGL math helpers\n"
             for key in sorted(self.required_fract_helpers):
@@ -3256,6 +3850,9 @@ class MojoCodeGen:
                 self.required_matrix_constructor_helpers[key]
             )
         return code + "\n"
+
+    def generate_sync_helper(self, helper_name):
+        return f"fn {helper_name}():\n    pass\n\n"
 
     def generate_resource_type(self, resource_type):
         code = f"@value\nstruct {resource_type}:\n"
@@ -3456,6 +4053,9 @@ class MojoCodeGen:
 
     def is_shadow_resource_type(self, resource_type):
         return isinstance(resource_type, str) and resource_type.endswith("Shadow")
+
+    def is_texture_resource_type(self, resource_type):
+        return isinstance(resource_type, str) and resource_type.startswith("Texture")
 
     def resource_sample_return_type(self, resource_type):
         if self.is_shadow_resource_type(resource_type):
@@ -4384,6 +4984,9 @@ class MojoCodeGen:
         return mapped_type
 
     def is_resource_type_name(self, type_name):
+        if self.is_array_type_name(type_name):
+            base_type, _ = parse_array_type(str(type_name))
+            return self.is_resource_type_name(base_type)
         if self.buffer_resource_info(type_name) is not None:
             return True
         return self.is_mojo_resource_type(
@@ -4436,5 +5039,32 @@ class MojoCodeGen:
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to the Mojo backend attribute name."""
         if semantic:
-            return self.semantic_map.get(semantic, semantic)
+            semantic = str(semantic)
+            if semantic in self.semantic_map:
+                return self.semantic_map[semantic]
+            upper = semantic.upper()
+            lower = semantic.lower()
+            if upper in self.semantic_map:
+                return self.semantic_map[upper]
+            target_match = re.fullmatch(r"SV_TARGET(\d*)", upper)
+            if target_match is not None:
+                index = target_match.group(1) or "0"
+                return f"color({index})"
+            color_match = re.fullmatch(r"gl_fragcolor(\d*)", lower)
+            if color_match is not None:
+                index = color_match.group(1) or "0"
+                return f"color({index})"
+            texcoord_match = re.fullmatch(r"TEXCOORD(\d*)", upper)
+            if texcoord_match is not None:
+                index = texcoord_match.group(1)
+                return f"texcoord{index}" if index else "texcoord"
+            color_semantic_match = re.fullmatch(r"COLOR(\d*)", upper)
+            if color_semantic_match is not None:
+                index = color_semantic_match.group(1)
+                return f"color{index}" if index else "color"
+            if lower == "gl_fragdepth" or upper == "SV_DEPTH":
+                return "depth(any)"
+            if lower == "gl_position" or upper == "SV_POSITION":
+                return "position"
+            return semantic
         return ""

@@ -1350,6 +1350,74 @@ def test_directx_typed_buffer_atomics_lift_inside_ternary_conditions():
     assert "unsupported HLSL typed buffer atomic expression" not in generated_code
 
 
+def test_directx_typed_buffer_atomic_ternaries_lift_inside_larger_expressions():
+    shader = """
+    shader TypedBufferAtomicNestedTernariesHLSL {
+        RWBuffer<uint> counters @register(u1);
+
+        uint pick(bool useAdd, uint index) {
+            return (useAdd ? atomicAdd(counters[index], 1u) : 7u) + 2u;
+        }
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                bool useAdd = tid.x != 0u;
+                uint selected =
+                    (useAdd
+                        ? atomicAdd(counters[tid.x], 1u)
+                        : atomicExchange(counters[tid.x], 2u)) + 3u;
+                selected = uint(
+                    useAdd
+                        ? atomicCompareExchange(counters[tid.x], 4u, 5u)
+                        : 6u
+                ) + 1u;
+                selected +=
+                    (useAdd ? atomicXor(counters[tid.x], 6u) : 7u) + 8u;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint __crossgl_atomic_ternary_0;" in generated_code
+    assert (
+        "InterlockedAdd(counters[index], 1u, __crossgl_atomic_expr_1);"
+        in generated_code
+    )
+    assert "__crossgl_atomic_ternary_0 = __crossgl_atomic_expr_1;" in generated_code
+    assert "__crossgl_atomic_ternary_0 = 7u;" in generated_code
+    assert "return (__crossgl_atomic_ternary_0 + 2u);" in generated_code
+    assert "uint __crossgl_atomic_ternary_2;" in generated_code
+    assert (
+        "InterlockedAdd(counters[tid.x], 1u, __crossgl_atomic_expr_3);"
+        in generated_code
+    )
+    assert (
+        "InterlockedExchange(counters[tid.x], 2u, __crossgl_atomic_expr_4);"
+        in generated_code
+    )
+    assert "uint selected = (__crossgl_atomic_ternary_2 + 3u);" in generated_code
+    assert "uint __crossgl_atomic_ternary_5;" in generated_code
+    assert (
+        "InterlockedCompareExchange(counters[tid.x], 4u, 5u, "
+        "__crossgl_atomic_expr_6);"
+    ) in generated_code
+    assert "selected = (uint(__crossgl_atomic_ternary_5) + 1u);" in generated_code
+    assert "uint __crossgl_atomic_ternary_7;" in generated_code
+    assert (
+        "InterlockedXor(counters[tid.x], 6u, __crossgl_atomic_expr_8);"
+        in generated_code
+    )
+    assert "selected += (__crossgl_atomic_ternary_7 + 8u);" in generated_code
+    assert "unsupported HLSL typed buffer atomic expression" not in generated_code
+    assert "atomicAdd(counters" not in generated_code
+    assert "atomicExchange(counters" not in generated_code
+    assert "atomicCompareExchange(counters" not in generated_code
+    assert "atomicXor(counters" not in generated_code
+
+
 def test_directx_typed_buffer_atomics_reject_non_integer_targets():
     shader = """
     shader BadTypedBufferAtomicHLSL {

@@ -44,7 +44,7 @@ shader main {
         ),
         (HipCodeGen, "RWStructuredBuffer<Particles> particles;"),
         (MetalCodeGen, "device Particles* particles [[buffer(0)]]"),
-        (SlangCodeGen, "RWStructuredBuffer<Particles> particles;"),
+        (SlangCodeGen, "RWStructuredBuffer<Particles> particles : register(u0);"),
     ],
 )
 def test_generic_resource_types_preserve_element_type(codegen_cls, expected):

@@ -2840,7 +2840,10 @@ def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "RaytracingAccelerationStructure scene;" in generated_code
+    assert (
+        "[[vk::binding(0, 0)]] RaytracingAccelerationStructure scene "
+        ": register(t0);" in generated_code
+    )
     assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, payload);" in generated_code
     assert (
         "TraceRay(scene, 0, 255, 0, 1, 0, "
@@ -2879,7 +2882,10 @@ def test_slang_ray_query_methods_emit_native_calls_and_infer_results():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "RaytracingAccelerationStructure scene;" in generated_code
+    assert (
+        "[[vk::binding(0, 0)]] RaytracingAccelerationStructure scene "
+        ": register(t0);" in generated_code
+    )
     assert "RayQuery<RAY_FLAG_NONE> rq;" in generated_code
     assert "rq.TraceRayInline(scene, 0, 255, ray);" in generated_code
     assert "bool advanced = rq.Proceed();" in generated_code
@@ -3722,24 +3728,316 @@ def test_resource_types_emit_slang_texture_names():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "Sampler1D<float4> lineMap;" in generated_code
-    assert "Sampler1DArray<float4> lineArray;" in generated_code
-    assert "Sampler2D<float4> colorMap;" in generated_code
-    assert "Sampler2DMS<float4> msTex;" in generated_code
-    assert "Sampler2DMSArray<float4> msArray;" in generated_code
-    assert "RWTexture1D<float4> lineImage;" in generated_code
-    assert "RWTexture1DArray<float4> lineImages;" in generated_code
-    assert "RWTexture1D<int> signedLine;" in generated_code
-    assert "RWTexture1DArray<uint> unsignedLines;" in generated_code
-    assert "RWTexture2D<float4> colorImage;" in generated_code
-    assert "RWTexture2DMS<float4> msColor;" in generated_code
-    assert "RWTexture2DMSArray<float4> msLayers;" in generated_code
-    assert "RWTexture2DMSArray<int> signedLayers;" in generated_code
-    assert "RWTexture2DMS<uint> counters;" in generated_code
+    assert "Sampler1D<float4> lineMap : register(t0);" in generated_code
+    assert "Sampler1DArray<float4> lineArray : register(t1);" in generated_code
+    assert "Sampler2D<float4> colorMap : register(t2);" in generated_code
+    assert "Sampler2DMS<float4> msTex : register(t3);" in generated_code
+    assert "Sampler2DMSArray<float4> msArray : register(t4);" in generated_code
+    assert "RWTexture1D<float4> lineImage : register(u0);" in generated_code
+    assert "RWTexture1DArray<float4> lineImages : register(u1);" in generated_code
+    assert "RWTexture1D<int> signedLine : register(u2);" in generated_code
+    assert "RWTexture1DArray<uint> unsignedLines : register(u3);" in generated_code
+    assert "RWTexture2D<float4> colorImage : register(u4);" in generated_code
+    assert "RWTexture2DMS<float4> msColor : register(u5);" in generated_code
+    assert "RWTexture2DMSArray<float4> msLayers : register(u6);" in generated_code
+    assert "RWTexture2DMSArray<int> signedLayers : register(u7);" in generated_code
+    assert "RWTexture2DMS<uint> counters : register(u8);" in generated_code
     assert "sampler2d" not in generated_code
     assert "image2DMS" not in generated_code
     assert "iimage2DMSArray" not in generated_code
     assert "uimage2DMS" not in generated_code
+
+
+def test_resource_binding_metadata_emits_slang_vk_and_register_decorations(tmp_path):
+    code = """
+    shader ResourceBindings {
+        cbuffer Camera : register(b1, space2) {
+            mat4 viewProj;
+        };
+
+        layout(set = 2, binding = 7) uniform sampler2D colorMap;
+        sampler linearSampler @register(s3, space2);
+        uimage2D counters @r32ui @binding(8) @set(2);
+        accelerationStructureEXT scene @binding(9) @set(2);
+        sampler2d textureArray[4] @binding(12) @set(2);
+
+        compute {
+            vec4 sampleBound(
+                sampler2D paramTex @binding(10) @set(2),
+                sampler paramSampler @register(s11, space2),
+                uimage2D paramImage @r32ui @binding(13) @set(2),
+                vec2 uv
+            ) {
+                uint oldValue = imageAtomicAdd(paramImage, ivec2(0, 0), 1u);
+                return texture(paramTex, uv) + vec4(float(oldValue));
+            }
+
+            void main() {}
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "[[vk::binding(1, 2)]] cbuffer Camera : register(b1, space2)" in generated_code
+    )
+    assert "float4x4 viewProj;" in generated_code
+    assert (
+        "[[vk::binding(7, 2)]] Sampler2D<float4> colorMap "
+        ": register(t7, space2);" in generated_code
+    )
+    assert (
+        "[[vk::binding(3, 2)]] SamplerState linearSampler "
+        ": register(s3, space2);" in generated_code
+    )
+    assert (
+        "[[vk::binding(8, 2)]] RWTexture2D<uint> counters "
+        ": register(u8, space2);" in generated_code
+    )
+    assert (
+        "[[vk::binding(9, 2)]] RaytracingAccelerationStructure scene "
+        ": register(t9, space2);" in generated_code
+    )
+    assert (
+        "[[vk::binding(12, 2)]] Sampler2D<float4> textureArray[4] "
+        ": register(t12, space2);" in generated_code
+    )
+    assert (
+        "[[vk::binding(10, 2)]] Sampler2D<float4> paramTex "
+        ": register(t10, space2)" in generated_code
+    )
+    assert (
+        "[[vk::binding(11, 2)]] SamplerState paramSampler "
+        ": register(s11, space2)" in generated_code
+    )
+    assert (
+        "[[vk::binding(13, 2)]] RWTexture2D<uint> paramImage "
+        ": register(u13, space2)" in generated_code
+    )
+    assert ": binding" not in generated_code
+    assert ": set" not in generated_code
+    assert ": register(register" not in generated_code
+
+    compile_generated_slang(generated_code, tmp_path, "compute")
+
+
+@pytest.mark.parametrize(
+    ("resource_source", "message"),
+    [
+        (
+            "sampler2d colorMap @binding(4) @register(t5);",
+            "binding 4 does not match register binding 5",
+        ),
+        (
+            "sampler2d colorMap @set(1) @register(t4, space2);",
+            "set 1 does not match register space2",
+        ),
+    ],
+)
+def test_conflicting_slang_resource_binding_metadata_raises(resource_source, message):
+    code = f"""
+    shader InvalidResourceBindings {{
+        {resource_source}
+
+        compute {{
+            void main() {{}}
+        }}
+    }}
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    with pytest.raises(ValueError, match=message):
+        generate_code(ast)
+
+
+def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots():
+    code = """
+    shader AutoResourceBindings {
+        cbuffer Camera {
+            mat4 viewProj;
+        };
+
+        sampler2d firstTexture;
+        sampler2d textureArray[2];
+        sampler2d reservedTexture @binding(2);
+        sampler2d afterArray;
+        sampler2d setOneTexture @set(1);
+        sampler2d setOneAfter @set(1);
+        sampler linearSampler;
+        uimage2D counters @r32ui;
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "[[vk::binding(0, 0)]] cbuffer Camera : register(b0)" in generated_code
+    assert (
+        "[[vk::binding(0, 0)]] Sampler2D<float4> firstTexture "
+        ": register(t0);" in generated_code
+    )
+    assert (
+        "[[vk::binding(3, 0)]] Sampler2D<float4> textureArray[2] "
+        ": register(t3);" in generated_code
+    )
+    assert (
+        "[[vk::binding(2, 0)]] Sampler2D<float4> reservedTexture "
+        ": register(t2);" in generated_code
+    )
+    assert (
+        "[[vk::binding(5, 0)]] Sampler2D<float4> afterArray "
+        ": register(t5);" in generated_code
+    )
+    assert (
+        "[[vk::binding(0, 1)]] Sampler2D<float4> setOneTexture "
+        ": register(t0, space1);" in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 1)]] Sampler2D<float4> setOneAfter "
+        ": register(t1, space1);" in generated_code
+    )
+    assert (
+        "[[vk::binding(0, 0)]] SamplerState linearSampler "
+        ": register(s0);" in generated_code
+    )
+    assert (
+        "[[vk::binding(0, 0)]] RWTexture2D<uint> counters "
+        ": register(u0);" in generated_code
+    )
+
+
+def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings():
+    code = """
+    shader SlangStructuredBuffers {
+        struct Particle {
+            vec4 position;
+            float mass;
+        };
+
+        StructuredBuffer<Particle> particlesIn @binding(1);
+        RWStructuredBuffer<Particle> particlesOut @binding(2);
+        StructuredBuffer<vec4> vectors;
+        RWStructuredBuffer<float> values[2];
+
+        compute {
+            uint countValues(RWStructuredBuffer<float> data) {
+                return buffer_dimensions(data);
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint len;
+                Particle particle = buffer_load(particlesIn, tid.x);
+                vec4 vectorValue = buffer_load(vectors, 0u);
+                particle.mass = particle.mass + vectorValue.x;
+                buffer_dimensions(particlesOut, len);
+                buffer_store(particlesOut, tid.x, particle);
+                buffer_store(values[1], 0u, particle.mass);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(1, 0)]] StructuredBuffer<Particle> particlesIn "
+        ": register(t1);" in generated_code
+    )
+    assert (
+        "[[vk::binding(2, 0)]] RWStructuredBuffer<Particle> particlesOut "
+        ": register(u2);" in generated_code
+    )
+    assert (
+        "[[vk::binding(2, 0)]] StructuredBuffer<float4> vectors "
+        ": register(t2);" in generated_code
+    )
+    assert (
+        "[[vk::binding(3, 0)]] RWStructuredBuffer<float> values[2] "
+        ": register(u3);" in generated_code
+    )
+    assert (
+        "uint cgl_bufferDimensions_RWStructuredBuffer_float("
+        "RWStructuredBuffer<float> buffer)" in generated_code
+    )
+    assert (
+        "return cgl_bufferDimensions_RWStructuredBuffer_float(data);" in generated_code
+    )
+    assert "Particle particle = particlesIn.Load(tid.x);" in generated_code
+    assert "float4 vectorValue = vectors.Load(0u);" in generated_code
+    assert "particlesOut.GetDimensions(len);" in generated_code
+    assert "particlesOut.Store(tid.x, particle);" in generated_code
+    assert "values[1].Store(0u, particle.mass);" in generated_code
+    assert "buffer_load(" not in generated_code
+    assert "buffer_store(" not in generated_code
+    assert "buffer_dimensions(" not in generated_code
+    assert "StructuredBuffer<vec4>" not in generated_code
+
+
+def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic():
+    code = """
+    shader SlangReadonlyStructuredBuffer {
+        StructuredBuffer<float> values;
+
+        compute {
+            void main() {
+                buffer_store(values, 0u, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "/* unsupported Slang structured buffer: buffer_store requires "
+        "RWStructuredBuffer resource */;" in generated_code
+    )
+    assert "buffer_store(values" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("resource_source", "message"),
+    [
+        (
+            """
+            sampler2d textures[2] @binding(0);
+            sampler2d overlap @binding(1);
+            """,
+            "t1 overlaps 'textures' t0-t1",
+        ),
+        (
+            """
+            sampler2d first @binding(0);
+            sampler2d second @binding(0);
+            """,
+            "t0 overlaps 'first' t0",
+        ),
+    ],
+)
+def test_conflicting_slang_resource_binding_ranges_raise(resource_source, message):
+    code = f"""
+    shader InvalidResourceBindingRanges {{
+        {resource_source}
+
+        compute {{
+            void main() {{}}
+        }}
+    }}
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    with pytest.raises(ValueError, match=message):
+        generate_code(ast)
 
 
 def test_one_dimensional_resources_emit_slang_methods_and_helpers():
@@ -3793,12 +4091,12 @@ def test_one_dimensional_resources_emit_slang_methods_and_helpers():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "Sampler1D<float4> line;" in generated_code
-    assert "Sampler1DArray<float4> lineLayers;" in generated_code
-    assert "RWTexture1D<float> values;" in generated_code
-    assert "RWTexture1DArray<float4> layerValues;" in generated_code
-    assert "RWTexture1D<uint> counters;" in generated_code
-    assert "RWTexture1DArray<uint> layerCounters;" in generated_code
+    assert "Sampler1D<float4> line : register(t0);" in generated_code
+    assert "Sampler1DArray<float4> lineLayers : register(t1);" in generated_code
+    assert "RWTexture1D<float> values : register(u0);" in generated_code
+    assert "RWTexture1DArray<float4> layerValues : register(u1);" in generated_code
+    assert "RWTexture1D<uint> counters : register(u2);" in generated_code
+    assert "RWTexture1DArray<uint> layerCounters : register(u3);" in generated_code
     assert (
         "float4 sampleLine(Sampler1D<float4> tex, "
         "Sampler1DArray<float4> layers, float u, float2 uvLayer, "
@@ -3932,10 +4230,10 @@ def test_sampled_texture_builtins_emit_slang_methods():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "Sampler2D<float4> colorMap;" in generated_code
-    assert "Sampler2DArray<float4> layerMap;" in generated_code
-    assert "Sampler2DMS<float4> msTex;" in generated_code
-    assert "Sampler2DMSArray<float4> msArray;" in generated_code
+    assert "Sampler2D<float4> colorMap : register(t0);" in generated_code
+    assert "Sampler2DArray<float4> layerMap : register(t1);" in generated_code
+    assert "Sampler2DMS<float4> msTex : register(t2);" in generated_code
+    assert "Sampler2DMSArray<float4> msArray : register(t3);" in generated_code
     assert "Sampler2D<float4> tex" in generated_code
     assert "Sampler2DArray<float4> layers" in generated_code
     assert "Sampler2DMS<float4> ms" in generated_code
@@ -3996,7 +4294,7 @@ def test_explicit_sampler_texture_builtins_emit_combined_slang_methods():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "SamplerState linearSampler;" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
     assert "SamplerState sampleState" in generated_code
     assert "float4 color = tex.Sample(uv);" in generated_code
     assert "float4 biased = tex.SampleBias(uv, 0.5);" in generated_code
@@ -4069,11 +4367,15 @@ def test_texture_and_shadow_arrays_preserve_expression_sizes_and_group_indices()
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "Sampler2D<float4> textures[((2 + 1) * 2)];" in generated_code
-    assert "SamplerState samplers[((2 + 1) * 2)];" in generated_code
-    assert "Sampler2D<float4> unaryTextures[+6];" in generated_code
-    assert "Sampler2DShadow shadowMaps[((2 + 1) * 2)];" in generated_code
-    assert "SamplerState shadowSamplers[((2 + 1) * 2)];" in generated_code
+    assert "Sampler2D<float4> textures[((2 + 1) * 2)] : register(t0);" in generated_code
+    assert "SamplerState samplers[((2 + 1) * 2)] : register(s0);" in generated_code
+    assert "Sampler2D<float4> unaryTextures[+6] : register(t6);" in generated_code
+    assert (
+        "Sampler2DShadow shadowMaps[((2 + 1) * 2)] : register(t12);" in generated_code
+    )
+    assert (
+        "SamplerState shadowSamplers[((2 + 1) * 2)] : register(s6);" in generated_code
+    )
     assert (
         "float4 sampleLayer(Sampler2D<float4> textures[((2 + 1) * 2)], "
         "SamplerState samplers[((2 + 1) * 2)], "
@@ -4445,7 +4747,7 @@ def test_explicit_sampler_texel_fetch_emits_combined_slang_methods():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "SamplerState linearSampler;" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
     assert "SamplerState sampleState" in generated_code
     assert "float4 fetched = tex.Load(int3(pixel, lod));" in generated_code
     assert "float4 fetchedLayer = layers.Load(int4(pixelLayer, lod));" in generated_code
@@ -5011,11 +5313,11 @@ def test_nested_resource_arrays_emit_slang_queries_and_operations():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "Sampler2D<float4> textureGrid[2][3];" in generated_code
-    assert "Sampler2DMS<float4> msGrid[2][2];" in generated_code
-    assert "Sampler2DShadow shadowGrid[2][3];" in generated_code
-    assert "RWTexture2D<float4> imageGrid[2][4];" in generated_code
-    assert "RWTexture2D<uint> counterGrid[2][2];" in generated_code
+    assert "Sampler2D<float4> textureGrid[2][3] : register(t0);" in generated_code
+    assert "Sampler2DMS<float4> msGrid[2][2] : register(t6);" in generated_code
+    assert "Sampler2DShadow shadowGrid[2][3] : register(t10);" in generated_code
+    assert "RWTexture2D<float4> imageGrid[2][4] : register(u0);" in generated_code
+    assert "RWTexture2D<uint> counterGrid[2][2] : register(u8);" in generated_code
     assert (
         "float4 sampleGrid(Sampler2D<float4> paramGrid[2][3], "
         "int layer, int slot, float2 uv)" in generated_code
@@ -5149,9 +5451,9 @@ def test_dynamic_resource_array_params_emit_slang_queries_and_operations():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "Sampler2D<float4> textureGrid[2][3];" in generated_code
-    assert "RWTexture2D<float4> imageGrid[2][3];" in generated_code
-    assert "RWTexture2D<uint> counterGrid[2][2];" in generated_code
+    assert "Sampler2D<float4> textureGrid[2][3] : register(t0);" in generated_code
+    assert "RWTexture2D<float4> imageGrid[2][3] : register(u0);" in generated_code
+    assert "RWTexture2D<uint> counterGrid[2][2] : register(u6);" in generated_code
     assert (
         "float4 sampleDynamic(Sampler2D<float4> dynGrid[][3], "
         "int layer, int slot, float2 uv)" in generated_code
@@ -7597,12 +7899,12 @@ def test_explicit_image_formats_emit_slang_storage_element_types():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "RWTexture2D<float> scalarFloat;" in generated_code
-    assert "RWTexture2D<float2> rgFloat;" in generated_code
-    assert "RWTexture2D<uint2> rgUnsigned;" in generated_code
-    assert "RWTexture3D<float4> rgbaVolume;" in generated_code
-    assert "RWTexture2DMS<uint> msCounter;" in generated_code
-    assert "RWTexture2DMSArray<float4> msLayers;" in generated_code
+    assert "RWTexture2D<float> scalarFloat : register(u0);" in generated_code
+    assert "RWTexture2D<float2> rgFloat : register(u1);" in generated_code
+    assert "RWTexture2D<uint2> rgUnsigned : register(u2);" in generated_code
+    assert "RWTexture3D<float4> rgbaVolume : register(u3);" in generated_code
+    assert "RWTexture2DMS<uint> msCounter : register(u4);" in generated_code
+    assert "RWTexture2DMSArray<float4> msLayers : register(u5);" in generated_code
     assert (
         "float scalarLoad(RWTexture2D<float2> image, int2 pixel, float value)"
         in generated_code
@@ -7685,10 +7987,10 @@ def test_integer_image_atomics_emit_slang_interlocked_helpers():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "RWTexture2D<uint> unsignedCounters;" in generated_code
-    assert "RWTexture2D<int> signedCounters;" in generated_code
-    assert "RWTexture3D<uint> unsignedVolume;" in generated_code
-    assert "RWTexture2DArray<int> signedLayers;" in generated_code
+    assert "RWTexture2D<uint> unsignedCounters : register(u0);" in generated_code
+    assert "RWTexture2D<int> signedCounters : register(u1);" in generated_code
+    assert "RWTexture3D<uint> unsignedVolume : register(u2);" in generated_code
+    assert "RWTexture2DArray<int> signedLayers : register(u3);" in generated_code
     assert (
         "uint cgl_imageAtomicAdd_uimage2D(RWTexture2D<uint> image, "
         "int2 coord, uint value)" in generated_code
@@ -7808,8 +8110,14 @@ def test_integer_image_array_atomics_preserve_expression_indices():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "RWTexture2D<uint> counterImages[((2 + 1) * 2)];" in generated_code
-    assert "RWTexture2DArray<int> layerImages[((2 + 1) * 2)];" in generated_code
+    assert (
+        "RWTexture2D<uint> counterImages[((2 + 1) * 2)] : register(u0);"
+        in generated_code
+    )
+    assert (
+        "RWTexture2DArray<int> layerImages[((2 + 1) * 2)] : register(u6);"
+        in generated_code
+    )
     assert (
         "uint addArray(RWTexture2D<uint> images[((2 + 1) * 2)], "
         "int2 pixel, uint value)" in generated_code
@@ -7863,9 +8171,9 @@ def test_unsupported_image_atomics_emit_slang_diagnostic_stubs():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "RWTexture2DMS<uint> msCounters;" in generated_code
-    assert "RWTexture2DMSArray<int> msLayers;" in generated_code
-    assert "RWTexture2D<uint2> vectorCounters;" in generated_code
+    assert "RWTexture2DMS<uint> msCounters : register(u0);" in generated_code
+    assert "RWTexture2DMSArray<int> msLayers : register(u1);" in generated_code
+    assert "RWTexture2D<uint2> vectorCounters : register(u2);" in generated_code
     assert (
         "return /* unsupported Slang image atomic: imageAtomicAdd "
         "requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray "
@@ -7914,9 +8222,9 @@ def test_formatted_image_arrays_preserve_expression_sizes():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "RWTexture2D<uint> counters[((1 + 1) * 2)];" in generated_code
-    assert "RWTexture2D<float2> rgPairs[+3];" in generated_code
-    assert "RWTexture2D<uint> afterCounters;" in generated_code
+    assert "RWTexture2D<uint> counters[((1 + 1) * 2)] : register(u0);" in generated_code
+    assert "RWTexture2D<float2> rgPairs[+3] : register(u4);" in generated_code
+    assert "RWTexture2D<uint> afterCounters : register(u7);" in generated_code
     assert (
         "uint touchCounters(RWTexture2D<uint> images[((1 + 1) * 2)], "
         "int2 pixel, uint value)" in generated_code

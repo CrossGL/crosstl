@@ -609,6 +609,12 @@ class GLSLParser:
         self.eat("SEMICOLON")
 
         struct_node = StructNode(block_name, members)
+        struct_node.interface_block = True
+        struct_node.interface_qualifiers = list(qualifiers or [])
+        struct_node.interface_layout = layout
+        struct_node.interface_instance_name = instance_name
+        struct_node.interface_instance_is_array = instance_is_array
+        struct_node.interface_array_size = array_size
         block_vars = []
 
         if instance_name:

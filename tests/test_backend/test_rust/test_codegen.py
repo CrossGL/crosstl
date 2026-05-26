@@ -906,6 +906,62 @@ def test_common_math_intrinsic_calls_convert_to_crossgl_intrinsics():
     assert "Vec3" not in result
 
 
+def test_unary_math_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn unary_math_ops(value: Vec3<f32>, scalar: f32) -> Vec3<f32> {
+        let root = crate::math::sqrt(value);
+        let inv_root = rsqrt(value);
+        let fractional = crate::math::fract(value);
+        let angles = degrees(value) + radians(value);
+        let trig = sin(value) + cos(value) + tan(value);
+        let inverse_trig = asin(value) + acos(value) + atan(value);
+        let hyper = sinh(value) + cosh(value) + tanh(value);
+        let logs = exp(value) + exp2(value) + log(value) + log2(value);
+        let rounded = floor(value) + ceil(value) + round(value) + trunc(value)
+            + round_even(value);
+        let scalar_root = scalar.sqrt();
+        let scalar_fraction = scalar.fract();
+        return root + inv_root + fractional + angles + trig + inverse_trig
+            + hyper + logs + rounded
+            + Vec3::<f32>::new(scalar_root, scalar_fraction, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec3 unary_math_ops(vec3 value, float scalar)" in result
+    assert "root = sqrt(value);" in result
+    assert "inv_root = inversesqrt(value);" in result
+    assert "fractional = fract(value);" in result
+    assert "degrees(value)" in result
+    assert "radians(value)" in result
+    assert "sin(value)" in result
+    assert "cos(value)" in result
+    assert "tan(value)" in result
+    assert "asin(value)" in result
+    assert "acos(value)" in result
+    assert "atan(value)" in result
+    assert "sinh(value)" in result
+    assert "cosh(value)" in result
+    assert "tanh(value)" in result
+    assert "exp(value)" in result
+    assert "exp2(value)" in result
+    assert "log(value)" in result
+    assert "log2(value)" in result
+    assert "floor(value)" in result
+    assert "ceil(value)" in result
+    assert "round(value)" in result
+    assert "trunc(value)" in result
+    assert "roundEven(value)" in result
+    assert "scalar_root = sqrt(scalar);" in result
+    assert "scalar_fraction = fract(scalar);" in result
+    assert "crate::math::sqrt" not in result
+    assert "rsqrt(value)" not in result
+    assert "crate::math::fract" not in result
+    assert ".sqrt()" not in result
+    assert ".fract()" not in result
+
+
 def test_rounding_intrinsic_calls_convert_to_crossgl_intrinsics():
     code = """
     fn rounding_ops(value: Vec3<f32>, scale: f32) -> Vec3<f32> {

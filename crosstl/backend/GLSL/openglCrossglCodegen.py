@@ -57,6 +57,22 @@ class GLSLToCrossGLConverter:
         "pervertex": "pervertex",
         "perview": "perview",
     }
+    VARIABLE_QUALIFIER_ATTRIBUTES = {
+        "invariant": "invariant",
+        "precise": "precise",
+        "lowp": "lowp",
+        "mediump": "mediump",
+        "highp": "highp",
+    }
+    LAYOUT_ATTRIBUTE_NAMES = (
+        "location",
+        "component",
+        "index",
+        "stream",
+        "xfb_buffer",
+        "xfb_offset",
+        "xfb_stride",
+    )
     NON_STRUCT_STAGE_TYPES = {
         "compute",
         "geometry",
@@ -374,6 +390,7 @@ class GLSLToCrossGLConverter:
         self.structured_buffer_names = set()
         self.structured_buffer_instance_members = {}
         self.converted_ssbo_struct_names = set()
+        self.interface_block_struct_names = set()
 
     def indent(self):
         return self.indent_str * self.indent_level
@@ -529,6 +546,11 @@ class GLSLToCrossGLConverter:
 
     def prepare_structured_buffers(self, node):
         self.structs_by_name = {struct.name: struct for struct in node.structs}
+        self.interface_block_struct_names = {
+            struct.name
+            for struct in node.structs
+            if self.is_graphics_interface_block_struct(struct)
+        }
         self.structured_buffer_names = set()
         self.structured_buffer_instance_members = {}
         self.converted_ssbo_struct_names = set()
@@ -609,10 +631,6 @@ class GLSLToCrossGLConverter:
         if binding is not None:
             attributes.append(f"@binding({binding})")
 
-        location = layout.get("location")
-        if location is not None:
-            attributes.append(f"@location({location})")
-
         if self._is_image_resource_type(var_type):
             supported_formats = self.supported_image_formats()
             for key in layout:
@@ -630,6 +648,15 @@ class GLSLToCrossGLConverter:
 
         return f" {' '.join(attributes)}" if attributes else ""
 
+    def variable_layout_attribute_suffix(self, var):
+        layout = getattr(var, "layout", None) or {}
+        attributes = []
+        for name in self.LAYOUT_ATTRIBUTE_NAMES:
+            value = layout.get(name)
+            if value is not None:
+                attributes.append(f"@{name}({value})")
+        return f" {' '.join(attributes)}" if attributes else ""
+
     def storage_qualifier_attributes(self, var):
         qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
         return [
@@ -637,6 +664,68 @@ class GLSLToCrossGLConverter:
             for qualifier, attribute in self.STORAGE_QUALIFIER_ATTRIBUTES.items()
             if qualifier in qualifiers
         ]
+
+    def variable_qualifier_attribute_suffix(self, var):
+        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
+        attributes = [
+            f"@{attribute}"
+            for qualifier, attribute in self.VARIABLE_QUALIFIER_ATTRIBUTES.items()
+            if qualifier in qualifiers
+        ]
+        return f" {' '.join(attributes)}" if attributes else ""
+
+    def interface_qualifier_attribute_suffix(self, var):
+        block_qualifiers = {"in", "out", "inout"}
+        qualifiers = [str(q).lower() for q in getattr(var, "qualifiers", []) or []]
+        attributes = []
+        for qualifier in qualifiers:
+            if qualifier in block_qualifiers:
+                continue
+            mapped = self.INTERFACE_QUALIFIER_NAMES.get(qualifier)
+            if mapped is not None and mapped not in attributes:
+                attributes.append(mapped)
+        return (
+            f" {' '.join(f'@{attribute}' for attribute in attributes)}"
+            if attributes
+            else ""
+        )
+
+    def stage_struct_member_attribute_suffix(self, var):
+        return self.variable_layout_attribute_suffix(
+            var
+        ) + self.variable_qualifier_attribute_suffix(var)
+
+    def fragment_return_attribute_suffix(self, var):
+        return (
+            self.variable_layout_attribute_suffix(var)
+            + self.interface_qualifier_attribute_suffix(var)
+            + self.variable_qualifier_attribute_suffix(var)
+        )
+
+    def generate_stage_struct_member(self, var):
+        var_type = self.convert_type(var.vtype)
+        var_name = var.name
+        qualifier_prefix = self.interface_member_qualifier_prefix(var)
+        if qualifier_prefix:
+            qualifier_prefix += " "
+        semantic = ""
+        if getattr(var, "semantic", None):
+            semantic = f" @ {var.semantic}"
+        array_suffix = self.array_suffix(var)
+        attributes = self.stage_struct_member_attribute_suffix(var)
+        return f"{qualifier_prefix}{var_type} {var_name}{array_suffix}{attributes}{semantic};\n"
+
+    def interface_member_qualifier_prefix(self, var):
+        block_qualifiers = {"in", "out", "inout", "patch"}
+        qualifiers = [str(q).lower() for q in getattr(var, "qualifiers", []) or []]
+        emitted = []
+        for qualifier in qualifiers:
+            if qualifier in block_qualifiers:
+                continue
+            mapped = self.INTERFACE_QUALIFIER_NAMES.get(qualifier)
+            if mapped is not None and mapped not in emitted:
+                emitted.append(mapped)
+        return " ".join(emitted)
 
     def interface_qualifier_prefix(self, var):
         qualifiers = [str(q).lower() for q in getattr(var, "qualifiers", []) or []]
@@ -664,6 +753,51 @@ class GLSLToCrossGLConverter:
         if qualifiers:
             layout_str += " " + " ".join(qualifiers)
         return layout_str.strip()
+
+    def is_graphics_interface_block_struct(self, node):
+        if not getattr(node, "interface_block", False):
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "interface_qualifiers", []) or []
+        }
+        return bool(qualifiers & {"in", "out", "inout", "patch"})
+
+    def is_graphics_interface_block_variable(self, var):
+        block_name = getattr(var, "interface_block", None)
+        return bool(block_name and block_name in self.interface_block_struct_names)
+
+    def interface_block_attribute_prefix(self, node):
+        if not self.is_graphics_interface_block_struct(node):
+            return ""
+
+        attributes = []
+        qualifiers = [
+            str(qualifier)
+            for qualifier in getattr(node, "interface_qualifiers", []) or []
+        ]
+        if qualifiers:
+            attributes.append(f"@glsl_interface_block({', '.join(qualifiers)})")
+
+        layout = getattr(node, "interface_layout", None) or {}
+        for key in self.LAYOUT_ATTRIBUTE_NAMES:
+            value = layout.get(key)
+            if value is not None:
+                attributes.append(f"@{key}({value})")
+
+        instance_name = getattr(node, "interface_instance_name", None)
+        if instance_name:
+            attributes.append(f"@glsl_interface_instance({instance_name})")
+            if getattr(node, "interface_instance_is_array", False):
+                array_size = getattr(node, "interface_array_size", None)
+                if array_size is None:
+                    attributes.append("@glsl_interface_array")
+                else:
+                    attributes.append(
+                        f"@glsl_interface_array({self.generate_expression(array_size)})"
+                    )
+
+        return f"{' '.join(attributes)} " if attributes else ""
 
     def generate(self, ast):
         """Generate a complete CrossGL shader from a parsed GLSL AST."""
@@ -733,12 +867,7 @@ class GLSLToCrossGLConverter:
             result += self.indent_str + f"struct {self.stage_struct_name()}Input {{\n"
             self.increase_indent()
             for input_var in self.inputs:
-                var_type = self.convert_type(input_var.vtype)
-                var_name = input_var.name
-                semantic = ""
-                if getattr(input_var, "semantic", None):
-                    semantic = f" @ {input_var.semantic}"
-                result += self.indent() + f"{var_type} {var_name}{semantic};\n"
+                result += self.indent() + self.generate_stage_struct_member(input_var)
             self.decrease_indent()
             result += self.indent_str + "};\n\n"
 
@@ -747,12 +876,7 @@ class GLSLToCrossGLConverter:
             result += self.indent_str + f"struct {self.stage_struct_name()}Output {{\n"
             self.increase_indent()
             for output_var in self.outputs:
-                var_type = self.convert_type(output_var.vtype)
-                var_name = output_var.name
-                semantic = ""
-                if getattr(output_var, "semantic", None):
-                    semantic = f" @ {output_var.semantic}"
-                result += self.indent() + f"{var_type} {var_name}{semantic};\n"
+                result += self.indent() + self.generate_stage_struct_member(output_var)
             self.decrease_indent()
             result += self.indent_str + "};\n\n"
 
@@ -822,6 +946,8 @@ class GLSLToCrossGLConverter:
             self.inputs or self.outputs
         ):
             for interface_var in [*self.inputs, *self.outputs]:
+                if self.is_graphics_interface_block_variable(interface_var):
+                    continue
                 result += (
                     self.indent_str
                     + self.generate_variable_declaration(interface_var)
@@ -868,12 +994,18 @@ class GLSLToCrossGLConverter:
             elif self.shader_type == "fragment":
                 output_type = "vec4"
                 output_name = "gl_FragColor"
+                output_attributes = ""
                 if self.outputs:
-                    output_type = self.convert_type(self.outputs[0].vtype)
-                    output_name = self.outputs[0].name
+                    output_var = self.outputs[0]
+                    output_type = self.convert_type(output_var.vtype)
+                    output_name = output_var.name
+                    output_attributes = self.fragment_return_attribute_suffix(
+                        output_var
+                    )
                 result += (
                     self.indent()
-                    + f"{output_type} main({self.stage_struct_name()}Input input) @ {output_name}"
+                    + f"{output_type} main({self.stage_struct_name()}Input input)"
+                    + f"{output_attributes} @ {output_name}"
                 )
             elif self.shader_type in self.NON_STRUCT_STAGE_TYPES:
                 result += self.indent() + "void main()"
@@ -925,11 +1057,12 @@ class GLSLToCrossGLConverter:
         return result
 
     def generate_struct(self, node):
-        result = f"struct {node.name} {{\n"
+        result = f"{self.interface_block_attribute_prefix(node)}struct {node.name} {{\n"
 
         self.increase_indent()
         members = getattr(node, "members", None) or getattr(node, "fields", [])
         for field in members:
+            qualifier_prefix = ""
             if isinstance(field, dict):
                 var_type = self.convert_type(field.get("type"))
                 var_name = field.get("name")
@@ -942,8 +1075,15 @@ class GLSLToCrossGLConverter:
                 if getattr(field, "semantic", None):
                     semantic = f" @ {field.semantic}"
                 array_suffix = self.array_suffix(field)
+                qualifier_prefix = ""
+                if self.is_graphics_interface_block_struct(node):
+                    qualifier_prefix = self.interface_member_qualifier_prefix(field)
+                    if qualifier_prefix:
+                        qualifier_prefix += " "
+                    semantic += self.variable_qualifier_attribute_suffix(field)
             result += (
-                self.indent() + f"{var_type} {var_name}{array_suffix}{semantic};\n"
+                self.indent()
+                + f"{qualifier_prefix}{var_type} {var_name}{array_suffix}{semantic};\n"
             )
         self.decrease_indent()
 
@@ -1333,12 +1473,9 @@ class GLSLToCrossGLConverter:
                 "tessellation_evaluation",
             ) and any(var.name == node.object.name for var in self.inputs):
                 object_name = f"input.{node.object.name}"
-            elif self.shader_type in (
-                "vertex",
-                "geometry",
-                "tessellation_control",
-                "tessellation_evaluation",
-            ) and any(var.name == node.object.name for var in self.outputs):
+            elif self.shader_type in ("vertex",) and any(
+                var.name == node.object.name for var in self.outputs
+            ):
                 object_name = f"output.{node.object.name}"
             else:
                 object_name = node.object.name
@@ -1463,7 +1600,11 @@ class GLSLToCrossGLConverter:
             prefix_parts.append(interface_prefix)
         prefix = f"{' '.join(prefix_parts)} " if prefix_parts else ""
         array_suffix = self.array_suffix(node)
-        attributes = self.image_resource_attribute_suffix(node)
+        attributes = (
+            self.variable_layout_attribute_suffix(node)
+            + self.image_resource_attribute_suffix(node)
+            + self.variable_qualifier_attribute_suffix(node)
+        )
 
         if getattr(node, "value", None) is not None:
             value = self.generate_expression(node.value)

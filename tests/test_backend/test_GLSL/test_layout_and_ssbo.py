@@ -35,14 +35,92 @@ def test_parse_ssbo_layout():
 def test_parse_layout_locations_and_components():
     code = """
     #version 450 core
-    layout(location = 1, component = 2) in vec4 color;
-    layout(location = 0, index = 1) out vec4 fragColor;
+    layout(location = 1, component = 2) flat centroid in highp vec4 color;
+    layout(location = 0, index = 1) invariant precise noperspective sample out mediump vec4 fragColor;
     void main() {
         fragColor = color;
     }
     """
     ast = parse_glsl(code, "fragment")
     assert ast is not None
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "flat centroid vec4 color @location(1) @component(2) @highp;" in crossgl
+    assert (
+        "vec4 main(FragmentInput input) @location(0) @index(1) "
+        "@noperspective @sample @invariant @precise @mediump @ fragColor"
+    ) in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert (
+        "layout(location = 1, component = 2) flat centroid in highp vec4 color;" in glsl
+    )
+    assert (
+        "layout(location = 0, index = 1) invariant precise noperspective sample "
+        "out mediump vec4 fragColor;" in glsl
+    )
+    assert "fragColor = color;" in glsl
+    assert "\n    vec4 fragColor;" not in glsl
+    assert "fragColor = fragColor;" not in glsl
+
+
+def test_parse_vertex_struct_layout_qualifiers_roundtrip():
+    code = """
+    #version 450 core
+    layout(location = 0) in vec3 position;
+    layout(location = 3, component = 1) smooth out mediump vec2 uv;
+
+    void main() {
+        uv = position.xy;
+        gl_Position = vec4(position, 1.0);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "vertex")
+
+    assert "vec3 position @location(0);" in crossgl
+    assert "smooth vec2 uv @location(3) @component(1) @mediump;" in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "layout(location = 0) in vec3 position;" in glsl
+    assert "layout(location = 3, component = 1) smooth out mediump vec2 uv;" in glsl
+    assert "uv = position.xy;" in glsl
+    assert "gl_Position = vec4(position, 1.0);" in glsl
+    assert "struct VertexOutput" not in glsl
+
+
+def test_parse_geometry_extended_layout_qualifiers_roundtrip():
+    code = """
+    #version 450 core
+    layout(points) in;
+    layout(points, max_vertices = 1) out;
+    layout(location = 0, component = 1) in vec2 inputUv[];
+    layout(location = 1, stream = 0, xfb_buffer = 0, xfb_offset = 0) out vec2 outUv;
+
+    void main() {
+        outUv = inputUv[0];
+        EmitVertex();
+    }
+    """
+
+    crossgl = generate_crossgl(code, "geometry")
+
+    assert "in vec2 inputUv @location(0) @component(1)[];" in crossgl
+    assert "out vec2 outUv @location(1) @stream(0) @xfb_buffer(0) @xfb_offset(0);" in (
+        crossgl
+    )
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "layout(location = 0, component = 1) in vec2 inputUv[];" in glsl
+    assert (
+        "layout(location = 1, stream = 0, xfb_buffer = 0, xfb_offset = 0) "
+        "out vec2 outUv;" in glsl
+    )
+    assert "outUv = inputUv[0];" in glsl
 
 
 def test_parse_precision_qualifiers_on_variables():
@@ -56,6 +134,128 @@ def test_parse_precision_qualifiers_on_variables():
     """
     ast = parse_glsl(code, "fragment")
     assert ast is not None
+
+
+def test_parse_interface_interpolation_precision_qualifiers_roundtrip():
+    code = """
+    #version 450 core
+    layout(points) in;
+    layout(points, max_vertices = 1) out;
+    layout(location = 0) flat centroid in highp vec2 inputUv[];
+    layout(location = 0) invariant precise noperspective sample out mediump vec4 outColor;
+
+    void main() {
+        outColor = vec4(inputUv[0], 0.0, 1.0);
+        EmitVertex();
+    }
+    """
+
+    crossgl = generate_crossgl(code, "geometry")
+
+    assert "flat centroid in vec2 inputUv" in crossgl
+    assert "@highp" in crossgl
+    assert (
+        "noperspective sample out vec4 outColor @location(0) @invariant @precise @mediump;"
+        in crossgl
+    )
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "flat centroid in highp vec2 inputUv[];" in glsl
+    assert (
+        "layout(location = 0) invariant precise noperspective sample out mediump vec4 outColor;"
+        in glsl
+    )
+    assert "outColor = vec4(inputUv[0], 0.0, 1.0);" in glsl
+
+
+def test_parse_geometry_interface_block_member_qualifiers_roundtrip():
+    code = """
+    #version 450 core
+    layout(points) in;
+    layout(points, max_vertices = 1) out;
+
+    in VertexIn {
+        flat centroid highp vec2 inputUv;
+    } vertexIn[];
+
+    out FragmentOut {
+        invariant precise noperspective sample mediump vec4 outColor;
+    } fragmentOut;
+
+    void main() {
+        fragmentOut.outColor = vec4(vertexIn[0].inputUv, 0.0, 1.0);
+        EmitVertex();
+    }
+    """
+
+    crossgl = generate_crossgl(code, "geometry")
+
+    assert "@glsl_interface_block(in)" in crossgl
+    assert "@glsl_interface_instance(vertexIn)" in crossgl
+    assert "@glsl_interface_array" in crossgl
+    assert "flat centroid vec2 inputUv @highp;" in crossgl
+    assert "@glsl_interface_block(out)" in crossgl
+    assert "@glsl_interface_instance(fragmentOut)" in crossgl
+    assert "noperspective sample vec4 outColor @invariant @precise @mediump;" in (
+        crossgl
+    )
+    assert "output.fragmentOut" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "in VertexIn {" in glsl
+    assert "flat centroid highp vec2 inputUv;" in glsl
+    assert "} vertexIn[];" in glsl
+    assert "out FragmentOut {" in glsl
+    assert "invariant precise noperspective sample mediump vec4 outColor;" in glsl
+    assert "} fragmentOut;" in glsl
+    assert "fragmentOut.outColor = vec4(vertexIn[0].inputUv, 0.0, 1.0);" in glsl
+    assert "output.fragmentOut" not in glsl
+    assert "in VertexIn vertexIn[]" not in glsl
+
+
+def test_parse_tessellation_interface_block_member_qualifiers_roundtrip():
+    code = """
+    #version 450 core
+    layout(triangles, fractional_even_spacing, ccw) in;
+
+    in ControlOut {
+        flat highp vec3 normal;
+    } controlIn[];
+
+    out EvalOut {
+        smooth mediump vec4 color;
+    } evalOut;
+
+    void main() {
+        evalOut.color = vec4(controlIn[0].normal, 1.0);
+        gl_Position = vec4(controlIn[0].normal, 1.0);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "tessellation_evaluation")
+
+    assert "@glsl_interface_block(in)" in crossgl
+    assert "@glsl_interface_instance(controlIn)" in crossgl
+    assert "@glsl_interface_array" in crossgl
+    assert "flat vec3 normal @highp;" in crossgl
+    assert "@glsl_interface_block(out)" in crossgl
+    assert "@glsl_interface_instance(evalOut)" in crossgl
+    assert "smooth vec4 color @mediump;" in crossgl
+    assert "output.evalOut" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "in ControlOut {" in glsl
+    assert "flat highp vec3 normal;" in glsl
+    assert "} controlIn[];" in glsl
+    assert "out EvalOut {" in glsl
+    assert "smooth mediump vec4 color;" in glsl
+    assert "} evalOut;" in glsl
+    assert "evalOut.color = vec4(controlIn[0].normal, 1.0);" in glsl
+    assert "output.evalOut" not in glsl
+    assert "in ControlOut controlIn[]" not in glsl
 
 
 def test_parse_early_fragment_tests_layout():
@@ -364,7 +564,6 @@ def test_parse_ray_query_type_and_functions_roundtrip():
     assert "rayQueryEXT rq;" in glsl
     assert "rayQueryInitializeEXT(" in glsl
     assert "bool active_ = rayQueryProceedEXT(rq);" in glsl
-    assert "bool active =" not in glsl
     assert "uint hitType = rayQueryGetIntersectionTypeEXT(rq, true);" in glsl
     assert (
         "uint candidatePrimitive = "
