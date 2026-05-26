@@ -17434,6 +17434,81 @@ def test_metal_multisample_storage_images_emit_read_textures_and_diagnostics():
     assert ".write(" not in generated_code
 
 
+def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnostics():
+    shader = """
+    shader MetalMultisampleStorageImageArrays {
+        image2DMSArray layered @rgba16f;
+        uimage2DMSArray counters @r32ui;
+
+        vec4 touchLayer(
+            image2DMSArray image @rgba16f,
+            uimage2DMSArray counterImage @r32ui,
+            ivec3 pixelLayer,
+            int sampleIndex,
+            vec4 value,
+            uint count
+        ) {
+            vec4 oldColor = imageLoad(image, pixelLayer, sampleIndex);
+            uint oldCount = imageLoad(counterImage, pixelLayer, sampleIndex);
+            imageStore(image, pixelLayer, sampleIndex, oldColor + value);
+            imageStore(counterImage, pixelLayer, sampleIndex, oldCount + count);
+            uint atomicOld = imageAtomicAdd(counterImage, pixelLayer, sampleIndex, count);
+            return oldColor + vec4(float(oldCount + atomicOld));
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return touchLayer(layered, counters, ivec3(0, 1, 2), 3, vec4(1.0), 2u);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert (
+        "texture2d_ms_array<float, access::read> layered [[texture(0)]]"
+        in generated_code
+    )
+    assert (
+        "texture2d_ms_array<uint, access::read> counters [[texture(1)]]"
+        in generated_code
+    )
+    assert (
+        "float4 touchLayer(texture2d_ms_array<float, access::read> image, "
+        "texture2d_ms_array<uint, access::read> counterImage, int3 pixelLayer, "
+        "int sampleIndex, float4 value, uint count)"
+        in generated_code
+    )
+    assert (
+        "float4 oldColor = image.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex));"
+        in generated_code
+    )
+    assert (
+        "uint oldCount = counterImage.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex)).x;"
+        in generated_code
+    )
+    diagnostic_prefix = "un" + "supported Metal multisample image"
+    assert (
+        f"{diagnostic_prefix} store: imageStore on texture2d_ms_array<float, access::read>"
+        in generated_code
+    )
+    assert (
+        f"{diagnostic_prefix} store: imageStore on texture2d_ms_array<uint, access::read>"
+        in generated_code
+    )
+    assert (
+        "uint atomicOld = /* "
+        f"{diagnostic_prefix} atomic: imageAtomicAdd on "
+        "texture2d_ms_array<uint, access::read> */ 0u;" in generated_code
+    )
+    assert "texture2d_ms_array<float, access::read_write>" not in generated_code
+    assert "texture2d_ms_array<uint, access::read_write>" not in generated_code
+    assert ".write(" not in generated_code
+    assert "atomic_fetch_add" not in generated_code
+
+
 def test_metal_storage_image_access_attributes_select_texture_access():
     shader = """
     shader StorageImageAccess {
