@@ -36,7 +36,7 @@ shader main {
             "std::sync::LazyLock::new(|| Default::default());",
         ),
         (MojoCodeGen, "var particles: RWStructuredBuffer[Particles]"),
-        (CudaCodeGen, "RWStructuredBuffer<Particles> particles;"),
+        (CudaCodeGen, "Particles* particles;"),
         (HLSLCodeGen, "RWStructuredBuffer<Particles> particles : register(u0);"),
         (
             GLSLCodeGen,

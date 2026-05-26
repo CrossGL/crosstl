@@ -325,6 +325,7 @@ class MetalCodeGen:
         self.texture_variables = []
         self.acceleration_structure_variables = []
         self.visible_function_table_variables = []
+        self.intersection_function_table_variables = []
         self.sampler_variables = []
         self.structured_buffer_variables = []
         self.structured_buffer_length_variables = []
@@ -548,6 +549,8 @@ class MetalCodeGen:
             "primitive_acceleration_structure": "primitive_acceleration_structure",
             "visible_function_table": "visible_function_table",
             "visibleFunctionTable": "visible_function_table",
+            "intersection_function_table": "intersection_function_table",
+            "intersectionFunctionTable": "intersection_function_table",
             "iimage1D": "texture1d<int, access::read_write>",
             "iimage1DArray": "texture1d_array<int, access::read_write>",
             "iimage2D": "texture2d<int, access::read_write>",
@@ -701,6 +704,7 @@ class MetalCodeGen:
         self.texture_variables = []
         self.acceleration_structure_variables = []
         self.visible_function_table_variables = []
+        self.intersection_function_table_variables = []
         self.sampler_variables = []
         self.structured_buffer_variables = []
         self.structured_buffer_length_variables = []
@@ -1168,6 +1172,32 @@ class MetalCodeGen:
                 )
                 mapped_type = self.map_visible_function_table_type(vtype)
                 self.visible_function_table_variables.append(
+                    (node, binding, mapped_type, array_size)
+                )
+                buffer_register = max(buffer_register, binding + resource_count)
+                continue
+
+            if self.is_intersection_function_table_type(vtype):
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "buffer"}, ("b", "u", "t")
+                )
+                if binding is None:
+                    binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "buffer",
+                        buffer_register,
+                        resource_count,
+                    )
+                self.reserve_resource_binding_range(
+                    used_resource_bindings,
+                    "Metal",
+                    "buffer",
+                    binding,
+                    resource_count,
+                    var_name,
+                )
+                mapped_type = self.map_intersection_function_table_type(vtype)
+                self.intersection_function_table_variables.append(
                     (node, binding, mapped_type, array_size)
                 )
                 buffer_register = max(buffer_register, binding + resource_count)
@@ -2273,6 +2303,19 @@ class MetalCodeGen:
                     array_size,
                 )
                 resource_params.append(f"{declaration} [[buffer({i})]]")
+        if self.intersection_function_table_variables:
+            for (
+                intersection_function_table_variable,
+                i,
+                intersection_function_table_type,
+                array_size,
+            ) in self.intersection_function_table_variables:
+                declaration = self.format_intersection_function_table_parameter(
+                    intersection_function_table_type,
+                    intersection_function_table_variable.name,
+                    array_size,
+                )
+                resource_params.append(f"{declaration} [[buffer({i})]]")
         if self.structured_buffer_variables:
             for (
                 buffer_variable,
@@ -2357,6 +2400,14 @@ class MetalCodeGen:
         ) in self.visible_function_table_variables:
             if getattr(visible_function_table_variable, "name", None):
                 names.add(visible_function_table_variable.name)
+        for (
+            intersection_function_table_variable,
+            _,
+            _,
+            _,
+        ) in self.intersection_function_table_variables:
+            if getattr(intersection_function_table_variable, "name", None):
+                names.add(intersection_function_table_variable.name)
         for buffer_variable, _, _, _ in self.structured_buffer_variables:
             if getattr(buffer_variable, "name", None):
                 names.add(buffer_variable.name)
@@ -2432,6 +2483,22 @@ class MetalCodeGen:
                     self.format_visible_function_table_parameter(
                         visible_function_table_type,
                         visible_function_table_name,
+                        array_size,
+                    )
+                )
+        for (
+            intersection_function_table_variable,
+            intersection_function_table_type,
+            array_size,
+        ) in self.required_function_intersection_function_tables(func_name):
+            intersection_function_table_name = getattr(
+                intersection_function_table_variable, "name", None
+            )
+            if intersection_function_table_name:
+                resource_params.append(
+                    self.format_intersection_function_table_parameter(
+                        intersection_function_table_type,
+                        intersection_function_table_name,
                         array_size,
                     )
                 )
@@ -4245,6 +4312,35 @@ class MetalCodeGen:
             return f"array<{table_type}, {array_size}> {name}"
         return f"{table_type} {name}"
 
+    def intersection_function_table_type_name(self, vtype):
+        return str(self.resource_base_type(vtype)).split("<", 1)[0]
+
+    def is_intersection_function_table_type(self, vtype):
+        return self.intersection_function_table_type_name(vtype) in {
+            "intersection_function_table",
+            "intersectionFunctionTable",
+        }
+
+    def map_intersection_function_table_type(self, vtype):
+        type_name = str(self.resource_base_type(vtype))
+        if "<" in type_name and type_name.endswith(">"):
+            tags = type_name.split("<", 1)[1][:-1].strip()
+            return f"intersection_function_table<{tags}>"
+        return "intersection_function_table<>"
+
+    def format_intersection_function_table_parameter(
+        self, vtype, name, array_size=None
+    ):
+        table_type = (
+            vtype
+            if str(vtype).startswith("intersection_function_table<")
+            else self.map_intersection_function_table_type(vtype)
+        )
+        if array_size is not None:
+            array_size = array_size or "1"
+            return f"array<{table_type}, {array_size}> {name}"
+        return f"{table_type} {name}"
+
     def is_sampler_type(self, vtype):
         return self.resource_base_type(vtype) == "sampler"
 
@@ -4263,6 +4359,7 @@ class MetalCodeGen:
             self.is_structured_buffer_type(vtype)
             or self.is_acceleration_structure_type(vtype)
             or self.is_visible_function_table_type(vtype)
+            or self.is_intersection_function_table_type(vtype)
             or self.resource_base_type(vtype)
             in {
                 "sampler",
@@ -4587,6 +4684,20 @@ class MetalCodeGen:
                 binding,
                 self.global_resource_shape(visible_function_table_variable)[1],
                 getattr(visible_function_table_variable, "name", "<anonymous>"),
+            )
+        for (
+            intersection_function_table_variable,
+            binding,
+            _,
+            _,
+        ) in self.intersection_function_table_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                self.global_resource_shape(intersection_function_table_variable)[1],
+                getattr(intersection_function_table_variable, "name", "<anonymous>"),
             )
         for buffer_variable, binding, _, _ in self.structured_buffer_variables:
             self.reserve_resource_binding_range(
@@ -5025,7 +5136,11 @@ class MetalCodeGen:
 
         for variable in global_vars:
             vtype, _ = self.global_resource_shape(variable)
-            if self.is_acceleration_structure_type(vtype):
+            if (
+                self.is_acceleration_structure_type(vtype)
+                or self.is_visible_function_table_type(vtype)
+                or self.is_intersection_function_table_type(vtype)
+            ):
                 return True
 
         for func in functions:
@@ -5521,6 +5636,9 @@ class MetalCodeGen:
         texture_names = self.global_texture_names()
         acceleration_structure_names = self.global_acceleration_structure_names()
         visible_function_table_names = self.global_visible_function_table_names()
+        intersection_function_table_names = (
+            self.global_intersection_function_table_names()
+        )
         buffer_names = (
             self.global_structured_buffer_names()
             | self.global_glsl_buffer_block_names()
@@ -5538,6 +5656,7 @@ class MetalCodeGen:
                         name in texture_names
                         or name in acceleration_structure_names
                         or name in visible_function_table_names
+                        or name in intersection_function_table_names
                         or name in buffer_names
                         or name in sampler_names
                     )
@@ -5700,6 +5819,15 @@ class MetalCodeGen:
             if getattr(visible_function_table_variable, "name", None)
         }
 
+    def global_intersection_function_table_names(self):
+        return {
+            intersection_function_table_variable.name
+            for intersection_function_table_variable, _, _, _ in (
+                self.intersection_function_table_variables
+            )
+            if getattr(intersection_function_table_variable, "name", None)
+        }
+
     def global_structured_buffer_names(self):
         return {
             buffer_variable.name
@@ -5782,6 +5910,24 @@ class MetalCodeGen:
             if getattr(visible_function_table_variable, "name", None) in dependencies
         ]
 
+    def required_function_intersection_function_tables(self, func_name):
+        dependencies = self.function_global_resource_dependencies.get(func_name, set())
+        return [
+            (
+                intersection_function_table_variable,
+                intersection_function_table_type,
+                array_size,
+            )
+            for (
+                intersection_function_table_variable,
+                _,
+                intersection_function_table_type,
+                array_size,
+            ) in self.intersection_function_table_variables
+            if getattr(intersection_function_table_variable, "name", None)
+            in dependencies
+        ]
+
     def required_function_samplers(self, func_name):
         dependencies = self.function_global_resource_dependencies.get(func_name, set())
         return [
@@ -5851,6 +5997,12 @@ class MetalCodeGen:
             visible_function_table_variable.name
             for visible_function_table_variable, _, _ in (
                 self.required_function_visible_function_tables(func_name)
+            )
+        )
+        names.extend(
+            intersection_function_table_variable.name
+            for intersection_function_table_variable, _, _ in (
+                self.required_function_intersection_function_tables(func_name)
             )
         )
         for (
@@ -7127,6 +7279,10 @@ class MetalCodeGen:
             attribute_names = {"binding", "buffer"}
             prefixes = ("b", "u", "t")
         elif self.is_visible_function_table_type(vtype):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
+        elif self.is_intersection_function_table_type(vtype):
             namespace = "buffer"
             attribute_names = {"binding", "buffer"}
             prefixes = ("b", "u", "t")
@@ -9910,6 +10066,9 @@ class MetalCodeGen:
 
         if self.is_visible_function_table_type(vtype_str):
             return self.map_visible_function_table_type(vtype_str)
+
+        if self.is_intersection_function_table_type(vtype_str):
+            return self.map_intersection_function_table_type(vtype_str)
 
         generic_enum_type = generic_enum_specialized_type_name(self, vtype_str)
         if generic_enum_type is not None:

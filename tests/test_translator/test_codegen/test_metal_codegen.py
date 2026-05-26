@@ -3073,6 +3073,59 @@ def test_metal_callshader_accepts_explicit_visible_function_table_argument():
     assert "unsupported Metal ray tracing intrinsic: CallShader" not in generated
 
 
+def test_metal_intersection_function_table_globals_lower_to_buffer_parameters():
+    code = """
+    shader rt {
+        intersection_function_table<instancing> intersectionFunctions @binding(3);
+
+        ray_generation {
+            void main() {
+                uint count = intersectionFunctions.size();
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "using namespace metal::raytracing;" in generated
+    assert (
+        "kernel void kernel_main("
+        "intersection_function_table<instancing> intersectionFunctions [[buffer(3)]])"
+    ) in generated
+    assert "uint count = intersectionFunctions.size();" in generated
+    assert (
+        "intersection_function_table<instancing> intersectionFunctions;"
+        not in generated
+    )
+
+
+def test_metal_intersection_function_table_globals_thread_through_helpers():
+    code = """
+    shader rt {
+        intersection_function_table<instancing> intersectionFunctions @binding(4);
+
+        uint tableSize() {
+            return intersectionFunctions.size();
+        }
+
+        ray_generation {
+            void main() {
+                uint count = tableSize();
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "uint tableSize("
+        "intersection_function_table<instancing> intersectionFunctions)"
+    ) in generated
+    assert "return intersectionFunctions.size();" in generated
+    assert "uint count = tableSize(intersectionFunctions);" in generated
+    assert "uint count = tableSize();" not in generated
+
+
 def test_ray_intersection_stage_lowers_to_metal_intersection_attribute():
     code = """
     shader rt {

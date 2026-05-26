@@ -3266,6 +3266,99 @@ class TestVulkanSPIRVCodeGen:
         ):
             VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
+    def test_structured_buffers_emit_spirv_buffer_blocks_and_accesses(self):
+        source_code = """
+        shader StorageBuffers {
+            struct Particle {
+                vec4 position;
+                float mass;
+            };
+
+            RWStructuredBuffer<Particle> particles @set(1) @binding(4);
+            StructuredBuffer<float> weights;
+
+            compute {
+                void main() {
+                    Particle p = buffer_load(particles, 0u);
+                    float weight = buffer_load(weights, 1u);
+                    p.mass = p.mass + weight;
+                    buffer_store(particles, 2u, p);
+                    particles[1u].mass = p.mass;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        particle_type = spirv_named_id(spv_code, "Particle")
+        particles_block = spirv_named_id(spv_code, "particlesBuffer")
+        weights_block = spirv_named_id(spv_code, "weightsBuffer")
+        particles_var = spirv_named_variable(
+            spv_code, "particles", storage_class="Uniform"
+        )
+        weights_var = spirv_named_variable(spv_code, "weights", storage_class="Uniform")
+
+        assert f"OpMemberDecorate {particle_type} 0 Offset 0" in spv_code
+        assert f"OpMemberDecorate {particle_type} 1 Offset 16" in spv_code
+        assert f"OpDecorate {particles_block} BufferBlock" in spv_code
+        assert f"OpDecorate {weights_block} BufferBlock" in spv_code
+        assert f"OpMemberDecorate {particles_block} 0 Offset 0" in spv_code
+        assert f"OpMemberDecorate {weights_block} 0 Offset 0" in spv_code
+        assert re.search(r"OpDecorate %\d+ ArrayStride 32", spv_code)
+        assert re.search(r"OpDecorate %\d+ ArrayStride 4", spv_code)
+        assert f"OpDecorate {particles_var} DescriptorSet 1" in spv_code
+        assert f"OpDecorate {particles_var} Binding 4" in spv_code
+        assert f"OpDecorate {weights_var} DescriptorSet 0" in spv_code
+        assert f"OpDecorate {weights_var} Binding 0" in spv_code
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(particles_var)} %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(weights_var)} %\d+ %\d+",
+            spv_code,
+        )
+        assert "OpStore" in spv_code
+        assert "buffer_load" not in spv_code
+        assert "buffer_store" not in spv_code
+        assert "StructuredBuffer" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_structured_buffers_reject_duplicate_spirv_bindings(self):
+        source_code = """
+        shader StorageBuffers {
+            sampler2d first @binding(0);
+            RWStructuredBuffer<float> data @binding(0);
+        }
+        """
+
+        with pytest.raises(
+            ValueError, match="Duplicate SPIR-V resource binding set 0 binding 0"
+        ):
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    def test_structured_buffer_store_to_readonly_buffer_emits_diagnostic(self):
+        source_code = """
+        shader StorageBuffers {
+            StructuredBuffer<float> values;
+
+            compute {
+                void main() {
+                    buffer_store(values, 0u, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "WARNING: buffer_store requires an RWStructuredBuffer" in spv_code
+
     def test_image_globals_emit_spirv_storage_image_types(self):
         source_code = """
         shader Resources {

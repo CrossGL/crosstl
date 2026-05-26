@@ -170,23 +170,121 @@ mod math {
         }
     }
 
-    #[derive(Debug, Clone, Copy)]
-    pub struct Mat3<T>(PhantomData<T>);
+    macro_rules! matrix_type {
+        ($name:ident) => {
+            #[derive(Debug, Clone, Copy)]
+            pub struct $name<T>(PhantomData<T>);
 
-    impl<T> Default for Mat3<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
+            impl<T> Default for $name<T> {
+                fn default() -> Self {
+                    Self(PhantomData)
+                }
+            }
+        };
     }
 
-    #[derive(Debug, Clone, Copy)]
-    pub struct Mat4<T>(PhantomData<T>);
+    matrix_type!(Mat2);
+    matrix_type!(Mat3);
+    matrix_type!(Mat4);
+    matrix_type!(Mat2x3);
+    matrix_type!(Mat2x4);
+    matrix_type!(Mat3x2);
+    matrix_type!(Mat3x4);
+    matrix_type!(Mat4x2);
+    matrix_type!(Mat4x3);
 
-    impl<T> Default for Mat4<T> {
-        fn default() -> Self {
-            Self(PhantomData)
-        }
+    pub trait Transpose {
+        type Output;
+
+        fn transposed(self) -> Self::Output;
     }
+
+    pub fn transpose<M: Transpose>(value: M) -> M::Output {
+        value.transposed()
+    }
+
+    macro_rules! square_transpose {
+        ($matrix:ident) => {
+            impl<T> Transpose for $matrix<T> {
+                type Output = Self;
+
+                fn transposed(self) -> Self::Output {
+                    self
+                }
+            }
+        };
+    }
+
+    square_transpose!(Mat2);
+    square_transpose!(Mat3);
+    square_transpose!(Mat4);
+
+    macro_rules! rectangular_transpose {
+        ($source:ident, $target:ident) => {
+            impl<T> Transpose for $source<T> {
+                type Output = $target<T>;
+
+                fn transposed(self) -> Self::Output {
+                    Default::default()
+                }
+            }
+        };
+    }
+
+    rectangular_transpose!(Mat2x3, Mat3x2);
+    rectangular_transpose!(Mat3x2, Mat2x3);
+    rectangular_transpose!(Mat2x4, Mat4x2);
+    rectangular_transpose!(Mat4x2, Mat2x4);
+    rectangular_transpose!(Mat3x4, Mat4x3);
+    rectangular_transpose!(Mat4x3, Mat3x4);
+
+    pub trait Inverse {
+        fn inverted(self) -> Self;
+    }
+
+    pub fn inverse<M: Inverse>(value: M) -> M {
+        value.inverted()
+    }
+
+    macro_rules! square_inverse {
+        ($matrix:ident) => {
+            impl<T> Inverse for $matrix<T> {
+                fn inverted(self) -> Self {
+                    self
+                }
+            }
+        };
+    }
+
+    square_inverse!(Mat2);
+    square_inverse!(Mat3);
+    square_inverse!(Mat4);
+
+    pub trait Determinant {
+        type Output;
+
+        fn determinant_value(self) -> Self::Output;
+    }
+
+    pub fn determinant<M: Determinant>(value: M) -> M::Output {
+        value.determinant_value()
+    }
+
+    macro_rules! square_determinant {
+        ($matrix:ident) => {
+            impl<T: Default> Determinant for $matrix<T> {
+                type Output = T;
+
+                fn determinant_value(self) -> Self::Output {
+                    T::default()
+                }
+            }
+        };
+    }
+
+    square_determinant!(Mat2);
+    square_determinant!(Mat3);
+    square_determinant!(Mat4);
 
     impl Mul<Vec3<f32>> for Mat3<f32> {
         type Output = Vec3<f32>;
@@ -4442,6 +4540,49 @@ def test_common_math_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_pat
     assert "let hyper: f32 = ((sinh(x) + cosh(x)) + tanh(x));" in generated_code
     assert "let dist: Vec3<f32> = distance" not in generated_code
     assert "let facing: f32 = faceforward" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_matrix_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
+    code = """
+    shader MatrixIntrinsicInference {
+        fragment {
+            vec4 main(
+                mat3 normal_matrix,
+                mat4 world_matrix,
+                mat3x4 affine,
+                vec3 normal,
+                vec4 position
+            ) {
+                let normal_basis = transpose(normal_matrix);
+                let normal_inverse = inverse(normal_basis);
+                let normal_weight = determinant(normal_inverse);
+                let world_inverse = inverse(world_matrix);
+                let world_basis = transpose(world_inverse);
+                let world_weight = determinant(world_basis);
+                let rectangular = transpose(affine);
+                let transformed_normal = normal_inverse * normal;
+                let transformed_position = world_basis * position;
+                return vec4(
+                    transformed_normal,
+                    transformed_position.w + normal_weight + world_weight
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let normal_basis: Mat3<f32> = transpose(normal_matrix);" in generated_code
+    assert "let normal_inverse: Mat3<f32> = inverse(normal_basis);" in generated_code
+    assert "let normal_weight: f32 = determinant(normal_inverse);" in generated_code
+    assert "let world_inverse: Mat4<f32> = inverse(world_matrix);" in generated_code
+    assert "let world_basis: Mat4<f32> = transpose(world_inverse);" in generated_code
+    assert "let world_weight: f32 = determinant(world_basis);" in generated_code
+    assert "let rectangular: Mat4x3<f32> = transpose(affine);" in generated_code
+    assert "let normal_basis: f32 = transpose" not in generated_code
+    assert "let rectangular: Mat3x4<f32> = transpose" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

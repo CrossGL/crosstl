@@ -102,6 +102,7 @@ class VulkanSPIRVCodeGen:
         self.vector_constants = {}
         self.composite_constants = {}
         self.resource_type_metadata = {}
+        self.structured_buffer_metadata = {}
         self.precise_global_variables = set()
         self.precise_local_variables = set()
         self.no_contraction_ids = set()
@@ -1330,6 +1331,8 @@ class VulkanSPIRVCodeGen:
             "imageAtomicXor",
             "imageAtomicExchange",
             "imageAtomicCompSwap",
+            "buffer_load",
+            "buffer_store",
             "texture",
             "texture2D",
             "textureCube",
@@ -1382,6 +1385,9 @@ class VulkanSPIRVCodeGen:
             "imageAtomicExchange",
             "imageAtomicCompSwap",
         }
+
+    def buffer_function_names(self):
+        return {"buffer_load", "buffer_store"}
 
     def resource_query_size_result_type(self, metadata) -> SpirvId:
         dim = metadata.get("dim", "2D") if metadata else "2D"
@@ -2008,6 +2014,50 @@ class VulkanSPIRVCodeGen:
         if function_name in self.projected_shadow_function_names():
             return self.call_projected_shadow_function(function_name, args)
 
+        if function_name == "buffer_load":
+            if len(args) < 2:
+                self.emit("; WARNING: buffer_load requires buffer and index operands")
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            element_pointer = self.structured_buffer_element_pointer(args[0], args[1])
+            if element_pointer is None:
+                self.emit("; WARNING: buffer_load requires a StructuredBuffer operand")
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            element_type = self.variable_value_types[element_pointer.id]
+            return self.load_from_variable(element_pointer, element_type)
+
+        if function_name == "buffer_store":
+            if len(args) < 3:
+                self.emit(
+                    "; WARNING: buffer_store requires buffer, index, and value operands"
+                )
+                return None
+
+            metadata = self.structured_buffer_metadata_for_pointer(args[0])
+            if metadata is None:
+                self.emit(
+                    "; WARNING: buffer_store requires an RWStructuredBuffer operand"
+                )
+                return None
+            if metadata.get("readonly"):
+                self.emit("; WARNING: buffer_store requires an RWStructuredBuffer")
+                return None
+
+            element_pointer = self.structured_buffer_element_pointer(args[0], args[1])
+            if element_pointer is None:
+                self.emit(
+                    "; WARNING: buffer_store requires an RWStructuredBuffer operand"
+                )
+                return None
+
+            self.store_to_variable(element_pointer, args[2])
+            return None
+
         if function_name == "imageLoad":
             if len(args) < 2:
                 self.emit("; WARNING: imageLoad requires image and coordinate operands")
@@ -2620,6 +2670,11 @@ class VulkanSPIRVCodeGen:
                 return offset_constant
 
         if function_name in self.image_atomic_function_names() and arg_index == 0:
+            pointer_arg = self.variable_pointer_from_expression(arg)
+            if pointer_arg is not None:
+                return pointer_arg
+
+        if function_name in self.buffer_function_names() and arg_index == 0:
             pointer_arg = self.variable_pointer_from_expression(arg)
             if pointer_arg is not None:
                 return pointer_arg
@@ -3629,6 +3684,23 @@ class VulkanSPIRVCodeGen:
     def is_resource_type_name(self, type_str: str) -> bool:
         return self.resource_type_info(type_str) is not None
 
+    def structured_buffer_type_info(self, type_str: str):
+        type_str = re.sub(r"\s+", "", str(type_str))
+        match = re.fullmatch(r"(StructuredBuffer|RWStructuredBuffer)<(.+)>", type_str)
+        if not match:
+            return None
+
+        buffer_kind, element_type_name = match.groups()
+        return {
+            "kind": "structured_buffer",
+            "buffer_kind": buffer_kind,
+            "element_type_name": element_type_name,
+            "readonly": buffer_kind == "StructuredBuffer",
+        }
+
+    def is_structured_buffer_type_name(self, type_str: str) -> bool:
+        return self.structured_buffer_type_info(type_str) is not None
+
     def spirv_image_format_map(self):
         return {
             "r8": "R8",
@@ -4000,6 +4072,49 @@ class VulkanSPIRVCodeGen:
 
         return var_id
 
+    def process_structured_buffer_declaration(
+        self, node: VariableNode, type_name: str
+    ) -> SpirvId:
+        """Emit a StructuredBuffer/RWStructuredBuffer as a Vulkan BufferBlock."""
+        metadata = self.structured_buffer_type_info(type_name)
+        if metadata is None:
+            raise ValueError(f"Invalid SPIR-V structured buffer type {type_name}")
+
+        element_type = self.map_crossgl_type(metadata["element_type_name"])
+        self.decorate_storage_buffer_nested_type(element_type)
+        runtime_array_type = self.register_array_type(element_type, None)
+        self.decorations.append(
+            f"OpDecorate %{runtime_array_type.id} "
+            f"ArrayStride {self.storage_array_stride(element_type)}"
+        )
+
+        block_name = f"{node.name}Buffer"
+        block_type = self.register_struct_type(
+            block_name,
+            [(runtime_array_type, node.name)],
+        )
+        self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
+        self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 Offset 0")
+
+        var_id = self.create_variable(block_type, "Uniform", node.name)
+        descriptor_set, binding = self.resource_descriptor_slot(node)
+        self.decorations.append(
+            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+        )
+        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+
+        buffer_metadata = {
+            **metadata,
+            "element_type": element_type,
+            "runtime_array_type": runtime_array_type,
+            "block_type": block_type,
+            "member_index": 0,
+        }
+        self.global_variables[node.name] = var_id
+        self.structured_buffer_metadata[var_id.id] = buffer_metadata
+        self.structured_buffer_metadata[block_type.id] = buffer_metadata
+        return var_id
+
     def decorate_cbuffer_type(
         self, cbuffer_type: SpirvId, members: List[Tuple[SpirvId, str]]
     ):
@@ -4092,6 +4207,111 @@ class VulkanSPIRVCodeGen:
         stride = self.uniform_array_stride(element_type)
         self.decorations.append(f"OpDecorate %{type_id.id} ArrayStride {stride}")
         self.decorate_uniform_array_strides(element_type)
+
+    def decorate_storage_buffer_nested_type(self, type_id: SpirvId):
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            for member_index, (member_type, _) in enumerate(struct_members):
+                offset = self.storage_struct_member_offset(type_id, member_index)
+                self.decorations.append(
+                    f"OpMemberDecorate %{type_id.id} {member_index} Offset {offset}"
+                )
+                if self.uniform_layout_contains_matrix(member_type):
+                    self.decorations.append(
+                        f"OpMemberDecorate %{type_id.id} {member_index} ColMajor"
+                    )
+                    self.decorations.append(
+                        f"OpMemberDecorate %{type_id.id} {member_index} MatrixStride 16"
+                    )
+                self.decorate_storage_buffer_nested_type(member_type)
+            return
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, _ = array_info
+            self.decorations.append(
+                f"OpDecorate %{type_id.id} "
+                f"ArrayStride {self.storage_array_stride(element_type)}"
+            )
+            self.decorate_storage_buffer_nested_type(element_type)
+
+    def storage_struct_member_offset(
+        self, struct_type: SpirvId, target_member_index: int
+    ) -> int:
+        offset = 0
+        for member_index, (member_type, _) in enumerate(
+            self.current_struct_members.get(struct_type.type.base_type, [])
+        ):
+            offset = self.align_to(offset, self.storage_layout_alignment(member_type))
+            if member_index == target_member_index:
+                return offset
+            offset += self.storage_layout_size(member_type)
+        return offset
+
+    def storage_layout_alignment(self, type_id: SpirvId) -> int:
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is not None:
+            return 16
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, _ = array_info
+            return self.storage_layout_alignment(element_type)
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            return max(
+                (
+                    self.storage_layout_alignment(member_type)
+                    for member_type, _ in struct_members
+                ),
+                default=1,
+            )
+
+        vector_info = self.vector_type_info_from_type(type_id)
+        if vector_info is not None:
+            _, component_count = vector_info
+            if component_count == 2:
+                return 8
+            if component_count in {3, 4}:
+                return 16
+
+        return self.uniform_scalar_size(type_id)
+
+    def storage_layout_size(self, type_id: SpirvId) -> int:
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is not None:
+            _, column_count = matrix_info
+            return 16 * column_count
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, size = array_info
+            return self.storage_array_stride(element_type) * int(size or 1)
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            offset = 0
+            max_alignment = 1
+            for member_type, _ in struct_members:
+                alignment = self.storage_layout_alignment(member_type)
+                max_alignment = max(max_alignment, alignment)
+                offset = self.align_to(offset, alignment)
+                offset += self.storage_layout_size(member_type)
+            return self.align_to(offset, max_alignment)
+
+        vector_info = self.vector_type_info_from_type(type_id)
+        if vector_info is not None:
+            component_type, component_count = vector_info
+            return self.uniform_scalar_size(component_type) * component_count
+
+        return self.uniform_scalar_size(type_id)
+
+    def storage_array_stride(self, element_type: SpirvId) -> int:
+        return self.align_to(
+            self.storage_layout_size(element_type),
+            self.storage_layout_alignment(element_type),
+        )
 
     def process_function_node(self, function_node, stage=None):
         """Process a CrossGL function definition."""
@@ -4264,6 +4484,9 @@ class VulkanSPIRVCodeGen:
         """Process a module-scope CrossGL variable declaration."""
         var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
         var_type_name = self.type_name_from_value(var_type_source)
+        if self.is_structured_buffer_type_name(var_type_name):
+            return self.process_structured_buffer_declaration(node, var_type_name)
+
         var_type = self.map_resource_type_with_format(var_type_source, node)
         storage_class = self.infer_global_storage_class(
             node, default_storage_class, var_type_name
@@ -4354,7 +4577,24 @@ class VulkanSPIRVCodeGen:
 
     def global_descriptor_binding_nodes(self, ast: ShaderNode):
         yield from self.global_resource_nodes(ast)
+        yield from self.global_structured_buffer_nodes(ast)
         yield from getattr(ast, "cbuffers", []) or []
+
+    def global_structured_buffer_nodes(self, ast: ShaderNode):
+        nodes = list(getattr(ast, "global_variables", []) or [])
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            nodes.extend(getattr(stage, "local_variables", []) or [])
+
+        seen = set()
+        for node in nodes:
+            node_id = id(node)
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
+            type_name = self.type_name_from_value(type_source)
+            if self.is_structured_buffer_type_name(type_name):
+                yield node
 
     def global_resource_nodes(self, ast: ShaderNode):
         nodes = list(getattr(ast, "global_variables", []) or [])
@@ -5017,6 +5257,34 @@ class VulkanSPIRVCodeGen:
         self.variable_value_types[access.id] = member_type
         return access
 
+    def structured_buffer_metadata_for_pointer(self, pointer_id: SpirvId):
+        metadata = self.structured_buffer_metadata.get(pointer_id.id)
+        if metadata is not None:
+            return metadata
+
+        pointee_type = self.variable_value_types.get(pointer_id.id)
+        if pointee_type is not None:
+            return self.structured_buffer_metadata.get(pointee_type.id)
+
+        return None
+
+    def structured_buffer_element_pointer(
+        self, buffer_pointer: SpirvId, index_id: SpirvId
+    ) -> Optional[SpirvId]:
+        metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
+        if metadata is None:
+            return None
+
+        element_type = metadata["element_type"]
+        int_type = self.primitive_types["int"]
+        member_index = self.register_constant(metadata.get("member_index", 0), int_type)
+        ptr_type = self.register_pointer_type(
+            element_type, buffer_pointer.type.storage_class or "Uniform"
+        )
+        access = self.access_chain(buffer_pointer, [member_index, index_id], ptr_type)
+        self.variable_value_types[access.id] = element_type
+        return access
+
     def variable_pointer_from_expression(self, expr) -> Optional[SpirvId]:
         if isinstance(expr, IdentifierNode):
             name = expr.name
@@ -5356,6 +5624,12 @@ class VulkanSPIRVCodeGen:
             if array_variable is None:
                 return None
 
+            structured_access = self.structured_buffer_element_pointer(
+                array_variable, index
+            )
+            if structured_access is not None:
+                return structured_access
+
             array_type = self.variable_value_types.get(array_variable.id)
             element_type = self.array_element_type_from_type(array_type)
             if element_type is None:
@@ -5386,6 +5660,14 @@ class VulkanSPIRVCodeGen:
                 array_variable = addressable_array
 
         if array_variable is not None:
+            structured_access = self.structured_buffer_element_pointer(
+                array_variable, index
+            )
+            if structured_access is not None:
+                return structured_access, self.variable_value_types.get(
+                    structured_access.id
+                )
+
             array_type = self.variable_value_types.get(array_variable.id)
             element_type = self.array_element_type_from_type(array_type)
             if element_type is None:

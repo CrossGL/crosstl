@@ -17,6 +17,7 @@ from ..ast import (
     ArrayNode,
     ShaderNode,
     FunctionNode,
+    FunctionCallNode,
     ExpressionStatementNode,
     IdentifierNode,
     MemberAccessNode,
@@ -581,8 +582,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def visit_FunctionCallNode(self, node):
         """Visit function call"""
+        function_expr = getattr(node, "function", getattr(node, "name", None))
         if hasattr(node, "function"):
-            func_name = self.visit(node.function)
+            func_name = self.visit(function_expr)
         else:
             func_name = getattr(node, "name", "unknown")
 
@@ -599,6 +601,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         is_user_function = self.is_user_defined_function(func_name)
         if not is_user_function:
+            buffer_call = self.generate_buffer_call(
+                function_expr, func_name, raw_args, args
+            )
+            if buffer_call is not None:
+                return buffer_call
+
             resource_call = self.generate_resource_call(func_name, raw_args, args)
             if resource_call is not None:
                 return resource_call
@@ -682,6 +690,71 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         # Convert built-in functions
         func_name = self.convert_builtin_function(func_name)
         return f"{func_name}({args_str})"
+
+    def generate_buffer_call(self, function_expr, func_name, raw_args, args):
+        """Lower structured-buffer loads and stores to CUDA pointer indexing."""
+        member_call = self.structured_buffer_member_call(function_expr)
+        if member_call is not None:
+            buffer_expr, operation, buffer_type = member_call
+            access = self.format_structured_buffer_access(buffer_expr, raw_args, args)
+            if access is None:
+                return None
+            if operation == "Load":
+                return access
+            if operation == "Store":
+                if self.structured_buffer_is_writable(buffer_type) and len(args) >= 2:
+                    return f"{access} = {args[1]}"
+                return self.unsupported_structured_buffer_call(
+                    "Store", buffer_type, "((void)0)"
+                )
+            return None
+
+        if func_name == "buffer_load" and len(args) >= 2:
+            buffer_type = self.expression_result_type(raw_args[0])
+            if self.structured_buffer_type_parts(buffer_type) is None:
+                return None
+            return f"{args[0]}[{args[1]}]"
+
+        if func_name == "buffer_store" and len(args) >= 3:
+            buffer_type = self.expression_result_type(raw_args[0])
+            if self.structured_buffer_type_parts(buffer_type) is None:
+                return None
+            if self.structured_buffer_is_writable(buffer_type):
+                return f"{args[0]}[{args[1]}] = {args[2]}"
+            return self.unsupported_structured_buffer_call(
+                "buffer_store", buffer_type, "((void)0)"
+            )
+
+        return None
+
+    def structured_buffer_member_call(self, function_expr):
+        """Return structured-buffer member call pieces, if applicable."""
+        if not isinstance(function_expr, MemberAccessNode):
+            return None
+
+        buffer_expr = getattr(
+            function_expr, "object_expr", getattr(function_expr, "object", None)
+        )
+        buffer_type = self.expression_result_type(buffer_expr)
+        if self.structured_buffer_type_parts(buffer_type) is None:
+            return None
+
+        return buffer_expr, getattr(function_expr, "member", ""), buffer_type
+
+    def format_structured_buffer_access(self, buffer_expr, raw_args, args):
+        """Format one CUDA pointer access for a structured-buffer operation."""
+        if not raw_args or not args:
+            return None
+        buffer_name = self.visit(buffer_expr)
+        return f"{buffer_name}[{args[0]}]"
+
+    def unsupported_structured_buffer_call(self, operation, buffer_type, fallback):
+        """Return diagnostic code for unsupported structured-buffer operations."""
+        buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
+        return (
+            f"/* unsupported {self.resource_backend_name()} structured buffer call: "
+            f"{operation} on {buffer_type} */ {fallback}"
+        )
 
     def generate_lambda_expression(self, args):
         """Render CrossGL's pseudo-lambda as a CUDA device lambda."""
@@ -1401,6 +1474,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         else:
             crossgl_type = str(crossgl_type)
 
+        structured_buffer_type = self.cuda_structured_buffer_type(crossgl_type)
+        if structured_buffer_type is not None:
+            return structured_buffer_type
+
         type_mapping = {
             # Basic types
             "void": "void",
@@ -1552,6 +1629,116 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return f"{cuda_element_type}*"
 
         return type_mapping.get(crossgl_type, crossgl_type)
+
+    def type_name_string(self, type_name):
+        """Return a stable string spelling for TypeNode or legacy type values."""
+        if type_name is None:
+            return None
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            return self.convert_type_node_to_string(type_name)
+        return str(type_name)
+
+    def generic_type_parts(self, type_name):
+        """Split a generic type name into base name and top-level arguments."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+
+        base_type = type_name.split("[", 1)[0].strip()
+        generic_start = base_type.find("<")
+        generic_end = base_type.rfind(">")
+        if generic_start == -1 or generic_end < generic_start:
+            return None
+
+        base_name = base_type[:generic_start].strip()
+        args_text = base_type[generic_start + 1 : generic_end].strip()
+        args = []
+        depth = 0
+        current = []
+        for char in args_text:
+            if char == "<":
+                depth += 1
+                current.append(char)
+            elif char == ">":
+                depth -= 1
+                current.append(char)
+            elif char == "," and depth == 0:
+                args.append("".join(current).strip())
+                current = []
+            else:
+                current.append(char)
+
+        trailing_arg = "".join(current).strip()
+        if trailing_arg:
+            args.append(trailing_arg)
+        return base_name, args
+
+    def structured_buffer_type_parts(self, type_name):
+        """Return structured-buffer base and element type, if applicable."""
+        parts = self.generic_type_parts(type_name)
+        if parts is None:
+            return None
+
+        base_name, args = parts
+        if base_name not in {"StructuredBuffer", "RWStructuredBuffer"} or not args:
+            return None
+        return base_name, args[0]
+
+    def structured_buffer_is_writable(self, type_name):
+        """Return whether a structured-buffer type permits writes."""
+        parts = self.structured_buffer_type_parts(type_name)
+        return parts is not None and parts[0] == "RWStructuredBuffer"
+
+    def cuda_structured_buffer_type(self, type_name):
+        """Map StructuredBuffer and RWStructuredBuffer to CUDA pointer types."""
+        parts = self.structured_buffer_type_parts(type_name)
+        if parts is None:
+            return None
+
+        base_name, element_type = parts
+        cuda_element_type = self.convert_crossgl_type_to_cuda(element_type)
+        if base_name == "StructuredBuffer":
+            return f"const {cuda_element_type}*"
+        return f"{cuda_element_type}*"
+
+    def array_access_element_type(self, type_name):
+        """Return the element type for CUDA arrays and structured buffers."""
+        array_element_type = super().array_access_element_type(type_name)
+        if array_element_type is not None:
+            return array_element_type
+
+        parts = self.structured_buffer_type_parts(type_name)
+        if parts is not None:
+            return parts[1]
+        return None
+
+    def expression_result_type(self, node):
+        """Infer expression result types with CUDA structured-buffer operations."""
+        if isinstance(node, FunctionCallNode):
+            buffer_result_type = self.buffer_call_result_type(node)
+            if buffer_result_type is not None:
+                return buffer_result_type
+        return super().expression_result_type(node)
+
+    def buffer_call_result_type(self, node):
+        """Infer result type for structured-buffer read calls."""
+        function_expr = getattr(node, "function", getattr(node, "name", None))
+        raw_args = getattr(node, "arguments", getattr(node, "args", []))
+
+        member_call = self.structured_buffer_member_call(function_expr)
+        if member_call is not None:
+            _, operation, buffer_type = member_call
+            if operation == "Load" and raw_args:
+                return self.structured_buffer_type_parts(buffer_type)[1]
+            return None
+
+        func_name = getattr(function_expr, "name", function_expr)
+        if func_name == "buffer_load" and raw_args:
+            buffer_type = self.expression_result_type(raw_args[0])
+            parts = self.structured_buffer_type_parts(buffer_type)
+            if parts is not None:
+                return parts[1]
+        return None
 
     def canonical_sampled_resource_type(self, type_name):
         """Return the sampler spelling for HLSL-style sampled resources."""

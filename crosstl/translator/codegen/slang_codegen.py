@@ -1224,15 +1224,15 @@ class SlangCodeGen:
         for node in self.walk_ast(body_statements):
             if not isinstance(node, AssignmentNode):
                 continue
-            member_target = self.slang_hull_output_member_target(node.left)
-            if member_target is not None:
-                gl_out_assignments.append((node, member_target))
+            index = self.slang_hull_output_access_index(node.left)
+            if index is not None:
+                gl_out_assignments.append((node, index))
 
         if not gl_out_assignments:
             if self.slang_stage_uses_gl_out(body_statements):
                 raise ValueError(
                     "Slang hull stage gl_out requires assignments to "
-                    "gl_out[gl_InvocationID].field"
+                    "gl_out[gl_InvocationID] or gl_out[gl_InvocationID].field"
                 )
             return None
 
@@ -1245,7 +1245,7 @@ class SlangCodeGen:
                 "Slang hull stage gl_out outputs cannot be mixed with explicit returns"
             )
 
-        for assignment, (_member, index) in gl_out_assignments:
+        for assignment, index in gl_out_assignments:
             if getattr(assignment, "operator", None) != "=":
                 raise ValueError(
                     "Slang hull stage gl_out outputs require simple assignment"
@@ -1254,6 +1254,27 @@ class SlangCodeGen:
                 raise ValueError(
                     "Slang hull stage gl_out writes must target "
                     "gl_out[gl_InvocationID] or the SV_OutputControlPointID parameter"
+                )
+
+        for index in self.slang_hull_output_access_indices(body_statements):
+            if not self.is_slang_hull_output_index(index, param_list):
+                raise ValueError(
+                    "Slang hull stage gl_out accesses must target "
+                    "gl_out[gl_InvocationID] or the SV_OutputControlPointID parameter"
+                )
+
+        indexed_identifier_ids = self.slang_hull_output_indexed_identifier_ids(
+            body_statements
+        )
+        for node in self.walk_ast(body_statements):
+            if (
+                isinstance(node, IdentifierNode)
+                and node.name == "gl_out"
+                and id(node) not in indexed_identifier_ids
+            ):
+                raise ValueError(
+                    "Slang hull stage gl_out must be indexed as "
+                    "gl_out[gl_InvocationID]"
                 )
 
         output_type_name = None
@@ -1313,6 +1334,40 @@ class SlangCodeGen:
             isinstance(node, IdentifierNode) and node.name == "gl_out"
             for node in self.walk_ast(body_statements)
         )
+
+    def slang_hull_output_access_index(self, target):
+        if isinstance(target, MemberAccessNode):
+            return self.slang_hull_output_access_index(
+                getattr(target, "object", getattr(target, "object_expr", None))
+            )
+        if isinstance(target, ArrayAccessNode):
+            array = getattr(target, "array", getattr(target, "array_expr", None))
+            if self.identifier_name(array) == "gl_out":
+                return getattr(target, "index", getattr(target, "index_expr", None))
+            return self.slang_hull_output_access_index(array)
+        return None
+
+    def slang_hull_output_access_indices(self, body_statements):
+        indices = []
+        for node in self.walk_ast(body_statements):
+            if not isinstance(node, ArrayAccessNode):
+                continue
+            array = getattr(node, "array", getattr(node, "array_expr", None))
+            if self.identifier_name(array) == "gl_out":
+                indices.append(
+                    getattr(node, "index", getattr(node, "index_expr", None))
+                )
+        return indices
+
+    def slang_hull_output_indexed_identifier_ids(self, body_statements):
+        identifier_ids = set()
+        for node in self.walk_ast(body_statements):
+            if not isinstance(node, ArrayAccessNode):
+                continue
+            array = getattr(node, "array", getattr(node, "array_expr", None))
+            if isinstance(array, IdentifierNode) and array.name == "gl_out":
+                identifier_ids.add(id(array))
+        return identifier_ids
 
     def slang_hull_output_member_target(self, target):
         if not isinstance(target, MemberAccessNode):
@@ -1868,6 +1923,10 @@ class SlangCodeGen:
         return f"{left} {node.operator} {right}"
 
     def slang_assignment_target_alias(self, target):
+        hull_output_alias = self.slang_hull_output_array_alias(target)
+        if hull_output_alias is not None:
+            return hull_output_alias
+
         hull_output_alias = self.slang_hull_output_member_alias(target)
         if hull_output_alias is not None:
             return hull_output_alias
@@ -1876,6 +1935,18 @@ class SlangCodeGen:
         if target_name is None:
             return None
         return self.identifier_aliases.get(target_name)
+
+    def slang_hull_output_array_alias(self, target):
+        if self.current_hull_output_rewrite is None:
+            return None
+        if not isinstance(target, ArrayAccessNode):
+            return None
+
+        array = getattr(target, "array", getattr(target, "array_expr", None))
+        if self.identifier_name(array) != "gl_out":
+            return None
+
+        return self.current_hull_output_rewrite["local_name"]
 
     def slang_hull_output_member_alias(self, target):
         if self.current_hull_output_rewrite is None:
@@ -2222,6 +2293,9 @@ class SlangCodeGen:
         elif isinstance(node, AssignmentNode):
             return self.generate_assignment(node)
         elif isinstance(node, ArrayAccessNode):
+            hull_output_alias = self.slang_hull_output_array_alias(node)
+            if hull_output_alias is not None:
+                return hull_output_alias
             array = self.generate_expression(
                 getattr(node, "array", getattr(node, "array_expr", None))
             )

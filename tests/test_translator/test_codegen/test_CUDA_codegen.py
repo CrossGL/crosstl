@@ -159,6 +159,13 @@ class TestCudaCodeGen:
         assert codegen.convert_crossgl_type_to_cuda("sampler2D") == "texture<float4, 2>"
         assert codegen.convert_crossgl_type_to_cuda("Texture2D") == "texture<float4, 2>"
         assert (
+            codegen.convert_crossgl_type_to_cuda("StructuredBuffer<float4>")
+            == "const float4*"
+        )
+        assert (
+            codegen.convert_crossgl_type_to_cuda("RWStructuredBuffer<uint>") == "uint*"
+        )
+        assert (
             codegen.convert_crossgl_type_to_cuda("Texture2D<float4>")
             == "texture<float4, 2>"
         )
@@ -2630,6 +2637,92 @@ class TestCudaCodeGen:
         assert " = texture(" not in cuda_code
         assert "imageLoad(" not in cuda_code
         assert "imageStore(" not in cuda_code
+
+    def test_structured_buffer_resources_emit_cuda_pointer_access(self):
+        """Test CUDA lowers structured-buffer declarations and accessors."""
+        source_code = """
+        shader StructuredBufferCUDA {
+            struct Particle {
+                float weight;
+            };
+
+            StructuredBuffer<int> input;
+            RWStructuredBuffer<int> values;
+            RWStructuredBuffer<Particle> particles;
+            StructuredBuffer<uint> readonlyCounts[2];
+
+            void process(
+                StructuredBuffer<float> inputValues,
+                RWStructuredBuffer<float> outputValues,
+                uint index,
+                uint which,
+                float value,
+                Particle p
+            ) {
+                int g = input.Load(index);
+                values.Store(index, g);
+                values[index] = g + 1;
+                int loadedWrite = values[index];
+                float localValue = buffer_load(inputValues, index);
+                buffer_store(outputValues, index, localValue + value);
+                Particle particleValue = particles.Load(index);
+                particles.Store(index, p);
+                uint count = readonlyCounts[which].Load(index);
+            }
+
+            void rejectReadOnlyStores(
+                StructuredBuffer<int> readOnly,
+                uint index,
+                int value
+            ) {
+                readOnly.Store(index, value);
+                buffer_store(readOnly, index, value);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "const int* input;" in cuda_code
+        assert "int* values;" in cuda_code
+        assert "Particle* particles;" in cuda_code
+        assert "const uint* readonlyCounts[2];" in cuda_code
+        assert (
+            "__device__ void process(const float* inputValues, float* outputValues, "
+            "uint index, uint which, float value, Particle p)"
+        ) in cuda_code
+        assert "int g = input[index];" in cuda_code
+        assert "values[index] = g;" in cuda_code
+        assert "values[index] = (g + 1);" in cuda_code
+        assert "int loadedWrite = values[index];" in cuda_code
+        assert "float localValue = inputValues[index];" in cuda_code
+        assert "outputValues[index] = (localValue + value);" in cuda_code
+        assert "Particle particleValue = particles[index];" in cuda_code
+        assert "particles[index] = p;" in cuda_code
+        assert "uint count = readonlyCounts[which][index];" in cuda_code
+        assert (
+            "/* unsupported CUDA structured buffer call: "
+            "Store on StructuredBuffer<int> */ ((void)0);" in cuda_code
+        )
+        assert (
+            "/* unsupported CUDA structured buffer call: "
+            "buffer_store on StructuredBuffer<int> */ ((void)0);" in cuda_code
+        )
+        assert "StructuredBuffer<int> input;" not in cuda_code
+        assert "StructuredBuffer<float> inputValues" not in cuda_code
+        assert "RWStructuredBuffer<" not in cuda_code
+        assert ".Load(" not in cuda_code
+        assert ".Store(" not in cuda_code
+        assert "buffer_load(" not in cuda_code
+        assert "buffer_store(" not in cuda_code
 
     def test_array_and_3d_texture_calls_emit_cuda_texture_functions(self):
         """Test CUDA maps array and 3D sampled texture calls by resource type."""

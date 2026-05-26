@@ -309,6 +309,29 @@ shader SpirvUniformBufferValidation {
 """
 
 
+SPIRV_STRUCTURED_BUFFER_COMPUTE_SHADER = """
+shader SpirvStructuredBufferValidation {
+    struct Particle {
+        vec4 position;
+        float mass;
+    };
+
+    RWStructuredBuffer<Particle> particles @set(1) @binding(4);
+    StructuredBuffer<float> weights;
+
+    compute {
+        void main() {
+            Particle p = buffer_load(particles, 0u);
+            float weight = buffer_load(weights, 1u);
+            p.mass = p.mass + weight;
+            buffer_store(particles, 2u, p);
+            particles[1u].mass = p.mass;
+        }
+    }
+}
+"""
+
+
 SPIRV_IMAGE_ATOMIC_FORWARDING_COMPUTE_SHADER = """
 shader SpirvImageAtomicForwardingValidation {
     uimage2D counters @r32ui;
@@ -1442,6 +1465,23 @@ shader MetalRayStagesValidation {
 """
 
 
+METAL_INTERSECTION_FUNCTION_TABLE_SHADER = """
+shader MetalIntersectionFunctionTableValidation {
+    intersection_function_table<instancing> intersectionFunctions @binding(3);
+
+    uint tableSize() {
+        return intersectionFunctions.size();
+    }
+
+    ray_generation {
+        void main() {
+            uint count = tableSize();
+        }
+    }
+}
+"""
+
+
 METAL_TEXTURE_3D_PROJECTED_OFFSET_FRAGMENT_SHADER = """
 shader MetalTexture3DProjectedOffsetValidation {
     sampler3D volumeMap;
@@ -2405,6 +2445,16 @@ def test_generated_spirv_uniform_buffer_compute_validates_with_spirv_tools(
     )
 
 
+def test_generated_spirv_structured_buffer_compute_validates_with_spirv_tools(
+    tmp_path,
+):
+    validate_spirv_shader_source(
+        tmp_path,
+        "structured_buffer_compute",
+        SPIRV_STRUCTURED_BUFFER_COMPUTE_SHADER,
+    )
+
+
 def test_generated_spirv_integer_image_atomics_validates_with_spirv_tools(
     tmp_path,
 ):
@@ -3128,6 +3178,35 @@ def test_generated_metal_ray_stages_compile_with_metal3(tmp_path):
     source = tmp_path / "ray_stages.metal"
     output = tmp_path / "ray_stages.air"
     code = MetalCodeGen().generate(crosstl.translator.parse(METAL_RAY_STAGES_SHADER))
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_intersection_function_table_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "intersection_function_table.metal"
+    output = tmp_path / "intersection_function_table.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_INTERSECTION_FUNCTION_TABLE_SHADER)
+    )
     source.write_text(code, encoding="utf-8")
 
     run_validator(

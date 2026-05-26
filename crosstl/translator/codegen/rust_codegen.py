@@ -256,6 +256,9 @@ class RustCodeGen:
             "reflect": "reflect",
             "refract": "refract",
             "faceforward": "faceforward",
+            "transpose": "transpose",
+            "determinant": "determinant",
+            "inverse": "inverse",
             "sin": "sin",
             "cos": "cos",
             "tan": "tan",
@@ -5435,6 +5438,25 @@ class RustCodeGen:
 
         if mapped_name in {"dot", "length", "distance"} and arg_types:
             return self.vector_or_scalar_component_type(arg_types[0])
+
+        if mapped_name == "transpose" and arg_types:
+            matrix_info = self.matrix_type_info(arg_types[0])
+            if matrix_info is not None:
+                return self.matrix_type_for_dimensions(
+                    matrix_info["component_type"],
+                    matrix_info["rows"],
+                    matrix_info["columns"],
+                )
+
+        if mapped_name == "determinant" and arg_types:
+            matrix_info = self.matrix_type_info(arg_types[0])
+            if matrix_info is not None:
+                return matrix_info["component_type"]
+
+        if mapped_name == "inverse" and arg_types:
+            matrix_info = self.matrix_type_info(arg_types[0])
+            if matrix_info is not None:
+                return arg_types[0]
 
         if (
             mapped_name

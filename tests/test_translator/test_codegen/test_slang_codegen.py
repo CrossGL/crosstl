@@ -879,6 +879,228 @@ def test_tessellation_evaluation_gl_in_aliases_explicit_output_patch_parameter()
     assert "gl_in" not in generated_code
 
 
+def test_tessellation_control_gl_out_output_patch_lowers_to_hull_return():
+    code = """
+    shader main {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct HSOut {
+            vec4 position @ gl_Position;
+            vec4 color @ TEXCOORD0;
+        };
+
+        tessellation_control {
+            void main(
+                InputPatch<VSOut, 3> inputPatch,
+                OutputPatch<HSOut, 3> gl_out
+            ) {
+                gl_out[gl_InvocationID].position =
+                    inputPatch[gl_InvocationID].position;
+                gl_out[gl_InvocationID].color = vec4(1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "HSOut main(InputPatch<VSOut, 3> inputPatch, "
+        "uint gl_InvocationID : SV_OutputControlPointID)" in generated_code
+    )
+    assert "OutputPatch<HSOut, 3> gl_out" not in generated_code
+    assert "HSOut cgl_OutputControlPoint;" in generated_code
+    assert (
+        "cgl_OutputControlPoint.position = "
+        "inputPatch[gl_InvocationID].position;" in generated_code
+    )
+    assert "cgl_OutputControlPoint.color = float4(1.0);" in generated_code
+    assert "return cgl_OutputControlPoint;" in generated_code
+    assert "gl_out" not in generated_code
+
+
+def test_tessellation_control_gl_out_non_void_return_lowers_assignments():
+    code = """
+    shader main {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct HSOut {
+            vec4 position @ gl_Position;
+        };
+
+        tessellation_control {
+            HSOut main(InputPatch<VSOut, 3> inputPatch) {
+                gl_out[gl_InvocationID].position =
+                    inputPatch[gl_InvocationID].position;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "HSOut main(InputPatch<VSOut, 3> inputPatch, "
+        "uint gl_InvocationID : SV_OutputControlPointID)" in generated_code
+    )
+    assert "HSOut cgl_OutputControlPoint;" in generated_code
+    assert (
+        "cgl_OutputControlPoint.position = "
+        "inputPatch[gl_InvocationID].position;" in generated_code
+    )
+    assert "return cgl_OutputControlPoint;" in generated_code
+    assert "gl_out" not in generated_code
+
+
+def test_tessellation_control_gl_out_uses_existing_control_point_parameter():
+    code = """
+    shader main {
+        struct HSOut {
+            vec4 position @ gl_Position;
+        };
+
+        tessellation_control {
+            void main(
+                OutputPatch<HSOut, 3> outputs,
+                uint controlPoint @ gl_InvocationID
+            ) {
+                gl_out[controlPoint].position = vec4(1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "HSOut main(uint controlPoint : SV_OutputControlPointID)" in generated_code
+    assert "uint gl_InvocationID : SV_OutputControlPointID" not in generated_code
+    assert "cgl_OutputControlPoint.position = float4(1.0);" in generated_code
+    assert "gl_out" not in generated_code
+
+
+def test_tessellation_control_gl_out_whole_control_point_assignment_lowers():
+    code = """
+    shader main {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct HSOut {
+            vec4 position @ gl_Position;
+            vec4 color @ TEXCOORD0;
+        };
+
+        tessellation_control {
+            void main(
+                InputPatch<VSOut, 3> inputPatch,
+                OutputPatch<HSOut, 3> gl_out
+            ) {
+                HSOut output;
+                output.position = inputPatch[gl_InvocationID].position;
+                output.color = vec4(1.0);
+                gl_out[gl_InvocationID] = output;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "HSOut main(InputPatch<VSOut, 3> inputPatch, "
+        "uint gl_InvocationID : SV_OutputControlPointID)" in generated_code
+    )
+    assert "cgl_OutputControlPoint = output;" in generated_code
+    assert "return cgl_OutputControlPoint;" in generated_code
+    assert "OutputPatch<HSOut, 3> gl_out" not in generated_code
+    assert "gl_out" not in generated_code
+
+
+def test_tessellation_control_gl_out_current_reads_alias_to_hull_return_local():
+    code = """
+    shader main {
+        struct HSOut {
+            vec4 position @ gl_Position;
+        };
+
+        tessellation_control {
+            void main(OutputPatch<HSOut, 3> gl_out) {
+                gl_out[gl_InvocationID].position = vec4(1.0);
+                vec4 copied = gl_out[gl_InvocationID].position;
+                gl_out[gl_InvocationID].position.x = copied.y;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 copied = cgl_OutputControlPoint.position;" in generated_code
+    assert "cgl_OutputControlPoint.position.x = copied.y;" in generated_code
+    assert "return cgl_OutputControlPoint;" in generated_code
+    assert "gl_out" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            tessellation_control {
+                void main() {
+                    gl_out[gl_InvocationID].position = vec4(1.0);
+                }
+            }
+            """,
+            "gl_out requires a non-void return type or exactly one explicit OutputPatch",
+        ),
+        (
+            """
+            tessellation_control {
+                void main(OutputPatch<HSOut, 3> outputs) {
+                    gl_out[0].position = vec4(1.0);
+                }
+            }
+            """,
+            "gl_out writes must target gl_out\\[gl_InvocationID\\]",
+        ),
+        (
+            """
+            tessellation_control {
+                void main(OutputPatch<HSOut, 3> outputs) {
+                    gl_out[gl_InvocationID].position = vec4(1.0);
+                    HSOut previous = gl_out[0];
+                }
+            }
+            """,
+            "gl_out accesses must target gl_out\\[gl_InvocationID\\]",
+        ),
+        (
+            """
+            tessellation_control {
+                void main(OutputPatch<HSOut, 3> outputs) {
+                    gl_out[gl_InvocationID].position = vec4(1.0);
+                    HSOut previous = gl_out;
+                }
+            }
+            """,
+            "gl_out must be indexed as gl_out\\[gl_InvocationID\\]",
+        ),
+    ],
+)
+def test_tessellation_control_invalid_gl_out_raises(stage_source, message):
+    code = f"""
+    shader main {{
+        struct HSOut {{
+            vec4 position @ gl_Position;
+        }};
+
+        {stage_source}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 @pytest.mark.parametrize(
     ("stage_source", "message"),
     [
