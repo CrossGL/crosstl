@@ -3730,6 +3730,60 @@ def test_glsl_mesh_task_stage_extensions_and_local_size_layouts():
     )
 
 
+def test_glsl_geometry_stage_layout_attributes():
+    shader = """
+    shader GeometryLayoutAttributes {
+        geometry {
+            void main()
+                @points
+                @invocations(2)
+                @outputtopology(triangle_strip)
+                @max_vertices(3)
+            { }
+        }
+    }
+    """
+
+    geometry_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "geometry"
+    )
+
+    assert "layout(points, invocations = 2) in;" in geometry_code
+    assert "layout(triangle_strip, max_vertices = 3) out;" in geometry_code
+    assert geometry_code.index("layout(points") < geometry_code.index("void main()")
+
+
+def test_glsl_tessellation_stage_layout_attributes():
+    shader = """
+    shader TessellationLayoutAttributes {
+        tessellation_control {
+            void main() @outputcontrolpoints(4) { }
+        }
+
+        tessellation_evaluation {
+            void main()
+                @domain(triangle)
+                @partitioning(fractional_odd)
+                @cw
+                @point_mode
+            { }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    control_code = GLSLCodeGen().generate_stage(ast, "tessellation_control")
+    evaluation_code = GLSLCodeGen().generate_stage(ast, "tessellation_evaluation")
+
+    assert "layout(vertices = 4) out;" in control_code
+    assert "layout(vertices = 4) out;" not in evaluation_code
+    assert (
+        "layout(triangles, fractional_odd_spacing, cw, point_mode) in;"
+        in evaluation_code
+    )
+    assert "layout(triangles" not in control_code
+
+
 def test_glsl_ray_stage_entries_use_distinct_names():
     shader = """
     shader CombinedRayStages {

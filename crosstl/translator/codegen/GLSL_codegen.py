@@ -1845,6 +1845,160 @@ class GLSLCodeGen:
             f"layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;\n"
         )
 
+    def generate_stage_layout(self, shader_type, func):
+        if shader_type == "geometry":
+            return self.generate_geometry_stage_layout(func)
+        if shader_type == "tessellation_control":
+            return self.generate_tessellation_control_layout(func)
+        if shader_type == "tessellation_evaluation":
+            return self.generate_tessellation_evaluation_layout(func)
+        return ""
+
+    def generate_geometry_stage_layout(self, func):
+        input_primitive = self.glsl_stage_bare_attribute(
+            func,
+            {
+                "points",
+                "lines",
+                "lines_adjacency",
+                "triangles",
+                "triangles_adjacency",
+            },
+        )
+        output_primitive = self.glsl_single_stage_attribute_argument(
+            func, "outputtopology"
+        )
+        max_vertices = self.glsl_single_stage_attribute_argument(func, "max_vertices")
+        if max_vertices is None:
+            max_vertices = self.glsl_single_stage_attribute_argument(
+                func, "maxvertexcount"
+            )
+        invocations = self.glsl_single_stage_attribute_argument(func, "invocations")
+
+        code = ""
+        input_layout = []
+        if input_primitive:
+            input_layout.append(input_primitive)
+        if invocations is not None:
+            input_layout.append(f"invocations = {invocations}")
+        if input_layout:
+            code += f"layout({', '.join(input_layout)}) in;\n"
+
+        output_layout = []
+        if output_primitive:
+            output_layout.append(self.glsl_geometry_output_topology(output_primitive))
+        if max_vertices is not None:
+            output_layout.append(f"max_vertices = {max_vertices}")
+        if output_layout:
+            code += f"layout({', '.join(output_layout)}) out;\n"
+        return code
+
+    def generate_tessellation_control_layout(self, func):
+        vertices = self.glsl_single_stage_attribute_argument(func, "vertices")
+        if vertices is None:
+            vertices = self.glsl_single_stage_attribute_argument(
+                func, "outputcontrolpoints"
+            )
+        if vertices is None:
+            return ""
+        return f"layout(vertices = {vertices}) out;\n"
+
+    def generate_tessellation_evaluation_layout(self, func):
+        layout_parts = []
+        domain = self.glsl_single_stage_attribute_argument(func, "domain")
+        if domain:
+            layout_parts.append(self.glsl_tessellation_domain(domain))
+
+        partitioning = self.glsl_single_stage_attribute_argument(func, "partitioning")
+        if partitioning:
+            layout_parts.append(self.glsl_tessellation_partitioning(partitioning))
+
+        winding = self.glsl_stage_bare_attribute(func, {"cw", "ccw"})
+        if winding:
+            layout_parts.append(winding)
+
+        if self.glsl_stage_bare_attribute(func, {"point_mode"}):
+            layout_parts.append("point_mode")
+
+        if not layout_parts:
+            return ""
+        return f"layout({', '.join(layout_parts)}) in;\n"
+
+    def glsl_stage_bare_attribute(self, func, names):
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = self.glsl_stage_control_attribute_name(attr)
+            if attr_name in names and not getattr(attr, "arguments", []):
+                return attr_name
+        return None
+
+    def glsl_single_stage_attribute_argument(self, func, attribute_name):
+        arguments = self.glsl_stage_attribute_arguments(func, attribute_name)
+        if not arguments:
+            return None
+        if len(arguments) != 1:
+            raise ValueError(
+                f"GLSL stage attribute {attribute_name} requires exactly one argument"
+            )
+        return self.attribute_value_to_string(arguments[0])
+
+    def glsl_stage_attribute_arguments(self, func, attribute_name):
+        for attr in getattr(func, "attributes", []) or []:
+            if self.glsl_stage_control_attribute_name(attr) == attribute_name:
+                return getattr(attr, "arguments", []) or []
+        return []
+
+    def glsl_geometry_output_topology(self, topology):
+        topology_name = str(topology).strip().strip('"').lower()
+        topology_map = {
+            "point": "points",
+            "points": "points",
+            "line": "line_strip",
+            "lines": "line_strip",
+            "line_strip": "line_strip",
+            "triangle": "triangle_strip",
+            "triangles": "triangle_strip",
+            "triangle_strip": "triangle_strip",
+        }
+        mapped = topology_map.get(topology_name)
+        if mapped is None:
+            raise ValueError(
+                f"GLSL geometry output topology cannot be lowered: {topology}"
+            )
+        return mapped
+
+    def glsl_tessellation_domain(self, domain):
+        domain_name = str(domain).strip().strip('"').lower()
+        domain_map = {
+            "tri": "triangles",
+            "triangle": "triangles",
+            "triangles": "triangles",
+            "quad": "quads",
+            "quads": "quads",
+            "isoline": "isolines",
+            "isolines": "isolines",
+        }
+        mapped = domain_map.get(domain_name)
+        if mapped is None:
+            raise ValueError(f"GLSL tessellation domain cannot be lowered: {domain}")
+        return mapped
+
+    def glsl_tessellation_partitioning(self, partitioning):
+        partition_name = str(partitioning).strip().strip('"').lower()
+        partition_map = {
+            "equal": "equal_spacing",
+            "equal_spacing": "equal_spacing",
+            "fractional_even": "fractional_even_spacing",
+            "fractional_even_spacing": "fractional_even_spacing",
+            "fractional_odd": "fractional_odd_spacing",
+            "fractional_odd_spacing": "fractional_odd_spacing",
+        }
+        mapped = partition_map.get(partition_name)
+        if mapped is None:
+            raise ValueError(
+                f"GLSL tessellation partitioning cannot be lowered: {partitioning}"
+            )
+        return mapped
+
     def generate_function(
         self,
         func,
@@ -2010,6 +2164,10 @@ class GLSLCodeGen:
         stage_output = self.stage_return_output(func, shader_type)
         if stage_output and stage_output["declaration"]:
             code += f"{stage_output['declaration']}\n"
+
+        stage_layout = self.generate_stage_layout(shader_type, func)
+        if stage_layout:
+            code += stage_layout
 
         if shader_type in {"compute", "mesh", "task"}:
             code += self.generate_compute_layout(execution_config)
@@ -7602,8 +7760,9 @@ class GLSLCodeGen:
             return None
         if isinstance(value, str):
             return value
-        if hasattr(value, "name"):
-            return str(value.name)
+        name = getattr(value, "name", None)
+        if name is not None:
+            return str(name)
         if hasattr(value, "value"):
             return str(value.value).strip('"')
         return str(value)
