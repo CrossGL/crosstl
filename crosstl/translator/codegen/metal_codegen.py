@@ -759,6 +759,7 @@ class MetalCodeGen:
         self.current_glsl_buffer_block_parameter_failures = {}
         self.current_glsl_buffer_block_parameter_struct_failures = {}
         self.current_metal_mesh_output_parameter = None
+        self.current_metal_mesh_grid_properties_parameter = None
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
@@ -1523,6 +1524,9 @@ class MetalCodeGen:
             self.current_structured_buffer_counter_parameters
         )
         previous_metal_mesh_output_parameter = self.current_metal_mesh_output_parameter
+        previous_metal_mesh_grid_properties_parameter = (
+            self.current_metal_mesh_grid_properties_parameter
+        )
         self.current_function_name = getattr(func, "name", None)
         self.current_function_return_wrapper = None
         self.current_generic_function_substitutions = (
@@ -1694,6 +1698,9 @@ class MetalCodeGen:
             self.current_metal_mesh_output_parameter = (
                 previous_metal_mesh_output_parameter
             )
+            self.current_metal_mesh_grid_properties_parameter = (
+                previous_metal_mesh_grid_properties_parameter
+            )
             return code
 
         if shader_type == "vertex":
@@ -1734,6 +1741,17 @@ class MetalCodeGen:
             stage_attribute = self.metal_mesh_stage_attribute(
                 shader_type, func, execution_config
             )
+            mesh_grid_properties_parameter = self.metal_mesh_grid_properties_parameter(
+                shader_type, func, reserved_parameter_names
+            )
+            if mesh_grid_properties_parameter is not None:
+                params_str = self.append_parameter_declaration(
+                    params_str,
+                    f"mesh_grid_properties {mesh_grid_properties_parameter}",
+                )
+                self.current_metal_mesh_grid_properties_parameter = (
+                    mesh_grid_properties_parameter
+                )
             mesh_output = self.metal_mesh_stage_output_config(
                 shader_type, func, function_name, reserved_parameter_names
             )
@@ -1802,6 +1820,9 @@ class MetalCodeGen:
             previous_structured_buffer_counter_parameters
         )
         self.current_metal_mesh_output_parameter = previous_metal_mesh_output_parameter
+        self.current_metal_mesh_grid_properties_parameter = (
+            previous_metal_mesh_grid_properties_parameter
+        )
         self.current_function_name = previous_function_name
         self.current_function_return_type = previous_function_return_type
         self.current_function_return_wrapper = previous_function_return_wrapper
@@ -3578,6 +3599,18 @@ class MetalCodeGen:
                 f"{self.current_metal_mesh_output_parameter}"
                 f".set_primitive_count({primitive_count})"
             )
+        if (
+            expr.operation == "DispatchMesh"
+            and self.current_metal_mesh_grid_properties_parameter
+            and len(expr.arguments) == 3
+        ):
+            grid = ", ".join(
+                self.generate_expression(argument) for argument in expr.arguments
+            )
+            return (
+                f"{self.current_metal_mesh_grid_properties_parameter}"
+                f".set_threadgroups_per_grid(uint3({grid}))"
+            )
         return None
 
     def generate_buffer_call(self, func_name, args):
@@ -4478,6 +4511,26 @@ class MetalCodeGen:
             "max_primitives": max_primitives,
             "topology": self.metal_mesh_topology(topology),
         }
+
+    def metal_mesh_grid_properties_parameter(
+        self, shader_type, func, reserved_parameter_names
+    ):
+        if shader_type not in {"object", "task", "amplification"}:
+            return None
+        if not self.function_contains_mesh_op(func, "DispatchMesh", argument_count=3):
+            return None
+        return self.unique_metal_generated_name(
+            "_crossglMeshGrid", reserved_parameter_names
+        )
+
+    def function_contains_mesh_op(self, func, operation, argument_count=None):
+        for node in self.iter_ast_nodes(getattr(func, "body", None)):
+            if not isinstance(node, MeshOpNode) or node.operation != operation:
+                continue
+            if argument_count is not None and len(node.arguments) != argument_count:
+                continue
+            return True
+        return False
 
     def unique_metal_generated_name(self, base_name, reserved_names):
         reserved_names = set(reserved_names or ())

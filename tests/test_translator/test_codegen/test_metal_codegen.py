@@ -2851,6 +2851,39 @@ def test_metal_mesh_stage_output_signature_avoids_generated_name_collisions():
     assert "topology::triangle> _crossglMeshOut_1" in generated
 
 
+def test_metal_object_stage_dispatch_mesh_sets_grid_properties():
+    code = """
+    shader meshpipe {
+        object {
+            void main() @max_total_threads_per_threadgroup(32) {
+                DispatchMesh(2, 3, 4);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "object")
+
+    assert "mesh_grid_properties _crossglMeshGrid" in generated
+    assert "_crossglMeshGrid.set_threadgroups_per_grid(uint3(2, 3, 4));" in generated
+    assert "DispatchMesh" not in generated
+
+
+def test_metal_object_stage_dispatch_mesh_grid_name_avoids_parameter_collision():
+    code = """
+    shader meshpipe {
+        object {
+            void main(int _crossglMeshGrid) @max_total_threads_per_threadgroup(32) {
+                DispatchMesh(2, 3, 4);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "object")
+
+    assert "int _crossglMeshGrid, mesh_grid_properties _crossglMeshGrid_1" in generated
+    assert "_crossglMeshGrid_1.set_threadgroups_per_grid(uint3(2, 3, 4));" in generated
+
+
 def test_metal_rejects_unsupported_geometry_and_tessellation_stages():
     geometry_code = """
     shader geometry_stage {
