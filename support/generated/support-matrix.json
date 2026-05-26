@@ -161,7 +161,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 1002,
+        "unsupported_marker_count": 1000,
         "unsupported_marker_samples": [
           {
             "line": 246,
@@ -271,7 +271,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 683
+        "test_count": 685
       },
       "translator_codegen": {
         "exists": true,
@@ -1825,15 +1825,6 @@
       "feature": "Constant/uniform buffers",
       "feature_id": "resources.constant_buffers",
       "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "resources",
-      "feature": "Structured/storage buffers",
-      "feature_id": "resources.structured_buffers",
-      "notes": "Covers StructuredBuffer/RWStructuredBuffer as SSBOs, fixed and inferred resource arrays, and load/store/dimensions helpers. Append/consume structured buffers remain deterministic diagnostics because GLSL needs explicit counter storage.",
       "status": "partial"
     },
     {
@@ -3991,11 +3982,13 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_structured_buffer_access_contracts_are_preserved",
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_append_consume_structured_buffers_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_append_consume_structured_buffers_use_sidecar_counters",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_append_consume_structured_buffer_helpers_thread_sidecar_counters",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_append_structured_buffer_arrays_use_sidecar_counter_arrays",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract"
           ],
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer as SSBOs, fixed and inferred resource arrays, and load/store/dimensions helpers. Append/consume structured buffers remain deterministic diagnostics because GLSL needs explicit counter storage.",
-          "status": "partial"
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer as SSBOs, fixed and inferred resource arrays, load/store/dimensions helpers, and AppendStructuredBuffer/ConsumeStructuredBuffer lowering through generated sidecar counter SSBOs.",
+          "status": "supported"
         },
         "rust": {
           "evidence": [],
@@ -5620,7 +5613,7 @@
   },
   "summary": {
     "backend_count": 9,
-    "backlog_count": 209,
+    "backlog_count": 208,
     "feature_count": 42,
     "status_counts": {
       "cuda": {
@@ -5665,8 +5658,8 @@
       },
       "opengl": {
         "diagnostic": 0,
-        "partial": 5,
-        "supported": 37,
+        "partial": 4,
+        "supported": 38,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

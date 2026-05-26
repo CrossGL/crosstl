@@ -225,7 +225,7 @@ def test_readonly_structured_buffer_uses_readonly_ssbo():
     assert "int v = values[gl_GlobalInvocationID.x];" in generated
 
 
-def test_append_consume_structured_buffers_emit_diagnostics():
+def test_append_consume_structured_buffers_use_sidecar_counters():
     code = """
     shader StructuredBufferAppendConsumeGLSL {
         AppendStructuredBuffer<int> appendValues @ binding(1);
@@ -252,17 +252,93 @@ def test_append_consume_structured_buffers_emit_diagnostics():
         in generated
     )
     assert (
-        "/* unsupported GLSL buffer append: requires explicit counter buffer */;"
+        "layout(std430, binding = 3) buffer appendValuesCounterBuffer { uint appendValuesCounter[]; };"
         in generated
     )
     assert (
-        "int consumed = 0 /* unsupported GLSL buffer consume: requires explicit counter buffer */;"
+        "layout(std430, binding = 4) buffer consumeValuesCounterBuffer { uint consumeValuesCounter[]; };"
+        in generated
+    )
+    assert (
+        "appendValues[atomicAdd(appendValuesCounter[0], 1u)] = int(value);" in generated
+    )
+    assert (
+        "int consumed = consumeValues[(atomicAdd(consumeValuesCounter[0], uint(-1)) - 1u)];"
         in generated
     )
     assert "appendValues[0]" not in generated
     assert "consumeValues[0]" not in generated
     assert "buffer_append" not in generated
     assert "buffer_consume" not in generated
+
+
+def test_append_consume_structured_buffer_helpers_thread_sidecar_counters():
+    code = """
+    shader StructuredBufferAppendConsumeHelpersGLSL {
+        AppendStructuredBuffer<int> appendValues @ binding(1);
+        ConsumeStructuredBuffer<int> consumeValues @ binding(2);
+
+        void pushValue(AppendStructuredBuffer<int> values, uint value) {
+            buffer_append(values, int(value));
+        }
+
+        int popValue(ConsumeStructuredBuffer<int> values) {
+            return buffer_consume(values);
+        }
+
+        compute {
+            void main(uint value) {
+                pushValue(appendValues, value);
+                int consumed = popValue(consumeValues);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "void pushValue(int values[], uint valuesCounter[], uint value) {" in generated
+    )
+    assert "values[atomicAdd(valuesCounter[0], 1u)] = int(value);" in generated
+    assert "int popValue(int values[], uint valuesCounter[]) {" in generated
+    assert "return values[(atomicAdd(valuesCounter[0], uint(-1)) - 1u)];" in generated
+    assert "pushValue(appendValues, appendValuesCounter, value);" in generated
+    assert "int consumed = popValue(consumeValues, consumeValuesCounter);" in generated
+    assert "buffer_append" not in generated
+    assert "buffer_consume" not in generated
+
+
+def test_append_structured_buffer_arrays_use_sidecar_counter_arrays():
+    code = """
+    shader StructuredBufferAppendArrayGLSL {
+        AppendStructuredBuffer<int> appendValues[2] @ binding(1);
+
+        compute {
+            void main(uint value, uint index) {
+                buffer_append(appendValues[index], int(value));
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "layout(std430, binding = 1) buffer appendValuesBuffer { int data[]; } appendValues[2];"
+        in generated
+    )
+    assert (
+        "layout(std430, binding = 3) buffer appendValuesCounterBuffer { uint counter[]; } appendValuesCounters[2];"
+        in generated
+    )
+    assert (
+        "appendValues[index].data[atomicAdd(appendValuesCounters[index].counter[0], 1u)] = int(value);"
+        in generated
+    )
+    assert "buffer_append" not in generated
 
 
 def test_structured_buffer_arrays_lower_to_ssbo_instance_arrays():

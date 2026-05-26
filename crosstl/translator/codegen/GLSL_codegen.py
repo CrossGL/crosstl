@@ -327,6 +327,7 @@ class GLSLCodeGen:
         self.match_temp_variable_index = 0
         self.local_variable_types = {}
         self.current_structured_buffer_array_parameters = {}
+        self.current_structured_buffer_counter_parameters = {}
         self.struct_member_types = {}
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
@@ -335,6 +336,8 @@ class GLSLCodeGen:
         self.generic_function_specialized_names = {}
         self.current_generic_function_substitutions = {}
         self.structured_buffer_instance_members = {}
+        self.structured_buffer_counter_members = {}
+        self.structured_buffer_counter_instances = {}
         self.glsl_buffer_block_struct_names = set()
         self.semantic_map = {
             "gl_VertexID": "gl_VertexID",
@@ -774,7 +777,10 @@ class GLSLCodeGen:
         self.match_temp_variable_index = 0
         self.local_variable_types = {}
         self.current_structured_buffer_array_parameters = {}
+        self.current_structured_buffer_counter_parameters = {}
         self.structured_buffer_instance_members = {}
+        self.structured_buffer_counter_members = {}
+        self.structured_buffer_counter_instances = {}
         self.glsl_buffer_block_struct_names = set()
         structs = deduplicate_named_declarations(
             list(getattr(ast, "structs", []) or [])
@@ -1143,6 +1149,33 @@ class GLSLCodeGen:
                     resource_binding,
                     resource_count,
                 )
+                if self.structured_buffer_requires_counter(vtype):
+                    counter_binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        resource_binding_cursors,
+                        binding_namespace,
+                        resource_count,
+                    )
+                    counter_name = self.structured_buffer_counter_resource_name(
+                        var_name
+                    )
+                    self.reserve_resource_binding_range(
+                        used_resource_bindings,
+                        "OpenGL",
+                        binding_namespace,
+                        counter_binding,
+                        resource_count,
+                        counter_name,
+                    )
+                    code += self.structured_buffer_counter_block_declaration(
+                        var_name, counter_binding, array_size
+                    )
+                    self.advance_resource_binding(
+                        resource_binding_cursors,
+                        binding_namespace,
+                        counter_binding,
+                        resource_count,
+                    )
                 continue
             if self.is_opaque_resource_type(mapped_type):
                 self.texture_variable_types[var_name] = mapped_type
@@ -1805,11 +1838,15 @@ class GLSLCodeGen:
         previous_structured_buffer_array_parameters = (
             self.current_structured_buffer_array_parameters
         )
+        previous_structured_buffer_counter_parameters = (
+            self.current_structured_buffer_counter_parameters
+        )
         self.local_variable_types = {}
         self.current_generic_function_substitutions = (
             getattr(func, "_generic_substitutions", {}) or {}
         )
         self.current_structured_buffer_array_parameters = {}
+        self.current_structured_buffer_counter_parameters = {}
         for alias_name, binding in resource_aliases.items():
             self.local_variable_types[alias_name] = binding.get("type")
         for index, p in enumerate(param_list):
@@ -1839,10 +1876,17 @@ class GLSLCodeGen:
                 expanded_names = [
                     f"{p.name}_{index}" for index in range(buffer_array["count"])
                 ]
-                self.current_structured_buffer_array_parameters[p.name] = {
+                buffer_info = {
                     **buffer_array,
                     "expanded_names": expanded_names,
                 }
+                if self.structured_buffer_requires_counter(buffer_array["base_type"]):
+                    counter_names = [
+                        f"{p.name}Counter_{index}"
+                        for index in range(buffer_array["count"])
+                    ]
+                    buffer_info["counter_expanded_names"] = counter_names
+                self.current_structured_buffer_array_parameters[p.name] = buffer_info
                 for expanded_name in expanded_names:
                     self.local_variable_types[expanded_name] = (
                         f"{buffer_array['element_type']}[]"
@@ -1852,6 +1896,10 @@ class GLSLCodeGen:
                             f"{buffer_array['element_type']}[]",
                             expanded_name,
                         )
+                    )
+                for counter_name in buffer_info.get("counter_expanded_names", []):
+                    params.append(
+                        format_c_style_array_declaration("uint[]", counter_name)
                     )
                 continue
 
@@ -1885,6 +1933,10 @@ class GLSLCodeGen:
             params.append(
                 f"{declaration} {semantic_attr}" if semantic_attr else declaration
             )
+            if self.structured_buffer_requires_counter(raw_param_type):
+                counter_name = self.structured_buffer_counter_parameter_name(p.name)
+                self.current_structured_buffer_counter_parameters[p.name] = counter_name
+                params.append(format_c_style_array_declaration("uint[]", counter_name))
 
         if shader_type == "compute":
             self.validate_compute_builtin_parameter_types(param_list)
@@ -2011,6 +2063,9 @@ class GLSLCodeGen:
         )
         self.current_structured_buffer_array_parameters = (
             previous_structured_buffer_array_parameters
+        )
+        self.current_structured_buffer_counter_parameters = (
+            previous_structured_buffer_counter_parameters
         )
 
         code += "}\n\n"
@@ -3871,14 +3926,26 @@ class GLSLCodeGen:
                 f"{self.structured_buffer_access_expression(args[0], index)} = {value}"
             )
         if func_name == "buffer_append" and len(args) >= 2:
+            value = self.generate_expression(args[1])
+            counter = self.structured_buffer_counter_reference(args[0])
+            if counter is None:
+                return (
+                    "/* unsupported GLSL buffer append: requires append/consume "
+                    "counter buffer */"
+                )
+            index = f"atomicAdd({counter}, 1u)"
             return (
-                "/* unsupported GLSL buffer append: requires explicit counter buffer */"
+                f"{self.structured_buffer_access_expression(args[0], index)} = {value}"
             )
         if func_name == "buffer_consume" and args:
-            return (
-                "0 /* unsupported GLSL buffer consume: requires explicit "
-                "counter buffer */"
-            )
+            counter = self.structured_buffer_counter_reference(args[0])
+            if counter is None:
+                return (
+                    "0 /* unsupported GLSL buffer consume: requires append/consume "
+                    "counter buffer */"
+                )
+            index = f"(atomicAdd({counter}, uint(-1)) - 1u)"
+            return self.structured_buffer_access_expression(args[0], index)
         if func_name == "buffer_dimensions" and args:
             length_expr = self.structured_buffer_length_expression(args[0])
             if len(args) >= 2:
@@ -3918,6 +3985,24 @@ class GLSLCodeGen:
         if instance_member:
             return f"{buffer}.{instance_member}.length()"
         return f"{buffer}.length()"
+
+    def structured_buffer_counter_reference(self, buffer_arg):
+        array_access = self.structured_buffer_array_parameter_access(buffer_arg)
+        if array_access is not None:
+            info, selector = array_access
+            counter_names = info.get("counter_expanded_names")
+            if counter_names:
+                counter_info = {**info, "expanded_names": counter_names}
+                return self.structured_buffer_array_select_expression(
+                    counter_info,
+                    selector,
+                    lambda name: f"{name}[0]",
+                )
+
+        counter_data = self.structured_buffer_counter_data_argument(buffer_arg)
+        if counter_data is None:
+            return None
+        return f"{counter_data}[0]"
 
     def flattened_stage_member_name(self, expr):
         object_name = self.expression_name(getattr(expr, "object", None))
@@ -4009,15 +4094,23 @@ class GLSLCodeGen:
             param_type, param_name, func_name
         )
         if buffer_array is not None:
-            return self.structured_buffer_array_data_arguments(
+            generated_args = self.structured_buffer_array_data_arguments(
                 arg, buffer_array["count"]
             )
+            if self.structured_buffer_requires_counter(buffer_array["base_type"]):
+                generated_args += self.structured_buffer_array_counter_arguments(
+                    arg, buffer_array["count"]
+                )
+            return generated_args
         if (
             param_type is not None
             and self.is_structured_buffer_type(param_type)
             and not self.is_array_type(param_type)
         ):
-            return self.structured_buffer_data_argument(arg)
+            data_arg = self.structured_buffer_data_argument(arg)
+            if self.structured_buffer_requires_counter(param_type):
+                return [data_arg, self.structured_buffer_counter_data_argument(arg)]
+            return data_arg
         return self.generate_expression(arg)
 
     def structured_buffer_array_data_arguments(self, arg, count):
@@ -4040,6 +4133,56 @@ class GLSLCodeGen:
         if instance_member:
             return f"{arg_code}.{instance_member}"
         return arg_code
+
+    def structured_buffer_array_counter_arguments(self, arg, count):
+        arg_name = self.expression_name(arg)
+        expanded = self.current_structured_buffer_array_parameters.get(arg_name)
+        if expanded is not None:
+            counter_names = expanded.get("counter_expanded_names", [])
+            return counter_names[:count]
+
+        instance_name = self.structured_buffer_counter_instances.get(arg_name)
+        member_name = self.structured_buffer_counter_members.get(arg_name)
+        if instance_name and member_name:
+            return [f"{instance_name}[{index}].{member_name}" for index in range(count)]
+        return [self.structured_buffer_counter_data_argument(arg)] * count
+
+    def structured_buffer_counter_data_argument(self, arg):
+        array_access = self.structured_buffer_array_parameter_access(arg)
+        if array_access is not None:
+            info, selector = array_access
+            counter_names = info.get("counter_expanded_names")
+            if counter_names:
+                counter_info = {**info, "expanded_names": counter_names}
+                return self.structured_buffer_array_select_expression(
+                    counter_info,
+                    selector,
+                    lambda name: name,
+                )
+
+        arg_name = self.expression_name(arg)
+        counter_parameter = self.current_structured_buffer_counter_parameters.get(
+            arg_name
+        )
+        if counter_parameter is not None:
+            return counter_parameter
+
+        if isinstance(arg, ArrayAccessNode) or (
+            hasattr(arg, "__class__") and "ArrayAccess" in str(arg.__class__)
+        ):
+            array_expr = getattr(arg, "array", getattr(arg, "array_expr", None))
+            index_expr = getattr(arg, "index", getattr(arg, "index_expr", None))
+            array_name = self.expression_name(array_expr)
+            instance_name = self.structured_buffer_counter_instances.get(array_name)
+            member_name = self.structured_buffer_counter_members.get(array_name)
+            if instance_name and member_name:
+                index = self.generate_expression(index_expr)
+                return f"{instance_name}[{index}].{member_name}"
+
+        member_name = self.structured_buffer_counter_members.get(arg_name)
+        if member_name and arg_name not in self.structured_buffer_counter_instances:
+            return member_name
+        return None
 
     def structured_buffer_array_parameter_access(self, buffer_arg):
         if not isinstance(buffer_arg, ArrayAccessNode) and not (
@@ -6567,6 +6710,12 @@ class GLSLCodeGen:
             "ConsumeStructuredBuffer",
         }
 
+    def structured_buffer_requires_counter(self, vtype):
+        return self.structured_buffer_type_name(vtype) in {
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+        }
+
     def structured_buffer_element_type(self, vtype):
         type_name = str(self.resource_base_type(vtype))
         if "<" not in type_name or not type_name.endswith(">"):
@@ -6731,6 +6880,33 @@ class GLSLCodeGen:
         return (
             f"layout(std430, binding = {binding}) {readonly}buffer "
             f"{name}Buffer {{ {element_type} {name}[]; }};\n"
+        )
+
+    def structured_buffer_counter_resource_name(self, name):
+        return f"{name}Counter"
+
+    def structured_buffer_counter_parameter_name(self, name):
+        return f"{name}Counter"
+
+    def structured_buffer_counter_block_declaration(
+        self, name, binding, array_size=None
+    ):
+        counter_member = self.structured_buffer_counter_resource_name(name)
+        if array_size is not None:
+            counter_member = "counter"
+            counter_instance = f"{name}Counters"
+            self.structured_buffer_counter_members[name] = counter_member
+            self.structured_buffer_counter_instances[name] = counter_instance
+            array_suffix = f"[{array_size}]" if array_size else "[]"
+            return (
+                f"layout(std430, binding = {binding}) buffer {name}CounterBuffer "
+                f"{{ uint {counter_member}[]; }} {counter_instance}{array_suffix};\n"
+            )
+
+        self.structured_buffer_counter_members[name] = counter_member
+        return (
+            f"layout(std430, binding = {binding}) buffer {name}CounterBuffer "
+            f"{{ uint {counter_member}[]; }};\n"
         )
 
     def glsl_buffer_block_attribute(self, node):

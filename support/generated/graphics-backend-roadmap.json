@@ -73,15 +73,6 @@
       "status": "partial"
     },
     {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "resources",
-      "feature": "Structured/storage buffers",
-      "feature_id": "resources.structured_buffers",
-      "notes": "Covers StructuredBuffer/RWStructuredBuffer as SSBOs, fixed and inferred resource arrays, and load/store/dimensions helpers. Append/consume structured buffers remain deterministic diagnostics because GLSL needs explicit counter storage.",
-      "status": "partial"
-    },
-    {
       "backend": "Metal",
       "backend_id": "metal",
       "category": "resources",
@@ -598,11 +589,13 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_structured_buffer_access_contracts_are_preserved",
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_append_consume_structured_buffers_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_append_consume_structured_buffers_use_sidecar_counters",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_append_consume_structured_buffer_helpers_thread_sidecar_counters",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_append_structured_buffer_arrays_use_sidecar_counter_arrays",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract"
           ],
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer as SSBOs, fixed and inferred resource arrays, and load/store/dimensions helpers. Append/consume structured buffers remain deterministic diagnostics because GLSL needs explicit counter storage.",
-          "status": "partial"
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer as SSBOs, fixed and inferred resource arrays, load/store/dimensions helpers, and AppendStructuredBuffer/ConsumeStructuredBuffer lowering through generated sidecar counter SSBOs.",
+          "status": "supported"
         }
       }
     },
@@ -1447,20 +1440,20 @@
   "summary": {
     "backend_count": 3,
     "backlog": {
-      "backlog_count": 18,
+      "backlog_count": 17,
       "by_backend": {
         "directx": 5,
         "metal": 8,
-        "opengl": 5
+        "opengl": 4
       },
       "by_category": {
-        "resources": 4,
+        "resources": 3,
         "stages": 8,
         "textures": 6
       },
       "by_status": {
         "diagnostic": 0,
-        "partial": 16,
+        "partial": 15,
         "supported": 0,
         "unknown": 0,
         "unsupported": 2,
@@ -1487,8 +1480,8 @@
       },
       "opengl": {
         "diagnostic": 0,
-        "partial": 5,
-        "supported": 37,
+        "partial": 4,
+        "supported": 38,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
