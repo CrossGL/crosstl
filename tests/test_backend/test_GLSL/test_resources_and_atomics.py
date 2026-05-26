@@ -3169,8 +3169,7 @@ def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types():
     )
     assert (
         "uint incrementedCall = incrementArray__glsl_images_counters("
-        "readLayer(arrayBlock), readPixel(arrayBlock), readAmount(arrayBlock));"
-        in glsl
+        "readLayer(arrayBlock), readPixel(arrayBlock), readAmount(arrayBlock));" in glsl
     )
     assert "sampler sams" not in glsl
     assert "samplers" not in glsl

@@ -1355,7 +1355,9 @@ class GLSLCodeGen:
         if not self.glsl_resource_function_specializations:
             return
 
-        specialized_functions = list(self.glsl_resource_function_specializations.values())
+        specialized_functions = list(
+            self.glsl_resource_function_specializations.values()
+        )
         self.function_definitions.update(
             {
                 func.name: func
@@ -1547,7 +1549,9 @@ class GLSLCodeGen:
 
     def glsl_resource_specialized_call_arguments(self, specialized_func, args):
         bound_indices = getattr(specialized_func, "_glsl_resource_bound_indices", set())
-        return [arg for index, arg in enumerate(args or []) if index not in bound_indices]
+        return [
+            arg for index, arg in enumerate(args or []) if index not in bound_indices
+        ]
 
     def generate_constants(self, ast):
         code = ""

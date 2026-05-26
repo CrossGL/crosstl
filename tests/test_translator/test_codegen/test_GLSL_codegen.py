@@ -13464,8 +13464,7 @@ def test_opengl_formatted_image_arrays_ignore_unsupported_indices():
     assert "uint oldValue = imageLoad(images[(-1)], pixel).x;" in negative_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in negative_code
     assert (
-        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
-        in negative_code
+        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);" in negative_code
     )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[0];" not in negative_code
