@@ -1375,6 +1375,115 @@ def test_codegen_mixed_ssbo_bool_members_lower_as_uint_slots():
     assert "bool dynamic = readFlag(boolBlock, 1u);" in glsl
 
 
+def test_codegen_mixed_ssbo_bool_vector_members_lower_as_uint_components():
+    crossgl = """
+    shader main {
+        struct BoolVectorBlock {
+            bvec3 mask;
+            bvec2 pairs[2];
+            bvec4 values[];
+        };
+
+        BoolVectorBlock boolVectorBlock @glsl_buffer_block(std430) @binding(55);
+
+        bvec4 readValue(BoolVectorBlock localBlock @glsl_buffer_block(std430), uint i) {
+            return localBlock.values[i];
+        }
+
+        compute {
+            void main() {
+                bvec3 mask = boolVectorBlock.mask;
+                bvec2 pair = boolVectorBlock.pairs[1];
+                bvec4 dynamic = readValue(boolVectorBlock, 0u);
+                boolVectorBlock.mask = bvec3(dynamic.x, pair.x, mask.z);
+                boolVectorBlock.pairs[0] = bvec2(mask.x, dynamic.y);
+                boolVectorBlock.values[1] = bvec4(mask.x, pair.y, dynamic.z, true);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer boolVectorBlock : register(u55);" in hlsl
+    assert "bool4 readValue(RWByteAddressBuffer localBlock, uint i)" in hlsl
+    assert (
+        "return bool4((localBlock.Load((32 + i * 16)) != 0u), "
+        "(localBlock.Load((32 + i * 16 + 4)) != 0u), "
+        "(localBlock.Load((32 + i * 16 + 8)) != 0u), "
+        "(localBlock.Load((32 + i * 16 + 12)) != 0u));" in hlsl
+    )
+    assert (
+        "bool3 mask = bool3((boolVectorBlock.Load(0) != 0u), "
+        "(boolVectorBlock.Load(4) != 0u), "
+        "(boolVectorBlock.Load(8) != 0u));" in hlsl
+    )
+    assert (
+        "bool2 pair = bool2((boolVectorBlock.Load(24) != 0u), "
+        "(boolVectorBlock.Load(28) != 0u));" in hlsl
+    )
+    assert "bool3 __crossgl_bool_store_0 = bool3(dynamic.x, pair.x, mask.z);" in hlsl
+    assert (
+        "boolVectorBlock.Store3(0, uint3((__crossgl_bool_store_0.x ? 1u : 0u), "
+        "(__crossgl_bool_store_0.y ? 1u : 0u), "
+        "(__crossgl_bool_store_0.z ? 1u : 0u)));" in hlsl
+    )
+    assert "bool2 __crossgl_bool_store_1 = bool2(mask.x, dynamic.y);" in hlsl
+    assert (
+        "boolVectorBlock.Store2(16, uint2((__crossgl_bool_store_1.x ? 1u : 0u), "
+        "(__crossgl_bool_store_1.y ? 1u : 0u)));" in hlsl
+    )
+    assert (
+        "bool4 __crossgl_bool_store_2 = bool4(mask.x, pair.y, dynamic.z, true);"
+        in hlsl
+    )
+    assert (
+        "boolVectorBlock.Store4(48, uint4((__crossgl_bool_store_2.x ? 1u : 0u), "
+        "(__crossgl_bool_store_2.y ? 1u : 0u), "
+        "(__crossgl_bool_store_2.z ? 1u : 0u), "
+        "(__crossgl_bool_store_2.w ? 1u : 0u)));" in hlsl
+    )
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    assert "kernel void kernel_main(device uchar* boolVectorBlock [[buffer(55)]])" in metal
+    assert "bool4 readValue(device uchar* localBlock, uint i)" in metal
+    assert "reinterpret_cast<const device uint*>(localBlock + (32 + i * 16 + 12))" in metal
+    assert (
+        "bool3 mask = bool3(((*reinterpret_cast<const device uint*>"
+        "(boolVectorBlock + 0)) != 0u), "
+        "((*reinterpret_cast<const device uint*>(boolVectorBlock + 4)) != 0u), "
+        "((*reinterpret_cast<const device uint*>(boolVectorBlock + 8)) != 0u));"
+        in metal
+    )
+    assert "bool3 __crossgl_buffer_store_0 = bool3(dynamic.x, pair.x, mask.z);" in metal
+    assert (
+        "(*reinterpret_cast<device uint*>(boolVectorBlock + 8)) = "
+        "((__crossgl_buffer_store_0.z) ? 1u : 0u);" in metal
+    )
+    assert "bool2 __crossgl_buffer_store_1 = bool2(mask.x, dynamic.y);" in metal
+    assert (
+        "(*reinterpret_cast<device uint*>(boolVectorBlock + 20)) = "
+        "((__crossgl_buffer_store_1.y) ? 1u : 0u);" in metal
+    )
+    assert "bool4 __crossgl_buffer_store_2 = bool4(mask.x, pair.y, dynamic.z, true);" in metal
+    assert (
+        "(*reinterpret_cast<device uint*>(boolVectorBlock + 60)) = "
+        "((__crossgl_buffer_store_2.w) ? 1u : 0u);" in metal
+    )
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 55) buffer BoolVectorBlock" in glsl
+    assert "bvec3 mask;" in glsl
+    assert "bvec2 pairs[2];" in glsl
+    assert "bvec4 values[];" in glsl
+    assert "boolVectorBlock.values[1] = bvec4(mask.x, pair.y, dynamic.z, true);" in glsl
+
+
 def test_codegen_mixed_ssbo_metal_store_parenthesizes_binary_ternary_operand():
     crossgl = """
     shader main {

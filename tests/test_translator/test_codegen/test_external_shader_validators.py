@@ -219,6 +219,26 @@ void main() {
 """
 
 
+MIXED_GLSL_SSBO_BOOL_VECTOR_COMPUTE_SHADER = """
+#version 450 core
+layout(std430, binding = 27) buffer BoolVectorBlock {
+    bvec3 mask;
+    bvec2 pairs[2];
+    bvec4 values[];
+} boolVectorBlock;
+
+void main() {
+    uint i = boolVectorBlock.mask.x ? 1u : 0u;
+    bvec3 mask = boolVectorBlock.mask;
+    bvec2 pair = boolVectorBlock.pairs[i];
+    bvec4 dynamicFlags = boolVectorBlock.values[i];
+    boolVectorBlock.mask = bvec3(dynamicFlags.x, pair.y, mask.z);
+    boolVectorBlock.pairs[0] = bvec2(mask.x, dynamicFlags.y);
+    boolVectorBlock.values[1] = bvec4(mask.x, pair.y, dynamicFlags.z, true);
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
 
@@ -623,6 +643,40 @@ def test_mixed_glsl_ssbo_std140_metal_output_compiles_with_xcrun_metal(tmp_path)
     assert output_path.exists()
 
 
+def test_mixed_glsl_ssbo_bool_vector_hlsl_output_compiles_with_dxc(tmp_path):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / "mixed_glsl_ssbo_bool_vector.hlsl"
+    output_path = tmp_path / "mixed_glsl_ssbo_bool_vector.dxil"
+
+    code = HLSLCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_SSBO_BOOL_VECTOR_COMPUTE_SHADER, "compute")
+    )
+    assert "RWByteAddressBuffer boolVectorBlock : register(u27);" in code
+    assert "bool3((boolVectorBlock.Load(0) != 0u)" in code
+    assert "bool2((boolVectorBlock.Load((16 + i * 8)) != 0u)" in code
+    assert "bool4((boolVectorBlock.Load((32 + i * 16)) != 0u)" in code
+    assert "bool3 __crossgl_bool_store_0" in code
+    assert "boolVectorBlock.Store3(0, uint3" in code
+    assert "boolVectorBlock.Store2(16, uint2" in code
+    assert "boolVectorBlock.Store4(48, uint4" in code
+    assert ("un" + "supported HLSL GLSL buffer block") not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
 def test_mixed_glsl_ssbo_bool_metal_output_compiles_with_xcrun_metal(tmp_path):
     xcrun = _require_xcrun_tool("metal")
     shader_path = tmp_path / "mixed_glsl_ssbo_bool.metal"
@@ -640,6 +694,44 @@ def test_mixed_glsl_ssbo_bool_metal_output_compiles_with_xcrun_metal(tmp_path):
     )
     assert "reinterpret_cast<device float*>(boolBlock + (12 + i * 4))" in code
     assert "unsupported Metal GLSL buffer block" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_ssbo_bool_vector_metal_output_compiles_with_xcrun_metal(
+    tmp_path,
+):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "mixed_glsl_ssbo_bool_vector.metal"
+    output_path = tmp_path / "mixed_glsl_ssbo_bool_vector.air"
+
+    code = MetalCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_SSBO_BOOL_VECTOR_COMPUTE_SHADER, "compute")
+    )
+    assert "device uchar* boolVectorBlock [[buffer(27)]]" in code
+    assert "reinterpret_cast<const device uint*>(boolVectorBlock + 0)" in code
+    assert "reinterpret_cast<const device uint*>(boolVectorBlock + (16 + i * 8))" in code
+    assert "reinterpret_cast<const device uint*>(boolVectorBlock + (32 + i * 16))" in code
+    assert "bool3 __crossgl_buffer_store_0" in code
+    assert "reinterpret_cast<device uint*>(boolVectorBlock + 8)" in code
+    assert "bool2 __crossgl_buffer_store_1" in code
+    assert "reinterpret_cast<device uint*>(boolVectorBlock + 20)" in code
+    assert "bool4 __crossgl_buffer_store_2" in code
+    assert "reinterpret_cast<device uint*>(boolVectorBlock + 60)" in code
+    assert ("un" + "supported Metal GLSL buffer block") not in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(

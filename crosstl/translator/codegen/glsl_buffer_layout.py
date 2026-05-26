@@ -156,6 +156,7 @@ def std430_scalar_vector_type_entries():
         "uint": std430_scalar_type_info("uint"),
     }
     vector_prefixes = {
+        "bool": ("bvec", "bool"),
         "float": ("vec", "float"),
         "int": ("ivec", "int"),
         "uint": ("uvec", "uint"),

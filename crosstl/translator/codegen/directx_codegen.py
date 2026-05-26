@@ -121,6 +121,7 @@ from .glsl_buffer_layout import (
     glsl_buffer_compound_binary_operator,
     glsl_buffer_block_node_type,
     matrix_column_offsets,
+    vector_component_offsets,
 )
 from .image_access_contracts import (
     TEXTURE_COMPARE_INTRINSIC_NAMES,
@@ -8871,6 +8872,14 @@ class HLSLCodeGen:
                 columns.append(f"asfloat({load})")
             return f"{access['hlsl_type']}({', '.join(columns)})"
 
+        if access["component_type"] == "bool" and access["components"] > 1:
+            values = []
+            for _, component_offset in vector_component_offsets(
+                offset, access["components"]
+            ):
+                values.append(f"({buffer_name}.Load({component_offset}) != 0u)")
+            return f"{access['hlsl_type']}({', '.join(values)})"
+
         load = (
             f"{buffer_name}."
             f"{self.hlsl_byteaddress_load_method(access['components'])}({offset})"
@@ -8885,6 +8894,13 @@ class HLSLCodeGen:
 
     def hlsl_byteaddress_store_value(self, value, access):
         if access["component_type"] == "bool":
+            if access["components"] > 1:
+                value_expr = self.hlsl_indexable_expression(value)
+                fields = "xyzw"[: access["components"]]
+                values = [
+                    f"({value_expr}.{field} ? 1u : 0u)" for field in fields
+                ]
+                return f"uint{access['components']}({', '.join(values)})"
             return f"(({value}) ? 1u : 0u)"
         if access.get("layout_type") != access.get("type"):
             if access["component_type"] == "int":
@@ -8922,6 +8938,17 @@ class HLSLCodeGen:
                 f"({column_offset}, asuint({value_expr}[{column}]))"
             )
         return "\n".join(lines)
+
+    def hlsl_byteaddress_bool_vector_store(self, buffer_name, offset, value, access):
+        temp_name = self.next_hlsl_temp_variable("bool_store")
+        store_method = self.hlsl_byteaddress_store_method(access["components"])
+        store_value = self.hlsl_byteaddress_store_value(temp_name, access)
+        return "\n".join(
+            [
+                f"{access['hlsl_type']} {temp_name} = {value}",
+                f"{buffer_name}.{store_method}({offset}, {store_value})",
+            ]
+        )
 
     def hlsl_byteaddress_matrix_compound_store(
         self, buffer_name, offset, value, op, access
@@ -9002,6 +9029,11 @@ class HLSLCodeGen:
                 return self.hlsl_byteaddress_compound_store_diagnostic(op, access)
             current = self.hlsl_byteaddress_load(access["buffer"], offset, access)
             rhs = f"({current} {binary_op} {rhs})"
+
+        if access["component_type"] == "bool" and access["components"] > 1:
+            return self.hlsl_byteaddress_bool_vector_store(
+                access["buffer"], offset, rhs, access
+            )
 
         store_value = self.hlsl_byteaddress_store_value(rhs, access)
         store_method = self.hlsl_byteaddress_store_method(access["components"])

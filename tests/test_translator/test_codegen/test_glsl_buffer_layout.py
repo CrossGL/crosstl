@@ -91,6 +91,13 @@ def test_std430_type_info_covers_vec3_and_non_square_matrix_strides():
     assert bool_info["component_type"] == "bool"
     assert std430_array_stride(bool_info) == 4
 
+    bvec3 = std430_value_type_info("bvec3")
+    assert bvec3["size"] == 12
+    assert bvec3["align"] == 16
+    assert bvec3["components"] == 3
+    assert bvec3["component_type"] == "bool"
+    assert std430_array_stride(bvec3) == 16
+
     vec3 = std430_value_type_info("vec3")
     assert vec3["size"] == 12
     assert vec3["align"] == 16
@@ -286,6 +293,43 @@ def test_collect_lowered_glsl_buffer_blocks_lays_out_bool_members():
     assert data["offset"] == 12
     assert data["stride"] == 4
     assert data["runtime_array"] is True
+
+
+def test_collect_lowered_glsl_buffer_blocks_lays_out_bool_vector_members():
+    struct = block_struct(
+        member("mask", primitive("bvec3")),
+        member("pairs", ArrayType(primitive("bvec2"), size=2)),
+        member("data", ArrayType(primitive("bvec4"), size=None)),
+    )
+
+    blocks, var_failures, struct_failures = collect_for(struct)
+
+    assert not var_failures
+    assert not struct_failures
+    block = blocks["block"]
+    assert block["runtime_array"] == "data"
+
+    mask = block["members"]["mask"]
+    assert mask["offset"] == 0
+    assert mask["size"] == 12
+    assert mask["align"] == 16
+    assert mask["components"] == 3
+    assert mask["component_type"] == "bool"
+    assert mask["target_type"] == "mapped_bvec3"
+
+    pairs = block["members"]["pairs"]
+    assert pairs["offset"] == 16
+    assert pairs["stride"] == 8
+    assert pairs["array_count"] == 2
+    assert pairs["components"] == 2
+    assert pairs["target_type"] == "mapped_bvec2"
+
+    data = block["members"]["data"]
+    assert data["offset"] == 32
+    assert data["stride"] == 16
+    assert data["runtime_array"] is True
+    assert data["components"] == 4
+    assert data["target_type"] == "mapped_bvec4"
 
 
 def test_collect_lowered_glsl_buffer_blocks_tracks_readonly_qualifier():
