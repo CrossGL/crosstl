@@ -145,6 +145,76 @@ def collect_stage_local_structs(ast, target_stage=None):
     return structs
 
 
+def stage_layout_qualifiers(stage, direction=None):
+    """Return stage-level layout qualifiers, optionally filtered by direction."""
+    layouts = list(getattr(stage, "layout_qualifiers", []) or [])
+    if direction is None:
+        return layouts
+
+    direction = normalize_layout_direction(direction)
+    return [
+        layout
+        for layout in layouts
+        if normalize_layout_direction(getattr(layout, "direction", None)) == direction
+    ]
+
+
+def stage_layout_entries(stage, direction=None):
+    """Return all entries from matching stage-level layout qualifiers."""
+    entries = []
+    for layout in stage_layout_qualifiers(stage, direction):
+        entries.extend(getattr(layout, "entries", []) or [])
+    return entries
+
+
+def stage_layout_entry(stage, name, direction=None):
+    """Return the first matching stage layout entry by name."""
+    target_name = normalize_layout_entry_name(name)
+    for entry in stage_layout_entries(stage, direction):
+        if normalize_layout_entry_name(getattr(entry, "name", None)) == target_name:
+            return entry
+    return None
+
+
+def stage_layout_entry_arguments(stage, name, direction=None):
+    """Return arguments for the first matching stage layout entry."""
+    entry = stage_layout_entry(stage, name, direction)
+    return list(getattr(entry, "arguments", []) or []) if entry is not None else []
+
+
+def stage_layout_entry_value(stage, name, direction=None, default=None):
+    """Return the first argument value for a named stage layout entry."""
+    arguments = stage_layout_entry_arguments(stage, name, direction)
+    if not arguments:
+        return default
+    return layout_argument_value(arguments[0])
+
+
+def normalize_layout_direction(direction):
+    """Normalize a layout direction token."""
+    if direction is None:
+        return None
+    return str(direction).split(".")[-1].lower()
+
+
+def normalize_layout_entry_name(name):
+    """Normalize a layout entry name for lookup."""
+    if name is None:
+        return None
+    return str(name).lower()
+
+
+def layout_argument_value(argument):
+    """Return a simple value from a layout argument expression."""
+    value = getattr(argument, "value", None)
+    if value is not None:
+        return str(value)
+    name = getattr(argument, "name", None)
+    if name is not None:
+        return str(name)
+    return str(argument)
+
+
 def deduplicate_named_declarations(nodes, kind):
     """Deduplicate named declarations and reject conflicting same-name entries."""
     declarations = []

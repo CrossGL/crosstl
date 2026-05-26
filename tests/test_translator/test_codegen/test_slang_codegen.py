@@ -621,6 +621,119 @@ def test_multiple_stage_entry_points_emit():
     assert '[shader("compute")]' in generated_code
 
 
+def test_advanced_stage_attributes_emit_slang_shader_names():
+    code = """
+    shader advanced {
+        geometry {
+            void main() {
+            }
+        }
+        tessellation_control {
+            void main() {
+            }
+        }
+        tessellation_evaluation {
+            void main() {
+            }
+        }
+        mesh {
+            void main() {
+            }
+        }
+        task {
+            void main() {
+            }
+        }
+        ray_generation {
+            void main() {
+            }
+        }
+        ray_closest_hit {
+            void main() {
+            }
+        }
+        ray_any_hit {
+            void main() {
+            }
+        }
+        ray_miss {
+            void main() {
+            }
+        }
+        ray_callable {
+            void main() {
+            }
+        }
+        ray_intersection {
+            void main() {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    expected_shader_attributes = [
+        '[shader("geometry")]',
+        '[shader("hull")]',
+        '[shader("domain")]',
+        '[shader("mesh")]',
+        '[shader("amplification")]',
+        '[shader("raygeneration")]',
+        '[shader("closesthit")]',
+        '[shader("anyhit")]',
+        '[shader("miss")]',
+        '[shader("callable")]',
+        '[shader("intersection")]',
+    ]
+    for attribute in expected_shader_attributes:
+        assert attribute in generated_code
+
+    raw_crossgl_stage_attributes = [
+        '[shader("tessellation_control")]',
+        '[shader("tessellation_evaluation")]',
+        '[shader("task")]',
+        '[shader("ray_generation")]',
+        '[shader("ray_closest_hit")]',
+        '[shader("ray_any_hit")]',
+        '[shader("ray_miss")]',
+        '[shader("ray_callable")]',
+        '[shader("ray_intersection")]',
+    ]
+    for attribute in raw_crossgl_stage_attributes:
+        assert attribute not in generated_code
+
+
+def test_compute_stage_emits_default_numthreads():
+    code = """
+    shader main {
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "[numthreads(1, 1, 1)]" in generated_code
+    assert '[numthreads(1, 1, 1)]\n[shader("compute")]' in generated_code
+
+
+def test_compute_stage_uses_execution_layout_numthreads():
+    code = """
+    shader main {
+        compute {
+            layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;
+            void main() {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "[numthreads(8, 4, 2)]" in generated_code
+    assert "[numthreads(1, 1, 1)]" not in generated_code
+
+
 def test_if_else_control_flow_emits_slang_blocks():
     code = """
     shader main {

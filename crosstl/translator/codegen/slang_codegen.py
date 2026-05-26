@@ -38,6 +38,7 @@ from .array_utils import (
     get_array_size_from_node,
     split_array_type_suffix,
 )
+from .stage_utils import compute_local_size
 
 
 class SlangCodeGen:
@@ -322,6 +323,25 @@ class SlangCodeGen:
             return qualifier
         return None
 
+    def slang_shader_stage_name(self, stage_name):
+        """Return the Slang [shader(...)] spelling for a CrossGL stage name."""
+        stage_map = {
+            "tessellation_control": "hull",
+            "tessellation_evaluation": "domain",
+            "tesscontrol": "hull",
+            "tesseval": "domain",
+            "task": "amplification",
+            "object": "amplification",
+            "ray_generation": "raygeneration",
+            "raygen": "raygeneration",
+            "ray_intersection": "intersection",
+            "ray_closest_hit": "closesthit",
+            "ray_any_hit": "anyhit",
+            "ray_miss": "miss",
+            "ray_callable": "callable",
+        }
+        return stage_map.get(stage_name, stage_name)
+
     def generate_stage(self, stage_type, stage):
         """Render one staged entry point and its local functions."""
         stage_name = self.get_stage_name(stage_type)
@@ -336,7 +356,11 @@ class SlangCodeGen:
 
         entry_point = getattr(stage, "entry_point", None)
         if entry_point is not None:
-            result += self.generate_function(entry_point, shader_type=stage_name)
+            result += self.generate_function(
+                entry_point,
+                shader_type=stage_name,
+                execution_config=getattr(stage, "execution_config", None),
+            )
             result += "\n\n"
 
         return result
@@ -495,7 +519,7 @@ class SlangCodeGen:
         result += "};"
         return result
 
-    def generate_function(self, node, shader_type=None):
+    def generate_function(self, node, shader_type=None, execution_config=None):
         """Render one CrossGL function or shader entry point as Slang code."""
         saved_variable_types = self.variable_types.copy()
         saved_image_resource_types = self.image_resource_types.copy()
@@ -555,8 +579,11 @@ class SlangCodeGen:
                 )
 
         result = ""
+        if shader_type == "compute":
+            result += self.generate_compute_numthreads(execution_config)
         if shader_type:
-            result += f'[shader("{shader_type}")]\n'
+            shader_stage = self.slang_shader_stage_name(shader_type)
+            result += f'[shader("{shader_stage}")]\n'
         result += f"{ret_type} {node.name}({params_str}){semantic_str}\n{{\n"
         self.indent_level += 1
 
@@ -574,6 +601,10 @@ class SlangCodeGen:
         self.image_resource_types = saved_image_resource_types
         self.current_function_return_type = saved_function_return_type
         return result
+
+    def generate_compute_numthreads(self, execution_config=None):
+        x, y, z = compute_local_size(execution_config)
+        return f"[numthreads({x}, {y}, {z})]\n"
 
     def emit_statement(self, node):
         statement = self.generate_statement(node)

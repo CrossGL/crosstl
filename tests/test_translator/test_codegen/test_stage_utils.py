@@ -7,6 +7,11 @@ from crosstl.translator.codegen.stage_utils import (
     collect_stage_local_variables,
     compute_local_size,
     deduplicate_named_declarations,
+    stage_layout_entries,
+    stage_layout_entry,
+    stage_layout_entry_arguments,
+    stage_layout_entry_value,
+    stage_layout_qualifiers,
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
@@ -39,11 +44,36 @@ class DummyVariable:
         self.attributes = attributes or []
 
 
+class DummyLayout:
+    def __init__(self, direction=None, entries=None):
+        self.direction = direction
+        self.entries = entries or []
+
+
+class DummyLayoutEntry:
+    def __init__(self, name, arguments=None):
+        self.name = name
+        self.arguments = arguments or []
+
+
+class DummyLayoutArgument:
+    def __init__(self, value=None, name=None):
+        self.value = value
+        self.name = name
+
+
 class DummyStageNode:
-    def __init__(self, entry_point=None, local_functions=None, local_variables=None):
+    def __init__(
+        self,
+        entry_point=None,
+        local_functions=None,
+        local_variables=None,
+        layout_qualifiers=None,
+    ):
         self.entry_point = entry_point
         self.local_functions = local_functions or []
         self.local_variables = local_variables or []
+        self.layout_qualifiers = layout_qualifiers or []
 
 
 class DummyAst:
@@ -171,6 +201,55 @@ def test_collect_stage_local_variables_filters_by_stage_and_predicate():
     )
 
     assert variables == [fragment_tex]
+
+
+def test_stage_layout_helpers_filter_entries_and_values():
+    geometry_stage = DummyStageNode(
+        layout_qualifiers=[
+            DummyLayout("in", [DummyLayoutEntry("triangles")]),
+            DummyLayout(
+                "out",
+                [
+                    DummyLayoutEntry("triangle_strip"),
+                    DummyLayoutEntry("max_vertices", [DummyLayoutArgument(value=3)]),
+                ],
+            ),
+        ]
+    )
+
+    assert stage_layout_qualifiers(geometry_stage, "in") == [
+        geometry_stage.layout_qualifiers[0]
+    ]
+    assert stage_layout_entries(geometry_stage, "out") == [
+        geometry_stage.layout_qualifiers[1].entries[0],
+        geometry_stage.layout_qualifiers[1].entries[1],
+    ]
+    assert (
+        stage_layout_entry(geometry_stage, "TRIANGLE_STRIP", "out")
+        is geometry_stage.layout_qualifiers[1].entries[0]
+    )
+    assert stage_layout_entry_arguments(geometry_stage, "max_vertices", "out") == [
+        geometry_stage.layout_qualifiers[1].entries[1].arguments[0]
+    ]
+    assert stage_layout_entry_value(geometry_stage, "max_vertices", "out") == "3"
+    assert stage_layout_entry_value(geometry_stage, "invocations", "out", "1") == "1"
+
+
+def test_stage_layout_entry_value_handles_identifier_arguments():
+    stage = DummyStageNode(
+        layout_qualifiers=[
+            DummyLayout(
+                "in",
+                [
+                    DummyLayoutEntry(
+                        "local_size_x", [DummyLayoutArgument(name="GROUP_SIZE")]
+                    )
+                ],
+            )
+        ]
+    )
+
+    assert stage_layout_entry_value(stage, "local_size_x", "in") == "GROUP_SIZE"
 
 
 def test_deduplicate_named_declarations_reuses_matching_stage_resources():

@@ -145,7 +145,14 @@
         "hip": {"status": "supported"},
         "mojo": {"status": "supported"},
         "rust": {"status": "supported"},
-        "slang": {"status": "supported"}
+        "slang": {
+          "status": "supported",
+          "notes": "Compute entry points lower to Slang shader entries with HLSL-compatible numthreads defaults and parsed local-size layouts.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_compute_stage_emits_default_numthreads",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_compute_stage_uses_execution_layout_numthreads"
+          ]
+        }
       }
     },
     {
