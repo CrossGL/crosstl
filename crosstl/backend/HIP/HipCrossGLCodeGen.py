@@ -471,6 +471,20 @@ class HipToCrossGLConverter:
                 target = self.format_runtime_pointer_target(node.args[0])
                 size = self.visit(node.args[1])
                 return [f"// HIP memory allocate: {target}, bytes: {size}"]
+        elif name == "hipMallocAsync":
+            if len(args) >= 3:
+                target = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP async memory allocate: {target}, bytes: {args[1]}, "
+                    f"stream: {args[2]}"
+                ]
+        elif name == "hipMallocFromPoolAsync":
+            if len(args) >= 4:
+                target = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP async memory allocate from pool: {target}, "
+                    f"bytes: {args[1]}, pool: {args[2]}, stream: {args[3]}"
+                ]
         elif name in {"hipHostMalloc", "hipHostAlloc"}:
             if len(args) >= 2:
                 target = self.format_runtime_pointer_target(node.args[0])
@@ -510,9 +524,66 @@ class HipToCrossGLConverter:
         elif name in {"hipFree", "hipHostFree", "hipFreeHost"}:
             if args:
                 return [f"// HIP memory free: {args[0]}"]
+        elif name == "hipFreeAsync":
+            if len(args) >= 2:
+                return [f"// HIP async memory free: {args[0]}, stream: {args[1]}"]
         elif name in {"hipFreeArray", "hipArrayDestroy"}:
             if args:
                 return [f"// HIP array free: {args[0]}"]
+        elif name == "hipMemPoolCreate":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP memory pool create: output: {output}, properties: {args[1]}"
+                ]
+        elif name == "hipMemPoolDestroy":
+            if args:
+                return [f"// HIP memory pool destroy: {args[0]}"]
+        elif name == "hipMemPoolTrimTo":
+            if len(args) >= 2:
+                return [
+                    f"// HIP memory pool trim: pool: {args[0]}, "
+                    f"minimum bytes: {args[1]}"
+                ]
+        elif name == "hipMemPoolSetAttribute":
+            if len(args) >= 3:
+                value = self.format_runtime_pointer_target(node.args[2])
+                return [
+                    f"// HIP memory pool set attribute: pool: {args[0]}, "
+                    f"attribute: {args[1]}, value: {value}"
+                ]
+        elif name == "hipMemPoolGetAttribute":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[2])
+                return [
+                    f"// HIP memory pool get attribute: pool: {args[0]}, "
+                    f"attribute: {args[1]}, output: {output}"
+                ]
+        elif name == "hipMemPoolSetAccess":
+            if len(args) >= 3:
+                return [
+                    f"// HIP memory pool set access: pool: {args[0]}, "
+                    f"descriptors: {args[1]}, count: {args[2]}"
+                ]
+        elif name == "hipMemPoolGetAccess":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP memory pool get access: output: {output}, "
+                    f"pool: {args[1]}, location: {args[2]}"
+                ]
+        elif name == "hipDeviceGetDefaultMemPool":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP get default memory pool: output: {output}, "
+                    f"device: {args[1]}"
+                ]
+        elif name == "hipDeviceSetMemPool":
+            if len(args) >= 2:
+                return [
+                    f"// HIP set device memory pool: device: {args[0]}, pool: {args[1]}"
+                ]
         elif name == "hipHostRegister":
             if len(args) >= 3:
                 return [
@@ -615,6 +686,79 @@ class HipToCrossGLConverter:
         elif name in {"hipStreamSynchronize"}:
             if args:
                 return [f"// HIP synchronize: {args[0]}"]
+        elif name == "hipStreamAddCallback":
+            if len(args) >= 4:
+                return [
+                    f"// HIP stream add callback: stream: {args[0]}, "
+                    f"callback: {args[1]}, user data: {args[2]}, flags: {args[3]}"
+                ]
+        elif name == "hipLaunchHostFunc":
+            if len(args) >= 3:
+                return [
+                    f"// HIP launch host function: stream: {args[0]}, "
+                    f"function: {args[1]}, user data: {args[2]}"
+                ]
+        elif name == "hipDeviceGetStreamPriorityRange":
+            if len(args) >= 2:
+                least_output = self.format_runtime_pointer_target(node.args[0])
+                greatest_output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// HIP get stream priority range: "
+                    f"least output: {least_output}, greatest output: {greatest_output}"
+                ]
+        elif name == "hipStreamGetFlags":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [f"// HIP get stream flags: stream: {args[0]}, output: {output}"]
+        elif name == "hipStreamGetPriority":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// HIP get stream priority: stream: {args[0]}, output: {output}"
+                ]
+        elif name == "hipStreamBeginCapture":
+            if len(args) >= 2:
+                return [
+                    f"// HIP stream begin capture: stream: {args[0]}, mode: {args[1]}"
+                ]
+        elif name == "hipStreamEndCapture":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// HIP stream end capture: stream: {args[0]}, graph output: {output}"
+                ]
+        elif name == "hipStreamIsCapturing":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// HIP stream is capturing: stream: {args[0]}, output: {output}"
+                ]
+        elif name in {"hipStreamGetCaptureInfo", "hipStreamGetCaptureInfo_v2"}:
+            if len(args) >= 3:
+                status_output = self.format_runtime_pointer_target(node.args[1])
+                id_output = self.format_runtime_pointer_target(node.args[2])
+                comment = (
+                    f"// HIP stream capture info: stream: {args[0]}, "
+                    f"status output: {status_output}, id output: {id_output}"
+                )
+                if len(args) >= 6:
+                    graph_output = self.format_runtime_pointer_target(node.args[3])
+                    dependencies_output = self.format_runtime_pointer_target(
+                        node.args[4]
+                    )
+                    count_output = self.format_runtime_pointer_target(node.args[5])
+                    comment += (
+                        f", graph output: {graph_output}, "
+                        f"dependencies output: {dependencies_output}, "
+                        f"dependency count output: {count_output}"
+                    )
+                return [comment]
+        elif name == "hipStreamUpdateCaptureDependencies":
+            if len(args) >= 4:
+                return [
+                    f"// HIP stream update capture dependencies: stream: {args[0]}, "
+                    f"dependencies: {args[1]}, count: {args[2]}, flags: {args[3]}"
+                ]
         elif name == "hipDeviceSynchronize":
             return ["// HIP device synchronize"]
         elif name in {
@@ -885,6 +1029,34 @@ class HipToCrossGLConverter:
                     f"block: ({args[4]}, {args[5]}, {args[6]}), "
                     f"shared memory: {args[7]}, stream: {args[8]}, "
                     f"params: {args[9]}, extra: {args[10]}"
+                ]
+        elif name == "hipLaunchCooperativeKernel":
+            if len(args) >= 6:
+                return [
+                    f"// HIP cooperative kernel launch: function: {args[0]}, "
+                    f"grid: {args[1]}, block: {args[2]}, params: {args[3]}, "
+                    f"shared memory: {args[4]}, stream: {args[5]}"
+                ]
+        elif name == "hipLaunchCooperativeKernelMultiDevice":
+            if len(args) >= 3:
+                return [
+                    f"// HIP cooperative multi-device launch: params: {args[0]}, "
+                    f"devices: {args[1]}, flags: {args[2]}"
+                ]
+        elif name == "hipModuleLaunchCooperativeKernel":
+            if len(args) >= 10:
+                return [
+                    f"// HIP module cooperative kernel launch: function: {args[0]}, "
+                    f"grid: ({args[1]}, {args[2]}, {args[3]}), "
+                    f"block: ({args[4]}, {args[5]}, {args[6]}), "
+                    f"shared memory: {args[7]}, stream: {args[8]}, "
+                    f"params: {args[9]}"
+                ]
+        elif name == "hipModuleLaunchCooperativeKernelMultiDevice":
+            if len(args) >= 3:
+                return [
+                    f"// HIP module cooperative multi-device launch: "
+                    f"params: {args[0]}, devices: {args[1]}, flags: {args[2]}"
                 ]
         elif name == "hipCreateTextureObject":
             if len(args) >= 4:

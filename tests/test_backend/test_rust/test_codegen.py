@@ -906,6 +906,28 @@ def test_common_math_intrinsic_calls_convert_to_crossgl_intrinsics():
     assert "Vec3" not in result
 
 
+def test_matrix_intrinsic_calls_and_types_convert_to_crossgl_intrinsics():
+    code = """
+    fn matrix_intrinsics(transform: Mat3<f64>, affine: Mat3x4<f32>) -> f64 {
+        let basis = transpose(transform);
+        let inverted = inverse(basis);
+        let det = determinant(inverted);
+        let rectangular = transpose(affine);
+        return det;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "double matrix_intrinsics(dmat3 transform, mat3x4 affine)" in result
+    assert "basis = transpose(transform);" in result
+    assert "inverted = inverse(basis);" in result
+    assert "det = determinant(inverted);" in result
+    assert "rectangular = transpose(affine);" in result
+    assert "Mat3" not in result
+    assert "Mat3x4" not in result
+
+
 def test_lerp_function_converts_to_crossgl_mix():
     code = """
     fn blend(a: f32, b: f32, t: f32) -> f32 {

@@ -1128,6 +1128,7 @@ class TestHipCodeGen:
             size_t totalMem;
             size_t ptrSize;
             float symbol;
+            hipStream_t stream;
             unsigned int flags;
             int pointerAttrValue;
             hipPointerAttribute_t pointerAttrs;
@@ -1139,9 +1140,23 @@ class TestHipCodeGen:
             hipChannelFormatDesc desc;
             hipPitchedPtr pitched;
             hipExtent extent;
+            hipMemPool_t pool;
+            hipMemPoolProps poolProps;
+            hipMemAccessDesc accessDesc;
+            hipMemLocation location;
             hipTextureObject_t texObj;
             hipSurfaceObject_t surfObj;
             hipMalloc((void**)&d, n * sizeof(float));
+            hipMallocAsync((void**)&d, n * sizeof(float), stream);
+            hipMemPoolCreate(&pool, &poolProps);
+            hipDeviceGetDefaultMemPool(&pool, 0);
+            hipDeviceSetMemPool(0, pool);
+            hipMallocFromPoolAsync((void**)&d2, n * sizeof(float), pool, stream);
+            hipMemPoolTrimTo(pool, n * sizeof(float));
+            hipMemPoolSetAttribute(pool, hipMemPoolAttrReleaseThreshold, &ptrSize);
+            hipMemPoolGetAttribute(pool, hipMemPoolAttrReleaseThreshold, &ptrSize);
+            hipMemPoolSetAccess(pool, &accessDesc, 1);
+            hipMemPoolGetAccess(&flags, pool, &location);
             hipHostMalloc((void**)&h, n * sizeof(float), hipHostMallocMapped);
             hipHostAlloc((void**)&h, n * sizeof(float), hipHostMallocDefault);
             hipHostRegister(h, n * sizeof(float), hipHostRegisterMapped);
@@ -1187,11 +1202,16 @@ class TestHipCodeGen:
             hipDeviceSynchronize();
             hipHostUnregister(h);
             hipFree(d);
+            hipFreeAsync(d2, stream);
             hipHostFree(h);
             hipFreeHost(h);
             hipFreeArray(array);
             hipArrayDestroy(array);
+            hipMemPoolDestroy(pool);
             hipError_t err = hipMalloc((void**)&d, n * sizeof(float));
+            err = hipMallocAsync((void**)&d, n * sizeof(float), stream);
+            err = hipMemPoolCreate(&pool, &poolProps);
+            err = hipFreeAsync(d2, stream);
             err = hipHostRegister(h, n * sizeof(float), hipHostRegisterMapped);
             err = hipMallocPitch((void**)&d2, &pitch, n * sizeof(float), 4);
             err = hipMallocArray(&array, &desc, n, 4, hipArrayDefault);
@@ -1219,6 +1239,45 @@ class TestHipCodeGen:
         assert (
             result.count("// HIP memory allocate: d, bytes: (n * sizeof(float))") == 2
         )
+        assert (
+            result.count(
+                "// HIP async memory allocate: d, bytes: (n * sizeof(float)), "
+                "stream: stream"
+            )
+            == 2
+        )
+        assert (
+            result.count(
+                "// HIP memory pool create: output: pool, properties: (&poolProps)"
+            )
+            == 2
+        )
+        assert "// HIP get default memory pool: output: pool, device: 0" in result
+        assert "// HIP set device memory pool: device: 0, pool: pool" in result
+        assert (
+            "// HIP async memory allocate from pool: d2, bytes: (n * sizeof(float)), "
+            "pool: pool, stream: stream"
+        ) in result
+        assert (
+            "// HIP memory pool trim: pool: pool, minimum bytes: (n * sizeof(float))"
+            in result
+        )
+        assert (
+            "// HIP memory pool set attribute: pool: pool, "
+            "attribute: hipMemPoolAttrReleaseThreshold, value: ptrSize"
+        ) in result
+        assert (
+            "// HIP memory pool get attribute: pool: pool, "
+            "attribute: hipMemPoolAttrReleaseThreshold, output: ptrSize"
+        ) in result
+        assert (
+            "// HIP memory pool set access: pool: pool, descriptors: (&accessDesc), "
+            "count: 1"
+        ) in result
+        assert (
+            "// HIP memory pool get access: output: flags, pool: pool, "
+            "location: (&location)"
+        ) in result
         assert (
             "// HIP host memory allocate: h, bytes: (n * sizeof(float)), "
             "flags: hipHostMallocMapped"
@@ -1330,12 +1389,26 @@ class TestHipCodeGen:
         assert result.count("// HIP memory free: h") == 2
         assert "// HIP host memory unregister: h" in result
         assert "// HIP memory free: d" in result
+        assert result.count("// HIP async memory free: d2, stream: stream") == 2
         assert result.count("// HIP array free: array") == 2
+        assert "// HIP memory pool destroy: pool" in result
         assert "workgroupBarrier();" not in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert "if ((err != hipSuccess))" in result
         assert "err = hipSuccess;" in result
         assert "hipMalloc(ptr<ptr<void>>((&d)), (n * sizeof(float)))" not in result
+        assert "hipMallocAsync(" not in result
+        assert "hipMallocFromPoolAsync(" not in result
+        assert "hipFreeAsync(" not in result
+        assert "hipMemPoolCreate(" not in result
+        assert "hipMemPoolDestroy(" not in result
+        assert "hipMemPoolTrimTo(" not in result
+        assert "hipMemPoolSetAttribute(" not in result
+        assert "hipMemPoolGetAttribute(" not in result
+        assert "hipMemPoolSetAccess(" not in result
+        assert "hipMemPoolGetAccess(" not in result
+        assert "hipDeviceGetDefaultMemPool(" not in result
+        assert "hipDeviceSetMemPool(" not in result
         assert "hipHostMalloc(" not in result
         assert "hipHostAlloc(" not in result
         assert "hipHostRegister(" not in result
@@ -1469,10 +1542,22 @@ class TestHipCodeGen:
             int attr = 0;
             int major = 0;
             int minor = 0;
+            int leastPriority = 0;
+            int greatestPriority = 0;
+            int priority = 0;
+            unsigned int flags = 0;
             size_t total = 0;
+            size_t numDeps = 0;
+            unsigned long long captureId = 0;
             char name[64];
+            hipStreamCaptureStatus captureStatus;
+            hipGraph_t graph;
+            hipGraphNode_t* deps;
             hipDeviceProp_t props;
             void* kernel;
+            void* callback;
+            void* hostFn;
+            void* userData;
             hipGetDevice(&device);
             hipGetDeviceCount(&count);
             hipSetDevice(device);
@@ -1503,6 +1588,19 @@ class TestHipCodeGen:
             );
             hipStreamCreate(&stream);
             hipStreamCreateWithFlags(&stream, hipStreamNonBlocking);
+            hipDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
+            hipStreamGetFlags(stream, &flags);
+            hipStreamGetPriority(stream, &priority);
+            hipStreamAddCallback(stream, callback, userData, 0);
+            hipLaunchHostFunc(stream, hostFn, userData);
+            hipStreamBeginCapture(stream, hipStreamCaptureModeGlobal);
+            hipStreamIsCapturing(stream, &captureStatus);
+            hipStreamGetCaptureInfo(stream, &captureStatus, &captureId);
+            hipStreamGetCaptureInfo_v2(
+                stream, &captureStatus, &captureId, &graph, &deps, &numDeps
+            );
+            hipStreamUpdateCaptureDependencies(stream, deps, numDeps, 0);
+            hipStreamEndCapture(stream, &graph);
             hipEventCreate(&start);
             hipEventCreateWithFlags(&stop, hipEventDisableTiming);
             hipEventRecord(start, stream);
@@ -1514,6 +1612,7 @@ class TestHipCodeGen:
             hipStreamDestroy(stream);
             hipError_t err = hipEventRecord(stop, stream);
             err = hipGetDeviceCount(&count);
+            err = hipLaunchHostFunc(stream, hostFn, userData);
             err = hipDeviceGetAttribute(
                 &attr, hipDeviceAttributeMaxThreadsPerBlock, device
             );
@@ -1532,6 +1631,48 @@ class TestHipCodeGen:
 
         assert "// HIP stream create: stream" in result
         assert "// HIP stream create: stream, flags: hipStreamNonBlocking" in result
+        assert (
+            "// HIP get stream priority range: least output: leastPriority, "
+            "greatest output: greatestPriority"
+        ) in result
+        assert "// HIP get stream flags: stream: stream, output: flags" in result
+        assert "// HIP get stream priority: stream: stream, output: priority" in result
+        assert (
+            "// HIP stream add callback: stream: stream, callback: callback, "
+            "user data: userData, flags: 0"
+        ) in result
+        assert (
+            result.count(
+                "// HIP launch host function: stream: stream, function: hostFn, "
+                "user data: userData"
+            )
+            == 2
+        )
+        assert (
+            "// HIP stream begin capture: stream: stream, mode: "
+            "hipStreamCaptureModeGlobal"
+        ) in result
+        assert (
+            "// HIP stream is capturing: stream: stream, output: captureStatus"
+            in result
+        )
+        assert (
+            "// HIP stream capture info: stream: stream, "
+            "status output: captureStatus, id output: captureId"
+        ) in result
+        assert (
+            "// HIP stream capture info: stream: stream, "
+            "status output: captureStatus, id output: captureId, "
+            "graph output: graph, dependencies output: deps, "
+            "dependency count output: numDeps"
+        ) in result
+        assert (
+            "// HIP stream update capture dependencies: stream: stream, "
+            "dependencies: deps, count: numDeps, flags: 0"
+        ) in result
+        assert (
+            "// HIP stream end capture: stream: stream, graph output: graph" in result
+        )
         assert "// HIP event create: start" in result
         assert "// HIP event create: stop, flags: hipEventDisableTiming" in result
         assert "// HIP event record: start, stream: stream" in result
@@ -1596,6 +1737,17 @@ class TestHipCodeGen:
         assert "err = hipSuccess;" in result
         assert "var err: hipError_t = hipEventRecord(stop, stream);" not in result
         assert "hipStreamCreateWithFlags(" not in result
+        assert "hipDeviceGetStreamPriorityRange(" not in result
+        assert "hipStreamGetFlags(" not in result
+        assert "hipStreamGetPriority(" not in result
+        assert "hipStreamAddCallback(" not in result
+        assert "hipLaunchHostFunc(" not in result
+        assert "hipStreamBeginCapture(" not in result
+        assert "hipStreamEndCapture(" not in result
+        assert "hipStreamIsCapturing(" not in result
+        assert "hipStreamGetCaptureInfo(" not in result
+        assert "hipStreamGetCaptureInfo_v2(" not in result
+        assert "hipStreamUpdateCaptureDependencies(" not in result
         assert "hipGetDevice(" not in result
         assert "hipGetDeviceCount(" not in result
         assert "hipSetDevice(" not in result
@@ -1646,6 +1798,7 @@ class TestHipCodeGen:
             size_t globalBytes;
             void** params;
             void** extra;
+            void* launchParams;
             void* image;
             hipJitOption options;
             void* optionValues;
@@ -1667,11 +1820,18 @@ class TestHipCodeGen:
             hipModuleLaunchKernel(
                 function, 8, 1, 1, 64, 1, 1, 0, stream, params, extra
             );
+            hipLaunchCooperativeKernel(function, 8, 64, params, 0, stream);
+            hipLaunchCooperativeKernelMultiDevice(launchParams, 1, 0);
+            hipModuleLaunchCooperativeKernel(
+                function, 8, 1, 1, 64, 1, 1, 0, stream, params
+            );
+            hipModuleLaunchCooperativeKernelMultiDevice(launchParams, 1, 0);
             hipModuleUnload(module);
             hipError_t err = hipModuleGetFunction(&function, module, "kernel");
             err = hipModuleLaunchKernel(
                 function, 8, 1, 1, 64, 1, 1, 0, stream, params, extra
             );
+            err = hipLaunchCooperativeKernel(function, 8, 64, params, 0, stream);
         }
         """
         lexer = HipLexer(code)
@@ -1731,6 +1891,26 @@ class TestHipCodeGen:
             )
             == 2
         )
+        assert (
+            result.count(
+                "// HIP cooperative kernel launch: function: function, grid: 8, "
+                "block: 64, params: params, shared memory: 0, stream: stream"
+            )
+            == 2
+        )
+        assert (
+            "// HIP cooperative multi-device launch: params: launchParams, "
+            "devices: 1, flags: 0"
+        ) in result
+        assert (
+            "// HIP module cooperative kernel launch: function: function, "
+            "grid: (8, 1, 1), block: (64, 1, 1), shared memory: 0, "
+            "stream: stream, params: params"
+        ) in result
+        assert (
+            "// HIP module cooperative multi-device launch: params: launchParams, "
+            "devices: 1, flags: 0"
+        ) in result
         assert "// HIP module unload: module" in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert "err = hipSuccess;" in result
@@ -1746,6 +1926,10 @@ class TestHipCodeGen:
         assert "hipFuncSetSharedMemConfig(" not in result
         assert "hipModuleGetGlobal(" not in result
         assert "hipModuleLaunchKernel(" not in result
+        assert "hipLaunchCooperativeKernel(" not in result
+        assert "hipLaunchCooperativeKernelMultiDevice(" not in result
+        assert "hipModuleLaunchCooperativeKernel(" not in result
+        assert "hipModuleLaunchCooperativeKernelMultiDevice(" not in result
         assert "hipModuleUnload(" not in result
 
     def test_hip_runtime_stream_create_with_priority_status_conversion(self):
