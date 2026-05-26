@@ -142,6 +142,31 @@ shader GLSLRayGenerationValidator {
 """
 
 
+GLSL_RAY_QUERY_COMPUTE_VALIDATOR_SHADER = """
+shader GLSLRayQueryComputeValidator {
+    accelerationStructureEXT topLevelAS @binding(0);
+
+    compute {
+        void main() {
+            RayQuery<RAY_FLAG_NONE> rayQuery;
+            rayQueryInitializeEXT(
+                rayQuery,
+                topLevelAS,
+                gl_RayFlagsNoneEXT,
+                255u,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                100.0
+            );
+            bool active = rayQuery.Proceed();
+            uint hitType = rayQuery.CommittedType();
+        }
+    }
+}
+"""
+
+
 MIXED_GLSL_GEOMETRY_INTERFACE_ARRAY_SHADER = """
 #version 450 core
 layout(lines_adjacency, invocations = 2) in;
@@ -999,6 +1024,29 @@ def test_generated_glsl_ray_generation_validates_with_glslangvalidator(tmp_path)
 
     _run_validator(
         [glslang, "-V", "--target-env", "vulkan1.2", "-S", "rgen", str(shader_path)]
+    )
+
+
+def test_generated_glsl_ray_query_compute_validates_with_glslangvalidator(tmp_path):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "ray_query_compute.comp"
+
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_RAY_QUERY_COMPUTE_VALIDATOR_SHADER),
+        "compute",
+    )
+    assert code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_query : require" in code
+    assert "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;" in code
+    assert "rayQueryEXT rayQuery;" in code
+    assert "rayQueryProceedEXT(rayQuery)" in code
+    assert "rayQueryGetIntersectionTypeEXT(rayQuery, true)" in code
+    assert ".Proceed(" not in code
+    assert ".CommittedType(" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [glslang, "-V", "--target-env", "vulkan1.2", "-S", "comp", str(shader_path)]
     )
 
 

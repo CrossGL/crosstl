@@ -1477,6 +1477,16 @@ def test_tessellation_domain_output_patch_matches_hull_output_shape():
         (
             """
             tessellation_evaluation {
+                vec4 main(OutputPatch<HSOut, 3> patch) @gl_Position {
+                    return patch[0].position;
+                }
+            }
+            """,
+            "tessellation_evaluation stage requires a domain attribute",
+        ),
+        (
+            """
+            tessellation_evaluation {
                 vec4 main(
                     OutputPatch<HSOut, 3> firstPatch,
                     OutputPatch<HSOut, 3> secondPatch
@@ -1533,6 +1543,39 @@ def test_tessellation_domain_invalid_output_patch_shape_raises(domain_source, me
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_tessellation_domain_attribute_requires_matching_hull_domain():
+    code = """
+    shader main {
+        struct HSOut {
+            vec4 position @ gl_Position;
+        };
+
+        tessellation_control {
+            HSOut main()
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3) {
+                HSOut output;
+                return output;
+            }
+        }
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<HSOut, 3> patch)
+                @domain(tri)
+                @gl_Position {
+                return patch[0].position;
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="tessellation_control stage requires a domain attribute",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_tessellation_control_output_patch_size_matches_outputcontrolpoints():
     code = """
     shader main {
@@ -1566,6 +1609,55 @@ def test_tessellation_control_output_patch_size_matches_outputcontrolpoints():
         ValueError,
         match="OutputPatch<HSOut, 4> must match outputcontrolpoints\\(3\\)",
     ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            tessellation_control {
+                vec4 main() @gl_Position {
+                    return vec4(1.0);
+                }
+            }
+            """,
+            "tessellation_control stage returns must put semantics",
+        ),
+        (
+            """
+            tessellation_control {
+                PatchConstants HSConst() @gl_Position {
+                    PatchConstants patch;
+                    return patch;
+                }
+
+                void main()
+                    @domain(tri)
+                    @partitioning(integer)
+                    @outputtopology(triangle_cw)
+                    @outputcontrolpoints(3)
+                    @patchconstantfunc(HSConst) {
+                }
+            }
+            """,
+            "patch constant function returns must put semantics",
+        ),
+    ],
+)
+def test_tessellation_control_return_semantics_are_rejected(stage_source, message):
+    code = f"""
+    shader main {{
+        struct PatchConstants {{
+            float outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+        }};
+
+        {stage_source}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -2468,6 +2560,73 @@ def test_semantics_map_to_slang_system_values():
     assert ": gl_Position" not in generated_code
     assert ": gl_FragColor" not in generated_code
     assert ": gl_GlobalInvocationID" not in generated_code
+
+
+def test_ray_stage_builtins_lower_to_slang_intrinsics():
+    code = """
+    shader RayBuiltins {
+        ray_generation {
+            void main() {
+                uvec3 launch = gl_LaunchIDEXT;
+                uint launchX = gl_LaunchIDEXT.x;
+                uvec3 launchSize = gl_LaunchSizeEXT;
+            }
+        }
+
+        ray_closest_hit {
+            void main() {
+                vec3 worldRay = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT;
+                vec3 objectRay = gl_ObjectRayOriginEXT + gl_ObjectRayDirectionEXT;
+                float range = gl_RayTmaxEXT - gl_RayTminEXT + gl_HitTEXT;
+                uint hitKind = gl_HitKindEXT;
+                uint customInstance = gl_InstanceCustomIndexEXT;
+                uint instance = gl_InstanceID;
+                uint primitive = gl_PrimitiveID;
+                uint geometry = gl_GeometryIndexEXT;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint3 launch = DispatchRaysIndex();" in generated_code
+    assert "uint launchX = DispatchRaysIndex().x;" in generated_code
+    assert "uint3 launchSize = DispatchRaysDimensions();" in generated_code
+    assert "float3 worldRay = WorldRayOrigin() + WorldRayDirection();" in generated_code
+    assert (
+        "float3 objectRay = ObjectRayOrigin() + ObjectRayDirection();" in generated_code
+    )
+    assert "float range = RayTCurrent() - RayTMin() + RayTCurrent();" in generated_code
+    assert "uint hitKind = HitKind();" in generated_code
+    assert "uint customInstance = InstanceIndex();" in generated_code
+    assert "uint instance = InstanceID();" in generated_code
+    assert "uint primitive = PrimitiveIndex();" in generated_code
+    assert "uint geometry = GeometryIndex();" in generated_code
+    assert "gl_LaunchIDEXT" not in generated_code
+    assert "gl_LaunchSizeEXT" not in generated_code
+    assert "gl_WorldRayOriginEXT" not in generated_code
+    assert "gl_InstanceCustomIndexEXT" not in generated_code
+    assert "gl_PrimitiveID" not in generated_code
+    assert "gl_GeometryIndexEXT" not in generated_code
+    assert ": SV_" not in generated_code
+
+
+def test_ray_stage_intrinsic_builtins_respect_local_shadowing():
+    code = """
+    shader RayBuiltinShadowing {
+        ray_miss {
+            void main() {
+                uint gl_HitKindEXT = 7;
+                uint hitKind = gl_HitKindEXT;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint gl_HitKindEXT = 7;" in generated_code
+    assert "uint hitKind = gl_HitKindEXT;" in generated_code
+    assert "HitKind()" not in generated_code
 
 
 @pytest.mark.parametrize(

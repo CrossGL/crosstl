@@ -570,6 +570,303 @@ mod math {
         }
     }
 
+    pub trait AnyValue {
+        fn any_value(self) -> bool;
+    }
+
+    pub fn any<T: AnyValue>(value: T) -> bool {
+        value.any_value()
+    }
+
+    impl AnyValue for bool {
+        fn any_value(self) -> bool {
+            self
+        }
+    }
+
+    impl AnyValue for Vec2<bool> {
+        fn any_value(self) -> bool {
+            self.x || self.y
+        }
+    }
+
+    impl AnyValue for Vec3<bool> {
+        fn any_value(self) -> bool {
+            self.x || self.y || self.z
+        }
+    }
+
+    impl AnyValue for Vec4<bool> {
+        fn any_value(self) -> bool {
+            self.x || self.y || self.z || self.w
+        }
+    }
+
+    pub trait AllValue {
+        fn all_value(self) -> bool;
+    }
+
+    pub fn all<T: AllValue>(value: T) -> bool {
+        value.all_value()
+    }
+
+    impl AllValue for bool {
+        fn all_value(self) -> bool {
+            self
+        }
+    }
+
+    impl AllValue for Vec2<bool> {
+        fn all_value(self) -> bool {
+            self.x && self.y
+        }
+    }
+
+    impl AllValue for Vec3<bool> {
+        fn all_value(self) -> bool {
+            self.x && self.y && self.z
+        }
+    }
+
+    impl AllValue for Vec4<bool> {
+        fn all_value(self) -> bool {
+            self.x && self.y && self.z && self.w
+        }
+    }
+
+    pub trait Relational<Rhs = Self> {
+        type Output;
+
+        fn less_than_value(self, rhs: Rhs) -> Self::Output;
+        fn less_than_equal_value(self, rhs: Rhs) -> Self::Output;
+        fn greater_than_value(self, rhs: Rhs) -> Self::Output;
+        fn greater_than_equal_value(self, rhs: Rhs) -> Self::Output;
+        fn equal_value(self, rhs: Rhs) -> Self::Output;
+        fn not_equal_value(self, rhs: Rhs) -> Self::Output;
+    }
+
+    pub fn less_than<Left, Right>(left: Left, right: Right) -> <Left as Relational<Right>>::Output
+    where
+        Left: Relational<Right>,
+    {
+        left.less_than_value(right)
+    }
+
+    pub fn less_than_equal<Left, Right>(
+        left: Left,
+        right: Right,
+    ) -> <Left as Relational<Right>>::Output
+    where
+        Left: Relational<Right>,
+    {
+        left.less_than_equal_value(right)
+    }
+
+    pub fn greater_than<Left, Right>(
+        left: Left,
+        right: Right,
+    ) -> <Left as Relational<Right>>::Output
+    where
+        Left: Relational<Right>,
+    {
+        left.greater_than_value(right)
+    }
+
+    pub fn greater_than_equal<Left, Right>(
+        left: Left,
+        right: Right,
+    ) -> <Left as Relational<Right>>::Output
+    where
+        Left: Relational<Right>,
+    {
+        left.greater_than_equal_value(right)
+    }
+
+    pub fn equal<Left, Right>(left: Left, right: Right) -> <Left as Relational<Right>>::Output
+    where
+        Left: Relational<Right>,
+    {
+        left.equal_value(right)
+    }
+
+    pub fn not_equal<Left, Right>(
+        left: Left,
+        right: Right,
+    ) -> <Left as Relational<Right>>::Output
+    where
+        Left: Relational<Right>,
+    {
+        left.not_equal_value(right)
+    }
+
+    impl Relational<f32> for f32 {
+        type Output = bool;
+
+        fn less_than_value(self, rhs: f32) -> Self::Output {
+            self < rhs
+        }
+
+        fn less_than_equal_value(self, rhs: f32) -> Self::Output {
+            self <= rhs
+        }
+
+        fn greater_than_value(self, rhs: f32) -> Self::Output {
+            self > rhs
+        }
+
+        fn greater_than_equal_value(self, rhs: f32) -> Self::Output {
+            self >= rhs
+        }
+
+        fn equal_value(self, rhs: f32) -> Self::Output {
+            self == rhs
+        }
+
+        fn not_equal_value(self, rhs: f32) -> Self::Output {
+            self != rhs
+        }
+    }
+
+    impl Relational<bool> for bool {
+        type Output = bool;
+
+        fn less_than_value(self, rhs: bool) -> Self::Output {
+            !self && rhs
+        }
+
+        fn less_than_equal_value(self, rhs: bool) -> Self::Output {
+            !self || rhs
+        }
+
+        fn greater_than_value(self, rhs: bool) -> Self::Output {
+            self && !rhs
+        }
+
+        fn greater_than_equal_value(self, rhs: bool) -> Self::Output {
+            self || !rhs
+        }
+
+        fn equal_value(self, rhs: bool) -> Self::Output {
+            self == rhs
+        }
+
+        fn not_equal_value(self, rhs: bool) -> Self::Output {
+            self != rhs
+        }
+    }
+
+    impl Relational<Vec3<f32>> for Vec3<f32> {
+        type Output = Vec3<bool>;
+
+        fn less_than_value(self, rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self.x < rhs.x, self.y < rhs.y, self.z < rhs.z)
+        }
+
+        fn less_than_equal_value(self, rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self.x <= rhs.x, self.y <= rhs.y, self.z <= rhs.z)
+        }
+
+        fn greater_than_value(self, rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self.x > rhs.x, self.y > rhs.y, self.z > rhs.z)
+        }
+
+        fn greater_than_equal_value(self, rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self.x >= rhs.x, self.y >= rhs.y, self.z >= rhs.z)
+        }
+
+        fn equal_value(self, rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self.x == rhs.x, self.y == rhs.y, self.z == rhs.z)
+        }
+
+        fn not_equal_value(self, rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self.x != rhs.x, self.y != rhs.y, self.z != rhs.z)
+        }
+    }
+
+    impl Relational<f32> for Vec3<f32> {
+        type Output = Vec3<bool>;
+
+        fn less_than_value(self, rhs: f32) -> Self::Output {
+            Vec3::new(self.x < rhs, self.y < rhs, self.z < rhs)
+        }
+
+        fn less_than_equal_value(self, rhs: f32) -> Self::Output {
+            Vec3::new(self.x <= rhs, self.y <= rhs, self.z <= rhs)
+        }
+
+        fn greater_than_value(self, rhs: f32) -> Self::Output {
+            Vec3::new(self.x > rhs, self.y > rhs, self.z > rhs)
+        }
+
+        fn greater_than_equal_value(self, rhs: f32) -> Self::Output {
+            Vec3::new(self.x >= rhs, self.y >= rhs, self.z >= rhs)
+        }
+
+        fn equal_value(self, rhs: f32) -> Self::Output {
+            Vec3::new(self.x == rhs, self.y == rhs, self.z == rhs)
+        }
+
+        fn not_equal_value(self, rhs: f32) -> Self::Output {
+            Vec3::new(self.x != rhs, self.y != rhs, self.z != rhs)
+        }
+    }
+
+    impl Relational<Vec3<f32>> for f32 {
+        type Output = Vec3<bool>;
+
+        fn less_than_value(self, rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self < rhs.x, self < rhs.y, self < rhs.z)
+        }
+
+        fn less_than_equal_value(self, rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self <= rhs.x, self <= rhs.y, self <= rhs.z)
+        }
+
+        fn greater_than_value(self, rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self > rhs.x, self > rhs.y, self > rhs.z)
+        }
+
+        fn greater_than_equal_value(self, rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self >= rhs.x, self >= rhs.y, self >= rhs.z)
+        }
+
+        fn equal_value(self, rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self == rhs.x, self == rhs.y, self == rhs.z)
+        }
+
+        fn not_equal_value(self, rhs: Vec3<f32>) -> Self::Output {
+            Vec3::new(self != rhs.x, self != rhs.y, self != rhs.z)
+        }
+    }
+
+    impl Relational<Vec3<bool>> for Vec3<bool> {
+        type Output = Vec3<bool>;
+
+        fn less_than_value(self, rhs: Vec3<bool>) -> Self::Output {
+            Vec3::new(!self.x && rhs.x, !self.y && rhs.y, !self.z && rhs.z)
+        }
+
+        fn less_than_equal_value(self, rhs: Vec3<bool>) -> Self::Output {
+            Vec3::new(!self.x || rhs.x, !self.y || rhs.y, !self.z || rhs.z)
+        }
+
+        fn greater_than_value(self, rhs: Vec3<bool>) -> Self::Output {
+            Vec3::new(self.x && !rhs.x, self.y && !rhs.y, self.z && !rhs.z)
+        }
+
+        fn greater_than_equal_value(self, rhs: Vec3<bool>) -> Self::Output {
+            Vec3::new(self.x || !rhs.x, self.y || !rhs.y, self.z || !rhs.z)
+        }
+
+        fn equal_value(self, rhs: Vec3<bool>) -> Self::Output {
+            Vec3::new(self.x == rhs.x, self.y == rhs.y, self.z == rhs.z)
+        }
+
+        fn not_equal_value(self, rhs: Vec3<bool>) -> Self::Output {
+            Vec3::new(self.x != rhs.x, self.y != rhs.y, self.z != rhs.z)
+        }
+    }
+
     pub trait Fma<Multiplier, Addend> {
         type Output;
 
@@ -5000,6 +5297,78 @@ def test_sign_and_classification_intrinsics_infer_bool_vectors_and_smoke_compile
     assert "let scalar_finite: bool = isfinite(scale);" in generated_code
     assert "let nan_mask: bool = isnan(value)" not in generated_code
     assert "let scalar_nan: f32 = isnan(scale)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_any_and_all_reduce_bool_vectors_to_scalar_bool_and_smoke_compile(tmp_path):
+    code = """
+    shader BoolReductionIntrinsicInference {
+        fragment {
+            vec4 main(vec3 value, bvec3 external_mask, bool ready) {
+                let invalid_mask = isnan(value) || isinf(value);
+                let finite_mask = isfinite(value);
+                let has_invalid = any(invalid_mask);
+                let all_finite = all(finite_mask);
+                let any_external = any(external_mask);
+                let all_external = all(external_mask);
+                let scalar_any = any(ready);
+                let scalar_all = all(ready);
+                let selected = has_invalid || !all_finite || any_external || !all_external
+                    || scalar_any || scalar_all;
+                return vec4(selected ? value : sign(value), selected ? 1.0 : 0.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let invalid_mask: Vec3<bool> = " in generated_code
+    assert "let finite_mask: Vec3<bool> = isfinite(value);" in generated_code
+    assert "let has_invalid: bool = any(invalid_mask);" in generated_code
+    assert "let all_finite: bool = all(finite_mask);" in generated_code
+    assert "let any_external: bool = any(external_mask);" in generated_code
+    assert "let all_external: bool = all(external_mask);" in generated_code
+    assert "let scalar_any: bool = any(ready);" in generated_code
+    assert "let scalar_all: bool = all(ready);" in generated_code
+    assert "let has_invalid: Vec3<bool> = any" not in generated_code
+    assert "let all_finite: Vec3<bool> = all" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_relational_intrinsics_infer_bool_vectors_and_smoke_compile(tmp_path):
+    code = """
+    shader RelationalIntrinsicInference {
+        fragment {
+            vec4 main(vec3 left, vec3 right, float threshold, bvec3 mask) {
+                let lt = lessThan(left, right);
+                let le = lessThanEqual(left, threshold);
+                let gt = greaterThan(threshold, right);
+                let ge = greaterThanEqual(left, right);
+                let eq = equal(mask, bvec3(true, false, true));
+                let ne = notEqual(left, right);
+                let scalar_eq = equal(threshold, 1.0);
+                let selected = any(lt || le || gt || ge || eq || ne) || scalar_eq;
+                return vec4(selected ? left : right, selected ? 1.0 : 0.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let lt: Vec3<bool> = less_than(left, right);" in generated_code
+    assert "let le: Vec3<bool> = less_than_equal(left, threshold);" in generated_code
+    assert "let gt: Vec3<bool> = greater_than(threshold, right);" in generated_code
+    assert "let ge: Vec3<bool> = greater_than_equal(left, right);" in generated_code
+    assert (
+        "let eq: Vec3<bool> = equal(mask, Vec3::<bool>::new(true, false, true));"
+        in generated_code
+    )
+    assert "let ne: Vec3<bool> = not_equal(left, right);" in generated_code
+    assert "let scalar_eq: bool = equal(threshold, 1.0);" in generated_code
+    assert "let lt: bool = less_than" not in generated_code
+    assert "let scalar_eq: Vec3<bool> = equal" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

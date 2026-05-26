@@ -498,41 +498,34 @@ class VulkanSPIRVCodeGen:
         return f"Offset %{offset_id.id}"
 
     def image_operands(self, *operands: str) -> str:
-        operand_order = [
-            "Bias",
-            "Lod",
-            "Grad",
-            "ConstOffset",
-            "Offset",
-            "ConstOffsets",
-            "Sample",
-            "MinLod",
-        ]
-        operand_value_counts = {
-            "Bias": 1,
+        operand_order = {
+            "Bias": 0,
             "Lod": 1,
             "Grad": 2,
-            "ConstOffset": 1,
-            "Offset": 1,
-            "ConstOffsets": 1,
-            "Sample": 1,
-            "MinLod": 1,
+            "ConstOffset": 3,
+            "Offset": 4,
+            "ConstOffsets": 5,
+            "Sample": 6,
+            "MinLod": 7,
         }
-        operand_values = {}
+        parsed_operands = []
         for operand in operands:
             if not operand:
                 continue
             parts = operand.split()
-            values = parts[1:]
-            value_index = 0
-            for mask in parts[0].split("|"):
-                value_count = operand_value_counts.get(mask, 1)
-                operand_values[mask] = values[value_index : value_index + value_count]
-                value_index += value_count
-        masks = [mask for mask in operand_order if mask in operand_values]
-        if not masks:
+            parsed_operands.append((parts[0], parts[1:]))
+        if not parsed_operands:
             return ""
-        values = [value for mask in masks for value in operand_values.get(mask, [])]
+
+        parsed_operands.sort(
+            key=lambda item: operand_order.get(item[0], len(operand_order))
+        )
+        masks = [mask for mask, _values in parsed_operands]
+        values = [
+            value
+            for _mask, operand_values in parsed_operands
+            for value in operand_values
+        ]
         return " ".join(["|".join(masks)] + values)
 
     def create_variable(
@@ -561,16 +554,29 @@ class VulkanSPIRVCodeGen:
 
     def store_to_variable(self, variable_id: SpirvId, value_id: SpirvId):
         """Store a value to a variable."""
+        metadata = self.structured_buffer_metadata_for_pointer(variable_id)
+        if metadata is not None and metadata.get("readonly"):
+            self.emit("; WARNING: storage buffer store requires a writable buffer")
+            return
+
         value_id = self.convert_value_for_store(variable_id, value_id)
         self.emit(f"OpStore %{variable_id.id} %{value_id.id}")
 
     def load_from_variable(self, variable_id: SpirvId, result_type: SpirvId) -> SpirvId:
         """Load a value from a variable."""
+        storage_metadata = self.structured_buffer_metadata_for_pointer(variable_id)
+        if storage_metadata is not None and storage_metadata.get("writeonly"):
+            self.emit("; WARNING: storage buffer load requires a readable buffer")
+            return self.default_value_for_type(result_type)
+
         id_value = self.get_id()
         self.emit(f"%{id_value} = OpLoad %{result_type.id} %{variable_id.id}")
 
         spirv_id = SpirvId(id_value, result_type.type)
         self.value_types[id_value] = result_type
+        resource_metadata = self.resource_metadata_for_pointer(variable_id)
+        if resource_metadata is not None:
+            self.resource_type_metadata[id_value] = resource_metadata
         return spirv_id
 
     def convert_value_for_store(
@@ -885,6 +891,15 @@ class VulkanSPIRVCodeGen:
         ptr_type = self.register_pointer_type(member_type, storage_class)
         access = self.access_chain(base_pointer, [index], ptr_type)
         self.variable_value_types[access.id] = member_type
+        metadata = self.structured_buffer_metadata_for_pointer(base_pointer)
+        if metadata is not None and metadata.get("_access_path") in {
+            "element",
+            "member",
+        }:
+            self.structured_buffer_metadata[access.id] = {
+                **metadata,
+                "_access_path": "member",
+            }
         return access
 
     def create_function(
@@ -1736,6 +1751,11 @@ class VulkanSPIRVCodeGen:
             return self.register_constant(0, self.register_primitive_type("uint"))
 
         component_type_name = metadata.get("component_type", "uint")
+        result_type = self.register_primitive_type(component_type_name)
+        if metadata.get("readonly") or metadata.get("writeonly"):
+            self.emit(f"; WARNING: {function_name} requires a read-write storage image")
+            return self.default_value_for_type(result_type)
+
         if component_type_name not in {"int", "uint"}:
             self.emit(f"; WARNING: {function_name} requires an integer storage image")
             return self.register_constant(0, self.register_primitive_type("uint"))
@@ -1772,7 +1792,6 @@ class VulkanSPIRVCodeGen:
             value_id = args[value_arg_index]
             comparator_id = None
 
-        result_type = self.register_primitive_type(component_type_name)
         value_id = self.convert_value_to_type(value_id, result_type)
         if comparator_id is not None:
             comparator_id = self.convert_value_to_type(comparator_id, result_type)
@@ -2080,6 +2099,11 @@ class VulkanSPIRVCodeGen:
                     0.0, self.register_primitive_type("float")
                 )
 
+            result_type = self.resource_access_result_type(metadata)
+            if metadata.get("writeonly"):
+                self.emit("; WARNING: imageLoad requires a readable storage image")
+                return self.default_value_for_type(result_type)
+
             image_operands = ""
             if metadata.get("multisampled"):
                 if len(args) < 3:
@@ -2089,7 +2113,6 @@ class VulkanSPIRVCodeGen:
                     )
                 image_operands = f" Sample %{args[2].id}"
 
-            result_type = self.resource_access_result_type(metadata)
             id_value = self.get_id()
             self.emit(
                 f"%{id_value} = OpImageRead %{result_type.id} "
@@ -2109,6 +2132,9 @@ class VulkanSPIRVCodeGen:
             metadata = self.resource_metadata_for_value(image_id)
             if not metadata or metadata.get("kind") != "storage_image":
                 self.emit("; WARNING: imageStore requires a storage image operand")
+                return None
+            if metadata.get("readonly"):
+                self.emit("; WARNING: imageStore requires a writable storage image")
                 return None
 
             image_operands = ""
@@ -3784,15 +3810,23 @@ class VulkanSPIRVCodeGen:
         return self.register_vector_type(component_type, component_count)
 
     def resource_metadata_for_value(self, value_id: SpirvId):
+        metadata = self.resource_type_metadata.get(value_id.id)
+        if metadata is not None:
+            return metadata
+
         result_type = self.value_types.get(value_id.id)
         if result_type is not None:
             metadata = self.resource_type_metadata.get(result_type.id)
             if metadata is not None:
                 return metadata
 
-        return self.resource_type_metadata.get(value_id.id)
+        return None
 
     def resource_metadata_for_pointer(self, pointer_id: SpirvId):
+        metadata = self.resource_type_metadata.get(pointer_id.id)
+        if metadata is not None:
+            return metadata
+
         pointee_type = self.variable_value_types.get(pointer_id.id)
         if pointee_type is not None:
             metadata = self.resource_type_metadata.get(pointee_type.id)
@@ -4086,6 +4120,9 @@ class VulkanSPIRVCodeGen:
         metadata = self.structured_buffer_type_info(type_name)
         if metadata is None:
             raise ValueError(f"Invalid SPIR-V structured buffer type {type_name}")
+        memory_flags = self.storage_buffer_memory_flags(
+            node, default_readonly=metadata.get("readonly", False)
+        )
 
         element_type = self.map_crossgl_type(metadata["element_type_name"])
         self.decorate_storage_buffer_nested_type(element_type)
@@ -4102,6 +4139,7 @@ class VulkanSPIRVCodeGen:
         )
         self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
         self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 Offset 0")
+        self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
         var_id = self.create_variable(block_type, "Uniform", node.name)
         descriptor_set, binding = self.resource_descriptor_slot(node)
@@ -4112,6 +4150,7 @@ class VulkanSPIRVCodeGen:
 
         buffer_metadata = {
             **metadata,
+            **memory_flags,
             "element_type": element_type,
             "runtime_array_type": runtime_array_type,
             "block_type": block_type,
@@ -4153,6 +4192,8 @@ class VulkanSPIRVCodeGen:
             block_members = [(variable_member_type, variable_member_name)]
 
         self.decorate_storage_buffer_block_type(block_type)
+        memory_flags = self.storage_buffer_memory_flags(node)
+        self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
         var_id = self.create_variable(value_type, "Uniform", node.name)
         descriptor_set, binding = self.resource_descriptor_slot(node)
@@ -4190,16 +4231,16 @@ class VulkanSPIRVCodeGen:
             return
 
         element_type, _ = array_info
+        memory_flags = self.storage_buffer_memory_flags(node)
         metadata = {
             "kind": "structured_buffer",
             "buffer_kind": (
                 "StructuredBuffer"
-                if self.storage_buffer_is_readonly(node)
+                if memory_flags.get("readonly")
                 else "RWStructuredBuffer"
             ),
             "element_type_name": element_type.type.base_type,
-            "readonly": self.storage_buffer_is_readonly(node),
-            "writeonly": self.storage_buffer_is_writeonly(node),
+            **memory_flags,
             "element_type": element_type,
             "runtime_array_type": member_type,
             "block_type": block_type,
@@ -4212,16 +4253,161 @@ class VulkanSPIRVCodeGen:
             self.structured_buffer_metadata[variable_member_type.id] = metadata
 
     def storage_buffer_is_readonly(self, node: VariableNode) -> bool:
-        qualifiers = {
-            str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
-        }
-        return "readonly" in qualifiers
+        return self.storage_buffer_memory_flags(node).get("readonly", False)
 
     def storage_buffer_is_writeonly(self, node: VariableNode) -> bool:
-        qualifiers = {
-            str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
+        return self.storage_buffer_memory_flags(node).get("writeonly", False)
+
+    def resource_memory_qualifier_names(self, node) -> set:
+        supported = {
+            "coherent",
+            "globallycoherent",
+            "volatile",
+            "restrict",
+            "readonly",
+            "read",
+            "writeonly",
+            "write",
+            "readwrite",
+            "read_write",
+            "access::read",
+            "access::write",
+            "access::read_write",
         }
-        return "writeonly" in qualifiers
+        aliases = {
+            "read": "readonly",
+            "write": "writeonly",
+            "read_write": "readwrite",
+            "access::read": "readonly",
+            "access::write": "writeonly",
+            "access::read_write": "readwrite",
+        }
+        qualifiers = set()
+
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            qualifier = str(qualifier).lower()
+            if qualifier in supported:
+                qualifiers.add(aliases.get(qualifier, qualifier))
+
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+
+            attr_name = str(attr_name).lower()
+            if attr_name in supported:
+                qualifiers.add(aliases.get(attr_name, attr_name))
+
+            if attr_name != "access":
+                continue
+
+            arguments = getattr(attr, "arguments", None)
+            if arguments is None:
+                arguments = getattr(attr, "args", [])
+            if not arguments:
+                continue
+
+            access_name = self.attribute_value_to_string(arguments[0])
+            if access_name is None:
+                continue
+            access_name = str(access_name).lower()
+            if access_name in supported:
+                qualifiers.add(aliases.get(access_name, access_name))
+
+        if "globallycoherent" in qualifiers:
+            qualifiers.add("coherent")
+
+        return qualifiers
+
+    def resource_memory_qualifier_flags(self, node) -> dict:
+        qualifiers = self.resource_memory_qualifier_names(node)
+        readwrite = "readwrite" in qualifiers
+        return {
+            "readonly": "readonly" in qualifiers and not readwrite,
+            "writeonly": "writeonly" in qualifiers and not readwrite,
+            "coherent": "coherent" in qualifiers,
+            "volatile": "volatile" in qualifiers,
+            "restrict": "restrict" in qualifiers,
+            "readwrite": readwrite,
+        }
+
+    def storage_buffer_memory_flags(
+        self, node: VariableNode, default_readonly: bool = False
+    ) -> dict:
+        flags = self.resource_memory_qualifier_flags(node)
+        if (
+            default_readonly
+            and not flags.get("writeonly")
+            and not flags.get("readwrite")
+        ):
+            flags["readonly"] = True
+        return flags
+
+    def resource_memory_decoration_names(self, flags: dict) -> List[str]:
+        decorations = []
+        if flags.get("readonly"):
+            decorations.append("NonWritable")
+        if flags.get("writeonly"):
+            decorations.append("NonReadable")
+        if flags.get("coherent"):
+            decorations.append("Coherent")
+        if flags.get("volatile"):
+            decorations.append("Volatile")
+        if flags.get("restrict"):
+            decorations.append("Restrict")
+        return decorations
+
+    def decorate_storage_buffer_member_memory_qualifiers(
+        self, block_type: SpirvId, flags: dict
+    ):
+        decoration_names = self.resource_memory_decoration_names(flags)
+        if not decoration_names:
+            return
+
+        members = self.current_struct_members.get(block_type.type.base_type, [])
+        for member_index in range(len(members)):
+            for decoration_name in decoration_names:
+                self.decorations.append(
+                    f"OpMemberDecorate %{block_type.id} "
+                    f"{member_index} {decoration_name}"
+                )
+
+    def decorate_resource_variable_memory_qualifiers(
+        self, var_id: SpirvId, metadata: dict
+    ):
+        for decoration_name in self.resource_memory_decoration_names(metadata):
+            self.decorations.append(f"OpDecorate %{var_id.id} {decoration_name}")
+
+    def metadata_with_resource_memory_qualifiers(self, metadata: dict, node) -> dict:
+        return {
+            **metadata,
+            **self.resource_memory_qualifier_flags(node),
+        }
+
+    def resource_metadata_for_declared_type(self, type_id: SpirvId):
+        metadata = self.resource_type_metadata.get(type_id.id)
+        if metadata is not None:
+            return metadata
+
+        element_type = self.array_element_type_from_type(type_id)
+        while element_type is not None:
+            metadata = self.resource_type_metadata.get(element_type.id)
+            if metadata is not None:
+                return metadata
+            element_type = self.array_element_type_from_type(element_type)
+
+        return None
+
+    def register_declared_resource_metadata(
+        self, node: VariableNode, var_id: SpirvId, type_id: SpirvId
+    ):
+        metadata = self.resource_metadata_for_declared_type(type_id)
+        if metadata is None or metadata.get("kind") != "storage_image":
+            return
+
+        metadata = self.metadata_with_resource_memory_qualifiers(metadata, node)
+        self.resource_type_metadata[var_id.id] = metadata
+        self.decorate_resource_variable_memory_qualifiers(var_id, metadata)
 
     def decorate_cbuffer_type(
         self, cbuffer_type: SpirvId, members: List[Tuple[SpirvId, str]]
@@ -4503,6 +4689,9 @@ class VulkanSPIRVCodeGen:
             self.local_variables[param_name] = param_id
             if i in resource_array_param_indices:
                 self.variable_value_types[param_id.id] = param_value_types[i]
+            self.register_declared_resource_metadata(
+                param, param_id, param_value_types[i]
+            )
 
         self.begin_block()
 
@@ -4644,6 +4833,7 @@ class VulkanSPIRVCodeGen:
                     f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
                 )
                 self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+                self.register_declared_resource_metadata(node, var_id, var_type)
 
         self.global_variables[node.name] = var_id
         if self.has_attribute(node, "precise"):
@@ -5414,6 +5604,8 @@ class VulkanSPIRVCodeGen:
         )
         access = self.access_chain(buffer_pointer, [member_index, index_id], ptr_type)
         self.variable_value_types[access.id] = element_type
+        access_metadata = {**metadata, "_access_path": "element"}
+        self.structured_buffer_metadata[access.id] = access_metadata
         return access
 
     def variable_pointer_from_expression(self, expr) -> Optional[SpirvId]:

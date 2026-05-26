@@ -285,6 +285,14 @@ class RustCodeGen:
             "isnan": "isnan",
             "isinf": "isinf",
             "isfinite": "isfinite",
+            "any": "any",
+            "all": "all",
+            "lessThan": "less_than",
+            "lessThanEqual": "less_than_equal",
+            "greaterThan": "greater_than",
+            "greaterThanEqual": "greater_than_equal",
+            "equal": "equal",
+            "notEqual": "not_equal",
             "min": "min",
             "max": "max",
             "clamp": "clamp",
@@ -5513,6 +5521,22 @@ class RustCodeGen:
         if mapped_name in {"isnan", "isinf", "isfinite"} and arg_types:
             return self.boolean_value_type(arg_types[0])
 
+        if mapped_name in {"any", "all"} and arg_types:
+            return "bool"
+
+        relational_operator = {
+            "less_than": "<",
+            "less_than_equal": "<=",
+            "greater_than": ">",
+            "greater_than_equal": ">=",
+            "equal": "==",
+            "not_equal": "!=",
+        }.get(mapped_name)
+        if relational_operator is not None and len(arg_types) >= 2:
+            return self.relational_function_result_type(
+                arg_types[0], arg_types[1], relational_operator
+            )
+
         if (
             mapped_name in {"min", "max", "pow", "modulo", "atan2"}
             and len(arg_types) >= 2
@@ -5676,6 +5700,26 @@ class RustCodeGen:
         if self.normalize_scalar_type(type_name) is not None:
             return "bool"
         return None
+
+    def relational_function_result_type(self, left_type, right_type, operator):
+        vector_plan = self.vector_comparison_plan(left_type, right_type, operator)
+        if vector_plan is not None:
+            return vector_plan["result_type"]
+
+        left_scalar = self.normalize_scalar_type(left_type)
+        right_scalar = self.normalize_scalar_type(right_type)
+        if left_scalar is None or right_scalar is None:
+            return None
+
+        component_type = self.promoted_scalar_type(left_scalar, right_scalar)
+        if component_type is None:
+            return None
+        if self.normalize_scalar_type(component_type) == "bool" and operator not in {
+            "==",
+            "!=",
+        }:
+            return None
+        return "bool"
 
     def promoted_argument_type(self, arg_types):
         result_type = None

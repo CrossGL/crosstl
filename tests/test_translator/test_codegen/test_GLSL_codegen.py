@@ -3960,6 +3960,87 @@ def test_glsl_ray_stage_entries_use_distinct_names():
     assert "rayPayloadEXT RayPayload rayPayload;" not in ray_miss_code
 
 
+def test_glsl_ray_query_methods_lower_to_ext_functions():
+    shader = """
+    shader RayQueryCompute {
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                rayQueryInitializeEXT(
+                    rq,
+                    topLevelAS,
+                    gl_RayFlagsNoneEXT,
+                    255u,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0
+                );
+                bool active = rq.Proceed();
+                uint candidateType = rq.CandidateType();
+                uint committedType = rq.CommittedType();
+                uint primitiveIndex = rq.CandidatePrimitiveIndex();
+                uint instanceId = rq.CommittedInstanceID();
+                uint geometryIndex = rq.CandidateGeometryIndex();
+                vec3 origin = rq.CommittedObjectRayOrigin();
+                vec3 direction = rq.CandidateObjectRayDirection();
+                float hitT = rq.CommittedRayT();
+                rq.Abort();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert generated_code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_query : require" in generated_code
+    assert "#extension GL_EXT_ray_tracing : require" not in generated_code
+    assert "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;" in (
+        generated_code
+    )
+    assert "rayQueryEXT rq;" in generated_code
+    assert "rayQueryInitializeEXT(" in generated_code
+    assert "bool active = rayQueryProceedEXT(rq);" in generated_code
+    assert (
+        "uint candidateType = rayQueryGetIntersectionTypeEXT(rq, false);"
+        in generated_code
+    )
+    assert (
+        "uint committedType = rayQueryGetIntersectionTypeEXT(rq, true);"
+        in generated_code
+    )
+    assert (
+        "uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);"
+        in generated_code
+    )
+    assert (
+        "uint instanceId = rayQueryGetIntersectionInstanceIdEXT(rq, true);"
+        in generated_code
+    )
+    assert (
+        "uint geometryIndex = rayQueryGetIntersectionGeometryIndexEXT(rq, false);"
+        in generated_code
+    )
+    assert (
+        "vec3 origin = rayQueryGetIntersectionObjectRayOriginEXT(rq, true);"
+        in generated_code
+    )
+    assert (
+        "vec3 direction = rayQueryGetIntersectionObjectRayDirectionEXT(rq, false);"
+        in generated_code
+    )
+    assert "float hitT = rayQueryGetIntersectionTEXT(rq, true);" in generated_code
+    assert "rayQueryTerminateEXT(rq);" in generated_code
+    assert ".Proceed(" not in generated_code
+    assert ".CandidateType(" not in generated_code
+    assert ".Abort(" not in generated_code
+
+
 def test_glsl_shader_record_buffer_rejects_binding_layout():
     shader = """
     shader InvalidShaderRecordBinding {

@@ -2909,10 +2909,163 @@ def test_metal_trace_ray_full_signature_lowers_to_intersector_query():
     )
     assert (
         "intersection_result<triangle_data, instancing> __crossgl_intersection_2 = "
-        "__crossgl_intersector_1.intersect(__crossgl_ray_0, topLevelAS);"
+        "__crossgl_intersector_1.intersect(__crossgl_ray_0, topLevelAS, 255);"
     ) in generated
     assert "(void)__crossgl_intersection_2;" in generated
     assert "TraceRay" not in generated
+
+
+def test_metal_trace_ray_uses_single_intersection_function_table():
+    code = """
+    shader rt {
+        accelerationStructureEXT topLevelAS @binding(0);
+        intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+        ray_generation {
+            void main() {
+                TraceRay(
+                    topLevelAS,
+                    0,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    0
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "intersector<instancing> __crossgl_intersector_1;" in generated
+    assert (
+        "intersection_result<instancing> __crossgl_intersection_2 = "
+        "__crossgl_intersector_1.intersect("
+        "__crossgl_ray_0, topLevelAS, 255, intersectionFunctions);"
+    ) in generated
+
+
+def test_metal_trace_ray_threads_intersection_function_table_through_helpers():
+    code = """
+    shader rt {
+        accelerationStructureEXT topLevelAS @binding(0);
+        intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+        void shoot(vec3 origin, vec3 direction) {
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                origin,
+                0.001,
+                direction,
+                1000.0,
+                0
+            );
+        }
+
+        ray_generation {
+            void main() {
+                shoot(vec3(0.0), vec3(0.0, 0.0, 1.0));
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void shoot(float3 origin, float3 direction, "
+        "instance_acceleration_structure topLevelAS, "
+        "intersection_function_table<instancing> intersectionFunctions)"
+    ) in generated
+    assert (
+        "__crossgl_intersector_1.intersect("
+        "__crossgl_ray_0, topLevelAS, 255, intersectionFunctions);"
+    ) in generated
+    assert (
+        "shoot(float3(0.0), float3(0.0, 0.0, 1.0), "
+        "topLevelAS, intersectionFunctions);"
+    ) in generated
+
+
+def test_metal_trace_ray_skips_incompatible_intersection_function_table():
+    code = """
+    shader rt {
+        accelerationStructureEXT topLevelAS @binding(0);
+        intersection_function_table<triangle_data> primitiveIntersectionFunctions
+            @binding(1);
+
+        ray_generation {
+            void main() {
+                TraceRay(
+                    topLevelAS,
+                    0,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    0
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "__crossgl_intersector_1.intersect(__crossgl_ray_0, topLevelAS, 255);"
+        in generated
+    )
+    assert "primitiveIntersectionFunctions)" not in generated
+
+
+def test_metal_trace_ray_uses_primitive_acceleration_structure_shape():
+    code = """
+    shader rt {
+        primitive_acceleration_structure primitiveAS @binding(0);
+        intersection_function_table<triangle_data> intersectionFunctions @binding(1);
+
+        ray_generation {
+            void main() {
+                TraceRay(
+                    primitiveAS,
+                    0,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    0
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "primitive_acceleration_structure primitiveAS [[buffer(0)]]" in generated
+    assert "intersector<triangle_data> __crossgl_intersector_1;" in generated
+    assert (
+        "intersection_result<triangle_data> __crossgl_intersection_2 = "
+        "__crossgl_intersector_1.intersect("
+        "__crossgl_ray_0, primitiveAS, intersectionFunctions);"
+    ) in generated
+    assert "primitiveAS, 0xff" not in generated
 
 
 def test_metal_acceleration_structure_globals_thread_through_helpers():

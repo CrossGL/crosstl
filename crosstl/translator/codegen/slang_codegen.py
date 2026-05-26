@@ -486,6 +486,16 @@ class SlangCodeGen:
         domain_domain = self.normalized_slang_stage_attribute_argument(
             domain_entry, "domain"
         )
+        if hull_domain and not domain_domain:
+            raise ValueError(
+                "Slang tessellation_evaluation stage requires a domain "
+                "attribute matching tessellation_control"
+            )
+        if domain_domain and not hull_domain:
+            raise ValueError(
+                "Slang tessellation_control stage requires a domain "
+                "attribute matching tessellation_evaluation"
+            )
         if not hull_domain or not domain_domain:
             return
 
@@ -1349,6 +1359,7 @@ class SlangCodeGen:
         body = getattr(node, "body", [])
         body_statements = self.get_statements(body)
         param_list = getattr(node, "parameters", getattr(node, "params", []))
+        self.validate_slang_stage_return_semantic(shader_type, semantic, stage_role)
         hull_output_rewrite = None
         if stage_role != "patch_constant":
             hull_output_rewrite = self.slang_stage_hull_output_rewrite(
@@ -1433,6 +1444,11 @@ class SlangCodeGen:
             stage_role=stage_role,
         )
         identifier_aliases.update(
+            self.slang_stage_intrinsic_builtin_aliases(
+                body_statements, shader_type, effective_param_list
+            )
+        )
+        identifier_aliases.update(
             self.slang_stage_patch_input_aliases(
                 body_statements, shader_type, effective_param_list
             )
@@ -1502,6 +1518,25 @@ class SlangCodeGen:
     def generate_compute_numthreads(self, execution_config=None):
         x, y, z = compute_local_size(execution_config)
         return f"[numthreads({x}, {y}, {z})]\n"
+
+    def validate_slang_stage_return_semantic(self, shader_type, semantic, stage_role):
+        if semantic is None:
+            return
+
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        if shader_stage != "hull":
+            return
+
+        if stage_role == "patch_constant":
+            raise ValueError(
+                "Slang patch constant function returns must put semantics on "
+                "the returned struct members"
+            )
+
+        raise ValueError(
+            "Slang tessellation_control stage returns must put semantics on "
+            "the output control-point struct members"
+        )
 
     def slang_stage_hull_output_rewrite(
         self, body_statements, shader_type, ret_type_name, semantic, param_list
@@ -1831,6 +1866,34 @@ class SlangCodeGen:
                 aliases[node.name] = existing_param_name
         return aliases
 
+    def slang_stage_intrinsic_builtin_aliases(
+        self, body_statements, shader_type, param_list
+    ):
+        candidates = self.slang_intrinsic_builtin_candidates(shader_type)
+        if not candidates:
+            return {}
+
+        declared_names = {
+            getattr(param, "name", None)
+            for param in param_list or []
+            if getattr(param, "name", None)
+        }
+        for node in self.walk_ast(body_statements):
+            if isinstance(node, VariableNode):
+                declared_names.add(node.name)
+
+        aliases = {}
+        for node in self.walk_ast(body_statements):
+            if not isinstance(node, IdentifierNode):
+                continue
+            if node.name not in candidates or node.name in declared_names:
+                continue
+
+            return_type, intrinsic = candidates[node.name]
+            aliases[node.name] = intrinsic
+            self.register_variable_type(node.name, return_type)
+        return aliases
+
     def slang_stage_patch_input_aliases(self, body_statements, shader_type, param_list):
         shader_stage = self.slang_shader_stage_name(shader_type)
         patch_type = {
@@ -1881,6 +1944,35 @@ class SlangCodeGen:
         if hasattr(param, "vtype"):
             return str(param.vtype)
         return ""
+
+    def slang_intrinsic_builtin_candidates(self, shader_type):
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        if shader_stage not in {
+            "raygeneration",
+            "intersection",
+            "closesthit",
+            "anyhit",
+            "miss",
+            "callable",
+        }:
+            return {}
+
+        return {
+            "gl_HitKindEXT": ("uint", "HitKind()"),
+            "gl_HitTEXT": ("float", "RayTCurrent()"),
+            "gl_InstanceCustomIndexEXT": ("uint", "InstanceIndex()"),
+            "gl_InstanceID": ("uint", "InstanceID()"),
+            "gl_LaunchIDEXT": ("uvec3", "DispatchRaysIndex()"),
+            "gl_LaunchSizeEXT": ("uvec3", "DispatchRaysDimensions()"),
+            "gl_GeometryIndexEXT": ("uint", "GeometryIndex()"),
+            "gl_ObjectRayDirectionEXT": ("vec3", "ObjectRayDirection()"),
+            "gl_ObjectRayOriginEXT": ("vec3", "ObjectRayOrigin()"),
+            "gl_PrimitiveID": ("uint", "PrimitiveIndex()"),
+            "gl_RayTmaxEXT": ("float", "RayTCurrent()"),
+            "gl_RayTminEXT": ("float", "RayTMin()"),
+            "gl_WorldRayDirectionEXT": ("vec3", "WorldRayDirection()"),
+            "gl_WorldRayOriginEXT": ("vec3", "WorldRayOrigin()"),
+        }
 
     def slang_implicit_stage_parameter_candidates(self, shader_type, stage_role=None):
         shader_stage = self.slang_shader_stage_name(shader_type)

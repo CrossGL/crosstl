@@ -7012,6 +7012,94 @@ def test_directx_ray_query_validates_commit_arguments():
         )
 
 
+def test_directx_ray_acceleration_structure_globals_use_srv_registers_and_spaces():
+    code = """
+    shader RayAccelerationStructureBindings {
+        const int ACCEL_COUNT = 2;
+        Texture2D color @binding(0) @space(1);
+        RaytracingAccelerationStructure scene @binding(2) @space(1);
+        RaytracingAccelerationStructure gapFill @space(1);
+        RaytracingAccelerationStructure instances[ACCEL_COUNT] @binding(5) @space(1);
+        Texture2D after @space(1);
+
+        compute {
+            void main() { }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "Texture2D color : register(t0, space1);" in generated
+    assert "RaytracingAccelerationStructure scene : register(t2, space1);" in generated
+    assert (
+        "RaytracingAccelerationStructure gapFill : register(t3, space1);" in generated
+    )
+    assert (
+        "RaytracingAccelerationStructure instances[ACCEL_COUNT] : "
+        "register(t5, space1);"
+    ) in generated
+    assert "Texture2D after : register(t7, space1);" in generated
+
+
+def test_directx_ray_acceleration_structure_parameters_keep_array_sizes():
+    code = """
+    shader RayAccelerationStructureParameters {
+        const int ACCEL_COUNT = 2;
+
+        void traceOne(RaytracingAccelerationStructure accels[ACCEL_COUNT], RayDesc ray) {
+            RayQuery<RAY_FLAG_NONE> rq;
+            rq.TraceRayInline(accels[0], 0, 0xFF, ray);
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert (
+        "void traceOne(RaytracingAccelerationStructure accels[ACCEL_COUNT], "
+        "RayDesc ray)"
+    ) in generated
+    assert "rq.TraceRayInline(accels[0], 0, 255, ray);" in generated
+
+
+def test_directx_ray_acceleration_structure_register_conflicts_are_rejected():
+    code = """
+    shader RayAccelerationStructureRegisterConflict {
+        RaytracingAccelerationStructure accel @register(t0, space2);
+        Texture2D tex @register(t0, space2);
+
+        compute {
+            void main() { }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting DirectX resource binding.*t0, space2.*accel",
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+
+def test_directx_ray_acceleration_structure_rejects_non_srv_register_prefix():
+    code = """
+    shader RayAccelerationStructureWrongRegisterClass {
+        RaytracingAccelerationStructure accel @register(u0);
+
+        compute {
+            void main() { }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="RaytracingAccelerationStructure resource 'accel'.*t-register.*u",
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+
 def test_else_if_statement():
     code = """
     shader main {

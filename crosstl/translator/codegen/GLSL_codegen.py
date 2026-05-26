@@ -289,6 +289,48 @@ class GLSLCodeGen:
         "miss",
         "callable",
     }
+    RAY_QUERY_METHOD_MAP = {
+        "Proceed": ("rayQueryProceedEXT", None),
+        "Abort": ("rayQueryTerminateEXT", None),
+        "CandidateType": ("rayQueryGetIntersectionTypeEXT", "false"),
+        "CommittedType": ("rayQueryGetIntersectionTypeEXT", "true"),
+        "CandidatePrimitiveIndex": (
+            "rayQueryGetIntersectionPrimitiveIndexEXT",
+            "false",
+        ),
+        "CommittedPrimitiveIndex": (
+            "rayQueryGetIntersectionPrimitiveIndexEXT",
+            "true",
+        ),
+        "CandidateInstanceID": ("rayQueryGetIntersectionInstanceIdEXT", "false"),
+        "CommittedInstanceID": ("rayQueryGetIntersectionInstanceIdEXT", "true"),
+        "CandidateGeometryIndex": (
+            "rayQueryGetIntersectionGeometryIndexEXT",
+            "false",
+        ),
+        "CommittedGeometryIndex": (
+            "rayQueryGetIntersectionGeometryIndexEXT",
+            "true",
+        ),
+        "CandidateObjectRayOrigin": (
+            "rayQueryGetIntersectionObjectRayOriginEXT",
+            "false",
+        ),
+        "CandidateObjectRayDirection": (
+            "rayQueryGetIntersectionObjectRayDirectionEXT",
+            "false",
+        ),
+        "CommittedObjectRayOrigin": (
+            "rayQueryGetIntersectionObjectRayOriginEXT",
+            "true",
+        ),
+        "CommittedObjectRayDirection": (
+            "rayQueryGetIntersectionObjectRayDirectionEXT",
+            "true",
+        ),
+        "CandidateRayT": ("rayQueryGetIntersectionTEXT", "false"),
+        "CommittedRayT": ("rayQueryGetIntersectionTEXT", "true"),
+    }
 
     def __init__(self):
         """Initialize GLSL type maps and per-generation stage/resource state."""
@@ -759,7 +801,9 @@ class GLSLCodeGen:
         return stage_names
 
     def default_glsl_version_line(self, ast, target_stage=None):
-        if self.glsl_stage_names(ast, target_stage) & self.RAY_STAGE_NAMES:
+        if self.glsl_stage_names(
+            ast, target_stage
+        ) & self.RAY_STAGE_NAMES or self.uses_ray_query(ast, target_stage):
             return "#version 460 core"
         return "#version 450 core"
 
@@ -771,7 +815,19 @@ class GLSLCodeGen:
             lines.append("#extension GL_EXT_mesh_shader : require")
         if stage_names & self.RAY_STAGE_NAMES:
             lines.append("#extension GL_EXT_ray_tracing : require")
+        if self.uses_ray_query(ast, target_stage):
+            lines.append("#extension GL_EXT_ray_query : require")
         return lines
+
+    def uses_ray_query(self, ast, target_stage=None):
+        for node in self.walk_ast(ast):
+            if isinstance(node, RayQueryOpNode):
+                return True
+            if not isinstance(node, VariableNode):
+                continue
+            if self.is_ray_query_type(getattr(node, "var_type", None)):
+                return True
+        return False
 
     def generate_program(self, ast, target_stage=None):
         """Render an AST to GLSL, optionally filtering stage entry points."""
@@ -2164,6 +2220,18 @@ class GLSLCodeGen:
         if mapped in {"ignoreIntersectionEXT", "terminateRayEXT"} and not args:
             return mapped
         return f"{mapped}({', '.join(args)})"
+
+    def map_ray_query_intrinsic(self, operation, query, args):
+        mapping = self.RAY_QUERY_METHOD_MAP.get(operation)
+        if mapping is None:
+            return f"{query}.{operation}({', '.join(args)})"
+
+        function_name, committed = mapping
+        call_args = [query]
+        if committed is not None:
+            call_args.append(committed)
+        call_args.extend(args)
+        return f"{function_name}({', '.join(call_args)})"
 
     def glsl_tessellation_domain(self, domain):
         domain_name = str(domain).strip().strip('"').lower()
@@ -4335,8 +4403,8 @@ class GLSLCodeGen:
             return f"{operation}({args})"
         elif isinstance(expr, RayQueryOpNode):
             query = self.generate_expression(expr.query_expr)
-            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
-            return f"{query}.{expr.operation}({args})"
+            args = [self.generate_expression(arg) for arg in expr.arguments]
+            return self.map_ray_query_intrinsic(expr.operation, query, args)
         elif hasattr(expr, "__class__") and "ArrayAccessNode" in str(type(expr)):
             # Handle array access properly
             if hasattr(expr, "array") and hasattr(expr, "index"):
@@ -7814,6 +7882,9 @@ class GLSLCodeGen:
         else:
             vtype_str = str(vtype)
 
+        if self.is_ray_query_type_name(vtype_str):
+            return "rayQueryEXT"
+
         if "[" in vtype_str and "]" in vtype_str:
             base_type, array_suffix = split_array_type_suffix(vtype_str)
             base_mapped = self.map_type(base_type)
@@ -7834,6 +7905,19 @@ class GLSLCodeGen:
             return vtype_str
 
         return self.type_mapping.get(vtype_str, vtype_str)
+
+    def is_ray_query_type(self, vtype):
+        if vtype is None:
+            return False
+        return self.is_ray_query_type_name(self.type_name_string(vtype))
+
+    def is_ray_query_type_name(self, type_name):
+        type_name = str(type_name)
+        return (
+            type_name == "rayQueryEXT"
+            or type_name == "RayQuery"
+            or type_name.startswith("RayQuery<")
+        )
 
     def map_resource_parameter_type_with_hint(
         self, vtype, node=None, function_name=None

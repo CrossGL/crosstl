@@ -3910,7 +3910,7 @@ class MetalCodeGen:
     def generate_ray_tracing_op_expression(self, expr):
         rendered_args = [self.generate_expression(arg) for arg in expr.arguments]
         if expr.operation == "TraceRay":
-            trace_ray = self.generate_metal_trace_ray(rendered_args)
+            trace_ray = self.generate_metal_trace_ray(expr.arguments, rendered_args)
             if trace_ray is not None:
                 return trace_ray
             return self.unsupported_metal_ray_tracing_intrinsic(
@@ -3944,18 +3944,37 @@ class MetalCodeGen:
 
         return f"{expr.operation}({', '.join(rendered_args)})"
 
-    def generate_metal_trace_ray(self, args):
-        if len(args) != 11:
+    def generate_metal_trace_ray(self, raw_args, rendered_args):
+        if len(rendered_args) != 11:
             return None
 
-        acceleration_structure = args[0]
-        origin = args[6]
-        min_distance = args[7]
-        direction = args[8]
-        max_distance = args[9]
+        acceleration_structure = rendered_args[0]
+        instance_mask = rendered_args[2]
+        origin = rendered_args[6]
+        min_distance = rendered_args[7]
+        direction = rendered_args[8]
+        max_distance = rendered_args[9]
+        acceleration_structure_type = self.metal_acceleration_structure_argument_type(
+            raw_args[0]
+        )
+        intersection_function_table = self.default_intersection_function_table(
+            acceleration_structure_type
+        )
+        intersector_tags = (
+            intersection_function_table["tags"]
+            if intersection_function_table is not None
+            else self.default_metal_intersector_tags(acceleration_structure_type)
+        )
         ray_name = self.next_metal_temp_variable("ray")
         intersector_name = self.next_metal_temp_variable("intersector")
         intersection_name = self.next_metal_temp_variable("intersection")
+        intersect_args = [ray_name, acceleration_structure]
+        if acceleration_structure_type != "primitive_acceleration_structure":
+            intersect_args.append(instance_mask)
+        if intersection_function_table is not None:
+            intersect_args.append(intersection_function_table["name"])
+        intersector_type = f"intersector<{intersector_tags}>"
+        intersection_type = f"intersection_result<{intersector_tags}>"
 
         return "\n".join(
             [
@@ -3964,15 +3983,75 @@ class MetalCodeGen:
                 f"{ray_name}.direction = {direction}",
                 f"{ray_name}.min_distance = {min_distance}",
                 f"{ray_name}.max_distance = {max_distance}",
-                f"intersector<triangle_data, instancing> {intersector_name}",
+                f"{intersector_type} {intersector_name}",
                 (
-                    "intersection_result<triangle_data, instancing> "
-                    f"{intersection_name} = {intersector_name}.intersect("
-                    f"{ray_name}, {acceleration_structure})"
+                    f"{intersection_type} {intersection_name} = "
+                    f"{intersector_name}.intersect({', '.join(intersect_args)})"
                 ),
                 f"(void){intersection_name}",
             ]
         )
+
+    def metal_acceleration_structure_argument_type(self, expr):
+        name = self.expression_name(expr)
+        local_type = self.local_variable_types.get(name)
+        if local_type and self.is_acceleration_structure_type(local_type):
+            return self.map_resource_type_with_format(local_type)
+        for (
+            acceleration_structure_variable,
+            _,
+            mapped_type,
+            _,
+        ) in self.acceleration_structure_variables:
+            if getattr(acceleration_structure_variable, "name", None) == name:
+                return mapped_type
+        return "instance_acceleration_structure"
+
+    def default_metal_intersector_tags(self, acceleration_structure_type):
+        if acceleration_structure_type == "primitive_acceleration_structure":
+            return "triangle_data"
+        return "triangle_data, instancing"
+
+    def default_intersection_function_table(self, acceleration_structure_type):
+        candidates = []
+        for (
+            intersection_function_table_variable,
+            _,
+            intersection_function_table_type,
+            _,
+        ) in self.intersection_function_table_variables:
+            name = getattr(intersection_function_table_variable, "name", None)
+            tags = self.intersection_function_table_tags(
+                intersection_function_table_type
+            )
+            if (
+                name
+                and tags
+                and self.intersection_function_table_tags_match_acceleration_structure(
+                    tags, acceleration_structure_type
+                )
+            ):
+                candidates.append({"name": name, "tags": ", ".join(tags)})
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
+    def intersection_function_table_tags(self, table_type):
+        type_name = str(table_type)
+        if "<" not in type_name or not type_name.endswith(">"):
+            return []
+        tags = type_name.split("<", 1)[1][:-1].strip()
+        if not tags:
+            return []
+        return [tag.strip() for tag in tags.split(",") if tag.strip()]
+
+    def intersection_function_table_tags_match_acceleration_structure(
+        self, tags, acceleration_structure_type
+    ):
+        has_instancing = "instancing" in tags
+        if acceleration_structure_type == "primitive_acceleration_structure":
+            return not has_instancing
+        return has_instancing
 
     def generate_metal_call_shader(self, raw_args, rendered_args):
         if len(raw_args) == 2:
@@ -5808,15 +5887,37 @@ class MetalCodeGen:
                     node,
                     local_names,
                     visible_function_table_names,
+                    intersection_function_table_names,
                     dependencies,
                 )
 
         return dependencies
 
     def add_ray_tracing_resource_dependencies(
-        self, call, local_names, visible_function_table_names, dependencies
+        self,
+        call,
+        local_names,
+        visible_function_table_names,
+        intersection_function_table_names,
+        dependencies,
     ):
-        if getattr(call, "operation", None) != "CallShader":
+        operation = getattr(call, "operation", None)
+        if operation == "TraceRay":
+            args = getattr(call, "arguments", [])
+            if not args:
+                return
+            table = self.default_intersection_function_table(
+                self.metal_acceleration_structure_argument_type(args[0])
+            )
+            if (
+                table is not None
+                and table["name"] in intersection_function_table_names
+                and table["name"] not in local_names
+            ):
+                dependencies.add(table["name"])
+            return
+
+        if operation != "CallShader":
             return
         args = getattr(call, "arguments", [])
         if len(args) == 3:

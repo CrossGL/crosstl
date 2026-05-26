@@ -3435,6 +3435,88 @@ class TestVulkanSPIRVCodeGen:
         assert "buffer_store" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_storage_buffer_memory_qualifiers_emit_member_decorations(self):
+        source_code = """
+        shader StorageBuffers {
+            StructuredBuffer<float> readOnlyValues;
+            RWStructuredBuffer<float> writeOnlyValues @writeonly;
+
+            compute {
+                layout(std430, binding = 2) readonly buffer float glslValues[];
+                layout(std430, binding = 3) writeonly buffer float glslOutValues[];
+
+                void main() {
+                    float value = buffer_load(readOnlyValues, 0u);
+                    buffer_store(writeOnlyValues, 0u, value);
+                    float rejectedLoad = writeOnlyValues[1u];
+                    readOnlyValues[2u] = rejectedLoad;
+                    buffer_store(glslOutValues, 0u, value);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        read_block = spirv_named_id(spv_code, "readOnlyValuesBuffer")
+        write_block = spirv_named_id(spv_code, "writeOnlyValuesBuffer")
+        glsl_values_block = spirv_named_id(spv_code, "glslValuesBuffer")
+        glsl_out_block = spirv_named_id(spv_code, "glslOutValuesBuffer")
+
+        assert f"OpMemberDecorate {read_block} 0 NonWritable" in spv_code
+        assert f"OpMemberDecorate {write_block} 0 NonReadable" in spv_code
+        assert f"OpMemberDecorate {glsl_values_block} 0 NonWritable" in spv_code
+        assert f"OpMemberDecorate {glsl_out_block} 0 NonReadable" in spv_code
+        assert "WARNING: storage buffer load requires a readable buffer" in spv_code
+        assert "WARNING: storage buffer store requires a writable buffer" in spv_code
+
+    def test_storage_image_memory_qualifiers_emit_decorations_and_diagnostics(self):
+        source_code = """
+        shader StorageImages {
+            image2D source @rgba32f @readonly @coherent;
+            image2D target @rgba32f @writeonly @volatile @restrict;
+            uimage2D counters @r32ui @readonly;
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(0, 1);
+                    vec4 value = imageLoad(source, pixel);
+                    imageStore(target, pixel, value);
+                    vec4 rejectedLoad = imageLoad(target, pixel);
+                    imageStore(source, pixel, rejectedLoad);
+                    uint rejectedAtomic = imageAtomicAdd(counters, pixel, 1u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        source_var = spirv_named_variable(
+            spv_code, "source", storage_class="UniformConstant"
+        )
+        target_var = spirv_named_variable(
+            spv_code, "target", storage_class="UniformConstant"
+        )
+        counters_var = spirv_named_variable(
+            spv_code, "counters", storage_class="UniformConstant"
+        )
+
+        assert f"OpDecorate {source_var} NonWritable" in spv_code
+        assert f"OpDecorate {source_var} Coherent" in spv_code
+        assert f"OpDecorate {target_var} NonReadable" in spv_code
+        assert f"OpDecorate {target_var} Volatile" in spv_code
+        assert f"OpDecorate {target_var} Restrict" in spv_code
+        assert f"OpDecorate {counters_var} NonWritable" in spv_code
+        assert "WARNING: imageLoad requires a readable storage image" in spv_code
+        assert "WARNING: imageStore requires a writable storage image" in spv_code
+        assert "WARNING: imageAtomicAdd requires a read-write storage image" in spv_code
+        assert "OpAtomicIAdd" not in spv_code
+
     def test_image_globals_emit_spirv_storage_image_types(self):
         source_code = """
         shader Resources {

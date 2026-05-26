@@ -2938,8 +2938,11 @@ def test_generic_vector_constructors_emit_mojo_names():
         compute {
             void main() {
                 vec2<f64> precise = vec2<f64>(1.0, 2.0);
+                vec3<f16> lowp = vec3<f16>(1.0, 2.0, 3.0);
                 vec3<i32> index = vec3<i32>(1, 2, 3);
+                vec4<i16> smallIndex = vec4<i16>(1, 2, 3, 4);
                 vec4<u32> mask = vec4<u32>(1, 2, 3, 4);
+                vec3<u16> smallMask = vec3<u16>(1, 2, 3);
                 vec2<bool> flags = vec2<bool>(true, false);
             }
         }
@@ -2954,10 +2957,20 @@ def test_generic_vector_constructors_emit_mojo_names():
         "var precise: SIMD[DType.float64, 2] = " "SIMD[DType.float64, 2](1.0, 2.0)"
     ) in generated_code
     assert (
+        "var lowp: SIMD[DType.float16, 4] = "
+        "SIMD[DType.float16, 4](1.0, 2.0, 3.0, 0.0)"
+    ) in generated_code
+    assert (
         "var index: SIMD[DType.int32, 4] = " "SIMD[DType.int32, 4](1, 2, 3, 0)"
     ) in generated_code
     assert (
+        "var smallIndex: SIMD[DType.int16, 4] = " "SIMD[DType.int16, 4](1, 2, 3, 4)"
+    ) in generated_code
+    assert (
         "var mask: SIMD[DType.uint32, 4] = " "SIMD[DType.uint32, 4](1, 2, 3, 4)"
+    ) in generated_code
+    assert (
+        "var smallMask: SIMD[DType.uint16, 4] = " "SIMD[DType.uint16, 4](1, 2, 3, 0)"
     ) in generated_code
     assert (
         "var flags: SIMD[DType.bool, 2] = " "SIMD[DType.bool, 2](True, False)"
@@ -2965,6 +2978,47 @@ def test_generic_vector_constructors_emit_mojo_names():
     assert "vec2<" not in generated_code
     assert "vec3<" not in generated_code
     assert "vec4<" not in generated_code
+
+
+def test_generic_min_precision_vector_aliases_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    vec3<f16> makeF16(vec2<f16> pair, f16 z) {
+        return vec3<f16>(pair, z);
+    }
+
+    vec4<i16> makeI16(vec2<i16> pair, i16 z, i16 w) {
+        return vec4<i16>(pair, z, w);
+    }
+
+    vec3<u16> makeU16(vec2<u16> pair, u16 z) {
+        return vec3<u16>(pair, z);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    print(makeF16(SIMD[DType.float16, 2](1.0, 2.0), Float16(3.0)))
+    print(makeI16(SIMD[DType.int16, 2](4, 5), Int16(6), Int16(7)))
+    print(makeU16(SIMD[DType.uint16, 2](8, 9), UInt16(10)))
+"""
+
+    source_path = tmp_path / "generic_min_precision_vector_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[4, 5, 6, 7]" in result.stdout
+    assert "[8, 9, 10, 0]" in result.stdout
 
 
 def test_hlsl_style_vector_aliases_emit_mojo_simd_names():
@@ -3158,6 +3212,190 @@ fn main():
     assert "[5.0, 6.0, 7.0, 8.0]" in result.stdout
     assert "[9.0, 10.0, 11.0, 0.0]" in result.stdout
     assert "[1, 2, 3, 0]" in result.stdout
+
+
+def test_hlsl_style_integer_vector_aliases_emit_mojo_simd_names():
+    code = """
+    struct IntegerVectors {
+        packed_int3 packedIndex;
+        simd_int4 simdIndex;
+        packed_uint2 packedMask;
+        simd_uint3 simdMask;
+        short3 shortIndex;
+        ushort2 ushortMask;
+        i16vec3 i16Index;
+        u16vec4 u16Mask;
+        min16int3 minSigned;
+        min12int2 min12Signed;
+        min16uint4 minUnsigned;
+    };
+
+    packed_int3 buildPackedInt(packed_int2 pair, int z) {
+        return packed_int3(pair, z);
+    }
+
+    simd_int4 buildSimdInt(simd_int2 pair, int z, int w) {
+        return simd_int4(pair, z, w);
+    }
+
+    packed_uint3 buildPackedUint(packed_uint2 pair, uint z) {
+        return packed_uint3(pair, z);
+    }
+
+    simd_uint4 buildSimdUint(simd_uint2 pair, uint z, uint w) {
+        return simd_uint4(pair, z, w);
+    }
+
+    min16int3 buildMin16(min16int2 pair, min16int z) {
+        return min16int3(pair, z);
+    }
+
+    min12int4 buildMin12(min12int2 pair, min12int z, min12int w) {
+        return min12int4(pair, z, w);
+    }
+
+    min16uint3 buildMinUint(min16uint2 pair, min16uint z) {
+        return min16uint3(pair, z);
+    }
+
+    short3 buildShort(short2 pair, short z) {
+        return short3(pair, z);
+    }
+
+    ushort4 buildUShort(ushort2 pair, ushort z, ushort w) {
+        return ushort4(pair, z, w);
+    }
+
+    i16vec3 buildI16(i16vec2 pair, i16 z) {
+        return i16vec3(pair, z);
+    }
+
+    u16vec4 buildU16(u16vec2 pair, u16 z, u16 w) {
+        return u16vec4(pair, z, w);
+    }
+
+    min12int passSmall(min12int value) {
+        return min12int(value);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var packedIndex: SIMD[DType.int32, 4]" in generated_code
+    assert "var simdIndex: SIMD[DType.int32, 4]" in generated_code
+    assert "var packedMask: SIMD[DType.uint32, 2]" in generated_code
+    assert "var simdMask: SIMD[DType.uint32, 4]" in generated_code
+    assert "var shortIndex: SIMD[DType.int16, 4]" in generated_code
+    assert "var ushortMask: SIMD[DType.uint16, 2]" in generated_code
+    assert "var i16Index: SIMD[DType.int16, 4]" in generated_code
+    assert "var u16Mask: SIMD[DType.uint16, 4]" in generated_code
+    assert "var minSigned: SIMD[DType.int16, 4]" in generated_code
+    assert "var min12Signed: SIMD[DType.int16, 2]" in generated_code
+    assert "var minUnsigned: SIMD[DType.uint16, 4]" in generated_code
+    assert "fn passSmall(value: Int16) -> Int16:" in generated_code
+    assert "return Int16(value)" in generated_code
+    assert "return SIMD[DType.int32, 4](pair[0], pair[1], z, 0)" in generated_code
+    assert "return SIMD[DType.uint32, 4](pair[0], pair[1], z, 0)" in generated_code
+    assert "return SIMD[DType.int16, 4](pair[0], pair[1], z, 0)" in generated_code
+    assert "return SIMD[DType.uint16, 4](pair[0], pair[1], z, 0)" in generated_code
+    for raw_alias in (
+        "packed_int2(",
+        "packed_int3(",
+        "simd_int2(",
+        "simd_int4(",
+        "packed_uint2(",
+        "packed_uint3(",
+        "simd_uint2(",
+        "simd_uint4(",
+        "min16int2(",
+        "min16int3(",
+        "min12int2(",
+        "min12int4(",
+        "min16uint2(",
+        "min16uint3(",
+        "short2(",
+        "short3(",
+        "ushort2(",
+        "ushort4(",
+        "i16vec2(",
+        "i16vec3(",
+        "u16vec2(",
+        "u16vec4(",
+    ):
+        assert raw_alias not in generated_code
+
+
+def test_hlsl_style_integer_vector_aliases_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    packed_int3 makePackedInt(packed_int2 pair, int z) {
+        return packed_int3(pair, z);
+    }
+
+    simd_uint4 makeSimdUint(simd_uint2 pair, uint z, uint w) {
+        return simd_uint4(pair, z, w);
+    }
+
+    min16int3 makeMin16(min16int2 pair, min16int z) {
+        return min16int3(pair, z);
+    }
+
+    min12int4 makeMin12(min12int2 pair, min12int z, min12int w) {
+        return min12int4(pair, z, w);
+    }
+
+    min16uint3 makeMinUint(min16uint2 pair, min16uint z) {
+        return min16uint3(pair, z);
+    }
+
+    i16vec3 makeI16(i16vec2 pair, i16 z) {
+        return i16vec3(pair, z);
+    }
+
+    u16vec4 makeU16(u16vec2 pair, u16 z, u16 w) {
+        return u16vec4(pair, z, w);
+    }
+
+    min12int passSmall(min12int value) {
+        return min12int(value);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    print(makePackedInt(SIMD[DType.int32, 2](1, 2), 3))
+    print(makeSimdUint(SIMD[DType.uint32, 2](4, 5), UInt32(6), UInt32(7)))
+    print(makeMin16(SIMD[DType.int16, 2](8, 9), Int16(10)))
+    print(makeMin12(SIMD[DType.int16, 2](11, 12), Int16(13), Int16(14)))
+    print(makeMinUint(SIMD[DType.uint16, 2](15, 16), UInt16(17)))
+    print(makeI16(SIMD[DType.int16, 2](18, 19), Int16(20)))
+    print(makeU16(SIMD[DType.uint16, 2](21, 22), UInt16(23), UInt16(24)))
+    print(passSmall(Int16(25)))
+"""
+
+    source_path = tmp_path / "hlsl_style_integer_vector_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1, 2, 3, 0]" in result.stdout
+    assert "[4, 5, 6, 7]" in result.stdout
+    assert "[8, 9, 10, 0]" in result.stdout
+    assert "[11, 12, 13, 14]" in result.stdout
+    assert "[15, 16, 17, 0]" in result.stdout
+    assert "[21, 22, 23, 24]" in result.stdout
+    assert "25" in result.stdout
 
 
 def test_three_component_vectors_emit_power_of_two_simd_storage():

@@ -1115,9 +1115,13 @@ class HLSLCodeGen:
             )
             declaration = format_c_style_array_declaration(declaration_type, var_name)
             register = ""
-            if mapped_type.startswith(
-                "Texture"
-            ) or self.is_multisample_storage_image_resource_type(mapped_type):
+            if (
+                mapped_type.startswith("Texture")
+                or self.is_multisample_storage_image_resource_type(mapped_type)
+                or self.is_hlsl_acceleration_structure_type(mapped_type)
+            ):
+                if self.is_hlsl_acceleration_structure_type(mapped_type):
+                    self.validate_hlsl_acceleration_structure_register(node)
                 self.texture_variables.add(var_name)
                 self.texture_variable_types[var_name] = mapped_type
                 if self.is_image_type(vtype):
@@ -7549,6 +7553,13 @@ class HLSLCodeGen:
             self.is_texture_type(vtype)
             or self.is_sampler_type(vtype)
             or self.is_image_type(vtype)
+            or self.is_hlsl_acceleration_structure_type(vtype)
+        )
+
+    def is_hlsl_acceleration_structure_type(self, vtype):
+        return (
+            self.map_type(self.resource_base_type(vtype))
+            == "RaytracingAccelerationStructure"
         )
 
     def is_explicit_sampler_argument(self, args):
@@ -7627,9 +7638,11 @@ class HLSLCodeGen:
             if self.is_glsl_buffer_block_variable(node, vtype):
                 return None
             mapped_type = self.map_resource_type_with_format(vtype, node)
-            if mapped_type.startswith(
-                "Texture"
-            ) or self.is_multisample_storage_image_resource_type(mapped_type):
+            if (
+                mapped_type.startswith("Texture")
+                or self.is_multisample_storage_image_resource_type(mapped_type)
+                or self.is_hlsl_acceleration_structure_type(mapped_type)
+            ):
                 prefix = "t"
                 attribute_names = {"binding", "texture"}
             elif mapped_type.startswith("RWTexture"):
@@ -10155,6 +10168,34 @@ class HLSLCodeGen:
                     if space is not None:
                         return space
         return None
+
+    def explicit_resource_register_prefix(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            arguments = getattr(attr, "arguments", []) or []
+            if not attr_name or str(attr_name).lower() != "register" or not arguments:
+                continue
+            value = self.attribute_value_to_string(arguments[0])
+            if value is None:
+                return None
+            value = str(value).strip().lower()
+            prefix = ""
+            for char in value:
+                if not char.isalpha():
+                    break
+                prefix += char
+            return prefix or None
+        return None
+
+    def validate_hlsl_acceleration_structure_register(self, node):
+        prefix = self.explicit_resource_register_prefix(node)
+        if prefix is None or prefix == "t":
+            return
+        name = getattr(node, "name", getattr(node, "variable_name", "<anonymous>"))
+        raise ValueError(
+            "DirectX RaytracingAccelerationStructure resource "
+            f"'{name}' must use an SRV t-register, got {prefix}"
+        )
 
     def resource_register_suffix_for_space(self, register_prefix, binding, space=None):
         register = f"{register_prefix}{binding}"
