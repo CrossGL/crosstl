@@ -5094,9 +5094,15 @@ class MetalCodeGen:
             return None, None
         return access, access["offset"]
 
-    def unsupported_glsl_buffer_block_atomic_call(self, target, operation, reason):
+    def unsupported_glsl_buffer_block_atomic_call(
+        self, target, operation, reason, access=None
+    ):
         result_type = self.expression_result_type(target) or "uint"
-        zero_value = "0u" if self.type_name_string(result_type) == "uint" else "0"
+        component_type = access.get("component_type") if access else None
+        if component_type is not None:
+            zero_value = "0u" if component_type == "uint" else "0"
+        else:
+            zero_value = "0u" if self.type_name_string(result_type) == "uint" else "0"
         return (
             "/* unsupported Metal GLSL buffer block atomic: "
             f"{operation} {reason} */ {zero_value}"
@@ -5118,15 +5124,24 @@ class MetalCodeGen:
             return None
         if access.get("readonly"):
             return self.unsupported_glsl_buffer_block_atomic_call(
-                target, func_name, "cannot write readonly device buffer"
+                target,
+                func_name,
+                "cannot write readonly device buffer",
+                access,
             )
         if access.get("components") != 1 or access.get("matrix_columns"):
             return self.unsupported_glsl_buffer_block_atomic_call(
-                target, func_name, "requires a scalar int or uint buffer member"
+                target,
+                func_name,
+                "requires a scalar int or uint buffer member",
+                access,
             )
         if access.get("component_type") not in {"int", "uint"}:
             return self.unsupported_glsl_buffer_block_atomic_call(
-                target, func_name, "currently supports only int or uint buffer members"
+                target,
+                func_name,
+                "currently supports only int or uint buffer members",
+                access,
             )
 
         if operation == "compare_exchange":

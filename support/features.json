@@ -459,6 +459,7 @@
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_only_blocks_lower_to_explicit_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_member_arrays_accept_global_const_size",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_hlsl_runtime_matrix_array_stores_use_column_stores",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic"
           ]
         },
@@ -474,10 +475,12 @@
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_only_blocks_lower_to_explicit_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_member_arrays_accept_global_const_size",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_metal_runtime_matrix_arrays_use_column_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_uint_atomics_metal_output_compiles_with_xcrun_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_int_atomics_metal_output_compiles_with_xcrun_metal",
-            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_runtime_array_atomics_metal_output_compiles_with_xcrun_metal"
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_runtime_array_atomics_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_unsupported_atomics_metal_output_compiles_with_xcrun_metal"
           ]
         },
         "vulkan": {"status": "unknown"},

@@ -15922,6 +15922,82 @@ def test_codegen_mixed_ssbo_runtime_array_atomics_lower_dynamic_offsets():
     assert "atomicAdd(runtimeSignedAtomicBlock.values[j], exchanged);" in glsl
 
 
+def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics():
+    code = """
+    #version 450 core
+    layout(std430, binding = 21) readonly buffer ReadAtomicBlock {
+        uint value;
+    } readAtomicBlock;
+    layout(std430, binding = 22) buffer FloatAtomicBlock {
+        float value;
+    } floatAtomicBlock;
+    layout(std430, binding = 23) buffer VectorAtomicBlock {
+        uvec2 value;
+    } vectorAtomicBlock;
+    layout(std430, binding = 24) buffer MatrixAtomicBlock {
+        mat2 value;
+    } matrixAtomicBlock;
+
+    void main() {
+        uint readonlyOld = atomicAdd(readAtomicBlock.value, 1u);
+        float floatOld = atomicAdd(floatAtomicBlock.value, 1.0);
+        uint vectorOld = atomicAdd(vectorAtomicBlock.value, 1u);
+        float matrixOld = atomicAdd(matrixAtomicBlock.value, 1.0);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert (
+        "uint readonlyOld = /* unsupported HLSL GLSL buffer block atomic: "
+        "atomicAdd cannot write readonly ByteAddressBuffer */ 0u;" in hlsl
+    )
+    assert (
+        "float floatOld = /* unsupported HLSL GLSL buffer block atomic: "
+        "atomicAdd currently supports only int or uint buffer members */ 0;" in hlsl
+    )
+    assert (
+        "uint vectorOld = /* unsupported HLSL GLSL buffer block atomic: "
+        "atomicAdd requires a scalar int or uint buffer member */ 0u;" in hlsl
+    )
+    assert (
+        "float matrixOld = /* unsupported HLSL GLSL buffer block atomic: "
+        "atomicAdd requires a scalar int or uint buffer member */ 0;" in hlsl
+    )
+    assert "Interlocked" not in hlsl
+    assert "__crossgl_byteaddress_atomic" not in hlsl
+
+    assert (
+        "uint readonlyOld = /* unsupported Metal GLSL buffer block atomic: "
+        "atomicAdd cannot write readonly device buffer */ 0u;" in metal
+    )
+    assert (
+        "float floatOld = /* unsupported Metal GLSL buffer block atomic: "
+        "atomicAdd currently supports only int or uint buffer members */ 0;" in metal
+    )
+    assert (
+        "uint vectorOld = /* unsupported Metal GLSL buffer block atomic: "
+        "atomicAdd requires a scalar int or uint buffer member */ 0u;" in metal
+    )
+    assert (
+        "float matrixOld = /* unsupported Metal GLSL buffer block atomic: "
+        "atomicAdd requires a scalar int or uint buffer member */ 0;" in metal
+    )
+    assert "atomic_fetch_" not in metal
+    assert "__crossgl_buffer_atomic" not in metal
+
+    assert "uint readonlyOld = atomicAdd(readAtomicBlock.value, 1u);" in glsl
+    assert "float floatOld = atomicAdd(floatAtomicBlock.value, 1.0);" in glsl
+    assert "uint vectorOld = atomicAdd(vectorAtomicBlock.value, 1u);" in glsl
+    assert "float matrixOld = atomicAdd(matrixAtomicBlock.value, 1.0);" in glsl
+
+
 def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets():
     code = """
     #version 300 es

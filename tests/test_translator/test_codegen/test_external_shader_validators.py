@@ -141,6 +141,30 @@ void main() {
 """
 
 
+MIXED_GLSL_SSBO_UNSUPPORTED_ATOMICS_COMPUTE_SHADER = """
+#version 450 core
+layout(std430, binding = 21) readonly buffer ReadAtomicBlock {
+    uint value;
+} readAtomicBlock;
+layout(std430, binding = 22) buffer FloatAtomicBlock {
+    float value;
+} floatAtomicBlock;
+layout(std430, binding = 23) buffer VectorAtomicBlock {
+    uvec2 value;
+} vectorAtomicBlock;
+layout(std430, binding = 24) buffer MatrixAtomicBlock {
+    mat2 value;
+} matrixAtomicBlock;
+
+void main() {
+    uint readonlyOld = atomicAdd(readAtomicBlock.value, 1u);
+    float floatOld = atomicAdd(floatAtomicBlock.value, 1.0);
+    uint vectorOld = atomicAdd(vectorAtomicBlock.value, 1u);
+    float matrixOld = atomicAdd(matrixAtomicBlock.value, 1.0);
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
 
@@ -389,6 +413,41 @@ def test_mixed_glsl_ssbo_runtime_array_atomics_metal_output_compiles_with_xcrun_
     assert "runtimeAtomicBlock + (4 + i * 4)" in code
     assert "runtimeSignedAtomicBlock + (4 + j * 4)" in code
     assert "__crossgl_buffer_atomic_compare_exchange_uint" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_ssbo_unsupported_atomics_metal_output_compiles_with_xcrun_metal(
+    tmp_path,
+):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "mixed_glsl_ssbo_unsupported_atomics.metal"
+    output_path = tmp_path / "mixed_glsl_ssbo_unsupported_atomics.air"
+
+    code = MetalCodeGen().generate(
+        _mixed_glsl_ast(
+            MIXED_GLSL_SSBO_UNSUPPORTED_ATOMICS_COMPUTE_SHADER,
+            "compute",
+        )
+    )
+    assert "#version" not in code
+    assert "unsupported Metal GLSL buffer block atomic" in code
+    assert "atomic_fetch_" not in code
+    assert "float floatOld = /* unsupported Metal GLSL buffer block atomic" in code
+    assert "*/ 0;" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(
