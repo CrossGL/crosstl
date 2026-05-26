@@ -1737,8 +1737,8 @@
       "category": "resources",
       "feature": "Resource arrays",
       "feature_id": "resources.resource_arrays",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Covers fixed and expression-sized texture, sampler, shadow, image, StructuredBuffer, Append/ConsumeStructuredBuffer, and ByteAddressBuffer arrays, nested resource arrays, dynamic resource-array parameters, indexed access through control flow and loops, automatic binding range allocation, and overlap diagnostics. Unsized/bindless resource-array semantics and compiler-backed coverage remain incomplete.",
+      "status": "partial"
     },
     {
       "backend": "Vulkan SPIR-V",
@@ -2232,8 +2232,8 @@
       "category": "textures",
       "feature": "Texture query operations",
       "feature_id": "texture.query",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Covers textureSize, imageSize, textureQueryLevels, textureQueryLod, textureSamples, imageSamples, array/cube-array, shadow, multisample, formatted image, and user-symbol-collision helper forms using Slang GetDimensions/CalculateLevelOfDetail helpers. slangc-backed coverage and some target-invalid query diagnostics remain incomplete.",
+      "status": "partial"
     },
     {
       "backend": "CUDA",
@@ -2700,7 +2700,7 @@
       "category": "language",
       "feature": "Wave/subgroup intrinsics",
       "feature_id": "language.wave_intrinsics",
-      "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, WaveMatch, and WaveMultiPrefix* forms to native Slang/HLSL wave intrinsics with deterministic arity diagnostics. slangc-backed coverage is optional and skips when slangc is unavailable locally.",
+      "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, QuadRead*, WaveMatch, and WaveMultiPrefix* forms to native Slang/HLSL wave intrinsics with deterministic arity diagnostics. slangc-backed coverage is optional and skips when slangc is unavailable locally.",
       "status": "partial"
     },
     {
@@ -4046,9 +4046,20 @@
           "status": "unknown"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_texture_and_shadow_arrays_preserve_expression_sizes_and_group_indices",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_nested_resource_arrays_emit_slang_queries_and_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_dynamic_resource_array_params_emit_slang_queries_and_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_forwarded_dynamic_resource_array_params_emit_slang_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mixed_fixed_dynamic_resource_array_params_emit_slang_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_multihop_reordered_resource_array_params_emit_slang_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_nested_loop_resource_indices_emit_slang_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_arrays_preserve_expression_sizes",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffers_emit_slang_load_store_dimensions_and_bindings",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_ranges_raise"
+          ],
+          "notes": "Covers fixed and expression-sized texture, sampler, shadow, image, StructuredBuffer, Append/ConsumeStructuredBuffer, and ByteAddressBuffer arrays, nested resource arrays, dynamic resource-array parameters, indexed access through control flow and loops, automatic binding range allocation, and overlap diagnostics. Unsized/bindless resource-array semantics and compiler-backed coverage remain incomplete.",
+          "status": "partial"
         },
         "vulkan": {
           "evidence": [],
@@ -4759,9 +4770,15 @@
           "status": "unknown"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_query_builtins_emit_slang_get_dimensions_helpers",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_texture_query_lod_emits_slang_lod_methods",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_queries_on_texture_arrays_emit_slang_helpers",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_queries_emit_typed_slang_helpers",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_query_helpers_avoid_user_symbol_collisions"
+          ],
+          "notes": "Covers textureSize, imageSize, textureQueryLevels, textureQueryLod, textureSamples, imageSamples, array/cube-array, shadow, multisample, formatted image, and user-symbol-collision helper forms using Slang GetDimensions/CalculateLevelOfDetail helpers. slangc-backed coverage and some target-invalid query diagnostics remain incomplete.",
+          "status": "partial"
         },
         "vulkan": {
           "evidence": [
@@ -5538,7 +5555,7 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsics_compile_with_slangc_if_available",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsic_invalid_arities_emit_slang_diagnostics"
           ],
-          "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, WaveMatch, and WaveMultiPrefix* forms to native Slang/HLSL wave intrinsics with deterministic arity diagnostics. slangc-backed coverage is optional and skips when slangc is unavailable locally.",
+          "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, QuadRead*, WaveMatch, and WaveMultiPrefix* forms to native Slang/HLSL wave intrinsics with deterministic arity diagnostics. slangc-backed coverage is optional and skips when slangc is unavailable locally.",
           "status": "partial"
         },
         "vulkan": {
@@ -5871,9 +5888,9 @@
       },
       "slang": {
         "diagnostic": 0,
-        "partial": 13,
+        "partial": 15,
         "supported": 14,
-        "unknown": 16,
+        "unknown": 14,
         "unsupported": 0,
         "validated_rejection": 0
       },

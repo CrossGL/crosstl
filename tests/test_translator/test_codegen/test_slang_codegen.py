@@ -2222,6 +2222,10 @@ def test_wave_intrinsics_lower_to_native_slang_calls():
                 uvec4 ballot = WaveActiveBallot(anyLane);
                 uint broadcast = WaveReadLaneAt(prefixSum, 0u);
                 uint firstValue = WaveReadLaneFirst(broadcast);
+                uint quadX = QuadReadAcrossX(firstValue);
+                uint quadY = QuadReadAcrossY(quadX);
+                uint quadDiagonal = QuadReadAcrossDiagonal(quadY);
+                uint quadLane = QuadReadLaneAt(quadDiagonal, 0u);
                 uvec4 matchMask = WaveMatch(lane);
                 uint multiSum = WaveMultiPrefixSum(lane, matchMask);
                 uint multiProduct = WaveMultiPrefixProduct(lane + 1u, matchMask);
@@ -2252,6 +2256,10 @@ def test_wave_intrinsics_lower_to_native_slang_calls():
     assert "uint4 ballot = WaveActiveBallot(anyLane);" in generated_code
     assert "uint broadcast = WaveReadLaneAt(prefixSum, 0u);" in generated_code
     assert "uint firstValue = WaveReadLaneFirst(broadcast);" in generated_code
+    assert "uint quadX = QuadReadAcrossX(firstValue);" in generated_code
+    assert "uint quadY = QuadReadAcrossY(quadX);" in generated_code
+    assert "uint quadDiagonal = QuadReadAcrossDiagonal(quadY);" in generated_code
+    assert "uint quadLane = QuadReadLaneAt(quadDiagonal, 0u);" in generated_code
     assert "uint4 matchMask = WaveMatch(lane);" in generated_code
     assert "uint multiSum = WaveMultiPrefixSum(lane, matchMask);" in generated_code
     assert (
@@ -2301,6 +2309,7 @@ def test_wave_intrinsic_invalid_arities_emit_slang_diagnostics():
                 bool first = WaveIsFirstLane(false);
                 uvec4 ballot = WaveActiveBallot();
                 uint multi = WaveMultiPrefixSum(lane);
+                uint quad = QuadReadLaneAt(lane);
             }
         }
     }
@@ -2322,6 +2331,10 @@ def test_wave_intrinsic_invalid_arities_emit_slang_diagnostics():
     )
     assert (
         "uint multi = /* unsupported Slang wave intrinsic: WaveMultiPrefixSum "
+        "expects 2 arguments, got 1 */ 0;" in generated_code
+    )
+    assert (
+        "uint quad = /* unsupported Slang wave intrinsic: QuadReadLaneAt "
         "expects 2 arguments, got 1 */ 0;" in generated_code
     )
     assert "WaveOpNode" not in generated_code
