@@ -1802,6 +1802,24 @@ class TestHipCodeGen:
             void* image;
             hipJitOption options;
             void* optionValues;
+            hiprtcProgram program;
+            hiprtcLinkState linkState;
+            hiprtcJIT_option jitOptions;
+            hiprtcJITInputType inputType;
+            const char* rtcSource;
+            const char** rtcHeaders;
+            const char** rtcIncludeNames;
+            const char** rtcOptions;
+            const char* loweredName;
+            char* rtcLog;
+            char* rtcCode;
+            char* rtcBitcode;
+            void* linkedBinary;
+            size_t logSize;
+            size_t codeSize;
+            size_t bitcodeSize;
+            int rtcMajor;
+            int rtcMinor;
             hipModuleLoad(&module, "kernel.hsaco");
             hipModuleLoadData(&module, image);
             hipModuleLoadDataEx(&module, image, 1, &options, &optionValues);
@@ -1827,11 +1845,40 @@ class TestHipCodeGen:
             );
             hipModuleLaunchCooperativeKernelMultiDevice(launchParams, 1, 0);
             hipModuleUnload(module);
+            hiprtcVersion(&rtcMajor, &rtcMinor);
+            hiprtcCreateProgram(
+                &program, rtcSource, "kernel.hip", 0, rtcHeaders, rtcIncludeNames
+            );
+            hiprtcCompileProgram(program, 1, rtcOptions);
+            hiprtcGetProgramLogSize(program, &logSize);
+            hiprtcGetProgramLog(program, rtcLog);
+            hiprtcGetCodeSize(program, &codeSize);
+            hiprtcGetCode(program, rtcCode);
+            hiprtcGetBitcodeSize(program, &bitcodeSize);
+            hiprtcGetBitcode(program, rtcBitcode);
+            hiprtcAddNameExpression(program, "kernel");
+            hiprtcGetLoweredName(program, "kernel", &loweredName);
+            hiprtcLinkCreate(1, &jitOptions, &optionValues, &linkState);
+            hiprtcLinkAddFile(
+                linkState, inputType, "kernel.bc", 0, &jitOptions, &optionValues
+            );
+            hiprtcLinkAddData(
+                linkState, inputType, rtcCode, codeSize, "kernel", 0, &jitOptions,
+                &optionValues
+            );
+            hiprtcLinkComplete(linkState, &linkedBinary, &globalBytes);
+            hiprtcLinkDestroy(linkState);
+            hiprtcDestroyProgram(&program);
             hipError_t err = hipModuleGetFunction(&function, module, "kernel");
             err = hipModuleLaunchKernel(
                 function, 8, 1, 1, 64, 1, 1, 0, stream, params, extra
             );
             err = hipLaunchCooperativeKernel(function, 8, 64, params, 0, stream);
+            hiprtcResult rtc = hiprtcCreateProgram(
+                &program, rtcSource, "kernel.hip", 0, rtcHeaders, rtcIncludeNames
+            );
+            rtc = hiprtcCompileProgram(program, 1, rtcOptions);
+            const char* rtcMessage = hiprtcGetErrorString(rtc);
         }
         """
         lexer = HipLexer(code)
@@ -1912,8 +1959,70 @@ class TestHipCodeGen:
             "devices: 1, flags: 0"
         ) in result
         assert "// HIP module unload: module" in result
+        assert (
+            "// HIPRTC version: major output: rtcMajor, minor output: rtcMinor"
+            in result
+        )
+        assert (
+            result.count(
+                "// HIPRTC create program: output: program, source: rtcSource, "
+                'name: "kernel.hip", headers: 0, header sources: rtcHeaders, '
+                "include names: rtcIncludeNames"
+            )
+            == 2
+        )
+        assert (
+            result.count(
+                "// HIPRTC compile program: program: program, options: 1, "
+                "option values: rtcOptions"
+            )
+            == 2
+        )
+        assert (
+            "// HIPRTC get program log size: program: program, output: logSize"
+            in result
+        )
+        assert "// HIPRTC get program log: program: program, output: rtcLog" in result
+        assert "// HIPRTC get code size: program: program, output: codeSize" in result
+        assert "// HIPRTC get code: program: program, output: rtcCode" in result
+        assert (
+            "// HIPRTC get bitcode size: program: program, output: bitcodeSize"
+            in result
+        )
+        assert "// HIPRTC get bitcode: program: program, output: rtcBitcode" in result
+        assert (
+            '// HIPRTC add name expression: program: program, expression: "kernel"'
+            in result
+        )
+        assert (
+            '// HIPRTC get lowered name: program: program, expression: "kernel", '
+            "output: loweredName"
+        ) in result
+        assert (
+            "// HIPRTC link create: options: 1, option keys: (&jitOptions), "
+            "option values: (&optionValues), state output: linkState"
+        ) in result
+        assert (
+            "// HIPRTC link add file: state: linkState, input type: inputType, "
+            'path: "kernel.bc", options: 0, option keys: (&jitOptions), '
+            "option values: (&optionValues)"
+        ) in result
+        assert (
+            "// HIPRTC link add data: state: linkState, input type: inputType, "
+            'image: rtcCode, bytes: codeSize, name: "kernel", options: 0, '
+            "option keys: (&jitOptions), option values: (&optionValues)"
+        ) in result
+        assert (
+            "// HIPRTC link complete: state: linkState, binary output: linkedBinary, "
+            "size output: globalBytes"
+        ) in result
+        assert "// HIPRTC link destroy: state: linkState" in result
+        assert "// HIPRTC destroy program: output: program" in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert "err = hipSuccess;" in result
+        assert "var rtc: hiprtcResult = HIPRTC_SUCCESS;" in result
+        assert "rtc = HIPRTC_SUCCESS;" in result
+        assert 'var rtcMessage: ptr<i8> = /* HIPRTC error string: rtc */ "";' in result
         assert "hipModuleLoad(" not in result
         assert "hipModuleLoadData(" not in result
         assert "hipModuleLoadDataEx(" not in result
@@ -1931,6 +2040,160 @@ class TestHipCodeGen:
         assert "hipModuleLaunchCooperativeKernel(" not in result
         assert "hipModuleLaunchCooperativeKernelMultiDevice(" not in result
         assert "hipModuleUnload(" not in result
+        assert "hiprtcVersion(" not in result
+        assert "hiprtcCreateProgram(" not in result
+        assert "hiprtcDestroyProgram(" not in result
+        assert "hiprtcCompileProgram(" not in result
+        assert "hiprtcGetProgramLogSize(" not in result
+        assert "hiprtcGetProgramLog(" not in result
+        assert "hiprtcGetCodeSize(" not in result
+        assert "hiprtcGetCode(" not in result
+        assert "hiprtcGetBitcodeSize(" not in result
+        assert "hiprtcGetBitcode(" not in result
+        assert "hiprtcAddNameExpression(" not in result
+        assert "hiprtcGetLoweredName(" not in result
+        assert "hiprtcGetErrorString(" not in result
+        assert "hiprtcLinkCreate(" not in result
+        assert "hiprtcLinkAddFile(" not in result
+        assert "hiprtcLinkAddData(" not in result
+        assert "hiprtcLinkComplete(" not in result
+        assert "hiprtcLinkDestroy(" not in result
+
+    def test_hip_runtime_driver_context_api_conversion(self):
+        """Test HIP initialization, context, and peer APIs emit metadata comments."""
+        code = """
+        void configure_context(int ordinal) {
+            hipDevice_t device;
+            hipDevice_t peerDevice;
+            hipCtx_t ctx;
+            hipCtx_t current;
+            int driverVersion = 0;
+            int runtimeVersion = 0;
+            int canAccess = 0;
+            int active = 0;
+            unsigned int flags = 0;
+            unsigned int apiVersion = 0;
+            hipFuncCache_t cacheConfig;
+            hipSharedMemConfig sharedConfig;
+
+            hipInit(0);
+            hipDriverGetVersion(&driverVersion);
+            hipRuntimeGetVersion(&runtimeVersion);
+            hipDeviceGet(&device, ordinal);
+            hipDeviceGet(&peerDevice, 1);
+            hipDeviceCanAccessPeer(&canAccess, device, peerDevice);
+            hipDeviceEnablePeerAccess(peerDevice, 0);
+            hipDeviceDisablePeerAccess(peerDevice);
+            hipCtxCreate(&ctx, 0, device);
+            hipCtxPushCurrent(ctx);
+            hipCtxGetCurrent(&current);
+            hipCtxSetCurrent(current);
+            hipCtxGetDevice(&device);
+            hipCtxGetApiVersion(ctx, &apiVersion);
+            hipCtxGetCacheConfig(&cacheConfig);
+            hipCtxSetCacheConfig(hipFuncCachePreferShared);
+            hipCtxGetSharedMemConfig(&sharedConfig);
+            hipCtxSetSharedMemConfig(hipSharedMemBankSizeEightByte);
+            hipCtxGetFlags(&flags);
+            hipCtxSynchronize();
+            hipCtxPopCurrent(&current);
+            hipCtxDestroy(ctx);
+            hipDevicePrimaryCtxRetain(&ctx, device);
+            hipDevicePrimaryCtxSetFlags(device, flags);
+            hipDevicePrimaryCtxGetState(device, &flags, &active);
+            hipDevicePrimaryCtxRelease(device);
+            hipDevicePrimaryCtxReset(device);
+            hipError_t err = hipDeviceGet(&device, ordinal);
+            err = hipCtxSynchronize();
+            err = hipDevicePrimaryCtxGetState(device, &flags, &active);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// HIP initialize runtime: flags: 0" in result
+        assert "// HIP get driver version: output: driverVersion" in result
+        assert "// HIP get runtime version: output: runtimeVersion" in result
+        assert (
+            result.count("// HIP get device handle: output: device, ordinal: ordinal")
+            == 2
+        )
+        assert "// HIP get device handle: output: peerDevice, ordinal: 1" in result
+        assert (
+            "// HIP device can access peer: output: canAccess, device: device, "
+            "peer device: peerDevice"
+        ) in result
+        assert "// HIP enable peer access: peer device: peerDevice, flags: 0" in result
+        assert "// HIP disable peer access: peer device: peerDevice" in result
+        assert "// HIP context create: output: ctx, flags: 0, device: device" in result
+        assert "// HIP context push current: ctx" in result
+        assert "// HIP context get current: output: current" in result
+        assert "// HIP context set current: current" in result
+        assert "// HIP context get device: output: device" in result
+        assert (
+            "// HIP context get API version: context: ctx, output: apiVersion" in result
+        )
+        assert "// HIP context get cache config: output: cacheConfig" in result
+        assert "// HIP context set cache config: hipFuncCachePreferShared" in result
+        assert "// HIP context get shared memory config: output: sharedConfig" in result
+        assert (
+            "// HIP context set shared memory config: hipSharedMemBankSizeEightByte"
+            in result
+        )
+        assert "// HIP context get flags: output: flags" in result
+        assert result.count("// HIP context synchronize") == 2
+        assert "// HIP context pop current: output: current" in result
+        assert "// HIP context destroy: ctx" in result
+        assert "// HIP primary context retain: output: ctx, device: device" in result
+        assert (
+            "// HIP primary context set flags: device: device, flags: flags" in result
+        )
+        assert (
+            result.count(
+                "// HIP primary context get state: device: device, "
+                "flags output: flags, active output: active"
+            )
+            == 2
+        )
+        assert "// HIP primary context release: device: device" in result
+        assert "// HIP primary context reset: device: device" in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert "err = hipSuccess;" in result
+
+        for function_name in [
+            "hipInit",
+            "hipDriverGetVersion",
+            "hipRuntimeGetVersion",
+            "hipDeviceGet",
+            "hipDeviceCanAccessPeer",
+            "hipDeviceEnablePeerAccess",
+            "hipDeviceDisablePeerAccess",
+            "hipCtxCreate",
+            "hipCtxDestroy",
+            "hipCtxPopCurrent",
+            "hipCtxPushCurrent",
+            "hipCtxSetCurrent",
+            "hipCtxGetCurrent",
+            "hipCtxGetDevice",
+            "hipCtxGetApiVersion",
+            "hipCtxGetCacheConfig",
+            "hipCtxSetCacheConfig",
+            "hipCtxGetSharedMemConfig",
+            "hipCtxSetSharedMemConfig",
+            "hipCtxGetFlags",
+            "hipCtxSynchronize",
+            "hipDevicePrimaryCtxRetain",
+            "hipDevicePrimaryCtxRelease",
+            "hipDevicePrimaryCtxReset",
+            "hipDevicePrimaryCtxSetFlags",
+            "hipDevicePrimaryCtxGetState",
+        ]:
+            assert f"{function_name}(" not in result
 
     def test_hip_runtime_graph_api_conversion(self):
         """Test HIP graph APIs emit metadata comments."""

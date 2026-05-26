@@ -269,6 +269,89 @@ def test_parse_ray_stage_storage_qualifiers_roundtrip(
         assert expected in glsl
 
 
+def test_parse_ray_query_type_and_functions_roundtrip():
+    code = """
+    #version 460 core
+    #extension GL_EXT_ray_query : require
+
+    layout(binding = 0) uniform accelerationStructureEXT topLevelAS;
+
+    void main() {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(
+            rq,
+            topLevelAS,
+            gl_RayFlagsNoneEXT,
+            255u,
+            vec3(0.0),
+            0.001,
+            vec3(0.0, 0.0, 1.0),
+            100.0
+        );
+        bool active = rayQueryProceedEXT(rq);
+        uint hitType = rayQueryGetIntersectionTypeEXT(rq, true);
+        uint candidatePrimitive = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);
+        uint committedInstance = rayQueryGetIntersectionInstanceIdEXT(rq, true);
+        uint candidateGeometry = rayQueryGetIntersectionGeometryIndexEXT(rq, false);
+        vec3 committedOrigin = rayQueryGetIntersectionObjectRayOriginEXT(rq, true);
+        vec3 candidateDirection = rayQueryGetIntersectionObjectRayDirectionEXT(rq, false);
+        float committedT = rayQueryGetIntersectionTEXT(rq, true);
+        rayQueryTerminateEXT(rq);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "accelerationStructureEXT topLevelAS @binding(0);" in crossgl
+    assert "rayQueryEXT rq;" in crossgl
+    assert "rayQueryInitializeEXT(" in crossgl
+    assert "bool active = rq.Proceed();" in crossgl
+    assert "uint hitType = rq.CommittedType();" in crossgl
+    assert "uint candidatePrimitive = rq.CandidatePrimitiveIndex();" in crossgl
+    assert "uint committedInstance = rq.CommittedInstanceID();" in crossgl
+    assert "uint candidateGeometry = rq.CandidateGeometryIndex();" in crossgl
+    assert "vec3 committedOrigin = rq.CommittedObjectRayOrigin();" in crossgl
+    assert "vec3 candidateDirection = rq.CandidateObjectRayDirection();" in crossgl
+    assert "float committedT = rq.CommittedRayT();" in crossgl
+    assert "rq.Abort();" in crossgl
+    assert "rayQueryProceedEXT(rq)" not in crossgl
+    assert "rayQueryGetIntersectionTypeEXT(rq, true)" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert glsl.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_query : require" in glsl
+    assert "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;" in glsl
+    assert "rayQueryEXT rq;" in glsl
+    assert "rayQueryInitializeEXT(" in glsl
+    assert "bool active = rayQueryProceedEXT(rq);" in glsl
+    assert "uint hitType = rayQueryGetIntersectionTypeEXT(rq, true);" in glsl
+    assert (
+        "uint candidatePrimitive = "
+        "rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);" in glsl
+    )
+    assert (
+        "uint committedInstance = rayQueryGetIntersectionInstanceIdEXT(rq, true);"
+        in glsl
+    )
+    assert (
+        "uint candidateGeometry = rayQueryGetIntersectionGeometryIndexEXT(rq, false);"
+        in glsl
+    )
+    assert (
+        "vec3 committedOrigin = "
+        "rayQueryGetIntersectionObjectRayOriginEXT(rq, true);" in glsl
+    )
+    assert (
+        "vec3 candidateDirection = "
+        "rayQueryGetIntersectionObjectRayDirectionEXT(rq, false);" in glsl
+    )
+    assert "float committedT = rayQueryGetIntersectionTEXT(rq, true);" in glsl
+    assert "rayQueryTerminateEXT(rq);" in glsl
+    assert ".Proceed(" not in glsl
+    assert ".CommittedType(" not in glsl
+
+
 def test_parse_compute_layout_roundtrips_as_stage_layout():
     code = """
     #version 450 core

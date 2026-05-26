@@ -460,7 +460,10 @@ class HipToCrossGLConverter:
         if comments is None:
             return None
 
-        return comments, "hipSuccess"
+        success_value = (
+            "HIPRTC_SUCCESS" if value.name.startswith("hiprtc") else "hipSuccess"
+        )
+        return comments, success_value
 
     def format_hip_runtime_call(self, node):
         args = [self.visit(arg) for arg in node.args]
@@ -1059,6 +1062,14 @@ class HipToCrossGLConverter:
                     f"params: {args[0]}, devices: {args[1]}, flags: {args[2]}"
                 ]
 
+        rtc_comments = self.format_hip_rtc_runtime_call(name, node.args, args)
+        if rtc_comments is not None:
+            return rtc_comments
+
+        driver_comments = self.format_hip_driver_runtime_call(name, node.args, args)
+        if driver_comments is not None:
+            return driver_comments
+
         graph_comments = self.format_hip_graph_runtime_call(name, node.args, args)
         if graph_comments is not None:
             return graph_comments
@@ -1081,6 +1092,213 @@ class HipToCrossGLConverter:
             if args:
                 return [f"// HIP surface object destroy: {args[0]}"]
 
+        return None
+
+    def format_hip_rtc_runtime_call(self, name, raw_args, args):
+        if name == "hiprtcVersion":
+            if len(args) >= 2:
+                major_output = self.format_runtime_pointer_target(raw_args[0])
+                minor_output = self.format_runtime_pointer_target(raw_args[1])
+                return [
+                    f"// HIPRTC version: major output: {major_output}, "
+                    f"minor output: {minor_output}"
+                ]
+        if name == "hiprtcCreateProgram":
+            if len(args) >= 6:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIPRTC create program: output: {output}, source: {args[1]}, "
+                    f"name: {args[2]}, headers: {args[3]}, header sources: {args[4]}, "
+                    f"include names: {args[5]}"
+                ]
+        if name == "hiprtcDestroyProgram":
+            if args:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [f"// HIPRTC destroy program: output: {output}"]
+        if name == "hiprtcCompileProgram":
+            if len(args) >= 3:
+                return [
+                    f"// HIPRTC compile program: program: {args[0]}, "
+                    f"options: {args[1]}, option values: {args[2]}"
+                ]
+        if name in {
+            "hiprtcGetCodeSize",
+            "hiprtcGetBitcodeSize",
+            "hiprtcGetProgramLogSize",
+        }:
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(raw_args[1])
+                artifact = {
+                    "hiprtcGetCodeSize": "code size",
+                    "hiprtcGetBitcodeSize": "bitcode size",
+                    "hiprtcGetProgramLogSize": "program log size",
+                }[name]
+                return [
+                    f"// HIPRTC get {artifact}: program: {args[0]}, output: {output}"
+                ]
+        if name in {"hiprtcGetCode", "hiprtcGetBitcode", "hiprtcGetProgramLog"}:
+            if len(args) >= 2:
+                artifact = {
+                    "hiprtcGetCode": "code",
+                    "hiprtcGetBitcode": "bitcode",
+                    "hiprtcGetProgramLog": "program log",
+                }[name]
+                return [
+                    f"// HIPRTC get {artifact}: program: {args[0]}, output: {args[1]}"
+                ]
+        if name == "hiprtcAddNameExpression":
+            if len(args) >= 2:
+                return [
+                    f"// HIPRTC add name expression: program: {args[0]}, "
+                    f"expression: {args[1]}"
+                ]
+        if name == "hiprtcGetLoweredName":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(raw_args[2])
+                return [
+                    f"// HIPRTC get lowered name: program: {args[0]}, "
+                    f"expression: {args[1]}, output: {output}"
+                ]
+        if name == "hiprtcLinkCreate":
+            if len(args) >= 4:
+                output = self.format_runtime_pointer_target(raw_args[3])
+                return [
+                    f"// HIPRTC link create: options: {args[0]}, "
+                    f"option keys: {args[1]}, option values: {args[2]}, "
+                    f"state output: {output}"
+                ]
+        if name == "hiprtcLinkAddFile":
+            if len(args) >= 6:
+                return [
+                    f"// HIPRTC link add file: state: {args[0]}, input type: {args[1]}, "
+                    f"path: {args[2]}, options: {args[3]}, option keys: {args[4]}, "
+                    f"option values: {args[5]}"
+                ]
+        if name == "hiprtcLinkAddData":
+            if len(args) >= 8:
+                return [
+                    f"// HIPRTC link add data: state: {args[0]}, input type: {args[1]}, "
+                    f"image: {args[2]}, bytes: {args[3]}, name: {args[4]}, "
+                    f"options: {args[5]}, option keys: {args[6]}, "
+                    f"option values: {args[7]}"
+                ]
+        if name == "hiprtcLinkComplete":
+            if len(args) >= 3:
+                binary_output = self.format_runtime_pointer_target(raw_args[1])
+                size_output = self.format_runtime_pointer_target(raw_args[2])
+                return [
+                    f"// HIPRTC link complete: state: {args[0]}, "
+                    f"binary output: {binary_output}, size output: {size_output}"
+                ]
+        if name == "hiprtcLinkDestroy":
+            if args:
+                return [f"// HIPRTC link destroy: state: {args[0]}"]
+        return None
+
+    def format_hip_driver_runtime_call(self, name, raw_args, args):
+        if name == "hipInit":
+            if args:
+                return [f"// HIP initialize runtime: flags: {args[0]}"]
+        if name in {"hipDriverGetVersion", "hipRuntimeGetVersion"}:
+            if args:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                version_kind = "driver" if name == "hipDriverGetVersion" else "runtime"
+                return [f"// HIP get {version_kind} version: output: {output}"]
+        if name == "hipDeviceGet":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP get device handle: output: {output}, ordinal: {args[1]}"
+                ]
+        if name == "hipDeviceCanAccessPeer":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP device can access peer: output: {output}, "
+                    f"device: {args[1]}, peer device: {args[2]}"
+                ]
+        if name in {"hipDeviceEnablePeerAccess", "hipDeviceDisablePeerAccess"}:
+            if args:
+                action = "enable" if name == "hipDeviceEnablePeerAccess" else "disable"
+                comment = f"// HIP {action} peer access: peer device: {args[0]}"
+                if len(args) >= 2:
+                    comment += f", flags: {args[1]}"
+                return [comment]
+        if name == "hipCtxCreate":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP context create: output: {output}, flags: {args[1]}, "
+                    f"device: {args[2]}"
+                ]
+        if name == "hipCtxDestroy":
+            if args:
+                return [f"// HIP context destroy: {args[0]}"]
+        if name == "hipCtxPopCurrent":
+            if args:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [f"// HIP context pop current: output: {output}"]
+        if name == "hipCtxPushCurrent":
+            if args:
+                return [f"// HIP context push current: {args[0]}"]
+        if name == "hipCtxSetCurrent":
+            if args:
+                return [f"// HIP context set current: {args[0]}"]
+        if name == "hipCtxGetCurrent":
+            if args:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [f"// HIP context get current: output: {output}"]
+        if name == "hipCtxGetDevice":
+            if args:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [f"// HIP context get device: output: {output}"]
+        if name == "hipCtxGetApiVersion":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(raw_args[1])
+                return [
+                    f"// HIP context get API version: context: {args[0]}, "
+                    f"output: {output}"
+                ]
+        if name in {"hipCtxGetCacheConfig", "hipCtxGetSharedMemConfig"}:
+            if args:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                config_kind = "cache" if "Cache" in name else "shared memory"
+                return [f"// HIP context get {config_kind} config: output: {output}"]
+        if name in {"hipCtxSetCacheConfig", "hipCtxSetSharedMemConfig"}:
+            if args:
+                config_kind = "cache" if "Cache" in name else "shared memory"
+                return [f"// HIP context set {config_kind} config: {args[0]}"]
+        if name == "hipCtxGetFlags":
+            if args:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [f"// HIP context get flags: output: {output}"]
+        if name == "hipCtxSynchronize":
+            return ["// HIP context synchronize"]
+        if name == "hipDevicePrimaryCtxRetain":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP primary context retain: output: {output}, "
+                    f"device: {args[1]}"
+                ]
+        if name in {"hipDevicePrimaryCtxRelease", "hipDevicePrimaryCtxReset"}:
+            if args:
+                action = "release" if name == "hipDevicePrimaryCtxRelease" else "reset"
+                return [f"// HIP primary context {action}: device: {args[0]}"]
+        if name == "hipDevicePrimaryCtxSetFlags":
+            if len(args) >= 2:
+                return [
+                    f"// HIP primary context set flags: device: {args[0]}, "
+                    f"flags: {args[1]}"
+                ]
+        if name == "hipDevicePrimaryCtxGetState":
+            if len(args) >= 3:
+                flags_output = self.format_runtime_pointer_target(raw_args[1])
+                active_output = self.format_runtime_pointer_target(raw_args[2])
+                return [
+                    f"// HIP primary context get state: device: {args[0]}, "
+                    f"flags output: {flags_output}, active output: {active_output}"
+                ]
         return None
 
     def format_hip_graph_runtime_call(self, name, raw_args, args):
@@ -1564,6 +1782,8 @@ class HipToCrossGLConverter:
             return f'/* HIP error string: {args[0]} */ ""'
         if name == "hipGetErrorName" and args:
             return f'/* HIP error name: {args[0]} */ ""'
+        if name == "hiprtcGetErrorString" and args:
+            return f'/* HIPRTC error string: {args[0]} */ ""'
         return None
 
     def format_runtime_pointer_target(self, arg):

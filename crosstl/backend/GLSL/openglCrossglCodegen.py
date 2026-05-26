@@ -71,6 +71,34 @@ class GLSLToCrossGLConverter:
         "ray_miss",
         "ray_callable",
     }
+    RAY_QUERY_SIMPLE_METHODS = {
+        "rayQueryProceedEXT": "Proceed",
+        "rayQueryTerminateEXT": "Abort",
+    }
+    RAY_QUERY_COMMITTED_METHODS = {
+        "rayQueryGetIntersectionTypeEXT": ("CandidateType", "CommittedType"),
+        "rayQueryGetIntersectionPrimitiveIndexEXT": (
+            "CandidatePrimitiveIndex",
+            "CommittedPrimitiveIndex",
+        ),
+        "rayQueryGetIntersectionInstanceIdEXT": (
+            "CandidateInstanceID",
+            "CommittedInstanceID",
+        ),
+        "rayQueryGetIntersectionGeometryIndexEXT": (
+            "CandidateGeometryIndex",
+            "CommittedGeometryIndex",
+        ),
+        "rayQueryGetIntersectionObjectRayOriginEXT": (
+            "CandidateObjectRayOrigin",
+            "CommittedObjectRayOrigin",
+        ),
+        "rayQueryGetIntersectionObjectRayDirectionEXT": (
+            "CandidateObjectRayDirection",
+            "CommittedObjectRayDirection",
+        ),
+        "rayQueryGetIntersectionTEXT": ("CandidateRayT", "CommittedRayT"),
+    }
 
     def __init__(self, shader_type="vertex"):
         """Initialize GLSL-to-CrossGL mappings for a shader stage."""
@@ -267,6 +295,7 @@ class GLSLToCrossGLConverter:
             "uimage2DMS": "uimage2DMS",
             "uimage2DMSArray": "uimage2DMSArray",
             "accelerationStructureEXT": "accelerationStructureEXT",
+            "rayQueryEXT": "rayQueryEXT",
             "void": "void",
         }
 
@@ -1174,6 +1203,10 @@ class GLSLToCrossGLConverter:
         elif isinstance(name, VariableNode):
             name = name.name
 
+        ray_query_call = self.generate_ray_query_method_call(name, node.args)
+        if ray_query_call is not None:
+            return ray_query_call
+
         if name in [
             "vec2",
             "vec3",
@@ -1216,6 +1249,40 @@ class GLSLToCrossGLConverter:
         args = ", ".join(self.generate_expression(arg) for arg in node.args)
 
         return f"{mapped_name}({args})"
+
+    def generate_ray_query_method_call(self, name, args):
+        if name in self.RAY_QUERY_SIMPLE_METHODS and len(args) == 1:
+            query = self.generate_expression(args[0])
+            method = self.RAY_QUERY_SIMPLE_METHODS[name]
+            return f"{query}.{method}()"
+
+        if name not in self.RAY_QUERY_COMMITTED_METHODS or len(args) != 2:
+            return None
+
+        committed = self.ray_query_committed_argument(args[1])
+        if committed is None:
+            return None
+
+        query = self.generate_expression(args[0])
+        candidate_method, committed_method = self.RAY_QUERY_COMMITTED_METHODS[name]
+        method = committed_method if committed else candidate_method
+        return f"{query}.{method}()"
+
+    def ray_query_committed_argument(self, arg):
+        if isinstance(arg, str):
+            value = arg.lower()
+        elif isinstance(arg, VariableNode):
+            value = str(arg.name).lower()
+        elif isinstance(arg, NumberNode):
+            value = str(arg.value).lower()
+        else:
+            value = str(arg).lower()
+
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+        return None
 
     def generate_member_access(self, node):
         object_name = ""

@@ -1016,6 +1016,58 @@ def test_sign_and_classification_calls_convert_to_crossgl_intrinsics():
     assert ".is_finite(" not in result
 
 
+def test_any_and_all_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn reduce_masks(mask: Vec3<bool>, flag: bool) -> bool {
+        let has_any = any(mask);
+        let has_all = crate::math::all(mask);
+        let scalar_any = any(flag);
+        let scalar_all = crate::math::all(flag);
+        return has_any || has_all || scalar_any || scalar_all;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "bool reduce_masks(bvec3 mask, bool flag)" in result
+    assert "has_any = any(mask);" in result
+    assert "has_all = all(mask);" in result
+    assert "scalar_any = any(flag);" in result
+    assert "scalar_all = all(flag);" in result
+    assert "crate::math::all" not in result
+
+
+def test_relational_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn relational_ops(left: Vec3<f32>, right: Vec3<f32>, threshold: f32, mask: Vec3<bool>) -> bool {
+        let lt = less_than(left, right);
+        let le = less_than_equal(left, threshold);
+        let gt = crate::math::greater_than(threshold, right);
+        let ge = crate::math::greater_than_equal(left, right);
+        let eq = equal(mask, Vec3::new(true, false, true));
+        let ne = not_equal(left, right);
+        let scalar_eq = equal(threshold, 1.0);
+        return any(lt) || any(le) || any(gt) || any(ge) || any(eq) || any(ne) || scalar_eq;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "bool relational_ops(vec3 left, vec3 right, float threshold, bvec3 mask)"
+        in result
+    )
+    assert "lt = lessThan(left, right);" in result
+    assert "le = lessThanEqual(left, threshold);" in result
+    assert "gt = greaterThan(threshold, right);" in result
+    assert "ge = greaterThanEqual(left, right);" in result
+    assert "eq = equal(mask, bvec3(true, false, true));" in result
+    assert "ne = notEqual(left, right);" in result
+    assert "scalar_eq = equal(threshold, 1.0);" in result
+    assert "crate::math::greater_than" not in result
+    assert "crate::math::greater_than_equal" not in result
+
+
 def test_lerp_function_converts_to_crossgl_mix():
     code = """
     fn blend(a: f32, b: f32, t: f32) -> f32 {
