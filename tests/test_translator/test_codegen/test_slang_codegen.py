@@ -791,6 +791,68 @@ def test_tessellation_factor_semantics_map_to_slang_patch_constant_outputs():
     assert ": gl_TessLevelInner" not in generated_code
 
 
+def test_tessellation_domain_struct_semantics_map_without_stage_context():
+    code = """
+    struct DomainInput {
+        vec3 coord @ gl_TessCoord;
+        uint primitive @ gl_PrimitiveIDIn;
+    };
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float3 coord : SV_DomainLocation;" in generated_code
+    assert "uint primitive : SV_PrimitiveID;" in generated_code
+    assert ": gl_TessCoord" not in generated_code
+    assert ": gl_PrimitiveIDIn" not in generated_code
+
+
+def test_tessellation_patch_generic_literal_type_arguments_emit():
+    code = """
+    shader main {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        tessellation_evaluation {
+            void main(InputPatch<VSOut, 3> patch) {
+                VSOut first = patch[0];
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void main(InputPatch<VSOut, 3> patch)" in generated_code
+    assert "VSOut first = patch[0];" in generated_code
+    assert "None" not in generated_code
+
+
+def test_tessellation_output_patch_generic_literal_return_type_emits():
+    code = """
+    shader main {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        tessellation_control {
+            OutputPatch<VSOut, 3> makePatch() {
+                OutputPatch<VSOut, 3> patch;
+                return patch;
+            }
+
+            void main() {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "OutputPatch<VSOut, 3> makePatch()" in generated_code
+    assert "OutputPatch<VSOut, 3> patch;" in generated_code
+    assert "return patch;" in generated_code
+    assert "None" not in generated_code
+
+
 @pytest.mark.parametrize(
     ("attribute", "message"),
     [

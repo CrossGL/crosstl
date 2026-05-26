@@ -2915,6 +2915,44 @@ def test_metal_trace_ray_full_signature_lowers_to_intersector_query():
     assert "TraceRay" not in generated
 
 
+def test_metal_acceleration_structure_globals_thread_through_helpers():
+    code = """
+    shader rt {
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        void shoot(vec3 origin, vec3 direction) {
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                origin,
+                0.001,
+                direction,
+                1000.0,
+                0
+            );
+        }
+
+        ray_generation {
+            void main() {
+                shoot(vec3(0.0), vec3(0.0, 0.0, 1.0));
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void shoot(float3 origin, float3 direction, "
+        "instance_acceleration_structure topLevelAS)"
+    ) in generated
+    assert "shoot(float3(0.0), float3(0.0, 0.0, 1.0), topLevelAS);" in generated
+    assert "shoot(float3(0.0), float3(0.0, 0.0, 1.0));" not in generated
+
+
 def test_metal_unsupported_ray_intrinsics_emit_compile_safe_diagnostics():
     code = """
     shader rt {

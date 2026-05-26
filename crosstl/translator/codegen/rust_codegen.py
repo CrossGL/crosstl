@@ -3961,19 +3961,59 @@ class RustCodeGen:
         has_sampler = self.call_has_explicit_sampler_argument(arguments)
         if func_name == "textureSize":
             return "texture_size" if arg_count == 1 else "texture_size_lod"
+        if func_name == "texture":
+            if has_sampler:
+                return (
+                    "sample_bias_sampler"
+                    if arg_count and arg_count >= 4
+                    else "sample_sampler"
+                )
+            return "sample_bias" if arg_count and arg_count >= 3 else "sample"
+        if func_name == "textureOffset":
+            if has_sampler:
+                return (
+                    "sample_offset_bias_sampler"
+                    if arg_count and arg_count >= 5
+                    else "sample_offset_sampler"
+                )
+            return (
+                "sample_offset_bias"
+                if arg_count and arg_count >= 4
+                else "sample_offset"
+            )
+        if func_name == "textureProj":
+            if has_sampler:
+                return (
+                    "sample_projected_bias_sampler"
+                    if arg_count and arg_count >= 4
+                    else "sample_projected_sampler"
+                )
+            return (
+                "sample_projected_bias"
+                if arg_count and arg_count >= 3
+                else "sample_projected"
+            )
+        if func_name == "textureProjOffset":
+            if has_sampler:
+                return (
+                    "sample_projected_offset_bias_sampler"
+                    if arg_count and arg_count >= 5
+                    else "sample_projected_offset_sampler"
+                )
+            return (
+                "sample_projected_offset_bias"
+                if arg_count and arg_count >= 4
+                else "sample_projected_offset"
+            )
         sampler_texture_map = {
-            "texture": "sample_sampler",
             "textureLod": "sample_lod_sampler",
             "textureLodOffset": "sample_lod_offset_sampler",
             "textureGrad": "sample_grad_sampler",
             "textureGradOffset": "sample_grad_offset_sampler",
-            "textureOffset": "sample_offset_sampler",
-            "textureProj": "sample_projected_sampler",
             "textureProjLod": "sample_projected_lod_sampler",
             "textureProjLodOffset": "sample_projected_lod_offset_sampler",
             "textureProjGrad": "sample_projected_grad_sampler",
             "textureProjGradOffset": "sample_projected_grad_offset_sampler",
-            "textureProjOffset": "sample_projected_offset_sampler",
             "textureQueryLod": "texture_query_lod_sampler",
         }
         if has_sampler and func_name in sampler_texture_map:
@@ -5283,7 +5323,9 @@ class RustCodeGen:
 
         if mapped_name in {
             "sample",
+            "sample_bias",
             "sample_sampler",
+            "sample_bias_sampler",
             "sample_lod",
             "sample_lod_sampler",
             "sample_lod_offset",
@@ -5293,15 +5335,21 @@ class RustCodeGen:
             "sample_grad_offset",
             "sample_grad_offset_sampler",
             "sample_offset",
+            "sample_offset_bias",
             "sample_offset_sampler",
+            "sample_offset_bias_sampler",
             "sample_projected",
+            "sample_projected_bias",
             "sample_projected_sampler",
+            "sample_projected_bias_sampler",
             "sample_projected_lod",
             "sample_projected_lod_sampler",
             "sample_projected_grad",
             "sample_projected_grad_sampler",
             "sample_projected_offset",
+            "sample_projected_offset_bias",
             "sample_projected_offset_sampler",
+            "sample_projected_offset_bias_sampler",
             "sample_projected_lod_offset",
             "sample_projected_lod_offset_sampler",
             "sample_projected_grad_offset",

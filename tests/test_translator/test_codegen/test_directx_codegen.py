@@ -3024,6 +3024,153 @@ def test_ray_and_mesh_shader_attributes():
     assert "void MSMain()" in generated
 
 
+def test_directx_ray_stage_semantic_parameters_emit_and_validate():
+    shader = """
+    shader RayStageSemantics {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute
+            ) {
+                payload.color = vec3(attributes.barycentrics, 1.0);
+            }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callable_data) {
+                data.value = 1u;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert '[shader("closesthit")]' in generated
+    assert "RayPayload payload : payload" in generated
+    assert "HitAttributes attributes : hit_attribute" in generated
+    assert '[shader("callable")]' in generated
+    assert "CallableData data : callable_data" in generated
+
+
+def test_directx_ray_stage_semantic_parameters_reject_invalid_stages_and_types():
+    callable_payload_code = """
+    shader BadCallablePayload {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_callable {
+            void main(RayPayload payload @ payload) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ray_callable.*payload"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(callable_payload_code), "ray_callable"
+        )
+
+    miss_hit_attribute_code = """
+    shader BadMissHitAttribute {
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        ray_miss {
+            void main(HitAttributes attributes @ hit_attribute) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ray_miss.*hit_attribute"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(miss_hit_attribute_code), "ray_miss"
+        )
+
+    scalar_payload_code = """
+    shader BadScalarRayPayload {
+        ray_miss {
+            void main(float payload @ payload) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="payload.*user-defined struct"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(scalar_payload_code), "ray_miss"
+        )
+
+
+def test_directx_ray_tracing_intrinsics_validate_stage_and_arity():
+    wrong_stage_code = """
+    shader BadTraceRayStage {
+        compute {
+            void main() {
+                TraceRay(1, 2, 3, 4, 5, 6, 7, 8);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="compute.*cannot call TraceRay"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(wrong_stage_code), "compute"
+        )
+
+    wrong_arity_code = """
+    shader BadTraceRayArity {
+        ray_generation {
+            void main() {
+                TraceRay(1, 2, 3);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="TraceRay requires 8 or 11"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(wrong_arity_code), "ray_generation"
+        )
+
+    report_hit_stage_code = """
+    shader BadReportHitStage {
+        ray_any_hit {
+            void main() {
+                ReportHit(1.0, 0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ray_any_hit.*cannot call ReportHit"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(report_hit_stage_code), "ray_any_hit"
+        )
+
+    any_hit_ops_code = """
+    shader ValidAnyHitOps {
+        ray_any_hit {
+            void main() {
+                IgnoreHit();
+                AcceptHitAndEndSearch();
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(any_hit_ops_code), "ray_any_hit"
+    )
+    assert "IgnoreHit();" in generated
+    assert "AcceptHitAndEndSearch();" in generated
+
+
 def test_directx_mesh_task_stages_emit_numthreads_layouts():
     shader = """
     shader MeshTaskLocalSizes {
@@ -3484,6 +3631,84 @@ def test_directx_mesh_output_writes_validate_order_and_indices():
         HLSLCodeGen().generate_stage(
             crosstl.translator.parse(component_index_write_code), "mesh"
         )
+
+
+def test_directx_mesh_output_writes_track_literal_branch_dominance():
+    true_branch_code = """
+    shader MeshOutputCountDominatesAfterTrueBranch {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                if (true) {
+                    SetMeshOutputCounts(3, 1);
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(true_branch_code), "mesh"
+    )
+    assert "SetMeshOutputCounts(3, 1);" in generated
+
+    false_branch_code = """
+    shader MeshOutputCountSkippedByFalseBranch {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                if (false) {
+                    SetMeshOutputCounts(3, 1);
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(false_branch_code), "mesh"
+        )
+
+    else_branch_code = """
+    shader MeshOutputCountDominatesThroughElseBranch {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                if (false) {
+                    verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                } else {
+                    SetMeshOutputCounts(3, 1);
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(else_branch_code), "mesh"
+    )
+    assert "SetMeshOutputCounts(3, 1);" in generated
 
 
 def test_directx_mesh_output_writes_validate_literal_bounds():

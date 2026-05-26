@@ -306,6 +306,22 @@ MOJO_IMAGE_ATOMIC_BUILTINS = {
     "imageAtomicCompSwap": "image_atomic_comp_swap",
 }
 
+MOJO_TYPED_BUFFER_RESOURCE_TYPES = {
+    "StructuredBuffer",
+    "RWStructuredBuffer",
+    "AppendStructuredBuffer",
+    "ConsumeStructuredBuffer",
+}
+
+MOJO_BYTE_ADDRESS_BUFFER_TYPES = {
+    "ByteAddressBuffer",
+    "RWByteAddressBuffer",
+}
+
+MOJO_BUFFER_RESOURCE_TYPES = (
+    MOJO_TYPED_BUFFER_RESOURCE_TYPES | MOJO_BYTE_ADDRESS_BUFFER_TYPES
+)
+
 MOJO_INTEGER_INDEX_TYPES = {"int", "uint", "short", "ushort", "long", "ulong"}
 
 MOJO_VECTOR_ARITHMETIC_OPS = {
@@ -339,6 +355,12 @@ class MojoCodeGen:
         self.required_image_load_types = set()
         self.required_image_store_types = set()
         self.required_resource_builtin_helpers = {}
+        self.required_buffer_resource_types = set()
+        self.required_buffer_load_helpers = set()
+        self.required_buffer_store_helpers = set()
+        self.required_buffer_append_helpers = set()
+        self.required_buffer_consume_helpers = set()
+        self.required_buffer_dimensions_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -476,6 +498,12 @@ class MojoCodeGen:
         self.required_image_load_types = set()
         self.required_image_store_types = set()
         self.required_resource_builtin_helpers = {}
+        self.required_buffer_resource_types = set()
+        self.required_buffer_load_helpers = set()
+        self.required_buffer_store_helpers = set()
+        self.required_buffer_append_helpers = set()
+        self.required_buffer_consume_helpers = set()
+        self.required_buffer_dimensions_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -688,6 +716,51 @@ class MojoCodeGen:
         if hasattr(size, "value"):
             return size.value
         return size
+
+    def parse_generic_type_name(self, type_name):
+        if not isinstance(type_name, str) or "<" not in type_name:
+            return None
+        match = re.fullmatch(r"\s*([A-Za-z_]\w*)\s*<(.+)>\s*", type_name)
+        if match is None:
+            return None
+        return match.group(1), self.split_generic_arguments(match.group(2))
+
+    def split_generic_arguments(self, args_text):
+        args = []
+        depth = 0
+        start = 0
+        for index, char in enumerate(args_text):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif char == "," and depth == 0:
+                args.append(args_text[start:index].strip())
+                start = index + 1
+        args.append(args_text[start:].strip())
+        return [arg for arg in args if arg]
+
+    def buffer_resource_info(self, type_name):
+        generic = self.parse_generic_type_name(self.type_name(type_name))
+        if generic is None:
+            type_name = self.type_name(type_name)
+            if type_name in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+                return type_name, None
+            return None
+
+        base_type, generic_args = generic
+        if base_type not in MOJO_TYPED_BUFFER_RESOURCE_TYPES or not generic_args:
+            return None
+        return base_type, generic_args[0]
+
+    def mapped_buffer_type(self, buffer_type, element_type=None):
+        if buffer_type in MOJO_TYPED_BUFFER_RESOURCE_TYPES and element_type is not None:
+            return f"{buffer_type}[{self.map_type(element_type)}]"
+        return buffer_type
+
+    def register_buffer_resource_type(self, buffer_type):
+        if buffer_type in MOJO_BUFFER_RESOURCE_TYPES:
+            self.required_buffer_resource_types.add(buffer_type)
 
     def extract_semantic_from_attributes(self, attributes):
         """Extract semantic information from new AST attributes."""
@@ -1925,6 +1998,16 @@ class MojoCodeGen:
                 return self.generate_image_load_call(expr.args)
             if func_name == "imageStore":
                 return self.generate_image_store_call(expr.args)
+            if func_name == "buffer_load":
+                return self.generate_buffer_load_call(expr.args)
+            if func_name == "buffer_store":
+                return self.generate_buffer_store_call(expr.args)
+            if func_name == "buffer_append":
+                return self.generate_buffer_append_call(expr.args)
+            if func_name == "buffer_consume":
+                return self.generate_buffer_consume_call(expr.args)
+            if func_name == "buffer_dimensions":
+                return self.generate_buffer_dimensions_call(expr.args)
             if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
                 helper_base, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
                 return self.generate_resource_builtin_call(
@@ -2264,6 +2347,56 @@ class MojoCodeGen:
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"image_store({generated_args})"
 
+    def generate_buffer_load_call(self, args):
+        if args:
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            if info is not None and info[1] is not None:
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_load_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_load({generated_args})"
+
+    def generate_buffer_store_call(self, args):
+        if args:
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            if info is not None and info[1] is not None:
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_store_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_store({generated_args})"
+
+    def generate_buffer_append_call(self, args):
+        if args:
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            if info is not None and info[1] is not None:
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_append_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_append({generated_args})"
+
+    def generate_buffer_consume_call(self, args):
+        if args:
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            if info is not None and info[1] is not None:
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_consume_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_consume({generated_args})"
+
+    def generate_buffer_dimensions_call(self, args):
+        if args:
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            if info is not None:
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_dimensions_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_dimensions({generated_args})"
+
     def generate_resource_builtin_call(self, args, helper_base, return_kind):
         if not args:
             return f"{helper_base}()"
@@ -2582,6 +2715,12 @@ class MojoCodeGen:
             and not self.required_image_load_types
             and not self.required_image_store_types
             and not self.required_resource_builtin_helpers
+            and not self.required_buffer_resource_types
+            and not self.required_buffer_load_helpers
+            and not self.required_buffer_store_helpers
+            and not self.required_buffer_append_helpers
+            and not self.required_buffer_consume_helpers
+            and not self.required_buffer_dimensions_helpers
         ):
             return ""
 
@@ -2600,12 +2739,20 @@ class MojoCodeGen:
             self.required_resource_types
             or resource_sampled_types
             or self.required_resource_builtin_helpers
+            or self.required_buffer_resource_types
+            or self.required_buffer_load_helpers
+            or self.required_buffer_store_helpers
+            or self.required_buffer_append_helpers
+            or self.required_buffer_consume_helpers
+            or self.required_buffer_dimensions_helpers
         ):
             code += "# CrossGL resource placeholders\n"
             for resource_type in sorted(
                 self.required_resource_types | resource_sampled_types
             ):
                 code += self.generate_resource_type(resource_type)
+            for buffer_type in sorted(self.required_buffer_resource_types):
+                code += self.generate_buffer_resource_type(buffer_type)
             for resource_type in sorted(self.required_resource_sample_types):
                 code += self.generate_resource_sample_helper(resource_type)
             for resource_type in sorted(self.required_resource_lod_types):
@@ -2626,6 +2773,16 @@ class MojoCodeGen:
                 code += self.generate_resource_builtin_helper(
                     self.required_resource_builtin_helpers[key]
                 )
+            for key in sorted(self.required_buffer_load_helpers):
+                code += self.generate_buffer_load_helper(*key)
+            for key in sorted(self.required_buffer_store_helpers):
+                code += self.generate_buffer_store_helper(*key)
+            for key in sorted(self.required_buffer_append_helpers):
+                code += self.generate_buffer_append_helper(*key)
+            for key in sorted(self.required_buffer_consume_helpers):
+                code += self.generate_buffer_consume_helper(*key)
+            for key in sorted(self.required_buffer_dimensions_helpers):
+                code += self.generate_buffer_dimensions_helper(*key)
             code += "\n"
 
         if self.required_fract_helpers or self.required_saturate_helpers:
@@ -2672,6 +2829,63 @@ class MojoCodeGen:
     def generate_resource_type(self, resource_type):
         code = f"@value\nstruct {resource_type}:\n"
         code += "    pass\n\n"
+        return code
+
+    def generate_buffer_resource_type(self, buffer_type):
+        if buffer_type in MOJO_TYPED_BUFFER_RESOURCE_TYPES:
+            return f"@value\nstruct {buffer_type}[T: AnyType]:\n    pass\n\n"
+        return f"@value\nstruct {buffer_type}:\n    pass\n\n"
+
+    def generate_buffer_load_helper(self, buffer_type, element_type):
+        element_mojo_type = self.map_type(element_type)
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        zero_value = self.zero_value_for_type(element_type)
+        code = ""
+        for index_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_load(buffer: {buffer_mojo_type}, "
+                f"index: {index_type}) -> {element_mojo_type}:\n"
+            )
+            code += f"    return {zero_value}\n\n"
+        return code
+
+    def generate_buffer_store_helper(self, buffer_type, element_type):
+        element_mojo_type = self.map_type(element_type)
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        code = ""
+        for index_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_store(buffer: {buffer_mojo_type}, "
+                f"index: {index_type}, value: {element_mojo_type}):\n"
+            )
+            code += "    pass\n\n"
+        return code
+
+    def generate_buffer_append_helper(self, buffer_type, element_type):
+        element_mojo_type = self.map_type(element_type)
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        code = f"fn buffer_append(buffer: {buffer_mojo_type}, value: {element_mojo_type}):\n"
+        code += "    pass\n\n"
+        return code
+
+    def generate_buffer_consume_helper(self, buffer_type, element_type):
+        element_mojo_type = self.map_type(element_type)
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        code = (
+            f"fn buffer_consume(buffer: {buffer_mojo_type}) -> {element_mojo_type}:\n"
+        )
+        code += f"    return {self.zero_value_for_type(element_type)}\n\n"
+        return code
+
+    def generate_buffer_dimensions_helper(self, buffer_type, element_type):
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        code = ""
+        for dimensions_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_dimensions(buffer: {buffer_mojo_type}, "
+                f"dimensions: {dimensions_type}):\n"
+            )
+            code += "    pass\n\n"
         return code
 
     def generate_resource_sample_helper(self, resource_type):
@@ -3204,6 +3418,10 @@ class MojoCodeGen:
 
     def zero_value_for_type(self, type_name):
         type_name = self.type_name(type_name)
+        buffer_info = self.buffer_resource_info(type_name)
+        if buffer_info is not None:
+            return f"{self.mapped_buffer_type(*buffer_info)}()"
+
         if self.is_array_type_name(type_name):
             element_type, size = parse_array_type(type_name)
             return self.zero_array_value(element_type, size)
@@ -3378,6 +3596,20 @@ class MojoCodeGen:
                     return "uint"
                 return "vec4"
             if func_name == "imageStore":
+                return "void"
+            if func_name == "buffer_load" and expr.args:
+                info = self.buffer_resource_info(
+                    self.expression_result_type(expr.args[0])
+                )
+                if info is not None:
+                    return info[1]
+            if func_name == "buffer_consume" and expr.args:
+                info = self.buffer_resource_info(
+                    self.expression_result_type(expr.args[0])
+                )
+                if info is not None:
+                    return info[1]
+            if func_name in {"buffer_store", "buffer_append", "buffer_dimensions"}:
                 return "void"
             if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
                 _, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
@@ -3594,6 +3826,11 @@ class MojoCodeGen:
             else:
                 return f"List[{base_mapped}]"
 
+        buffer_info = self.buffer_resource_info(vtype_str)
+        if buffer_info is not None:
+            self.register_buffer_resource_type(buffer_info[0])
+            return self.mapped_buffer_type(*buffer_info)
+
         if vtype_str in MOJO_MATRIX_TYPES:
             dtype, columns, rows = MOJO_MATRIX_TYPES[vtype_str]
             self.required_matrix_types.add((dtype, columns, rows))
@@ -3608,6 +3845,8 @@ class MojoCodeGen:
         return mapped_type
 
     def is_resource_type_name(self, type_name):
+        if self.buffer_resource_info(type_name) is not None:
+            return True
         return self.is_mojo_resource_type(
             self.type_mapping.get(str(type_name), type_name)
         )

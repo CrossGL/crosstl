@@ -2918,6 +2918,9 @@ class TestCudaCodeGen:
                 sampler2d paramTex,
                 vec2 uv,
                 vec3 uvLayer,
+                vec3 uvw,
+                vec2 ddx,
+                vec2 ddy,
                 ivec2 offset,
                 ivec2 offsets[4]
             ) {
@@ -2940,6 +2943,33 @@ class TestCudaCodeGen:
                     2
                 );
                 vec4 gatheredVolume = textureGather(volumeTex, uvLayer);
+                vec4 offsetSample = textureOffset(colorMap, uv, offset);
+                vec4 lodOffsetSample = textureLodOffset(colorMap, uv, 1.0, offset);
+                vec4 gradOffsetSample = textureGradOffset(
+                    colorMap,
+                    uv,
+                    ddx,
+                    ddy,
+                    offset
+                );
+                vec4 projected = textureProj(colorMap, uvw);
+                vec4 projectedOffset = textureProjOffset(colorMap, uvw, offset);
+                vec4 projectedLod = textureProjLod(colorMap, uvw, 1.0);
+                vec4 projectedLodOffset = textureProjLodOffset(
+                    colorMap,
+                    uvw,
+                    1.0,
+                    offset
+                );
+                vec4 projectedGrad = textureProjGrad(colorMap, uvw, ddx, ddy);
+                vec4 projectedGradOffset = textureProjGradOffset(
+                    colorMap,
+                    uvw,
+                    ddx,
+                    ddy,
+                    offset
+                );
+                vec4 fetchedOffset = texelFetchOffset(colorMap, offset, 0, offset);
             }
 
             compute {
@@ -2990,9 +3020,69 @@ class TestCudaCodeGen:
             "textureGather on sampler3D */ "
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
         )
+        assert (
+            "float4 offsetSample = /* unsupported CUDA sampled resource call: "
+            "textureOffset on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 lodOffsetSample = /* unsupported CUDA sampled resource call: "
+            "textureLodOffset on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 gradOffsetSample = /* unsupported CUDA sampled resource call: "
+            "textureGradOffset on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 projected = /* unsupported CUDA sampled resource call: "
+            "textureProj on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 projectedOffset = /* unsupported CUDA sampled resource call: "
+            "textureProjOffset on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 projectedLod = /* unsupported CUDA sampled resource call: "
+            "textureProjLod on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 projectedLodOffset = /* unsupported CUDA sampled resource call: "
+            "textureProjLodOffset on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 projectedGrad = /* unsupported CUDA sampled resource call: "
+            "textureProjGrad on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 projectedGradOffset = /* unsupported CUDA sampled resource call: "
+            "textureProjGradOffset on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 fetchedOffset = /* unsupported CUDA sampled resource call: "
+            "texelFetchOffset on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
         assert "textureGather(" not in cuda_code
         assert "textureGatherOffset(" not in cuda_code
         assert "textureGatherOffsets(" not in cuda_code
+        assert "textureOffset(" not in cuda_code
+        assert "textureLodOffset(" not in cuda_code
+        assert "textureGradOffset(" not in cuda_code
+        assert "textureProj(" not in cuda_code
+        assert "textureProjOffset(" not in cuda_code
+        assert "textureProjLod(" not in cuda_code
+        assert "textureProjLodOffset(" not in cuda_code
+        assert "textureProjGrad(" not in cuda_code
+        assert "textureProjGradOffset(" not in cuda_code
+        assert "texelFetchOffset(" not in cuda_code
 
     def test_resource_type_keywords_emit_cuda_resource_types(self):
         """Test CUDA maps all parser resource keywords instead of leaking CrossGL types."""

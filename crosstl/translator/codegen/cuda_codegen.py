@@ -1813,6 +1813,38 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     func_name, texture_type, args
                 )
 
+        if (
+            func_name
+            in {
+                "textureOffset",
+                "textureLodOffset",
+                "textureGradOffset",
+                "textureProj",
+                "textureProjOffset",
+                "textureProjLod",
+                "textureProjLodOffset",
+                "textureProjGrad",
+                "textureProjGradOffset",
+                "texelFetchOffset",
+            }
+            and raw_args
+        ):
+            texture_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            if texture_type is not None:
+                if self.is_shadow_resource_type(texture_type):
+                    return self.unsupported_shadow_resource_call(
+                        func_name, texture_type, args
+                    )
+                if self.is_multisample_resource_type(texture_type):
+                    return self.unsupported_multisample_resource_call(
+                        func_name, texture_type, args
+                    )
+                return self.unsupported_sampled_resource_call(
+                    func_name, texture_type, args
+                )
+
         if func_name in {
             "imageAtomicAdd",
             "imageAtomicMin",

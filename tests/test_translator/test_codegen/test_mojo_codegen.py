@@ -862,6 +862,98 @@ def test_resource_arrays_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_structured_buffer_placeholders_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct Particle {
+        vec4 position;
+        float mass;
+    };
+
+    StructuredBuffer<Particle> inputParticles;
+    RWStructuredBuffer<Particle> outputParticles;
+    RWStructuredBuffer<int> counters[2];
+    AppendStructuredBuffer<int> appended;
+    ConsumeStructuredBuffer<int> consumed;
+
+    float scale(
+        RWStructuredBuffer<float> outputValues,
+        StructuredBuffer<float> inputValues,
+        uint index
+    ) {
+        float value = buffer_load(inputValues, index);
+        buffer_store(outputValues, index, value * 2.0);
+        return value;
+    }
+
+    Particle copyParticle(
+        RWStructuredBuffer<Particle> outputBuffer,
+        StructuredBuffer<Particle> inputBuffer,
+        uint index
+    ) {
+        Particle value = buffer_load(inputBuffer, index);
+        buffer_store(outputBuffer, index, value);
+        return value;
+    }
+
+    int updateCounter(int slot, uint index, int value) {
+        int previous = buffer_load(counters[slot], index);
+        buffer_store(counters[slot], index, previous + value);
+        buffer_append(appended, value);
+        return buffer_consume(consumed);
+    }
+
+    void queryCount(StructuredBuffer<float> inputValues) {
+        uint count = 0;
+        buffer_dimensions(inputValues, count);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct StructuredBuffer[T: AnyType]:" in generated_code
+    assert "struct RWStructuredBuffer[T: AnyType]:" in generated_code
+    assert "struct AppendStructuredBuffer[T: AnyType]:" in generated_code
+    assert "struct ConsumeStructuredBuffer[T: AnyType]:" in generated_code
+    assert "var inputParticles: StructuredBuffer[Particle]" in generated_code
+    assert "var outputParticles: RWStructuredBuffer[Particle]" in generated_code
+    assert "InlineArray[RWStructuredBuffer[Int32], 2]" in generated_code
+    assert (
+        "fn buffer_load(buffer: StructuredBuffer[Float32], "
+        "index: UInt32) -> Float32:" in generated_code
+    )
+    assert (
+        "fn buffer_store(buffer: RWStructuredBuffer[Particle], "
+        "index: UInt32, value: Particle):" in generated_code
+    )
+    assert (
+        "fn buffer_append(buffer: AppendStructuredBuffer[Int32], value: Int32):"
+        in generated_code
+    )
+    assert (
+        "fn buffer_consume(buffer: ConsumeStructuredBuffer[Int32]) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "fn buffer_dimensions(buffer: StructuredBuffer[Float32], "
+        "dimensions: UInt32):" in generated_code
+    )
+    assert "RWStructuredBuffer<" not in generated_code
+    assert "StructuredBuffer<" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "structured_buffer_placeholders.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_advanced_texture_placeholder_builtins_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 

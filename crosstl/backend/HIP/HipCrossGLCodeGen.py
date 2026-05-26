@@ -142,6 +142,10 @@ class HipToCrossGLConverter:
         "texCubemapLayeredGrad": "samplerCubeArray",
     }
     HIP_SURFACE_CALL_TYPE_HINTS = {
+        "surf1Dread": "image1D",
+        "surf1Dwrite": "image1D",
+        "surf1DLayeredread": "image1DArray",
+        "surf1DLayeredwrite": "image1DArray",
         "surf2Dread": "image2D",
         "surf2Dwrite": "image2D",
         "surf3Dread": "image3D",
@@ -260,7 +264,7 @@ class HipToCrossGLConverter:
                 return
 
             if isinstance(current, FunctionCallNode):
-                hint = self.get_resource_object_call_hint(current.name)
+                hint = self.get_resource_object_call_hint(current.name, current.args)
                 if hint is not None:
                     arg_index, resource_type = hint
                     if len(current.args) > arg_index:
@@ -312,7 +316,7 @@ class HipToCrossGLConverter:
                 return
 
             if isinstance(current, FunctionCallNode):
-                hint = self.get_resource_object_call_hint(current.name)
+                hint = self.get_resource_object_call_hint(current.name, current.args)
                 if hint is not None:
                     arg_index, resource_type = hint
                     if len(current.args) > arg_index:
@@ -371,7 +375,7 @@ class HipToCrossGLConverter:
         collect(getattr(node, "body", []))
         return names
 
-    def get_resource_object_call_hint(self, function_name):
+    def get_resource_object_call_hint(self, function_name, args=None):
         base_name, _ = self.parse_cpp_template(function_name)
         if self.is_user_defined_function(base_name):
             return None
@@ -380,8 +384,19 @@ class HipToCrossGLConverter:
         if base_name in self.HIP_SURFACE_CALL_TYPE_HINTS:
             if base_name.endswith("write"):
                 return 1, self.HIP_SURFACE_CALL_TYPE_HINTS[base_name]
+            if args and self.is_surface_pointer_output_argument(args[0]):
+                return 1, self.HIP_SURFACE_CALL_TYPE_HINTS[base_name]
             return 0, self.HIP_SURFACE_CALL_TYPE_HINTS[base_name]
         return None
+
+    def is_surface_pointer_output_argument(self, expression):
+        if isinstance(expression, UnaryOpNode) and expression.op == "&":
+            return True
+        if isinstance(expression, CastNode):
+            return self.is_surface_pointer_output_argument(expression.expression)
+        if isinstance(expression, str):
+            return self.is_surface_output_target(expression)
+        return False
 
     def get_resource_object_expression_name(self, expression):
         if isinstance(expression, str):
@@ -614,6 +629,23 @@ class HipToCrossGLConverter:
                     f"// HIP memory info: free output: {free_output}, "
                     f"total output: {total_output}"
                 ]
+        elif name == "hipCreateTextureObject":
+            if len(args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP texture object create: {output}, resource: {args[1]}, "
+                    f"texture desc: {args[2]}, resource view: {args[3]}"
+                ]
+        elif name == "hipDestroyTextureObject":
+            if args:
+                return [f"// HIP texture object destroy: {args[0]}"]
+        elif name == "hipCreateSurfaceObject":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// HIP surface object create: {output}, resource: {args[1]}"]
+        elif name == "hipDestroySurfaceObject":
+            if args:
+                return [f"// HIP surface object destroy: {args[0]}"]
 
         return None
 
@@ -1125,6 +1157,8 @@ class HipToCrossGLConverter:
             return self.format_hip_texture_call(base_name, args, "vec4", 4)
 
         if base_name in {
+            "surf1Dread",
+            "surf1DLayeredread",
             "surf2Dread",
             "surf3Dread",
             "surf2DLayeredread",
@@ -1132,6 +1166,8 @@ class HipToCrossGLConverter:
             "surfCubemapLayeredread",
         }:
             dimensions = {
+                "surf1Dread": 1,
+                "surf1DLayeredread": 2,
                 "surf2Dread": 2,
                 "surf3Dread": 3,
                 "surf2DLayeredread": 3,
@@ -1141,6 +1177,8 @@ class HipToCrossGLConverter:
             return self.format_hip_surface_read(args, dimensions, value_type)
 
         if base_name in {
+            "surf1Dwrite",
+            "surf1DLayeredwrite",
             "surf2Dwrite",
             "surf3Dwrite",
             "surf2DLayeredwrite",
@@ -1148,6 +1186,8 @@ class HipToCrossGLConverter:
             "surfCubemapLayeredwrite",
         }:
             dimensions = {
+                "surf1Dwrite": 1,
+                "surf1DLayeredwrite": 2,
                 "surf2Dwrite": 2,
                 "surf3Dwrite": 3,
                 "surf2DLayeredwrite": 3,
@@ -1195,13 +1235,24 @@ class HipToCrossGLConverter:
         return f"texture({texture_name}, {coordinate})"
 
     def format_hip_surface_read(self, args, dimensions, value_type):
-        if len(args) < dimensions + 1:
+        if len(args) >= dimensions + 2 and self.is_surface_output_target(args[0]):
+            output_target = self.strip_surface_output_target(args[0])
+            surface_name = args[1]
+            coord_start = 2
+        elif len(args) >= dimensions + 1:
+            output_target = None
+            surface_name = args[0]
+            coord_start = 1
+        else:
             return None
-        surface_name = args[0]
-        coord_args = [self.strip_surface_byte_offset(args[1], value_type)]
-        coord_args.extend(args[2 : dimensions + 1])
+
+        coord_args = [self.strip_surface_byte_offset(args[coord_start], value_type)]
+        coord_args.extend(args[coord_start + 1 : coord_start + dimensions])
         coord = self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
-        return f"imageLoad({surface_name}, {coord})"
+        image_load = f"imageLoad({surface_name}, {coord})"
+        if output_target is not None:
+            return f"{output_target} = {image_load}"
+        return image_load
 
     def format_hip_surface_write(self, args, dimensions, value_type):
         if len(args) < dimensions + 2:
@@ -1212,6 +1263,20 @@ class HipToCrossGLConverter:
         coord_args.extend(args[3 : dimensions + 2])
         coord = self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
         return f"imageStore({surface_name}, {coord}, {value})"
+
+    def is_surface_output_target(self, expression):
+        text = str(expression).strip()
+        if text.startswith("(") and text.endswith(")"):
+            text = text[1:-1].strip()
+        return text.startswith("&")
+
+    def strip_surface_output_target(self, expression):
+        text = str(expression).strip()
+        if text.startswith("(") and text.endswith(")"):
+            text = text[1:-1].strip()
+        if text.startswith("&"):
+            return text[1:].strip()
+        return text
 
     def strip_surface_byte_offset(self, expression, value_type):
         text = str(expression).strip()

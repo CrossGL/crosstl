@@ -2388,6 +2388,126 @@ def test_gpu_texture_helper_calls_convert_to_crossgl_intrinsics():
     assert "texture_gather_component" not in result
 
 
+def test_gpu_explicit_sampler_texture_helpers_convert_to_crossgl_intrinsics():
+    code = """
+    fn texture_sampler_helpers(
+        tex: Texture2D<f32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        projected: Vec3<f32>,
+        ddx: Vec2<f32>,
+        ddy: Vec2<f32>,
+        offset: Vec2<i32>,
+        offsets: [Vec2<i32>; 4],
+    ) -> Vec4<f32> {
+        let base = sample_sampler(tex, sampler_state, uv);
+        let biased = sample_bias(tex, uv, 0.25);
+        let biased_sampler = sample_bias_sampler(tex, sampler_state, uv, 0.5);
+        let lod = sample_lod_sampler(tex, sampler_state, uv, 1.0);
+        let lod_offset = sample_lod_offset_sampler(tex, sampler_state, uv, 1.0, offset);
+        let grad = sample_grad_sampler(tex, sampler_state, uv, ddx, ddy);
+        let grad_offset = sample_grad_offset_sampler(tex, sampler_state, uv, ddx, ddy, offset);
+        let shifted = sample_offset_sampler(tex, sampler_state, uv, offset);
+        let shifted_bias = sample_offset_bias(tex, uv, offset, 0.125);
+        let shifted_bias_sampler = sample_offset_bias_sampler(tex, sampler_state, uv, offset, 0.125);
+        let projected_color = sample_projected_sampler(tex, sampler_state, projected);
+        let projected_bias = sample_projected_bias(tex, projected, 0.25);
+        let projected_bias_sampler = sample_projected_bias_sampler(tex, sampler_state, projected, 0.25);
+        let projected_lod = sample_projected_lod_sampler(tex, sampler_state, projected, 1.0);
+        let projected_grad = sample_projected_grad_sampler(tex, sampler_state, projected, ddx, ddy);
+        let projected_offset = sample_projected_offset_sampler(tex, sampler_state, projected, offset);
+        let projected_offset_bias = sample_projected_offset_bias(tex, projected, offset, 0.25);
+        let projected_offset_bias_sampler = sample_projected_offset_bias_sampler(tex, sampler_state, projected, offset, 0.25);
+        let projected_lod_offset = sample_projected_lod_offset_sampler(tex, sampler_state, projected, 1.0, offset);
+        let projected_grad_offset = sample_projected_grad_offset_sampler(tex, sampler_state, projected, ddx, ddy, offset);
+        let query = texture_query_lod_sampler(tex, sampler_state, uv);
+        let gather = texture_gather_sampler(tex, sampler_state, uv);
+        let gather_component = texture_gather_component_sampler(tex, sampler_state, uv, 1);
+        let gather_offset = texture_gather_offset_sampler(tex, sampler_state, uv, offset);
+        let gather_offset_component = texture_gather_offset_component_sampler(tex, sampler_state, uv, offset, 2);
+        let gather_offsets = texture_gather_offsets_sampler(tex, sampler_state, uv, offsets);
+        let gather_offsets_component = texture_gather_offsets_component_sampler(tex, sampler_state, uv, offsets, 3);
+        return base;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec4 texture_sampler_helpers(sampler2D tex, sampler sampler_state" in result
+    assert "base = texture(tex, sampler_state, uv);" in result
+    assert "biased = texture(tex, uv, 0.25);" in result
+    assert "biased_sampler = texture(tex, sampler_state, uv, 0.5);" in result
+    assert "lod = textureLod(tex, sampler_state, uv, 1.0);" in result
+    assert (
+        "lod_offset = textureLodOffset(tex, sampler_state, uv, 1.0, offset);" in result
+    )
+    assert "grad = textureGrad(tex, sampler_state, uv, ddx, ddy);" in result
+    assert (
+        "grad_offset = textureGradOffset(tex, sampler_state, uv, ddx, ddy, offset);"
+        in result
+    )
+    assert "shifted = textureOffset(tex, sampler_state, uv, offset);" in result
+    assert "shifted_bias = textureOffset(tex, uv, offset, 0.125);" in result
+    assert (
+        "shifted_bias_sampler = textureOffset(tex, sampler_state, uv, offset, 0.125);"
+        in result
+    )
+    assert "projected_color = textureProj(tex, sampler_state, projected);" in result
+    assert "projected_bias = textureProj(tex, projected, 0.25);" in result
+    assert (
+        "projected_bias_sampler = textureProj(tex, sampler_state, projected, 0.25);"
+        in result
+    )
+    assert (
+        "projected_lod = textureProjLod(tex, sampler_state, projected, 1.0);" in result
+    )
+    assert (
+        "projected_grad = textureProjGrad(tex, sampler_state, projected, ddx, ddy);"
+        in result
+    )
+    assert (
+        "projected_offset = textureProjOffset(tex, sampler_state, projected, offset);"
+        in result
+    )
+    assert (
+        "projected_offset_bias = textureProjOffset(tex, projected, offset, 0.25);"
+        in result
+    )
+    assert (
+        "projected_offset_bias_sampler = textureProjOffset(tex, sampler_state, projected, offset, 0.25);"
+        in result
+    )
+    assert (
+        "projected_lod_offset = textureProjLodOffset(tex, sampler_state, projected, 1.0, offset);"
+        in result
+    )
+    assert (
+        "projected_grad_offset = textureProjGradOffset(tex, sampler_state, projected, ddx, ddy, offset);"
+        in result
+    )
+    assert "query = textureQueryLod(tex, sampler_state, uv);" in result
+    assert "gather = textureGather(tex, sampler_state, uv);" in result
+    assert "gather_component = textureGather(tex, sampler_state, uv, 1);" in result
+    assert (
+        "gather_offset = textureGatherOffset(tex, sampler_state, uv, offset);" in result
+    )
+    assert (
+        "gather_offset_component = textureGatherOffset(tex, sampler_state, uv, offset, 2);"
+        in result
+    )
+    assert (
+        "gather_offsets = textureGatherOffsets(tex, sampler_state, uv, offsets);"
+        in result
+    )
+    assert (
+        "gather_offsets_component = textureGatherOffsets(tex, sampler_state, uv, offsets, 3);"
+        in result
+    )
+    assert "sample_sampler" not in result
+    assert "sample_bias" not in result
+    assert "texture_gather" not in result
+
+
 def test_gpu_shadow_compare_helper_calls_convert_to_crossgl_intrinsics():
     code = """
     fn shadow_helpers(

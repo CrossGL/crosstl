@@ -93,6 +93,8 @@ class SlangCodeGen:
             "gl_BaseInstance": "SV_StartInstanceLocation",
             "gl_DrawID": "SV_DrawID",
             "gl_PrimitiveID": "SV_PrimitiveID",
+            "gl_PrimitiveIDIn": "SV_PrimitiveID",
+            "gl_TessCoord": "SV_DomainLocation",
             "gl_TessLevelOuter": "SV_TessFactor",
             "gl_TessLevelInner": "SV_InsideTessFactor",
             "gl_Layer": "SV_RenderTargetArrayIndex",
@@ -907,6 +909,8 @@ class SlangCodeGen:
         return result
 
     def convert_type_node_to_string(self, type_node) -> str:
+        if isinstance(type_node, LiteralNode):
+            return self.generate_literal(type_node)
         if hasattr(type_node, "name"):
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:

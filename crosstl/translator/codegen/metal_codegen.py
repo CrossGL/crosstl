@@ -5623,6 +5623,12 @@ class MetalCodeGen:
             texture_variable.name
             for texture_variable, _, _ in self.required_function_textures(func_name)
         ]
+        names.extend(
+            acceleration_structure_variable.name
+            for acceleration_structure_variable, _, _ in (
+                self.required_function_acceleration_structures(func_name)
+            )
+        )
         for (
             buffer_variable,
             buffer_type,

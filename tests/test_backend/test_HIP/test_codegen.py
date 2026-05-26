@@ -582,9 +582,12 @@ class TestHipCodeGen:
             hipTextureObject_t textures[2];
             hipTextureObject_t ambiguous;
             hipSurfaceObject_t surf;
+            hipSurfaceObject_t lineSurf;
             texture<float4, 2> legacyTex;
             texture<float4, hipTextureTypeCubemap> cubeTex;
             texture<float4, hipTextureTypeCubemapLayered> cubeLayerTex;
+            surface<void, hipSurfaceType1D> lineSurface;
+            surface<void, hipSurfaceType1DLayered> lineLayerSurface;
             surface<void, 2> legacySurf;
             surface<void, hipSurfaceType3D> volumeSurface;
             surface<void, hipSurfaceTypeCubemap> cubeSurface;
@@ -654,8 +657,36 @@ class TestHipCodeGen:
                 pixel.y,
                 0
             );
+            float4 lineLoaded;
+            float4 lineLayerLoaded;
+            float4 loadedByPointer;
+            surf1Dread<float4>(
+                &lineLoaded,
+                lineSurface,
+                pixel.x * sizeof(float4)
+            );
+            surf1Dread<float4>(&lineLoaded, lineSurf, pixel.x * sizeof(float4));
+            surf1DLayeredread<float4>(
+                &lineLayerLoaded,
+                lineLayerSurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dread<float4>(
+                &loadedByPointer,
+                surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
             surf2Dwrite(loaded, surf, pixel.x * sizeof(float4), pixel.y);
             surf2Dwrite(loaded, globalSurf, pixel.x * sizeof(float4), pixel.y);
+            surf1Dwrite(lineLoaded, lineSurface, pixel.x * sizeof(float4));
+            surf1DLayeredwrite(
+                lineLayerLoaded,
+                lineLayerSurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
             surf2Dwrite(
                 legacyLoaded,
                 legacySurf,
@@ -685,7 +716,10 @@ class TestHipCodeGen:
         assert "var textures: array<sampler2D, 2>;" in result
         assert "var ambiguous: sampler;" in result
         assert "var surf: image2D;" in result
+        assert "var lineSurf: image1D;" in result
         assert "var legacyTex: sampler2D;" in result
+        assert "var lineSurface: image1D;" in result
+        assert "var lineLayerSurface: image1DArray;" in result
         assert "var legacySurf: image2D;" in result
         assert "var cubeTex: samplerCube;" in result
         assert "var cubeLayerTex: samplerCubeArray;" in result
@@ -736,18 +770,33 @@ class TestHipCodeGen:
             "var cubeLayerLoaded: vec4<f32> = imageLoad("
             "cubeLayerSurface, vec3<i32>(pixel.x, pixel.y, 0));" in result
         )
+        assert "lineLoaded = imageLoad(lineSurface, pixel.x);" in result
+        assert "lineLoaded = imageLoad(lineSurf, pixel.x);" in result
+        assert (
+            "lineLayerLoaded = imageLoad("
+            "lineLayerSurface, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "loadedByPointer = imageLoad(surf, vec2<i32>(pixel.x, pixel.y));" in result
+        )
         assert (
             "var legacyLoaded: vec4<f32> = imageLoad("
             "legacySurf, vec2<i32>(pixel.x, pixel.y));" in result
         )
         assert "imageStore(surf, vec2<i32>(pixel.x, pixel.y), loaded);" in result
         assert "imageStore(globalSurf, vec2<i32>(pixel.x, pixel.y), loaded);" in result
+        assert "imageStore(lineSurface, pixel.x, lineLoaded);" in result
+        assert (
+            "imageStore(lineLayerSurface, vec2<i32>(pixel.x, pixel.y), "
+            "lineLayerLoaded);" in result
+        )
         assert (
             "imageStore(legacySurf, vec2<i32>(pixel.x, pixel.y), legacyLoaded);"
             in result
         )
         assert "tex2D<" not in result
         assert "surf2D" not in result
+        assert "surf1D" not in result
 
     def test_kernel_launch_conversion(self):
         """Test HIP kernel launch configuration conversion"""
@@ -1075,6 +1124,11 @@ class TestHipCodeGen:
             size_t freeMem;
             size_t totalMem;
             float symbol;
+            void* resourceDesc;
+            void* textureDesc;
+            void* viewDesc;
+            hipTextureObject_t texObj;
+            hipSurfaceObject_t surfObj;
             hipMalloc((void**)&d, n * sizeof(float));
             hipMallocPitch((void**)&d2, &pitch, n * sizeof(float), 4);
             hipMemcpy(d, h, n * sizeof(float), hipMemcpyHostToDevice);
@@ -1093,11 +1147,23 @@ class TestHipCodeGen:
                 h, symbol, n * sizeof(float), 0, hipMemcpyDeviceToHost
             );
             hipMemGetInfo(&freeMem, &totalMem);
+            hipCreateTextureObject(
+                &texObj, resourceDesc, textureDesc, viewDesc
+            );
+            hipCreateSurfaceObject(&surfObj, resourceDesc);
+            hipDestroyTextureObject(texObj);
+            hipDestroySurfaceObject(surfObj);
             hipMemset(d, 0, n * sizeof(float));
             hipDeviceSynchronize();
             hipFree(d);
             hipError_t err = hipMalloc((void**)&d, n * sizeof(float));
             err = hipMallocPitch((void**)&d2, &pitch, n * sizeof(float), 4);
+            err = hipCreateTextureObject(
+                &texObj, resourceDesc, textureDesc, viewDesc
+            );
+            err = hipCreateSurfaceObject(&surfObj, resourceDesc);
+            err = hipDestroyTextureObject(texObj);
+            err = hipDestroySurfaceObject(surfObj);
             if (err != hipSuccess) { return; }
             err = hipDeviceSynchronize();
         }
@@ -1145,6 +1211,21 @@ class TestHipCodeGen:
         assert (
             "// HIP memory info: free output: freeMem, total output: totalMem" in result
         )
+        assert (
+            result.count(
+                "// HIP texture object create: texObj, resource: resourceDesc, "
+                "texture desc: textureDesc, resource view: viewDesc"
+            )
+            == 2
+        )
+        assert (
+            result.count(
+                "// HIP surface object create: surfObj, resource: resourceDesc"
+            )
+            == 2
+        )
+        assert result.count("// HIP texture object destroy: texObj") == 2
+        assert result.count("// HIP surface object destroy: surfObj") == 2
         assert "// HIP memory set: d, value: 0, bytes: (n * sizeof(float))" in result
         assert "// HIP device synchronize" in result
         assert "// HIP memory free: d" in result
@@ -1159,6 +1240,10 @@ class TestHipCodeGen:
         assert "hipMemcpyToSymbol(" not in result
         assert "hipMemcpyFromSymbol(" not in result
         assert "hipMemGetInfo(" not in result
+        assert "hipCreateTextureObject(" not in result
+        assert "hipCreateSurfaceObject(" not in result
+        assert "hipDestroyTextureObject(" not in result
+        assert "hipDestroySurfaceObject(" not in result
         assert "err = hipDeviceSynchronize();" not in result
 
     def test_hip_runtime_memset_async_conversion(self):
