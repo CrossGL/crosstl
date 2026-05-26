@@ -142,6 +142,26 @@ METADATA_CONFLICT_GROUPS = (
     (frozenset({"centroid", "sample"}), "@centroid and @sample"),
 )
 
+INTERPOLATION_MODE_METADATA_NAMES = {
+    "flat": "flat",
+    "nointerpolation": "flat",
+    "smooth": "smooth",
+    "linear": "smooth",
+    "linear_centroid": "smooth",
+    "linear_sample": "smooth",
+    "noperspective": "noperspective",
+    "linear_noperspective": "noperspective",
+    "linear_noperspective_centroid": "noperspective",
+}
+
+INTERPOLATION_SAMPLING_METADATA_NAMES = {
+    "centroid": "centroid",
+    "linear_centroid": "centroid",
+    "linear_noperspective_centroid": "centroid",
+    "sample": "sample",
+    "linear_sample": "sample",
+}
+
 SINGLE_VALUE_METADATA_NAMES = frozenset(
     {
         "access",
@@ -168,6 +188,45 @@ RESOURCE_ACCESS_METADATA_NAMES = {
     "access::write": "writeonly",
     "access::read_write": "readwrite",
 }
+
+STAGE_LAYOUT_DIRECTION_REQUIREMENTS = {
+    "local_size_x": "in",
+    "local_size_y": "in",
+    "local_size_z": "in",
+    "invocations": "in",
+    "max_vertices": "out",
+    "maxvertexcount": "out",
+    "max_primitives": "out",
+    "maxprimitivecount": "out",
+    "vertices": "out",
+    "outputcontrolpoints": "out",
+}
+
+STAGE_LAYOUT_EXCLUSIVE_ENTRY_GROUPS = (
+    frozenset(
+        {
+            "points",
+            "lines",
+            "line_strip",
+            "triangles",
+            "triangle_strip",
+            "lines_adjacency",
+            "triangles_adjacency",
+            "lineadj",
+            "triangleadj",
+            "quads",
+            "isolines",
+        }
+    ),
+    frozenset(
+        {
+            "equal_spacing",
+            "fractional_even_spacing",
+            "fractional_odd_spacing",
+        }
+    ),
+    frozenset({"cw", "ccw"}),
+)
 
 IMAGE_RESOURCE_INTRINSIC_NAMES = {
     "imageLoad",
@@ -541,6 +600,16 @@ def expression_debug_name(expr):
         return ""
     if isinstance(expr, str):
         return expr
+    op = getattr(expr, "op", None)
+    if op is not None and hasattr(expr, "left") and hasattr(expr, "right"):
+        left = expression_debug_name(expr.left)
+        right = expression_debug_name(expr.right)
+        return f"{left} {op} {right}"
+    if op is not None and hasattr(expr, "operand"):
+        operand = expression_debug_name(expr.operand)
+        if getattr(expr, "is_postfix", False):
+            return f"{operand}{op}"
+        return f"{op}{operand}"
     name = getattr(expr, "name", None)
     if isinstance(name, str):
         return name
@@ -662,6 +731,8 @@ def validate_shader_metadata(shader):
     """Validate backend-neutral declaration metadata for contradictions."""
     for node, context in _shader_metadata_nodes(shader):
         validate_node_metadata(node, context)
+    for stage in getattr(shader, "stages", {}).values():
+        validate_stage_layout_metadata(stage)
     return shader
 
 
@@ -671,6 +742,24 @@ def validate_node_metadata(node, context):
     for group, description in METADATA_CONFLICT_GROUPS:
         if group <= names:
             raise ValueError(f"Conflicting metadata on {context}: {description}")
+
+    interpolation_modes = _normalized_metadata_names(
+        names, INTERPOLATION_MODE_METADATA_NAMES
+    )
+    if len(set(interpolation_modes.values())) > 1:
+        raise ValueError(
+            f"Conflicting interpolation mode metadata on {context}: "
+            f"{_metadata_name_phrase(interpolation_modes)}"
+        )
+
+    interpolation_sampling = _normalized_metadata_names(
+        names, INTERPOLATION_SAMPLING_METADATA_NAMES
+    )
+    if len(set(interpolation_sampling.values())) > 1:
+        raise ValueError(
+            f"Conflicting interpolation sampling metadata on {context}: "
+            f"{_metadata_name_phrase(interpolation_sampling)}"
+        )
 
     access_names = _node_resource_access_names(node)
     if len(access_names) > 1:
@@ -693,6 +782,55 @@ def validate_node_metadata(node, context):
                 f"Conflicting {attr_name} metadata on {context}: "
                 f"{previous_value} vs {attr_value}"
             )
+
+
+def validate_stage_layout_metadata(stage):
+    """Validate stage-level layout qualifiers for contradictions."""
+    entries_by_direction = {}
+    for layout in getattr(stage, "layout_qualifiers", []) or []:
+        direction = _normalized_layout_direction(getattr(layout, "direction", None))
+        context = _stage_layout_context(stage, direction)
+        for entry in getattr(layout, "entries", []) or []:
+            entry_name = _normalized_metadata_name(getattr(entry, "name", None))
+            if not entry_name:
+                continue
+
+            required_direction = STAGE_LAYOUT_DIRECTION_REQUIREMENTS.get(entry_name)
+            if required_direction and direction != required_direction:
+                raise ValueError(
+                    f"Stage layout '{entry_name}' on {context} must use "
+                    f"'{required_direction}' direction"
+                )
+
+            entry_value = _stage_layout_entry_value(entry)
+            key = (direction, entry_name)
+            previous_value = entries_by_direction.setdefault(key, entry_value)
+            if previous_value != entry_value:
+                raise ValueError(
+                    f"Conflicting stage layout '{entry_name}' metadata on {context}: "
+                    f"{previous_value} vs {entry_value}"
+                )
+
+    for direction in {
+        _normalized_layout_direction(getattr(layout, "direction", None))
+        for layout in getattr(stage, "layout_qualifiers", []) or []
+    }:
+        layout_names = {
+            _normalized_metadata_name(getattr(entry, "name", None))
+            for layout in getattr(stage, "layout_qualifiers", []) or []
+            if _normalized_layout_direction(getattr(layout, "direction", None))
+            == direction
+            for entry in getattr(layout, "entries", []) or []
+        }
+        layout_names.discard(None)
+        for group in STAGE_LAYOUT_EXCLUSIVE_ENTRY_GROUPS:
+            conflicts = sorted(layout_names & group)
+            if len(conflicts) > 1:
+                context = _stage_layout_context(stage, direction)
+                raise ValueError(
+                    f"Conflicting stage layout entries on {context}: "
+                    f"{', '.join(conflicts)}"
+                )
 
 
 def _node_metadata_names(node):
@@ -727,6 +865,41 @@ def _node_resource_access_names(node):
             access_names.add(access_name)
 
     return access_names
+
+
+def _normalized_metadata_names(names, canonical_names):
+    return {name: canonical_names[name] for name in names if name in canonical_names}
+
+
+def _metadata_name_phrase(names):
+    formatted_names = sorted(f"@{name}" for name in names)
+    if len(formatted_names) == 2:
+        return f"{formatted_names[0]} and {formatted_names[1]}"
+    return ", ".join(formatted_names)
+
+
+def _normalized_metadata_name(name):
+    if name is None:
+        return None
+    return str(name).split(".")[-1].lower()
+
+
+def _normalized_layout_direction(direction):
+    return _normalized_metadata_name(direction)
+
+
+def _stage_layout_entry_value(entry):
+    arguments = getattr(entry, "arguments", []) or []
+    if not arguments:
+        return None
+    return expression_debug_name(arguments[0])
+
+
+def _stage_layout_context(stage, direction):
+    stage_name = _normalized_metadata_name(getattr(stage, "stage", None)) or "<unknown>"
+    if direction is None:
+        return f"{stage_name} stage layout"
+    return f"{stage_name} stage '{direction}' layout"
 
 
 def _attribute_metadata_value(attr):

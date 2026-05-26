@@ -359,6 +359,13 @@ shader SpirvAdvancedTextureComputeValidation {
                 3
             );
             vec4 fetched = texelFetch(colorMap, linearSampler, pixel, 0);
+            vec4 fetchedOffset = texelFetchOffset(
+                colorMap,
+                linearSampler,
+                pixel,
+                0,
+                offset
+            );
         }
     }
 }

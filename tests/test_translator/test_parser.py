@@ -2213,8 +2213,20 @@ def test_struct_member_layout_attributes_parse_with_post_attributes():
             "@flat and @noperspective",
         ),
         (
+            "float value @input @location(0) @smooth @flat;",
+            "@flat and @smooth",
+        ),
+        (
+            "float value @input @location(0) @linear @nointerpolation;",
+            "@linear and @nointerpolation",
+        ),
+        (
             "float value @input @location(0) @centroid @sample;",
             "@centroid and @sample",
+        ),
+        (
+            "float value @input @location(0) @linear_centroid @sample;",
+            "@linear_centroid and @sample",
         ),
     ],
 )
@@ -2264,6 +2276,60 @@ def test_conflicting_layout_attribute_values_fail_validation():
 
     with pytest.raises(ValueError, match="Conflicting location metadata"):
         parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "layout(binding = 0) image2D color @binding(1);",
+            "Conflicting binding metadata",
+        ),
+        (
+            "layout(set = 0) image2D color @set(1);",
+            "Conflicting set metadata",
+        ),
+        (
+            "image2D color @format(r32f) @format(rgba32f);",
+            "Conflicting format metadata",
+        ),
+    ],
+)
+def test_conflicting_resource_layout_metadata_values_fail_validation(
+    declaration, message
+):
+    code = f"""
+    shader ConflictingResourceLayoutMetadata {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_duplicate_matching_resource_layout_metadata_values_are_allowed():
+    code = """
+    shader MatchingResourceLayoutMetadata {
+        layout(set = 0, binding = 1) image2D color @set(0) @binding(1);
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    color = ast.global_variables[0]
+
+    assert [attribute.name for attribute in color.attributes] == [
+        "set",
+        "binding",
+        "set",
+        "binding",
+    ]
+    assert [attribute.arguments[0].value for attribute in color.attributes] == [
+        0,
+        1,
+        0,
+        1,
+    ]
 
 
 def test_precise_variable_attribute_parse():
