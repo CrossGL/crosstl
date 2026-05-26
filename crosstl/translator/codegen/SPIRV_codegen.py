@@ -3598,10 +3598,9 @@ class VulkanSPIRVCodeGen:
             is_storage_image_param = (
                 param_resource_metadata is not None
                 and param_resource_metadata.get("kind") == "storage_image"
+                and param_name in storage_image_pointer_params
             )
-            if self.is_resource_array_type(param_type) or (
-                is_storage_image_param and param_name in storage_image_pointer_params
-            ):
+            if self.is_resource_array_type(param_type) or is_storage_image_param:
                 resource_array_param_indices.add(len(param_types))
                 param_type = self.register_pointer_type(param_type, "UniformConstant")
 
@@ -4262,6 +4261,74 @@ class VulkanSPIRVCodeGen:
             if models
         }
 
+    def collect_storage_image_pointer_parameters(self, ast):
+        functions = {
+            getattr(func, "name", None): func
+            for func in self.collect_ast_functions(ast)
+        }
+        functions = {name: func for name, func in functions.items() if name}
+        parameter_names = {
+            func_name: [
+                getattr(param, "name", None)
+                for param in getattr(func, "parameters", getattr(func, "params", []))
+            ]
+            for func_name, func in functions.items()
+        }
+        parameter_name_sets = {
+            func_name: {name for name in names if name}
+            for func_name, names in parameter_names.items()
+        }
+
+        pointer_params = {func_name: set() for func_name in functions}
+        for func_name, func in functions.items():
+            for call in self.walk_ast_nodes(getattr(func, "body", [])):
+                if not isinstance(call, FunctionCallNode):
+                    continue
+                if (
+                    self.function_call_name(call)
+                    not in self.image_atomic_function_names()
+                ):
+                    continue
+                args = getattr(call, "arguments", getattr(call, "args", []))
+                if not args:
+                    continue
+                arg_name = self.expression_name(args[0])
+                if arg_name in parameter_name_sets[func_name]:
+                    pointer_params[func_name].add(arg_name)
+
+        changed = True
+        while changed:
+            changed = False
+            for caller_name, func in functions.items():
+                caller_params = parameter_name_sets[caller_name]
+                for call in self.walk_ast_nodes(getattr(func, "body", [])):
+                    if not isinstance(call, FunctionCallNode):
+                        continue
+                    callee_name = self.function_call_name(call)
+                    if callee_name not in functions:
+                        continue
+                    callee_pointer_params = pointer_params.get(callee_name, set())
+                    if not callee_pointer_params:
+                        continue
+
+                    args = getattr(call, "arguments", getattr(call, "args", []))
+                    callee_params = parameter_names.get(callee_name, [])
+                    for index, arg in enumerate(args):
+                        if index >= len(callee_params):
+                            continue
+                        if callee_params[index] not in callee_pointer_params:
+                            continue
+                        arg_name = self.expression_name(arg)
+                        if arg_name not in caller_params:
+                            continue
+                        if arg_name not in pointer_params[caller_name]:
+                            pointer_params[caller_name].add(arg_name)
+                            changed = True
+
+        return {
+            func_name: params for func_name, params in pointer_params.items() if params
+        }
+
     def collect_resource_array_parameter_type_hints(self, ast):
         functions = {
             getattr(func, "name", None): func
@@ -4357,72 +4424,6 @@ class VulkanSPIRVCodeGen:
             func_name: param_hints
             for func_name, param_hints in hints.items()
             if param_hints
-        }
-
-    def collect_storage_image_pointer_params(self, ast):
-        functions = {
-            getattr(func, "name", None): func
-            for func in self.collect_ast_functions(ast)
-        }
-        functions = {name: func for name, func in functions.items() if name}
-
-        param_names_by_function = {}
-        storage_image_params = {}
-        for function_name, func in functions.items():
-            param_names = []
-            storage_params = set()
-            for param in getattr(func, "parameters", getattr(func, "params", [])):
-                param_name = getattr(param, "name", None)
-                param_type = getattr(param, "param_type", getattr(param, "vtype", None))
-                param_names.append(param_name)
-                if not param_name or param_type is None:
-                    continue
-                resource_info = self.resource_type_info(
-                    self.type_name_from_value(param_type)
-                )
-                if resource_info and resource_info.get("kind") == "storage_image":
-                    storage_params.add(param_name)
-            param_names_by_function[function_name] = param_names
-            storage_image_params[function_name] = storage_params
-
-        pointer_params = {function_name: set() for function_name in functions}
-        changed = True
-        while changed:
-            changed = False
-            for function_name, func in functions.items():
-                for call in self.walk_ast_nodes(getattr(func, "body", [])):
-                    if not isinstance(call, FunctionCallNode):
-                        continue
-
-                    call_name = self.function_call_name(call)
-                    args = getattr(call, "arguments", getattr(call, "args", []))
-                    if not args:
-                        continue
-
-                    arg_name = self.expression_name(args[0])
-                    if arg_name not in storage_image_params.get(function_name, set()):
-                        continue
-
-                    needs_pointer = call_name in self.image_atomic_function_names()
-                    callee_pointer_params = pointer_params.get(call_name, set())
-                    if callee_pointer_params:
-                        for index, param_name in enumerate(
-                            param_names_by_function.get(call_name, [])
-                        ):
-                            if param_name in callee_pointer_params and index < len(
-                                args
-                            ):
-                                needs_pointer = True
-                                break
-
-                    if needs_pointer and arg_name not in pointer_params[function_name]:
-                        pointer_params[function_name].add(arg_name)
-                        changed = True
-
-        return {
-            function_name: params
-            for function_name, params in pointer_params.items()
-            if params
         }
 
     def split_outer_array_type(self, type_name: str):
@@ -6547,10 +6548,10 @@ class VulkanSPIRVCodeGen:
         self.function_resource_array_type_hints = (
             self.collect_resource_array_parameter_type_hints(ast)
         )
-        self.function_storage_image_pointer_params = (
-            self.collect_storage_image_pointer_params(ast)
-        )
         self.function_execution_models = self.collect_function_execution_models(ast)
+        self.function_storage_image_pointer_params = (
+            self.collect_storage_image_pointer_parameters(ast)
+        )
         self.reserve_explicit_resource_bindings(ast)
 
         for var in getattr(ast, "global_variables", []):
