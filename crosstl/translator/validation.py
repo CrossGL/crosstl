@@ -140,6 +140,7 @@ TEXTURE_INTRINSIC_ALLOWED_ARGUMENT_COUNTS = {
 METADATA_CONFLICT_GROUPS = (
     (frozenset({"flat", "noperspective"}), "@flat and @noperspective"),
     (frozenset({"centroid", "sample"}), "@centroid and @sample"),
+    (frozenset({"row_major", "column_major"}), "@row_major and @column_major"),
 )
 
 INTERPOLATION_MODE_METADATA_NAMES = {
@@ -171,6 +172,7 @@ SINGLE_VALUE_METADATA_NAMES = frozenset(
         "format",
         "index",
         "location",
+        "packoffset",
         "set",
         "texture",
         "uav",

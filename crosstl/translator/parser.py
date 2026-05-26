@@ -699,11 +699,14 @@ class Parser:
         return ImportNode(path=path, alias=alias, items=items)
 
     def parse_square_attributes(self):
-        """Parse HLSL-style ``[attribute(...)]`` metadata into attributes."""
+        """Parse HLSL-style ``[attr]`` or Metal-style ``[[attr]]`` metadata."""
         attributes = []
 
         while self.current_token_starts_square_attribute():
+            double_bracket = self.peek()[0] == "LBRACKET"
             self.eat("LBRACKET")
+            if double_bracket:
+                self.eat("LBRACKET")
 
             while self.current_token[0] != "RBRACKET":
                 name = str(self.current_token[1])
@@ -728,6 +731,8 @@ class Parser:
                 break
 
             self.eat("RBRACKET")
+            if double_bracket:
+                self.eat("RBRACKET")
 
         return attributes
 
@@ -736,13 +741,47 @@ class Parser:
         if self.current_token[0] != "LBRACKET":
             return False
 
-        name_token_type, name_token_value = self.peek()
+        offset = 1
+        if self.peek()[0] == "LBRACKET":
+            offset = 2
+
+        name_token_type, name_token_value = self.peek(offset)
         if name_token_type in {"RBRACKET", "EOF"}:
             return False
         if not isinstance(name_token_value, str) or not name_token_value.isidentifier():
             return False
 
-        return self.peek(2)[0] in {"LPAREN", "COMMA", "RBRACKET"}
+        return self.peek(offset + 1)[0] in {"LPAREN", "COMMA", "RBRACKET"}
+
+    def parse_attribute_annotations(self):
+        """Parse consecutive ``@``, HLSL ``[]``, or Metal ``[[]]`` attributes."""
+        attributes = []
+        while self.current_token[0] in ["AT", "ATTRIBUTE"] or (
+            not attributes and self.current_token_starts_square_attribute()
+        ):
+            if self.current_token[0] in ["AT", "ATTRIBUTE"]:
+                attributes.extend(self.parse_attributes())
+            else:
+                attributes.extend(self.parse_square_attributes())
+        return attributes
+
+    def parse_post_declaration_attributes(self):
+        """Parse declaration metadata that appears after a name or parameter list."""
+        attributes = []
+        while (
+            self.current_token[0] == "COLON"
+            or self.current_token[0] in ["AT", "ATTRIBUTE"]
+            or (
+                self.current_token[0] == "LBRACKET"
+                and self.peek()[0] == "LBRACKET"
+                and self.current_token_starts_square_attribute()
+            )
+        ):
+            if self.current_token[0] == "COLON":
+                attributes.extend(self.parse_colon_semantic_attributes())
+            else:
+                attributes.extend(self.parse_attribute_annotations())
+        return attributes
 
     def parse_colon_semantic_attributes(self):
         """Parse HLSL-style ``: SEMANTIC`` metadata into attributes."""
@@ -938,7 +977,7 @@ class Parser:
             variable_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
-        while self.current_token[0] == "LBRACKET":
+        while self.current_token[0] == "LBRACKET" and self.peek()[0] != "LBRACKET":
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
@@ -1098,10 +1137,7 @@ class Parser:
             member_type = self.parse_type()
 
             attributes = list(leading_attributes)
-            attributes.extend(self.parse_colon_semantic_attributes())
-            if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-                attributes.extend(self.parse_attributes())
-            attributes.extend(self.parse_colon_semantic_attributes())
+            attributes.extend(self.parse_post_declaration_attributes())
 
             if self.current_token[0] not in ["SEMICOLON", "COMMA", "RBRACE"]:
                 while self.current_token[0] not in [
@@ -1120,6 +1156,13 @@ class Parser:
             return StructMemberNode(
                 name=name, member_type=member_type, attributes=attributes
             )
+
+        qualifier_attributes = []
+        if self.current_token_is_variable_qualifier():
+            qualifier_attributes = [
+                AttributeNode(name=qualifier)
+                for qualifier in self.parse_variable_qualifiers()
+            ]
 
         member_type = self.parse_type()
 
@@ -1142,7 +1185,7 @@ class Parser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        while self.current_token[0] == "LBRACKET":
+        while self.current_token[0] == "LBRACKET" and self.peek()[0] != "LBRACKET":
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
@@ -1151,10 +1194,8 @@ class Parser:
             member_type = ArrayType(member_type, size)
 
         attributes = list(leading_attributes)
-        attributes.extend(self.parse_colon_semantic_attributes())
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes.extend(self.parse_attributes())
-        attributes.extend(self.parse_colon_semantic_attributes())
+        attributes.extend(qualifier_attributes)
+        attributes.extend(self.parse_post_declaration_attributes())
 
         if self.current_token[0] != "SEMICOLON":
             # Skip malformed member
@@ -1308,11 +1349,7 @@ class Parser:
             self.eat_arrow()
             return_type = self.parse_type()
 
-        post_attributes = []
-        post_attributes.extend(self.parse_colon_semantic_attributes())
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            post_attributes.extend(self.parse_attributes())
-        post_attributes.extend(self.parse_colon_semantic_attributes())
+        post_attributes = self.parse_post_declaration_attributes()
 
         body = None
         if self.current_token[0] == "LBRACE":
@@ -1358,8 +1395,7 @@ class Parser:
     def parse_parameter(self):
         """Parse one function parameter declaration."""
         attributes = []
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes = self.parse_attributes()
+        attributes.extend(self.parse_attribute_annotations())
 
         if self.current_token[0] == "VAR":
             return self.parse_resource_parameter(attributes)
@@ -1389,7 +1425,7 @@ class Parser:
             name = self.current_token[1]
             self.eat("IDENTIFIER")
 
-        while self.current_token[0] == "LBRACKET":
+        while self.current_token[0] == "LBRACKET" and self.peek()[0] != "LBRACKET":
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
@@ -1397,10 +1433,7 @@ class Parser:
             self.eat("RBRACKET")
             param_type = ArrayType(param_type, size)
 
-        attributes.extend(self.parse_colon_semantic_attributes())
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes.extend(self.parse_attributes())
-        attributes.extend(self.parse_colon_semantic_attributes())
+        attributes.extend(self.parse_post_declaration_attributes())
 
         default_value = None
         if self.current_token[0] == "EQUALS":
@@ -1474,8 +1507,7 @@ class Parser:
         self.eat("COLON")
         param_type = self.parse_resource_parameter_type()
 
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes.extend(self.parse_attributes())
+        attributes.extend(self.parse_attribute_annotations())
 
         parameter = ParameterNode(
             name=name,
@@ -1503,8 +1535,7 @@ class Parser:
     def parse_variable_declaration(self, leading_attributes=None):
         """Parse a variable declaration, including qualifiers and attributes."""
         attributes = list(leading_attributes or [])
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes.extend(self.parse_attributes())
+        attributes.extend(self.parse_attribute_annotations())
 
         qualifiers = self.parse_variable_qualifiers()
 
@@ -1512,7 +1543,7 @@ class Parser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        while self.current_token[0] == "LBRACKET":
+        while self.current_token[0] == "LBRACKET" and self.peek()[0] != "LBRACKET":
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
@@ -1520,12 +1551,9 @@ class Parser:
             self.eat("RBRACKET")
             var_type = ArrayType(var_type, size)
 
-        attributes.extend(self.parse_colon_semantic_attributes())
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes.extend(self.parse_attributes())
-        attributes.extend(self.parse_colon_semantic_attributes())
+        attributes.extend(self.parse_post_declaration_attributes())
 
-        while self.current_token[0] == "LBRACKET":
+        while self.current_token[0] == "LBRACKET" and self.peek()[0] != "LBRACKET":
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
@@ -1589,8 +1617,7 @@ class Parser:
         saved_token = self.current_token
 
         try:
-            if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-                self.parse_attributes()
+            self.parse_attribute_annotations()
 
             self.parse_variable_qualifiers()
 
@@ -3276,30 +3303,15 @@ class Parser:
         self.eat("IDENTIFIER")
 
         attributes = []
-        attributes.extend(self.parse_colon_semantic_attributes())
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes.extend(self.parse_attributes())
-        attributes.extend(self.parse_colon_semantic_attributes())
+        attributes.extend(self.parse_post_declaration_attributes())
 
         self.eat("LBRACE")
         members = []
 
         while self.current_token[0] != "RBRACE":
-            member_type = self.parse_type()
-            member_name = self.current_token[1]
-            self.eat("IDENTIFIER")
-
-            while self.current_token[0] == "LBRACKET":
-                self.eat("LBRACKET")
-                size = None
-                if self.current_token[0] != "RBRACKET":
-                    size = self.parse_expression()
-                self.eat("RBRACKET")
-                member_type = ArrayType(member_type, size)
-
-            self.eat("SEMICOLON")
-
-            members.append(StructMemberNode(name=member_name, member_type=member_type))
+            member = self.parse_struct_member()
+            if member:
+                members.append(member)
 
         self.eat("RBRACE")
 

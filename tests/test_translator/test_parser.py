@@ -1542,6 +1542,113 @@ def test_conflicting_register_metadata_values_fail_validation():
         parse_code(tokenize_code(code))
 
 
+def test_cbuffer_members_preserve_packoffset_layout_and_matrix_qualifiers():
+    code = """
+    shader CBufferMemberMetadata {
+        cbuffer Camera : register(b0) {
+            row_major mat4 viewProj : packoffset(c0) @packoffset(c0);
+            column_major mat4 world @packoffset(c4);
+            layout(offset = 128) vec4 tint @align(16);
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    view_proj, world, tint = ast.cbuffers[0].members
+
+    assert [attribute.name for attribute in view_proj.attributes] == [
+        "row_major",
+        "packoffset",
+        "packoffset",
+    ]
+    assert view_proj.attributes[1].arguments[0].name == "c0"
+    assert view_proj.attributes[2].arguments[0].name == "c0"
+
+    assert [attribute.name for attribute in world.attributes] == [
+        "column_major",
+        "packoffset",
+    ]
+    assert world.attributes[1].arguments[0].name == "c4"
+
+    assert [attribute.name for attribute in tint.attributes] == ["offset", "align"]
+    assert tint.attributes[0].arguments[0].value == 128
+    assert tint.attributes[1].arguments[0].value == 16
+
+
+def test_conflicting_cbuffer_member_packoffset_values_fail_validation():
+    code = """
+    shader ConflictingCBufferMemberPackoffset {
+        cbuffer Camera {
+            mat4 viewProj : packoffset(c0) @packoffset(c1);
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting packoffset metadata"):
+        parse_code(tokenize_code(code))
+
+
+def test_conflicting_matrix_layout_metadata_fails_validation():
+    code = """
+    shader ConflictingMatrixLayout {
+        cbuffer Camera {
+            row_major column_major mat4 viewProj;
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="@row_major and @column_major"):
+        parse_code(tokenize_code(code))
+
+
+def test_metal_double_bracket_attributes_parse_as_declaration_metadata():
+    code = """
+    shader MetalDoubleBracketAttributes {
+        texture2D<float> colorTexture [[texture(0)]];
+        sampler linearSampler [[sampler(0)]];
+        float weights[4] [[buffer(1)]];
+
+        struct VertexOut {
+            vec4 position [[position]];
+            vec2 uv [[user(texcoord0)]];
+        };
+
+        fragment {
+            vec4 main(
+                VertexOut stageInput [[stage_in]],
+                texture2D<float> tex [[texture(0)]],
+                sampler s [[sampler(0)]]
+            ) [[color(0)]] {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    texture, sampler_var, weights = ast.global_variables
+
+    assert [attr.name for attr in texture.attributes] == ["texture"]
+    assert texture.attributes[0].arguments[0].value == 0
+    assert [attr.name for attr in sampler_var.attributes] == ["sampler"]
+    assert sampler_var.attributes[0].arguments[0].value == 0
+    assert isinstance(weights.var_type, ArrayType)
+    assert [attr.name for attr in weights.attributes] == ["buffer"]
+    assert weights.attributes[0].arguments[0].value == 1
+
+    position, uv = ast.structs[0].members
+    assert [attr.name for attr in position.attributes] == ["position"]
+    assert [attr.name for attr in uv.attributes] == ["user"]
+    assert uv.attributes[0].arguments[0].name == "texcoord0"
+
+    entry = ast.stages[ShaderStage.FRAGMENT].entry_point
+    assert [attr.name for attr in entry.attributes] == ["color"]
+    assert entry.attributes[0].arguments[0].value == 0
+    assert [attr.name for attr in entry.parameters[0].attributes] == ["stage_in"]
+    assert [attr.name for attr in entry.parameters[1].attributes] == ["texture"]
+    assert [attr.name for attr in entry.parameters[2].attributes] == ["sampler"]
+
+
 def test_duplicate_matching_hlsl_semantic_metadata_is_allowed():
     code = """
     shader MatchingSemanticMetadata {
