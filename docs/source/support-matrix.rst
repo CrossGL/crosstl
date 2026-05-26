@@ -22,15 +22,15 @@ implicitly supported.
 .. csv-table:: Backend inventory
    :header: "Backend", "Ext", "Target generator", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
-   "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "480", "277", "Microsoft Learn HLSL reference; HLSL specification project"
+   "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "482", "277", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "686", "146", "GLSL 4.60 specification; OpenGL registry"
-   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "435", "301", "Apple Metal resources; Metal Shading Language specification"
+   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "438", "301", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "329", "11", "SPIR-V unified specification; Khronos SPIR-V registry"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "240", "9", "CUDA C++ programming guide"
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "271", "11", "ROCm HIP documentation"
-   "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "233", "2", "Mojo manual"
+   "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "235", "2", "Mojo manual"
    "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "439", "35", "Rust reference"
-   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "238", "43", "Slang user guide"
+   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "241", "43", "Slang user guide"
 
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
@@ -38,7 +38,7 @@ implicitly supported.
    "DirectX / HLSL", "37", "5", "0", "0", "0", "0"
    "OpenGL / GLSL", "38", "4", "0", "0", "0", "0"
    "Metal", "35", "5", "0", "0", "2", "0"
-   "Vulkan SPIR-V", "9", "12", "0", "0", "0", "21"
+   "Vulkan SPIR-V", "12", "16", "0", "0", "0", "14"
    "CUDA", "11", "11", "0", "0", "3", "17"
    "HIP", "10", "12", "0", "0", "3", "17"
    "Mojo", "10", "7", "0", "0", "0", "25"
@@ -93,7 +93,7 @@ Each category below uses the status codes from the legend.
 
    "Native source to CrossGL", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Native lexer coverage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Native preprocessor handling", "Y", "Y", "Y", "?", "?", "?", "?", "?", "?"
+   "Native preprocessor handling", "Y", "Y", "Y", "P", "?", "?", "?", "?", "?"
 
 .. csv-table:: stages
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
@@ -102,15 +102,15 @@ Each category below uses the status codes from the legend.
    "Fragment/pixel stage", "Y", "Y", "Y", "Y", "P", "P", "P", "P", "Y"
    "Compute stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Geometry stage", "Y", "Y", "U", "Y", "U", "U", "?", "?", "?"
-   "Tessellation stages", "Y", "Y", "U", "?", "U", "U", "?", "?", "?"
-   "Mesh/task/amplification stages", "P", "P", "P", "?", "U", "U", "?", "?", "?"
-   "Ray tracing stages", "P", "P", "P", "?", "?", "?", "?", "?", "?"
+   "Tessellation stages", "Y", "Y", "U", "Y", "U", "U", "?", "?", "?"
+   "Mesh/task/amplification stages", "P", "P", "P", "Y", "U", "U", "?", "?", "?"
+   "Ray tracing stages", "P", "P", "P", "P", "?", "?", "?", "?", "?"
 
 .. csv-table:: stage I/O
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
    "Stage parameter semantics", "Y", "Y", "Y", "P", "P", "P", "P", "P", "P"
-   "Direct function return semantics", "Y", "Y", "Y", "?", "?", "?", "?", "?", "?"
+   "Direct function return semantics", "Y", "Y", "Y", "P", "?", "?", "?", "?", "?"
    "Struct member semantics", "Y", "Y", "Y", "P", "P", "P", "P", "P", "P"
 
 .. csv-table:: resources
@@ -118,7 +118,7 @@ Each category below uses the status codes from the legend.
 
    "Explicit and automatic resource bindings", "Y", "Y", "Y", "P", "P", "P", "?", "?", "P"
    "Constant/uniform buffers", "Y", "Y", "Y", "P", "P", "P", "P", "P", "P"
-   "Structured/storage buffers", "Y", "Y", "Y", "?", "P", "P", "?", "?", "?"
+   "Structured/storage buffers", "Y", "Y", "Y", "P", "P", "P", "?", "?", "?"
    "Resource arrays", "Y", "Y", "Y", "?", "?", "?", "?", "?", "?"
    "Texture and sampler object model", "Y", "Y", "Y", "?", "?", "?", "?", "?", "P"
    "GLSL buffer block lowering", "P", "Y", "P", "?", "?", "?", "?", "?", "?"
@@ -140,7 +140,7 @@ Each category below uses the status codes from the legend.
 .. csv-table:: images
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Storage image load/store", "Y", "Y", "Y", "?", "?", "?", "?", "?", "?"
+   "Storage image load/store", "Y", "Y", "Y", "Y", "?", "?", "?", "?", "?"
    "Image atomics", "Y", "Y", "Y", "Y", "?", "?", "?", "?", "?"
    "Multisample storage images", "Y", "Y", "Y", "?", "?", "?", "?", "?", "?"
 
@@ -170,7 +170,7 @@ need an audit before implementation work can be scoped accurately.
 .. csv-table:: Non-supported or unaudited feature rows
    :header: "Backend", "Category", "Feature", "Status", "Notes"
 
-   "Vulkan SPIR-V", "source", "Native preprocessor handling", "unknown", ""
+   "Vulkan SPIR-V", "source", "Native preprocessor handling", "partial", "Covers explicit LOD, gradient, offset, combined LOD/gradient-offset, and shadow compare LOD/gradient-offset forms with spirv-as/spirv-val coverage. Bias and projected forms are tracked separately and remain incomplete."
    "CUDA", "source", "Native preprocessor handling", "unknown", ""
    "HIP", "source", "Native preprocessor handling", "unknown", ""
    "Mojo", "source", "Native preprocessor handling", "unknown", ""
@@ -191,7 +191,6 @@ need an audit before implementation work can be scoped accurately.
    "Rust", "stages", "Geometry stage", "unknown", ""
    "Slang", "stages", "Geometry stage", "unknown", ""
    "Metal", "stages", "Tessellation stages", "unsupported", ""
-   "Vulkan SPIR-V", "stages", "Tessellation stages", "unknown", ""
    "CUDA", "stages", "Tessellation stages", "unsupported", ""
    "HIP", "stages", "Tessellation stages", "unsupported", ""
    "Mojo", "stages", "Tessellation stages", "unknown", ""
@@ -200,7 +199,6 @@ need an audit before implementation work can be scoped accurately.
    "DirectX / HLSL", "stages", "Mesh/task/amplification stages", "partial", "Entry points lower to HLSL mesh/amplification shader attributes with deterministic stage names, numthreads from local-size layouts or @numthreads, and optional mesh output topology attributes. Full mesh payload/output signature validation remains incomplete."
    "OpenGL / GLSL", "stages", "Mesh/task/amplification stages", "partial", "Entry points and combined-stage names lower with GL_EXT_mesh_shader enablement and local-size layouts for task/mesh stages. Full mesh output layout and payload semantics are not complete."
    "Metal", "stages", "Mesh/task/amplification stages", "partial", "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, and explicit mesh output signatures/topology for SetMeshOutputCounts primitive counts. Full mesh payload and vertex/primitive write semantics are not complete."
-   "Vulkan SPIR-V", "stages", "Mesh/task/amplification stages", "unknown", ""
    "CUDA", "stages", "Mesh/task/amplification stages", "unsupported", ""
    "HIP", "stages", "Mesh/task/amplification stages", "unsupported", ""
    "Mojo", "stages", "Mesh/task/amplification stages", "unknown", ""
@@ -209,7 +207,7 @@ need an audit before implementation work can be scoped accurately.
    "DirectX / HLSL", "stages", "Ray tracing stages", "partial", "Ray entry points lower to HLSL library shader attributes with stage-specific names and payload semantics, but full ray pipeline object/signature coverage remains incomplete."
    "OpenGL / GLSL", "stages", "Ray tracing stages", "partial", "Entry points and combined-stage names lower with GL_EXT_ray_tracing enablement, but full GLSL ray tracing layout and payload semantics are not complete."
    "Metal", "stages", "Ray tracing stages", "partial", "Ray entry points lower to Metal-style entry keywords and payload attributes, but full Metal ray tracing pipeline semantics remain incomplete."
-   "Vulkan SPIR-V", "stages", "Ray tracing stages", "unknown", ""
+   "Vulkan SPIR-V", "stages", "Ray tracing stages", "partial", "Covers regular, array, and multisample texelFetch lowering to OpImageFetch with spirv-as/spirv-val coverage. Fetch-offset forms remain incomplete."
    "CUDA", "stages", "Ray tracing stages", "unknown", ""
    "HIP", "stages", "Ray tracing stages", "unknown", ""
    "Mojo", "stages", "Ray tracing stages", "unknown", ""
@@ -221,7 +219,7 @@ need an audit before implementation work can be scoped accurately.
    "Mojo", "stage I/O", "Stage parameter semantics", "partial", ""
    "Rust", "stage I/O", "Stage parameter semantics", "partial", ""
    "Slang", "stage I/O", "Stage parameter semantics", "partial", ""
-   "Vulkan SPIR-V", "stage I/O", "Direct function return semantics", "unknown", ""
+   "Vulkan SPIR-V", "stage I/O", "Direct function return semantics", "partial", "Covers multisample texture fetches and sample-count/size queries for 2D and 2D-array resources with spirv-as/spirv-val coverage. Unsupported multisample compare/gather diagnostics are not complete."
    "CUDA", "stage I/O", "Direct function return semantics", "unknown", ""
    "HIP", "stage I/O", "Direct function return semantics", "unknown", ""
    "Mojo", "stage I/O", "Direct function return semantics", "unknown", ""
@@ -245,7 +243,7 @@ need an audit before implementation work can be scoped accurately.
    "Mojo", "resources", "Constant/uniform buffers", "partial", ""
    "Rust", "resources", "Constant/uniform buffers", "partial", ""
    "Slang", "resources", "Constant/uniform buffers", "partial", ""
-   "Vulkan SPIR-V", "resources", "Structured/storage buffers", "unknown", ""
+   "Vulkan SPIR-V", "resources", "Structured/storage buffers", "partial", "Covers non-projected LOD, gradient, offset, gather, shadow compare, texel fetch, query, and multisample fetch/query forms with spirv-as/spirv-val coverage. Projected texture operations, bias variants, and fetch-offset diagnostics remain incomplete."
    "CUDA", "resources", "Structured/storage buffers", "partial", ""
    "HIP", "resources", "Structured/storage buffers", "partial", ""
    "Mojo", "resources", "Structured/storage buffers", "unknown", ""
@@ -337,7 +335,6 @@ need an audit before implementation work can be scoped accurately.
    "Mojo", "textures", "Advanced texture operations", "unknown", ""
    "Rust", "textures", "Advanced texture operations", "unknown", ""
    "Slang", "textures", "Advanced texture operations", "unknown", ""
-   "Vulkan SPIR-V", "images", "Storage image load/store", "unknown", ""
    "CUDA", "images", "Storage image load/store", "unknown", ""
    "HIP", "images", "Storage image load/store", "unknown", ""
    "Mojo", "images", "Storage image load/store", "unknown", ""
