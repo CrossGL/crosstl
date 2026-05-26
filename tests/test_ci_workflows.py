@@ -45,3 +45,24 @@ def test_backend_and_translator_compatibility_matrices_remain_enabled():
     assert "python-version" in translator_tests
     assert "OS:" in translator_tests
     assert "pytest tests/test_translator" in translator_tests
+
+
+def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
+    workflows = _workflow_texts()
+    support_matrix = workflows.get("support-matrix.yml", "")
+
+    assert support_matrix, "support-matrix.yml must exist"
+    assert re.search(r"\bpush\s*:", support_matrix)
+    assert re.search(r"\bpull_request\s*:", support_matrix)
+    assert re.search(r"\bschedule\s*:", support_matrix)
+    assert 'cron: "17 3 * * *"' in support_matrix
+    assert "workflow_dispatch:" in support_matrix
+    assert "python tools/support_matrix.py check" in support_matrix
+    assert "docs-probe:" in support_matrix
+    assert "github.event_name == 'schedule'" in support_matrix
+    assert "github.event_name == 'workflow_dispatch'" in support_matrix
+    assert (
+        "python tools/support_matrix.py docs --output "
+        "support/generated/backend-docs-report.json"
+    ) in support_matrix
+    assert "actions/upload-artifact@v4" in support_matrix
