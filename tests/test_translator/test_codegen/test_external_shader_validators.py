@@ -118,6 +118,29 @@ void main() {
 """
 
 
+MIXED_GLSL_SSBO_RUNTIME_ARRAY_ATOMICS_COMPUTE_SHADER = """
+#version 450 core
+layout(std430, binding = 19) buffer RuntimeAtomicBlock {
+    uint count;
+    uint values[];
+} runtimeAtomicBlock;
+layout(std430, binding = 20) buffer RuntimeSignedAtomicBlock {
+    int count;
+    int values[];
+} runtimeSignedAtomicBlock;
+
+void main() {
+    uint i = runtimeAtomicBlock.count;
+    uint oldValue = atomicAdd(runtimeAtomicBlock.values[i], 1u);
+    uint swapped = atomicCompSwap(runtimeAtomicBlock.values[i + 1u], oldValue, 7u);
+    int j = runtimeSignedAtomicBlock.count;
+    int oldSigned = atomicMin(runtimeSignedAtomicBlock.values[j], -2);
+    int exchanged = atomicExchange(runtimeSignedAtomicBlock.values[j + 1], oldSigned);
+    atomicAdd(runtimeSignedAtomicBlock.values[j], exchanged);
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
 
@@ -332,6 +355,40 @@ def test_mixed_glsl_ssbo_int_atomics_metal_output_compiles_with_xcrun_metal(
     assert "atomic_fetch_add_explicit" in code
     assert "reinterpret_cast<device atomic_int*>" in code
     assert "__crossgl_buffer_atomic_compare_exchange_int" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_ssbo_runtime_array_atomics_metal_output_compiles_with_xcrun_metal(
+    tmp_path,
+):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "mixed_glsl_ssbo_runtime_array_atomics.metal"
+    output_path = tmp_path / "mixed_glsl_ssbo_runtime_array_atomics.air"
+
+    code = MetalCodeGen().generate(
+        _mixed_glsl_ast(
+            MIXED_GLSL_SSBO_RUNTIME_ARRAY_ATOMICS_COMPUTE_SHADER,
+            "compute",
+        )
+    )
+    assert "#version" not in code
+    assert "runtimeAtomicBlock + (4 + i * 4)" in code
+    assert "runtimeSignedAtomicBlock + (4 + j * 4)" in code
+    assert "__crossgl_buffer_atomic_compare_exchange_uint" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(

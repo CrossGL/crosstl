@@ -15812,6 +15812,116 @@ def test_codegen_mixed_ssbo_int_atomics_lower_to_byteaddress_and_device_atomics(
     assert "atomicAdd(signedAtomicBlock.bins[1], casBin);" in glsl
 
 
+def test_codegen_mixed_ssbo_runtime_array_atomics_lower_dynamic_offsets():
+    code = """
+    #version 450 core
+    layout(std430, binding = 19) buffer RuntimeAtomicBlock {
+        uint count;
+        uint values[];
+    } runtimeAtomicBlock;
+    layout(std430, binding = 20) buffer RuntimeSignedAtomicBlock {
+        int count;
+        int values[];
+    } runtimeSignedAtomicBlock;
+
+    void main() {
+        uint i = runtimeAtomicBlock.count;
+        uint oldValue = atomicAdd(runtimeAtomicBlock.values[i], 1u);
+        uint swapped = atomicCompSwap(runtimeAtomicBlock.values[i + 1u], oldValue, 7u);
+        int j = runtimeSignedAtomicBlock.count;
+        int oldSigned = atomicMin(runtimeSignedAtomicBlock.values[j], -2);
+        int exchanged = atomicExchange(runtimeSignedAtomicBlock.values[j + 1], oldSigned);
+        atomicAdd(runtimeSignedAtomicBlock.values[j], exchanged);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    assert (
+        "RuntimeAtomicBlock runtimeAtomicBlock "
+        "@glsl_buffer_block(std430) @binding(19);" in crossgl
+    )
+    assert (
+        "RuntimeSignedAtomicBlock runtimeSignedAtomicBlock "
+        "@glsl_buffer_block(std430) @binding(20);" in crossgl
+    )
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer runtimeAtomicBlock : register(u19);" in hlsl
+    assert "RWByteAddressBuffer runtimeSignedAtomicBlock : register(u20);" in hlsl
+    assert "uint i = runtimeAtomicBlock.Load(0);" in hlsl
+    assert (
+        "uint oldValue = __crossgl_byteaddress_atomic_add_uint("
+        "runtimeAtomicBlock, (4 + i * 4), 1u);" in hlsl
+    )
+    assert (
+        "uint swapped = __crossgl_byteaddress_atomic_compare_exchange_uint("
+        "runtimeAtomicBlock, (4 + (i + 1u) * 4), oldValue, 7u);" in hlsl
+    )
+    assert "int j = asint(runtimeSignedAtomicBlock.Load(0));" in hlsl
+    assert (
+        "int oldSigned = __crossgl_byteaddress_atomic_min_int("
+        "runtimeSignedAtomicBlock, (4 + j * 4), -2);" in hlsl
+    )
+    assert (
+        "int exchanged = __crossgl_byteaddress_atomic_exchange_int("
+        "runtimeSignedAtomicBlock, (4 + (j + 1) * 4), oldSigned);" in hlsl
+    )
+    assert (
+        "__crossgl_byteaddress_atomic_add_int("
+        "runtimeSignedAtomicBlock, (4 + j * 4), exchanged);" in hlsl
+    )
+
+    assert "device uchar* runtimeAtomicBlock [[buffer(19)]]" in metal
+    assert "device uchar* runtimeSignedAtomicBlock [[buffer(20)]]" in metal
+    assert (
+        "uint oldValue = atomic_fetch_add_explicit("
+        "reinterpret_cast<device atomic_uint*>(runtimeAtomicBlock + (4 + i * 4)), "
+        "1u, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint swapped = __crossgl_buffer_atomic_compare_exchange_uint("
+        "runtimeAtomicBlock, (4 + (i + 1u) * 4), oldValue, 7u);" in metal
+    )
+    assert (
+        "int oldSigned = atomic_fetch_min_explicit("
+        "reinterpret_cast<device atomic_int*>("
+        "runtimeSignedAtomicBlock + (4 + j * 4)), -2, memory_order_relaxed);" in metal
+    )
+    assert (
+        "int exchanged = atomic_exchange_explicit("
+        "reinterpret_cast<device atomic_int*>("
+        "runtimeSignedAtomicBlock + (4 + (j + 1) * 4)), "
+        "oldSigned, memory_order_relaxed);" in metal
+    )
+    assert (
+        "atomic_fetch_add_explicit("
+        "reinterpret_cast<device atomic_int*>("
+        "runtimeSignedAtomicBlock + (4 + j * 4)), "
+        "exchanged, memory_order_relaxed);" in metal
+    )
+
+    assert "layout(std430, binding = 19) buffer RuntimeAtomicBlock" in glsl
+    assert "layout(std430, binding = 20) buffer RuntimeSignedAtomicBlock" in glsl
+    assert "uint oldValue = atomicAdd(runtimeAtomicBlock.values[i], 1u);" in glsl
+    assert (
+        "uint swapped = atomicCompSwap("
+        "runtimeAtomicBlock.values[(i + 1u)], oldValue, 7u);" in glsl
+    )
+    assert (
+        "int oldSigned = atomicMin(runtimeSignedAtomicBlock.values[j], (-2));" in glsl
+    )
+    assert (
+        "int exchanged = atomicExchange("
+        "runtimeSignedAtomicBlock.values[(j + 1)], oldSigned);" in glsl
+    )
+    assert "atomicAdd(runtimeSignedAtomicBlock.values[j], exchanged);" in glsl
+
+
 def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets():
     code = """
     #version 300 es
