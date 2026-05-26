@@ -1366,6 +1366,16 @@ def test_glsl_direct_return_semantic_ignores_stage_control_attributes():
                 @point_mode
             { }
         }
+
+        mesh {
+            void main()
+                @triangles
+                @max_vertices(64)
+                @max_primitives(32)
+            {
+                SetMeshOutputCounts(64, 32);
+            }
+        }
     }
     """
     ast = crosstl.translator.parse(code)
@@ -1392,6 +1402,11 @@ def test_glsl_direct_return_semantic_ignores_stage_control_attributes():
         in evaluation_code
     )
     assert "layout(triangles" not in control_code
+
+    mesh_code = GLSLCodeGen().generate_stage(ast, "mesh")
+    assert "layout(triangles, max_vertices = 64, max_primitives = 32) out;" in mesh_code
+    assert "SetMeshOutputsEXT(64, 32);" in mesh_code
+    assert "SetMeshOutputCounts" not in mesh_code
 
 
 @pytest.mark.parametrize(
@@ -3733,12 +3748,17 @@ def test_glsl_mesh_task_stage_extensions_and_local_size_layouts():
     shader MeshTaskLocalSizes {
         task {
             layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
-            void main() { }
+            void main() {
+                DispatchMesh(1, 1, 1);
+            }
         }
 
         mesh {
             layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
-            void main() { }
+            layout(triangles, max_vertices = 64, max_primitives = 32) out;
+            void main() {
+                SetMeshOutputCounts(64, 32);
+            }
         }
     }
     """
@@ -3761,6 +3781,11 @@ def test_glsl_mesh_task_stage_extensions_and_local_size_layouts():
     assert (
         "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;" in mesh_code
     )
+    assert "layout(triangles, max_vertices = 64, max_primitives = 32) out;" in mesh_code
+    assert "SetMeshOutputsEXT(64, 32);" in mesh_code
+    assert "SetMeshOutputCounts" not in mesh_code
+    assert "EmitMeshTasksEXT(1, 1, 1);" in combined_code
+    assert "DispatchMesh" not in combined_code
     assert (
         "layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;"
         not in mesh_code
@@ -5016,7 +5041,8 @@ def test_glsl_wave_and_mesh_intrinsics():
     ast = parse_code(tokens)
     generated = generate_code(ast)
     assert "WaveActiveSum" in generated
-    assert "SetMeshOutputCounts" in generated
+    assert "SetMeshOutputsEXT" in generated
+    assert "SetMeshOutputCounts" not in generated
 
 
 def test_else_if_statement():

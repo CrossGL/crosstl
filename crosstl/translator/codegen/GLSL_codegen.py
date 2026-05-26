@@ -1381,6 +1381,9 @@ class GLSLCodeGen:
                         stage.entry_point,
                         shader_type=stage_name,
                         execution_config=getattr(stage, "execution_config", None),
+                        stage_layout_qualifiers=getattr(
+                            stage, "layout_qualifiers", None
+                        ),
                         entry_name=combined_stage_entry_names.get(
                             id(stage.entry_point)
                         ),
@@ -1845,16 +1848,22 @@ class GLSLCodeGen:
             f"layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;\n"
         )
 
-    def generate_stage_layout(self, shader_type, func):
+    def generate_stage_layout(self, shader_type, func, stage_layout_qualifiers=None):
         if shader_type == "geometry":
-            return self.generate_geometry_stage_layout(func)
+            return self.generate_geometry_stage_layout(func, stage_layout_qualifiers)
         if shader_type == "tessellation_control":
-            return self.generate_tessellation_control_layout(func)
+            return self.generate_tessellation_control_layout(
+                func, stage_layout_qualifiers
+            )
         if shader_type == "tessellation_evaluation":
-            return self.generate_tessellation_evaluation_layout(func)
+            return self.generate_tessellation_evaluation_layout(
+                func, stage_layout_qualifiers
+            )
+        if shader_type == "mesh":
+            return self.generate_mesh_stage_layout(func, stage_layout_qualifiers)
         return ""
 
-    def generate_geometry_stage_layout(self, func):
+    def generate_geometry_stage_layout(self, func, stage_layout_qualifiers=None):
         input_primitive = self.glsl_stage_bare_attribute(
             func,
             {
@@ -1864,16 +1873,22 @@ class GLSLCodeGen:
                 "triangles",
                 "triangles_adjacency",
             },
+            stage_layout_qualifiers,
+            "in",
         )
         output_primitive = self.glsl_single_stage_attribute_argument(
-            func, "outputtopology"
+            func, "outputtopology", stage_layout_qualifiers, "out"
         )
-        max_vertices = self.glsl_single_stage_attribute_argument(func, "max_vertices")
+        max_vertices = self.glsl_single_stage_attribute_argument(
+            func, "max_vertices", stage_layout_qualifiers, "out"
+        )
         if max_vertices is None:
             max_vertices = self.glsl_single_stage_attribute_argument(
-                func, "maxvertexcount"
+                func, "maxvertexcount", stage_layout_qualifiers, "out"
             )
-        invocations = self.glsl_single_stage_attribute_argument(func, "invocations")
+        invocations = self.glsl_single_stage_attribute_argument(
+            func, "invocations", stage_layout_qualifiers, "in"
+        )
 
         code = ""
         input_layout = []
@@ -1893,46 +1908,106 @@ class GLSLCodeGen:
             code += f"layout({', '.join(output_layout)}) out;\n"
         return code
 
-    def generate_tessellation_control_layout(self, func):
-        vertices = self.glsl_single_stage_attribute_argument(func, "vertices")
+    def generate_tessellation_control_layout(self, func, stage_layout_qualifiers=None):
+        vertices = self.glsl_single_stage_attribute_argument(
+            func, "vertices", stage_layout_qualifiers, "out"
+        )
         if vertices is None:
             vertices = self.glsl_single_stage_attribute_argument(
-                func, "outputcontrolpoints"
+                func, "outputcontrolpoints", stage_layout_qualifiers, "out"
             )
         if vertices is None:
             return ""
         return f"layout(vertices = {vertices}) out;\n"
 
-    def generate_tessellation_evaluation_layout(self, func):
+    def generate_tessellation_evaluation_layout(
+        self, func, stage_layout_qualifiers=None
+    ):
         layout_parts = []
-        domain = self.glsl_single_stage_attribute_argument(func, "domain")
+        domain = self.glsl_single_stage_attribute_argument(
+            func, "domain", stage_layout_qualifiers, "in"
+        )
         if domain:
             layout_parts.append(self.glsl_tessellation_domain(domain))
 
-        partitioning = self.glsl_single_stage_attribute_argument(func, "partitioning")
+        partitioning = self.glsl_single_stage_attribute_argument(
+            func, "partitioning", stage_layout_qualifiers, "in"
+        )
         if partitioning:
             layout_parts.append(self.glsl_tessellation_partitioning(partitioning))
 
-        winding = self.glsl_stage_bare_attribute(func, {"cw", "ccw"})
+        winding = self.glsl_stage_bare_attribute(
+            func, {"cw", "ccw"}, stage_layout_qualifiers, "in"
+        )
         if winding:
             layout_parts.append(winding)
 
-        if self.glsl_stage_bare_attribute(func, {"point_mode"}):
+        if self.glsl_stage_bare_attribute(
+            func, {"point_mode"}, stage_layout_qualifiers, "in"
+        ):
             layout_parts.append("point_mode")
 
         if not layout_parts:
             return ""
         return f"layout({', '.join(layout_parts)}) in;\n"
 
-    def glsl_stage_bare_attribute(self, func, names):
+    def generate_mesh_stage_layout(self, func, stage_layout_qualifiers=None):
+        output_primitive = self.glsl_stage_bare_attribute(
+            func, {"points", "lines", "triangles"}, stage_layout_qualifiers, "out"
+        )
+        if output_primitive is None:
+            output_primitive = self.glsl_single_stage_attribute_argument(
+                func, "outputtopology", stage_layout_qualifiers, "out"
+            )
+
+        max_vertices = self.glsl_single_stage_attribute_argument(
+            func, "max_vertices", stage_layout_qualifiers, "out"
+        )
+        if max_vertices is None:
+            max_vertices = self.glsl_single_stage_attribute_argument(
+                func, "maxvertexcount", stage_layout_qualifiers, "out"
+            )
+
+        max_primitives = self.glsl_single_stage_attribute_argument(
+            func, "max_primitives", stage_layout_qualifiers, "out"
+        )
+        if max_primitives is None:
+            max_primitives = self.glsl_single_stage_attribute_argument(
+                func, "maxprimitivecount", stage_layout_qualifiers, "out"
+            )
+
+        layout_parts = []
+        if output_primitive:
+            layout_parts.append(self.glsl_mesh_output_topology(output_primitive))
+        if max_vertices is not None:
+            layout_parts.append(f"max_vertices = {max_vertices}")
+        if max_primitives is not None:
+            layout_parts.append(f"max_primitives = {max_primitives}")
+
+        if not layout_parts:
+            return ""
+        return f"layout({', '.join(layout_parts)}) out;\n"
+
+    def glsl_stage_bare_attribute(
+        self, func, names, stage_layout_qualifiers=None, direction=None
+    ):
+        names = set(names)
         for attr in getattr(func, "attributes", []) or []:
+            attr_name = self.glsl_stage_control_attribute_name(attr)
+            if attr_name in names and not getattr(attr, "arguments", []):
+                return attr_name
+        for attr in self.glsl_stage_layout_entries(stage_layout_qualifiers, direction):
             attr_name = self.glsl_stage_control_attribute_name(attr)
             if attr_name in names and not getattr(attr, "arguments", []):
                 return attr_name
         return None
 
-    def glsl_single_stage_attribute_argument(self, func, attribute_name):
-        arguments = self.glsl_stage_attribute_arguments(func, attribute_name)
+    def glsl_single_stage_attribute_argument(
+        self, func, attribute_name, stage_layout_qualifiers=None, direction=None
+    ):
+        arguments = self.glsl_stage_attribute_arguments(
+            func, attribute_name, stage_layout_qualifiers, direction
+        )
         if not arguments:
             return None
         if len(arguments) != 1:
@@ -1941,11 +2016,27 @@ class GLSLCodeGen:
             )
         return self.attribute_value_to_string(arguments[0])
 
-    def glsl_stage_attribute_arguments(self, func, attribute_name):
+    def glsl_stage_attribute_arguments(
+        self, func, attribute_name, stage_layout_qualifiers=None, direction=None
+    ):
         for attr in getattr(func, "attributes", []) or []:
             if self.glsl_stage_control_attribute_name(attr) == attribute_name:
                 return getattr(attr, "arguments", []) or []
+        for attr in self.glsl_stage_layout_entries(stage_layout_qualifiers, direction):
+            if self.glsl_stage_control_attribute_name(attr) == attribute_name:
+                return getattr(attr, "arguments", []) or []
         return []
+
+    def glsl_stage_layout_entries(self, stage_layout_qualifiers, direction=None):
+        if direction is not None:
+            direction = str(direction).lower()
+        for layout in stage_layout_qualifiers or []:
+            layout_direction = getattr(layout, "direction", None)
+            if layout_direction is not None:
+                layout_direction = str(layout_direction).lower()
+            if direction is not None and layout_direction != direction:
+                continue
+            yield from getattr(layout, "entries", []) or []
 
     def glsl_geometry_output_topology(self, topology):
         topology_name = str(topology).strip().strip('"').lower()
@@ -1965,6 +2056,28 @@ class GLSLCodeGen:
                 f"GLSL geometry output topology cannot be lowered: {topology}"
             )
         return mapped
+
+    def glsl_mesh_output_topology(self, topology):
+        topology_name = str(topology).strip().strip('"').lower()
+        topology_map = {
+            "point": "points",
+            "points": "points",
+            "line": "lines",
+            "lines": "lines",
+            "triangle": "triangles",
+            "triangles": "triangles",
+        }
+        mapped = topology_map.get(topology_name)
+        if mapped is None:
+            raise ValueError(f"GLSL mesh output topology cannot be lowered: {topology}")
+        return mapped
+
+    def map_mesh_intrinsic(self, operation):
+        mesh_intrinsics = {
+            "SetMeshOutputCounts": "SetMeshOutputsEXT",
+            "DispatchMesh": "EmitMeshTasksEXT",
+        }
+        return mesh_intrinsics.get(operation, operation)
 
     def glsl_tessellation_domain(self, domain):
         domain_name = str(domain).strip().strip('"').lower()
@@ -2006,6 +2119,7 @@ class GLSLCodeGen:
         shader_type=None,
         execution_config=None,
         entry_name=None,
+        stage_layout_qualifiers=None,
     ):
         """Render a function or GLSL ``main`` stage entry point."""
         code = ""
@@ -2165,7 +2279,9 @@ class GLSLCodeGen:
         if stage_output and stage_output["declaration"]:
             code += f"{stage_output['declaration']}\n"
 
-        stage_layout = self.generate_stage_layout(shader_type, func)
+        stage_layout = self.generate_stage_layout(
+            shader_type, func, stage_layout_qualifiers
+        )
         if stage_layout:
             code += stage_layout
 
@@ -3974,7 +4090,8 @@ class GLSLCodeGen:
             return f"{expr.operation}({args})"
         elif isinstance(expr, MeshOpNode):
             args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
-            return f"{expr.operation}({args})"
+            operation = self.map_mesh_intrinsic(expr.operation)
+            return f"{operation}({args})"
         elif isinstance(expr, RayQueryOpNode):
             query = self.generate_expression(expr.query_expr)
             args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
@@ -7878,6 +7995,8 @@ class GLSLCodeGen:
             "local_size_y",
             "local_size_z",
             "max_vertices",
+            "max_primitives",
+            "maxprimitivecount",
             "maxvertexcount",
             "outputcontrolpoints",
             "outputtopology",
