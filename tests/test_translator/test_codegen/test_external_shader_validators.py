@@ -142,6 +142,70 @@ shader GLSLRayGenerationValidator {
 """
 
 
+MIXED_GLSL_GEOMETRY_INTERFACE_ARRAY_SHADER = """
+#version 450 core
+layout(lines_adjacency, invocations = 2) in;
+layout(triangle_strip, max_vertices = 6) out;
+
+in vec3 vColor[];
+flat in int vLayer[];
+out vec3 gColor;
+flat out int gLayer;
+
+void main() {
+    for (int i = 0; i < 4; i++) {
+        gColor = vColor[i];
+        gLayer = vLayer[i];
+        gl_Position = gl_in[i].gl_Position;
+        EmitVertex();
+    }
+    EndPrimitive();
+}
+"""
+
+
+MIXED_GLSL_TESSELLATION_CONTROL_INTERFACE_ARRAY_SHADER = """
+#version 450 core
+layout(vertices = 4) out;
+
+in vec3 vPosition[];
+out vec3 tcPosition[];
+patch out vec4 tcPatchColor;
+
+void main() {
+    tcPosition[gl_InvocationID] = vPosition[gl_InvocationID];
+    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;
+    tcPatchColor = vec4(1.0);
+    gl_TessLevelOuter[0] = 2.0;
+    gl_TessLevelOuter[1] = 2.0;
+    gl_TessLevelOuter[2] = 2.0;
+    gl_TessLevelOuter[3] = 2.0;
+    gl_TessLevelInner[0] = 2.0;
+    gl_TessLevelInner[1] = 2.0;
+}
+"""
+
+
+MIXED_GLSL_TESSELLATION_EVALUATION_INTERFACE_ARRAY_SHADER = """
+#version 450 core
+layout(quads, fractional_even_spacing, ccw, point_mode) in;
+
+in vec3 tcPosition[];
+patch in vec4 tcPatchColor;
+out vec4 teColor;
+
+void main() {
+    vec3 p = mix(
+        mix(tcPosition[0], tcPosition[1], gl_TessCoord.x),
+        mix(tcPosition[2], tcPosition[3], gl_TessCoord.x),
+        gl_TessCoord.y
+    );
+    teColor = tcPatchColor;
+    gl_Position = vec4(p, 1.0);
+}
+"""
+
+
 MIXED_GLSL_PREPROCESSOR_COMPUTE_SHADER = """
 #version 300 es
 #extension GL_ARB_separate_shader_objects : enable
@@ -797,6 +861,106 @@ def test_generated_glsl_geometry_tessellation_layouts_validate_with_glslangvalid
         shader_path.write_text(code, encoding="utf-8")
 
         _run_validator([glslang, "-S", validator_stage, str(shader_path)])
+
+
+@pytest.mark.parametrize(
+    (
+        "case_name",
+        "source",
+        "shader_type",
+        "validator_stage",
+        "expected_snippets",
+        "forbidden_snippets",
+    ),
+    [
+        (
+            "geometry_interface_array",
+            MIXED_GLSL_GEOMETRY_INTERFACE_ARRAY_SHADER,
+            "geometry",
+            "geom",
+            (
+                "layout(lines_adjacency, invocations = 2) in;",
+                "layout(triangle_strip, max_vertices = 6) out;",
+                "in vec3 vColor[];",
+                "flat in int vLayer[];",
+                "out vec3 gColor;",
+                "flat out int gLayer;",
+                "gl_Position = gl_in[i].gl_Position;",
+            ),
+            (
+                "GeometryInput",
+                "GeometryOutput",
+                "// layout(",
+                "input.",
+                "output.",
+                "return output;",
+            ),
+        ),
+        (
+            "tessellation_control_interface_array",
+            MIXED_GLSL_TESSELLATION_CONTROL_INTERFACE_ARRAY_SHADER,
+            "tessellation_control",
+            "tesc",
+            (
+                "layout(vertices = 4) out;",
+                "in vec3 vPosition[];",
+                "out vec3 tcPosition[];",
+                "patch out vec4 tcPatchColor;",
+                "gl_out[gl_InvocationID].gl_Position = "
+                "gl_in[gl_InvocationID].gl_Position;",
+            ),
+            (
+                "TessellationControlInput",
+                "TessellationControlOutput",
+                "// layout(",
+                "input.",
+                "output.",
+                "return output;",
+            ),
+        ),
+        (
+            "tessellation_evaluation_interface_array",
+            MIXED_GLSL_TESSELLATION_EVALUATION_INTERFACE_ARRAY_SHADER,
+            "tessellation_evaluation",
+            "tese",
+            (
+                "layout(quads, fractional_even_spacing, ccw, point_mode) in;",
+                "in vec3 tcPosition[];",
+                "patch in vec4 tcPatchColor;",
+                "out vec4 teColor;",
+                "gl_Position = vec4(p, 1.0);",
+            ),
+            (
+                "TessellationEvaluationInput",
+                "TessellationEvaluationOutput",
+                "// layout(",
+                "input.",
+                "output.",
+                "return output;",
+            ),
+        ),
+    ],
+)
+def test_mixed_glsl_geometry_tessellation_interfaces_validate_with_glslangvalidator(
+    tmp_path,
+    case_name,
+    source,
+    shader_type,
+    validator_stage,
+    expected_snippets,
+    forbidden_snippets,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / f"mixed_glsl_{case_name}.{validator_stage}"
+
+    code = GLSLCodeGen().generate(_mixed_glsl_ast(source, shader_type))
+    for snippet in expected_snippets:
+        assert snippet in code
+    for snippet in forbidden_snippets:
+        assert snippet not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", validator_stage, str(shader_path)])
 
 
 def test_generated_glsl_mesh_shader_validates_with_glslangvalidator(tmp_path):

@@ -3126,6 +3126,166 @@ def test_metal_intersection_function_table_globals_thread_through_helpers():
     assert "uint count = tableSize();" not in generated
 
 
+def test_metal_visible_function_table_stage_parameter_maps_signature_and_binding():
+    code = """
+    shader rt {
+        struct CallableData {
+            vec4 color;
+        };
+
+        ray_generation {
+            void main(visible_function_table<CallableData> callables @binding(1)) {
+                CallableData data;
+                CallShader(callables, 0, data);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "kernel void kernel_main("
+        "visible_function_table<void(thread CallableData&)> callables [[buffer(1)]])"
+    ) in generated
+    assert "callables[0](data);" in generated
+    assert "visible_function_table<CallableData> callables" not in generated
+
+
+def test_metal_intersection_function_table_stage_parameter_gets_buffer_binding():
+    code = """
+    shader rt {
+        ray_generation {
+            void main(
+                intersection_function_table<instancing> intersectionFunctions
+                    @binding(3)
+            ) {
+                uint count = intersectionFunctions.size();
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "kernel void kernel_main("
+        "intersection_function_table<instancing> intersectionFunctions [[buffer(3)]])"
+    ) in generated
+    assert "uint count = intersectionFunctions.size();" in generated
+
+
+def test_metal_arrayed_visible_function_table_emits_compile_safe_diagnostic():
+    code = """
+    shader rt {
+        struct CallableData {
+            vec4 color;
+        };
+
+        visible_function_table<CallableData> callables[2] @binding(1);
+
+        void invoke(uint shaderIndex, CallableData data) {
+            CallShader(callables[0], shaderIndex, data);
+        }
+
+        ray_generation {
+            void main() {
+                CallableData data;
+                invoke(1u, data);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "arrays of visible_function_table are not valid Metal buffer parameters" in (
+        generated
+    )
+    assert "array<visible_function_table" not in generated
+    assert "callables[0][shaderIndex](data)" not in generated
+    assert "void invoke(uint shaderIndex, CallableData data)" in generated
+    assert "invoke(1u, data);" in generated
+
+
+def test_metal_arrayed_intersection_function_table_emits_compile_safe_diagnostic():
+    code = """
+    shader rt {
+        intersection_function_table<instancing> intersectionFunctions[2] @binding(3);
+
+        uint tableSize() {
+            return intersectionFunctions[0].size();
+        }
+
+        ray_generation {
+            void main() {
+                uint count = tableSize();
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "arrays of intersection_function_table are not valid Metal buffer parameters"
+        in generated
+    )
+    assert "array<intersection_function_table" not in generated
+    assert "return 0 /* unsupported Metal ray tracing resource:" in generated
+    assert "intersectionFunctions[0].size()" not in generated
+
+
+def test_metal_arrayed_visible_function_table_parameter_emits_compile_safe_diagnostic():
+    code = """
+    shader rt {
+        struct CallableData {
+            vec4 color;
+        };
+
+        ray_generation {
+            void main(visible_function_table<CallableData> callables[2] @binding(1)) {
+                CallableData data;
+                CallShader(callables[0], 0, data);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "arrays of visible_function_table are not valid Metal buffer parameters" in (
+        generated
+    )
+    assert (
+        "visible_function_table<void(thread CallableData&)> callables [[buffer(1)]]"
+        not in (generated)
+    )
+    assert "callables[0][0](data)" not in generated
+
+
+def test_metal_arrayed_intersection_function_table_parameter_emits_diagnostic():
+    code = """
+    shader rt {
+        ray_generation {
+            void main(
+                intersection_function_table<instancing> intersectionFunctions[2]
+                    @binding(3)
+            ) {
+                uint count = intersectionFunctions[0].size();
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "arrays of intersection_function_table are not valid Metal buffer parameters"
+        in generated
+    )
+    assert (
+        "intersection_function_table<instancing> intersectionFunctions [[buffer(3)]]"
+        not in (generated)
+    )
+    assert "uint count = 0 /* unsupported Metal ray tracing resource:" in generated
+    assert "intersectionFunctions[0].size()" not in generated
+
+
 def test_ray_intersection_stage_lowers_to_metal_intersection_attribute():
     code = """
     shader rt {

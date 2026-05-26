@@ -1262,6 +1262,313 @@ def test_tessellation_patch_constant_function_uses_existing_primitive_alias():
     assert "gl_in" not in generated_code
 
 
+def test_tessellation_patch_constant_input_patch_matches_hull_entry_shape():
+    code = """
+    shader main {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct PatchConstants {
+            float outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst(InputPatch<VSOut, 3> constantsPatch) {
+                PatchConstants patch;
+                VSOut first = gl_in[0];
+                patch.outer[0] = first.position.x;
+                return patch;
+            }
+
+            void main(InputPatch<VSOut, 3> inputPatch)
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                VSOut current = inputPatch[gl_InvocationID];
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "PatchConstants HSConst(InputPatch<VSOut, 3> constantsPatch)" in generated_code
+    )
+    assert (
+        "void main(InputPatch<VSOut, 3> inputPatch, "
+        "uint gl_InvocationID : SV_OutputControlPointID)" in generated_code
+    )
+    assert "VSOut first = constantsPatch[0];" in generated_code
+    assert "gl_in" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("patch_constant_source", "message"),
+    [
+        (
+            """
+            PatchConstants HSConst(InputPatch<OtherOut, 3> constantsPatch) {
+                PatchConstants patch;
+                return patch;
+            }
+            """,
+            "InputPatch<OtherOut, 3> must match hull entry InputPatch<VSOut, 3>",
+        ),
+        (
+            """
+            PatchConstants HSConst(InputPatch<VSOut, 4> constantsPatch) {
+                PatchConstants patch;
+                return patch;
+            }
+            """,
+            "InputPatch<VSOut, 4> must match hull entry InputPatch<VSOut, 3>",
+        ),
+        (
+            """
+            PatchConstants HSConst(
+                InputPatch<VSOut, 3> firstPatch,
+                InputPatch<VSOut, 3> secondPatch
+            ) {
+                PatchConstants patch;
+                return patch;
+            }
+            """,
+            "requires at most one InputPatch",
+        ),
+        (
+            """
+            void HSConst(InputPatch<VSOut, 3> constantsPatch) {
+            }
+            """,
+            "requires a non-void return type",
+        ),
+    ],
+)
+def test_tessellation_patch_constant_invalid_input_patch_shape_raises(
+    patch_constant_source, message
+):
+    code = f"""
+    shader main {{
+        struct VSOut {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct OtherOut {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct PatchConstants {{
+            float outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+        }};
+
+        tessellation_control {{
+            {patch_constant_source}
+
+            void main(InputPatch<VSOut, 3> inputPatch)
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {{
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_tessellation_domain_output_patch_matches_hull_output_shape():
+    code = """
+    shader main {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct HSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct PatchConstants {
+            float outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst(InputPatch<VSOut, 3> inputPatch) {
+                PatchConstants patch;
+                return patch;
+            }
+
+            HSOut main(InputPatch<VSOut, 3> inputPatch)
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOut output;
+                output.position = inputPatch[gl_InvocationID].position;
+                return output;
+            }
+        }
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<HSOut, 3> patch)
+                @domain(tri)
+                @gl_Position {
+                HSOut first = gl_in[0];
+                vec3 coord = gl_TessCoord;
+                return first.position + vec4(coord, 0.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "HSOut HSMain(InputPatch<VSOut, 3> inputPatch" in generated_code
+    assert (
+        "float4 DSMain(OutputPatch<HSOut, 3> patch, "
+        "float3 gl_TessCoord : SV_DomainLocation) : SV_Position" in generated_code
+    )
+    assert "HSOut first = patch[0];" in generated_code
+    assert "gl_in" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("domain_source", "message"),
+    [
+        (
+            """
+            tessellation_evaluation {
+                vec4 main(OutputPatch<OtherOut, 3> patch) @domain(tri) @gl_Position {
+                    return patch[0].position;
+                }
+            }
+            """,
+            "OutputPatch<OtherOut, 3> must match tessellation_control output "
+            "OutputPatch<HSOut, 3>",
+        ),
+        (
+            """
+            tessellation_evaluation {
+                vec4 main(OutputPatch<HSOut, 4> patch) @domain(tri) @gl_Position {
+                    return patch[0].position;
+                }
+            }
+            """,
+            "OutputPatch<HSOut, 4> must match tessellation_control output "
+            "OutputPatch<HSOut, 3>",
+        ),
+        (
+            """
+            tessellation_evaluation {
+                vec4 main(OutputPatch<HSOut, 3> patch) @domain(quad) @gl_Position {
+                    return patch[0].position;
+                }
+            }
+            """,
+            "domain 'quad' must match tessellation_control domain 'tri'",
+        ),
+        (
+            """
+            tessellation_evaluation {
+                vec4 main(
+                    OutputPatch<HSOut, 3> firstPatch,
+                    OutputPatch<HSOut, 3> secondPatch
+                ) @domain(tri) @gl_Position {
+                    return firstPatch[0].position + secondPatch[0].position;
+                }
+            }
+            """,
+            "tessellation_evaluation stage requires at most one OutputPatch",
+        ),
+    ],
+)
+def test_tessellation_domain_invalid_output_patch_shape_raises(domain_source, message):
+    code = f"""
+    shader main {{
+        struct VSOut {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct HSOut {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct OtherOut {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct PatchConstants {{
+            float outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+        }};
+
+        tessellation_control {{
+            PatchConstants HSConst(InputPatch<VSOut, 3> inputPatch) {{
+                PatchConstants patch;
+                return patch;
+            }}
+
+            HSOut main(InputPatch<VSOut, 3> inputPatch)
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {{
+                HSOut output;
+                return output;
+            }}
+        }}
+
+        {domain_source}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_tessellation_control_output_patch_size_matches_outputcontrolpoints():
+    code = """
+    shader main {
+        struct HSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct PatchConstants {
+            float outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst() {
+                PatchConstants patch;
+                return patch;
+            }
+
+            void main(OutputPatch<HSOut, 4> gl_out)
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                gl_out[gl_InvocationID].position = vec4(1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="OutputPatch<HSOut, 4> must match outputcontrolpoints\\(3\\)",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 @pytest.mark.parametrize(
     ("attribute", "message"),
     [

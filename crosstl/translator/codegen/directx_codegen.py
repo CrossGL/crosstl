@@ -1026,6 +1026,12 @@ class HLSLCodeGen:
             else:
                 var_name = f"var{i}"
 
+            attribute_array_size = self.hlsl_resource_array_size_expression(node, vtype)
+            if not array_suffix and attribute_array_size is not None:
+                array_size = self.expression_to_string(attribute_array_size)
+                array_suffix = f"[{array_size}]"
+                resource_count = self.resource_array_count(attribute_array_size)
+
             lowered_block = self.lowered_glsl_buffer_blocks.get(var_name)
             if lowered_block is not None:
                 mapped_type = (
@@ -7208,6 +7214,55 @@ class HLSLCodeGen:
             initial_literal_int_constants=self.initial_literal_int_constants,
         )
 
+    def hlsl_resource_array_size_expression(self, node, vtype=None):
+        if node is None:
+            return None
+
+        if vtype is None:
+            vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+            if vtype is None:
+                vtype = getattr(node, "param_type", None)
+
+        if vtype is None or (
+            hasattr(vtype, "element_type") and str(type(vtype)).find("ArrayType") != -1
+        ):
+            return None
+
+        base_type = (
+            self.convert_type_node_to_string(vtype)
+            if hasattr(vtype, "name") or hasattr(vtype, "element_type")
+            else split_array_type_suffix(str(vtype))[0]
+        )
+        if not self.is_resource_array_hint_type(base_type):
+            return None
+
+        for attr in getattr(node, "attributes", []) or []:
+            if not self.is_hlsl_resource_array_size_attribute(attr):
+                continue
+            return getattr(attr, "name", None)
+        return None
+
+    def is_hlsl_resource_array_size_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name or getattr(attr, "arguments", None):
+            return False
+        if (
+            is_image_format_attribute(attr)
+            or self.is_resource_binding_attribute(attr)
+            or is_resource_access_attribute(attr)
+            or self.is_resource_memory_attribute(attr)
+            or self.is_glsl_buffer_block_attribute(attr)
+            or self.hlsl_mesh_parameter_role_attribute_name(attr)
+            or self.hlsl_mesh_payload_parameter_attribute_name(attr)
+            or self.hlsl_stage_attribute_name(attr)
+        ):
+            return False
+        return True
+
+    def is_hlsl_resource_array_size_marker(self, node, attr):
+        array_size = self.hlsl_resource_array_size_expression(node)
+        return array_size is not None and getattr(attr, "name", None) == array_size
+
     def collect_unsized_resource_globals(self, ast):
         globals_by_name = {}
         for node in getattr(ast, "global_variables", []) or []:
@@ -7227,6 +7282,9 @@ class HLSLCodeGen:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             size = self.fixed_resource_array_size(vtype)
+            if size is None:
+                size_expr = self.hlsl_resource_array_size_expression(node, vtype)
+                size = self.literal_int_value(size_expr, self.literal_int_constants)
             if name and size is not None:
                 global_arrays[name] = size
         return global_arrays
@@ -7250,9 +7308,13 @@ class HLSLCodeGen:
             if not func_name:
                 continue
             for param in getattr(func, "parameters", getattr(func, "params", [])):
-                size = self.fixed_resource_array_size(
-                    getattr(param, "param_type", getattr(param, "vtype", None))
-                )
+                vtype = getattr(param, "param_type", getattr(param, "vtype", None))
+                size = self.fixed_resource_array_size(vtype)
+                if size is None:
+                    size_expr = self.hlsl_resource_array_size_expression(param, vtype)
+                    size = self.literal_int_value(
+                        size_expr, self.initial_literal_int_constants(func)
+                    )
                 if size is not None:
                     function_arrays.setdefault(func_name, {})[param.name] = size
         return function_arrays
@@ -7542,6 +7604,9 @@ class HLSLCodeGen:
             vtype = node.vtype
         else:
             vtype = "float"
+        attribute_array_size = self.hlsl_resource_array_size_expression(node, vtype)
+        if attribute_array_size is not None:
+            resource_count = self.resource_array_count(attribute_array_size)
         return vtype, resource_count
 
     def global_resource_register_metadata(self, node):
@@ -10137,6 +10202,7 @@ class HLSLCodeGen:
                 or self.is_glsl_buffer_block_attribute(attr)
                 or self.hlsl_mesh_parameter_role_attribute_name(attr)
                 or self.hlsl_mesh_payload_parameter_attribute_name(attr)
+                or self.is_hlsl_resource_array_size_marker(node, attr)
             ):
                 continue
             if hasattr(attr, "name"):
@@ -10179,6 +10245,7 @@ class HLSLCodeGen:
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
+                or self.is_hlsl_resource_array_size_marker(node, attr)
             ):
                 continue
             if hasattr(attr, "name"):
@@ -10221,6 +10288,14 @@ class HLSLCodeGen:
                 return (
                     f"{mapped_type}[{array_size}]" if array_size else f"{mapped_type}[]"
                 )
+
+        attribute_array_size = self.hlsl_resource_array_size_expression(node, vtype)
+        if attribute_array_size is not None:
+            base_type = self.convert_type_node_to_string(vtype)
+            if self.is_resource_array_hint_type(base_type):
+                array_size = self.expression_to_string(attribute_array_size)
+                mapped_type = self.map_image_base_type_with_format(base_type, node)
+                return f"{mapped_type}[{array_size}]"
 
         if not (hasattr(vtype, "name") or hasattr(vtype, "element_type")):
             type_string = str(vtype)

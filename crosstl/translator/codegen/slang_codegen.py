@@ -207,6 +207,7 @@ class SlangCodeGen:
 
             # Handle shader stages (new AST structure)
             if hasattr(ast, "stages") and ast.stages:
+                self.validate_slang_tessellation_stage_shapes(ast.stages)
                 self.stage_entry_name_overrides = (
                     self.collect_stage_entry_name_overrides(ast.stages)
                 )
@@ -346,6 +347,7 @@ class SlangCodeGen:
                 result += self.generate_function(function) + "\n\n"
 
         stages = getattr(node, "stages", {})
+        self.validate_slang_tessellation_stage_shapes(stages)
         self.stage_entry_name_overrides = self.collect_stage_entry_name_overrides(
             stages
         )
@@ -439,6 +441,152 @@ class SlangCodeGen:
         while f"{candidate}_{suffix}" in used_names:
             suffix += 1
         return f"{candidate}_{suffix}"
+
+    def slang_stage_by_shader_name(self, stages, expected_stage_name):
+        for stage_type, stage in (stages or {}).items():
+            stage_name = self.get_stage_name(stage_type)
+            if self.slang_shader_stage_name(stage_name) == expected_stage_name:
+                return stage
+        return None
+
+    def validate_slang_tessellation_stage_shapes(self, stages):
+        if not isinstance(stages, dict):
+            return
+
+        hull_stage = self.slang_stage_by_shader_name(stages, "hull")
+        domain_stage = self.slang_stage_by_shader_name(stages, "domain")
+        if hull_stage is None:
+            return
+
+        hull_entry = getattr(hull_stage, "entry_point", None)
+        if hull_entry is None:
+            return
+
+        hull_shape = self.slang_hull_output_patch_shape(hull_entry)
+        self.validate_slang_hull_output_patch_shape(hull_entry, hull_shape)
+
+        if domain_stage is None:
+            return
+
+        domain_entry = getattr(domain_stage, "entry_point", None)
+        if domain_entry is None:
+            return
+
+        self.validate_slang_tessellation_domain_attributes_match(
+            hull_entry, domain_entry
+        )
+        self.validate_slang_domain_output_patch_shape(domain_entry, hull_shape)
+
+    def validate_slang_tessellation_domain_attributes_match(
+        self, hull_entry, domain_entry
+    ):
+        hull_domain = self.normalized_slang_stage_attribute_argument(
+            hull_entry, "domain"
+        )
+        domain_domain = self.normalized_slang_stage_attribute_argument(
+            domain_entry, "domain"
+        )
+        if not hull_domain or not domain_domain:
+            return
+
+        hull_domain = self.canonical_slang_tessellation_domain(hull_domain)
+        domain_domain = self.canonical_slang_tessellation_domain(domain_domain)
+        if hull_domain != domain_domain:
+            raise ValueError(
+                "Slang tessellation_evaluation stage domain "
+                f"'{domain_domain}' must match tessellation_control domain "
+                f"'{hull_domain}'"
+            )
+
+    def validate_slang_hull_output_patch_shape(self, hull_entry, hull_shape):
+        output_patches = self.slang_patch_parameters(
+            getattr(hull_entry, "parameters", getattr(hull_entry, "params", [])),
+            "OutputPatch",
+        )
+        if len(output_patches) > 1:
+            raise ValueError(
+                "Slang tessellation_control stage requires at most one "
+                "OutputPatch<..., N> parameter"
+            )
+
+        output_control_points = self.slang_stage_attribute_int_argument(
+            hull_entry, "outputcontrolpoints"
+        )
+        if output_control_points is None or hull_shape is None:
+            return
+
+        _element_type, patch_size = hull_shape
+        if patch_size is None or str(output_control_points) == str(patch_size):
+            return
+
+        output_patch = self.format_slang_patch_shape("OutputPatch", hull_shape)
+        raise ValueError(
+            "Slang tessellation_control stage "
+            f"{output_patch} must match outputcontrolpoints({output_control_points})"
+        )
+
+    def validate_slang_domain_output_patch_shape(self, domain_entry, hull_shape):
+        domain_output_patches = self.slang_patch_parameters(
+            getattr(domain_entry, "parameters", getattr(domain_entry, "params", [])),
+            "OutputPatch",
+        )
+        if len(domain_output_patches) > 1:
+            raise ValueError(
+                "Slang tessellation_evaluation stage requires at most one "
+                "OutputPatch<..., N> parameter"
+            )
+        if not domain_output_patches or hull_shape is None:
+            return
+
+        _domain_param, domain_shape = domain_output_patches[0]
+        hull_type, hull_size = hull_shape
+        domain_type, domain_size = domain_shape
+        if hull_type and domain_type and hull_type != domain_type:
+            raise ValueError(
+                "Slang tessellation_evaluation stage "
+                f"{self.format_slang_patch_shape('OutputPatch', domain_shape)} "
+                "must match tessellation_control output "
+                f"{self.format_slang_patch_shape('OutputPatch', hull_shape)}"
+            )
+        if (
+            hull_size is not None
+            and domain_size is not None
+            and hull_size != domain_size
+        ):
+            raise ValueError(
+                "Slang tessellation_evaluation stage "
+                f"{self.format_slang_patch_shape('OutputPatch', domain_shape)} "
+                "must match tessellation_control output "
+                f"{self.format_slang_patch_shape('OutputPatch', hull_shape)}"
+            )
+
+    def slang_hull_output_patch_shape(self, hull_entry):
+        param_list = getattr(
+            hull_entry, "parameters", getattr(hull_entry, "params", [])
+        )
+        output_patches = self.slang_patch_parameters(param_list, "OutputPatch")
+        output_control_points = self.slang_stage_attribute_int_argument(
+            hull_entry, "outputcontrolpoints"
+        )
+
+        return_type_name = self.convert_type_node_to_string(
+            getattr(hull_entry, "return_type", "void")
+        )
+        if self.convert_type(return_type_name) != "void":
+            return return_type_name, (
+                str(output_control_points)
+                if output_control_points is not None
+                else None
+            )
+
+        if output_patches:
+            _param, patch_shape = output_patches[0]
+            element_type, patch_size = patch_shape
+            return element_type, patch_size
+
+        if output_control_points is not None:
+            return None, str(output_control_points)
+        return None
 
     def slang_stage_uses_numthreads(self, stage_name):
         shader_stage = self.slang_shader_stage_name(stage_name)
@@ -919,10 +1067,14 @@ class SlangCodeGen:
             result += self.generate_global_variable(local_var)
 
         entry_point = getattr(stage, "entry_point", None)
+        local_functions = getattr(stage, "local_functions", [])
+        self.validate_slang_stage_patch_constant_function_shapes(
+            entry_point, local_functions, stage_name
+        )
         patch_constant_function_names = self.slang_stage_patch_constant_function_names(
             entry_point, stage_name
         )
-        for func in getattr(stage, "local_functions", []):
+        for func in local_functions:
             if getattr(func, "name", None) in patch_constant_function_names:
                 result += (
                     self.generate_function(
@@ -959,6 +1111,75 @@ class SlangCodeGen:
 
         function_name = self.slang_stage_attribute_value_to_string(arguments[0])
         return {function_name} if function_name else set()
+
+    def validate_slang_stage_patch_constant_function_shapes(
+        self, entry_point, local_functions, stage_name
+    ):
+        if entry_point is None or self.slang_shader_stage_name(stage_name) != "hull":
+            return
+
+        patch_constant_function_names = self.slang_stage_patch_constant_function_names(
+            entry_point, stage_name
+        )
+        if not patch_constant_function_names:
+            return
+
+        local_functions_by_name = {
+            getattr(func, "name", None): func for func in local_functions or []
+        }
+        hull_input_patches = self.slang_patch_parameters(
+            getattr(entry_point, "parameters", getattr(entry_point, "params", [])),
+            "InputPatch",
+        )
+
+        for function_name in patch_constant_function_names:
+            patch_constant_function = local_functions_by_name.get(function_name)
+            if patch_constant_function is None:
+                continue
+
+            return_type_name = self.convert_type_node_to_string(
+                getattr(patch_constant_function, "return_type", "void")
+            )
+            if self.convert_type(return_type_name) == "void":
+                raise ValueError(
+                    "Slang tessellation_control stage patchconstantfunc "
+                    f"'{function_name}' requires a non-void return type"
+                )
+
+            patch_constant_input_patches = self.slang_patch_parameters(
+                getattr(
+                    patch_constant_function,
+                    "parameters",
+                    getattr(patch_constant_function, "params", []),
+                ),
+                "InputPatch",
+            )
+            if len(patch_constant_input_patches) > 1:
+                raise ValueError(
+                    "Slang tessellation_control stage patchconstantfunc "
+                    f"'{function_name}' requires at most one "
+                    "InputPatch<..., N> parameter"
+                )
+
+            if not patch_constant_input_patches or not hull_input_patches:
+                continue
+
+            _patch_param, patch_shape = patch_constant_input_patches[0]
+            _hull_param, hull_shape = hull_input_patches[0]
+            if patch_shape != hull_shape:
+                patch_type = self.format_slang_patch_shape("InputPatch", patch_shape)
+                hull_type = self.format_slang_patch_shape("InputPatch", hull_shape)
+                raise ValueError(
+                    "Slang tessellation_control stage patchconstantfunc "
+                    f"'{function_name}' {patch_type} must match hull entry "
+                    f"{hull_type}"
+                )
+
+    def format_slang_patch_shape(self, patch_type, shape):
+        element_type, patch_size = shape
+        if patch_size is None:
+            return f"{patch_type}<{element_type}>"
+        return f"{patch_type}<{element_type}, {patch_size}>"
 
     def convert_type_node_to_string(self, type_node) -> str:
         if isinstance(type_node, LiteralNode):
@@ -1469,11 +1690,29 @@ class SlangCodeGen:
         return False
 
     def slang_patch_parameter_element_type_name(self, param, patch_type):
+        shape = self.slang_patch_parameter_shape(param, patch_type)
+        if shape is not None:
+            return shape[0]
+        return None
+
+    def slang_patch_parameters(self, param_list, patch_type):
+        patch_params = []
+        for param in param_list or []:
+            shape = self.slang_patch_parameter_shape(param, patch_type)
+            if shape is not None:
+                patch_params.append((param, shape))
+        return patch_params
+
+    def slang_patch_parameter_shape(self, param, patch_type):
         type_node = getattr(param, "param_type", None)
         if getattr(type_node, "name", None) == patch_type:
             generic_args = getattr(type_node, "generic_args", []) or []
             if generic_args:
-                return self.convert_type_node_to_string(generic_args[0])
+                element_type = self.convert_type_node_to_string(generic_args[0])
+                patch_size = None
+                if len(generic_args) > 1:
+                    patch_size = self.convert_type_node_to_string(generic_args[1])
+                return element_type, patch_size
 
         type_name = self.slang_parameter_type_name(param)
         prefix = f"{patch_type}<"
@@ -1481,9 +1720,22 @@ class SlangCodeGen:
             return None
 
         args = type_name[len(prefix) : -1]
-        return self.first_slang_generic_argument(args)
+        generic_args = self.slang_generic_arguments(args)
+        if not generic_args:
+            return None
+        element_type = generic_args[0]
+        patch_size = generic_args[1] if len(generic_args) > 1 else None
+        return element_type, patch_size
 
     def first_slang_generic_argument(self, args):
+        generic_args = self.slang_generic_arguments(args)
+        if generic_args:
+            return generic_args[0]
+        return args.strip()
+
+    def slang_generic_arguments(self, args):
+        arguments = []
+        start = 0
         depth = 0
         for index, char in enumerate(args):
             if char == "<":
@@ -1491,8 +1743,12 @@ class SlangCodeGen:
             elif char == ">":
                 depth -= 1
             elif char == "," and depth == 0:
-                return args[:index].strip()
-        return args.strip()
+                arguments.append(args[start:index].strip())
+                start = index + 1
+        trailing_arg = args[start:].strip()
+        if trailing_arg:
+            arguments.append(trailing_arg)
+        return arguments
 
     def slang_implicit_stage_parameters(
         self, body_statements, shader_type, param_list, stage_role=None

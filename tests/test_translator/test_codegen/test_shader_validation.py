@@ -1508,6 +1508,62 @@ shader MetalIntersectionFunctionTableValidation {
 """
 
 
+METAL_RAY_FUNCTION_TABLE_PARAMETER_SHADER = """
+shader MetalRayFunctionTableParameterValidation {
+    struct CallableData {
+        vec4 color;
+    };
+
+    ray_generation {
+        void main(
+            visible_function_table<CallableData> callables @binding(1),
+            intersection_function_table<instancing> intersectionFunctions @binding(2)
+        ) {
+            CallableData data;
+            data.color = vec4(1.0);
+            CallShader(callables, 0, data);
+            uint count = intersectionFunctions.size();
+        }
+    }
+}
+"""
+
+
+METAL_RAY_FUNCTION_TABLE_ARRAY_DIAGNOSTIC_SHADER = """
+shader MetalRayFunctionTableArrayDiagnosticValidation {
+    struct CallableData {
+        vec4 color;
+    };
+
+    visible_function_table<CallableData> callables[2] @binding(1);
+    intersection_function_table<instancing> intersectionFunctions[2] @binding(3);
+
+    void invoke(uint shaderIndex, CallableData data) {
+        CallShader(callables[0], shaderIndex, data);
+    }
+
+    uint tableSize() {
+        return intersectionFunctions[0].size();
+    }
+
+    ray_generation {
+        void main(
+            visible_function_table<CallableData> paramCallables[2] @binding(5),
+            intersection_function_table<instancing> paramIntersections[2]
+                @binding(7)
+        ) {
+            CallableData data;
+            data.color = vec4(1.0);
+            invoke(1u, data);
+            uint count = tableSize();
+            CallShader(paramCallables[0], 1u, data);
+            uint paramCount = paramIntersections[0].size();
+        }
+    }
+}
+"""
+
+
 METAL_TEXTURE_3D_PROJECTED_OFFSET_FRAGMENT_SHADER = """
 shader MetalTexture3DProjectedOffsetValidation {
     sampler3D volumeMap;
@@ -3242,6 +3298,71 @@ def test_generated_metal_intersection_function_table_compiles_with_metal3(
     output = tmp_path / "intersection_function_table.air"
     code = MetalCodeGen().generate(
         crosstl.translator.parse(METAL_INTERSECTION_FUNCTION_TABLE_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_function_table_parameters_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_function_table_parameters.metal"
+    output = tmp_path / "ray_function_table_parameters.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_FUNCTION_TABLE_PARAMETER_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_function_table_array_diagnostics_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_function_table_array_diagnostics.metal"
+    output = tmp_path / "ray_function_table_array_diagnostics.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_FUNCTION_TABLE_ARRAY_DIAGNOSTIC_SHADER)
+    )
+    assert "arrays of visible_function_table are not valid Metal buffer parameters" in (
+        code
+    )
+    assert (
+        "arrays of intersection_function_table are not valid Metal buffer parameters"
+        in code
     )
     source.write_text(code, encoding="utf-8")
 

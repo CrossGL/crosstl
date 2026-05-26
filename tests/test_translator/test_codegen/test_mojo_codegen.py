@@ -2973,7 +2973,11 @@ def test_hlsl_style_vector_aliases_emit_mojo_simd_names():
         float2 uv;
         float3 normal;
         float4 color;
+        packed_float4 packedColor;
+        simd_float3 simdNormal;
         half3 hdr;
+        min16float3 minHdr;
+        min10float2 minUv;
         double2 precise;
         int3 index;
         uint4 mask;
@@ -2982,6 +2986,14 @@ def test_hlsl_style_vector_aliases_emit_mojo_simd_names():
 
     float4 buildColor(float2 uv, float z) {
         return float4(uv, z, 1.0);
+    }
+
+    packed_float4 buildPackedFloat(packed_float2 pair, float z, float w) {
+        return packed_float4(pair, z, w);
+    }
+
+    simd_float3 buildSimdFloat(simd_float2 pair, float value) {
+        return simd_float3(pair, value);
     }
 
     half3 buildHalf(half2 pair, half value) {
@@ -2994,6 +3006,14 @@ def test_hlsl_style_vector_aliases_emit_mojo_simd_names():
 
     f16vec3 buildF16(f16vec2 pair, half value) {
         return f16vec3(pair, value);
+    }
+
+    min16float3 buildMin16(min16float2 pair, min16float value) {
+        return min16float3(pair, value);
+    }
+
+    min10float4 buildMin10(min10float2 pair, min10float z, min10float w) {
+        return min10float4(pair, z, w);
     }
 
     double3 buildPrecise(double2 pair, double value) {
@@ -3016,12 +3036,20 @@ def test_hlsl_style_vector_aliases_emit_mojo_simd_names():
     assert "var uv: SIMD[DType.float32, 2]" in generated_code
     assert "var normal: SIMD[DType.float32, 4]" in generated_code
     assert "var color: SIMD[DType.float32, 4]" in generated_code
+    assert "var packedColor: SIMD[DType.float32, 4]" in generated_code
+    assert "var simdNormal: SIMD[DType.float32, 4]" in generated_code
     assert "var hdr: SIMD[DType.float16, 4]" in generated_code
+    assert "var minHdr: SIMD[DType.float16, 4]" in generated_code
+    assert "var minUv: SIMD[DType.float16, 2]" in generated_code
     assert "var precise: SIMD[DType.float64, 2]" in generated_code
     assert "var index: SIMD[DType.int32, 4]" in generated_code
     assert "var mask: SIMD[DType.uint32, 4]" in generated_code
     assert "var flags: SIMD[DType.bool, 2]" in generated_code
     assert "return SIMD[DType.float32, 4](uv[0], uv[1], z, 1.0)" in generated_code
+    assert "return SIMD[DType.float32, 4](pair[0], pair[1], z, w)" in generated_code
+    assert (
+        "return SIMD[DType.float32, 4](pair[0], pair[1], value, 0.0)" in generated_code
+    )
     assert (
         "return SIMD[DType.float16, 4](pair[0], pair[1], value, 0.0)" in generated_code
     )
@@ -3035,12 +3063,20 @@ def test_hlsl_style_vector_aliases_emit_mojo_simd_names():
         "float2(",
         "float3(",
         "float4(",
+        "packed_float2(",
+        "packed_float4(",
+        "simd_float2(",
+        "simd_float3(",
         "half2(",
         "half3(",
         "packed_half2(",
         "packed_half4(",
         "f16vec2(",
         "f16vec3(",
+        "min16float2(",
+        "min16float3(",
+        "min10float2(",
+        "min10float4(",
         "double2(",
         "double3(",
         "int2(",
@@ -3059,8 +3095,24 @@ def test_hlsl_style_vector_aliases_compile_with_mojo(tmp_path):
         return float4(uv, z, w);
     }
 
+    packed_float4 makePackedFloat(packed_float2 pair, float z, float w) {
+        return packed_float4(pair, z, w);
+    }
+
+    simd_float3 makeSimdFloat(simd_float2 pair, float z) {
+        return simd_float3(pair, z);
+    }
+
     half3 makeHalf(half2 pair, half z) {
         return half3(pair, z);
+    }
+
+    min16float3 makeMin16(min16float2 pair, min16float z) {
+        return min16float3(pair, z);
+    }
+
+    min10float4 makeMin10(min10float2 pair, min10float z, min10float w) {
+        return min10float4(pair, z, w);
     }
 
     double3 makePrecise(double2 pair, double z) {
@@ -3082,7 +3134,11 @@ def test_hlsl_style_vector_aliases_compile_with_mojo(tmp_path):
     generated_code += """
 fn main():
     print(makeColor(SIMD[DType.float32, 2](1.0, 2.0), 3.0, 4.0))
+    print(makePackedFloat(SIMD[DType.float32, 2](5.0, 6.0), 7.0, 8.0))
+    print(makeSimdFloat(SIMD[DType.float32, 2](9.0, 10.0), 11.0))
     print(makeHalf(SIMD[DType.float16, 2](1.0, 2.0), Float16(3.0)))
+    print(makeMin16(SIMD[DType.float16, 2](4.0, 5.0), Float16(6.0)))
+    print(makeMin10(SIMD[DType.float16, 2](7.0, 8.0), Float16(9.0), Float16(10.0)))
     print(makePrecise(SIMD[DType.float64, 2](1.0, 2.0), 3.0))
     print(makeIndex(SIMD[DType.int32, 2](1, 2), 3))
     print(makeMask(SIMD[DType.uint32, 2](1, 2), UInt32(3), UInt32(4)))
@@ -3099,6 +3155,8 @@ fn main():
 
     assert result.returncode == 0, result.stderr
     assert "[1.0, 2.0, 3.0, 4.0]" in result.stdout
+    assert "[5.0, 6.0, 7.0, 8.0]" in result.stdout
+    assert "[9.0, 10.0, 11.0, 0.0]" in result.stdout
     assert "[1, 2, 3, 0]" in result.stdout
 
 

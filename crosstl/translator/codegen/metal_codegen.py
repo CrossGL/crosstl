@@ -1637,6 +1637,9 @@ class MetalCodeGen:
         previous_glsl_buffer_block_parameter_struct_failures = (
             self.current_glsl_buffer_block_parameter_struct_failures
         )
+        previous_unsupported_metal_ray_function_table_array_variables = dict(
+            self.unsupported_metal_ray_function_table_array_variables
+        )
         previous_structured_buffer_length_parameters = (
             self.current_structured_buffer_length_parameters
         )
@@ -1658,7 +1661,7 @@ class MetalCodeGen:
             self.current_glsl_buffer_block_parameter_failures,
             self.current_glsl_buffer_block_parameter_struct_failures,
         ) = self.collect_lowered_glsl_buffer_block_parameters(param_list)
-        if shader_type in {"vertex", "fragment", "compute"}:
+        if shader_type in {"vertex", "fragment", "compute", "ray_generation"}:
             self.validate_stage_parameter_resource_bindings(
                 param_list, self.current_function_name
             )
@@ -1670,6 +1673,7 @@ class MetalCodeGen:
             self.collect_unsupported_glsl_buffer_block_parameter_names(param_list)
         )
         self.current_unsupported_glsl_buffer_block_local_variables = set()
+        unsupported_metal_ray_function_table_parameter_diagnostics = []
         self.current_structured_buffer_length_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
         self.local_variable_types = {}
@@ -1685,6 +1689,20 @@ class MetalCodeGen:
             else:
                 raw_param_type = "float"
             self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
+
+            table_array_kind = self.metal_ray_function_table_array_parameter_kind(
+                raw_param_type, p
+            )
+            if table_array_kind is not None:
+                self.unsupported_metal_ray_function_table_array_variables[p.name] = (
+                    table_array_kind
+                )
+                unsupported_metal_ray_function_table_parameter_diagnostics.append(
+                    self.unsupported_metal_ray_function_table_array_diagnostic(
+                        table_array_kind, p.name
+                    ).rstrip()
+                )
+                continue
 
             if self.is_sampler_type(raw_param_type):
                 sampler_parameters.add(p.name)
@@ -1803,6 +1821,9 @@ class MetalCodeGen:
             )
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_glsl_buffer_block_local_variables
+            )
+            self.unsupported_metal_ray_function_table_array_variables = (
+                previous_unsupported_metal_ray_function_table_array_variables
             )
             self.current_glsl_buffer_block_parameter_failures = (
                 previous_glsl_buffer_block_parameter_failures
@@ -1931,6 +1952,8 @@ class MetalCodeGen:
         self.current_sampler_parameters = sampler_parameters
         self.current_texture_parameters = texture_parameters
         self.current_image_format_parameters = image_format_parameters
+        for diagnostic in unsupported_metal_ray_function_table_parameter_diagnostics:
+            code += f"    {diagnostic}\n"
         body = getattr(func, "body", [])
         if hasattr(body, "statements"):
             for stmt in body.statements:
@@ -1970,6 +1993,9 @@ class MetalCodeGen:
         )
         self.current_unsupported_glsl_buffer_block_local_variables = (
             previous_unsupported_glsl_buffer_block_local_variables
+        )
+        self.unsupported_metal_ray_function_table_array_variables = (
+            previous_unsupported_metal_ray_function_table_array_variables
         )
         self.current_glsl_buffer_block_parameter_failures = (
             previous_glsl_buffer_block_parameter_failures
@@ -3516,6 +3542,11 @@ class MetalCodeGen:
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
+            unsupported_value = (
+                self.unsupported_metal_ray_function_table_array_expression(expr)
+            )
+            if unsupported_value is not None:
+                return unsupported_value
             block_load = self.generate_glsl_buffer_block_array_load(expr)
             if block_load is not None:
                 return block_load
@@ -3553,6 +3584,12 @@ class MetalCodeGen:
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
+
+            unsupported_table_call = (
+                self.unsupported_metal_ray_function_table_array_member_call(func_expr)
+            )
+            if unsupported_table_call is not None:
+                return unsupported_table_call
 
             static_generic_call = generate_static_generic_numeric_call(self, func_name)
             if static_generic_call is not None:
@@ -3798,6 +3835,11 @@ class MetalCodeGen:
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
+            unsupported_value = (
+                self.unsupported_metal_ray_function_table_array_expression(expr)
+            )
+            if unsupported_value is not None:
+                return unsupported_value
             block_load = self.generate_glsl_buffer_block_member_load(expr)
             if block_load is not None:
                 return block_load
@@ -3939,6 +3981,13 @@ class MetalCodeGen:
                 return None
             shader_index, callable_data = rendered_args
         elif len(raw_args) == 3:
+            unsupported_array = self.unsupported_metal_ray_function_table_array_reason(
+                raw_args[0]
+            )
+            if unsupported_array is not None:
+                return self.unsupported_metal_ray_tracing_intrinsic(
+                    "CallShader", unsupported_array
+                )
             table_name = rendered_args[0]
             shader_index = rendered_args[1]
             callable_data = rendered_args[2]
@@ -3961,6 +4010,53 @@ class MetalCodeGen:
 
     def unsupported_metal_ray_tracing_intrinsic(self, operation, reason):
         return f"/* unsupported Metal ray tracing intrinsic: {operation} - {reason} */"
+
+    def unsupported_metal_ray_function_table_array_diagnostic(self, table_kind, name):
+        return (
+            f"/* unsupported Metal ray tracing resource: arrays of {table_kind} "
+            f"are not valid Metal buffer parameters ({name}) */\n"
+        )
+
+    def metal_ray_function_table_kind(self, vtype):
+        if self.is_visible_function_table_type(vtype):
+            return "visible_function_table"
+        if self.is_intersection_function_table_type(vtype):
+            return "intersection_function_table"
+        return None
+
+    def metal_ray_function_table_array_parameter_kind(self, vtype, node=None):
+        table_kind = self.metal_ray_function_table_kind(vtype)
+        if table_kind is None:
+            return None
+        if self.resource_array_parameter(vtype, node) is None:
+            return None
+        return table_kind
+
+    def unsupported_metal_ray_function_table_array_reason(self, expr):
+        table_name = self.expression_name(expr)
+        table_kind = self.unsupported_metal_ray_function_table_array_variables.get(
+            table_name
+        )
+        if table_kind is None:
+            return None
+        return (
+            f"arrays of {table_kind} are not valid Metal buffer parameters "
+            f"({table_name})"
+        )
+
+    def unsupported_metal_ray_function_table_array_expression(self, expr):
+        reason = self.unsupported_metal_ray_function_table_array_reason(expr)
+        if reason is None:
+            return None
+        return f"0 /* unsupported Metal ray tracing resource: {reason} */"
+
+    def unsupported_metal_ray_function_table_array_member_call(self, func_expr):
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+        object_expr = getattr(
+            func_expr, "object_expr", getattr(func_expr, "object", None)
+        )
+        return self.unsupported_metal_ray_function_table_array_expression(object_expr)
 
     def generate_atomic_function_call(self, func_name, args):
         if func_name in self.user_function_names:
@@ -4322,15 +4418,19 @@ class MetalCodeGen:
         return f"visible_function_table<{self.visible_function_table_signature(vtype)}>"
 
     def format_visible_function_table_parameter(self, vtype, name, array_size=None):
-        table_type = (
-            vtype
-            if str(vtype).startswith("visible_function_table<")
-            else self.map_visible_function_table_type(vtype)
-        )
+        table_type = self.visible_function_table_parameter_type(vtype)
         if array_size is not None:
             array_size = array_size or "1"
             return f"array<{table_type}, {array_size}> {name}"
         return f"{table_type} {name}"
+
+    def visible_function_table_parameter_type(self, vtype):
+        type_name = str(vtype)
+        if type_name.startswith("visible_function_table<"):
+            signature = type_name.split("<", 1)[1][:-1].strip()
+            if signature.startswith("void"):
+                return type_name
+        return self.map_visible_function_table_type(vtype)
 
     def intersection_function_table_type_name(self, vtype):
         return str(self.resource_base_type(vtype)).split("<", 1)[0]
@@ -4565,7 +4665,7 @@ class MetalCodeGen:
             return ""
         if semantic:
             return self.map_semantic(semantic)
-        if shader_type in {"vertex", "fragment", "compute"}:
+        if shader_type in {"vertex", "fragment", "compute", "ray_generation"}:
             resource_attr = self.resource_parameter_attribute(raw_param_type, node)
             if resource_attr:
                 return resource_attr
@@ -4583,6 +4683,10 @@ class MetalCodeGen:
             attribute_names = {"binding", "sampler"}
             prefixes = ("s",)
         elif self.is_visible_function_table_type(raw_param_type):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
+        elif self.is_intersection_function_table_type(raw_param_type):
             namespace = "buffer"
             attribute_names = {"binding", "buffer"}
             prefixes = ("b", "u", "t")
@@ -4785,6 +4889,11 @@ class MetalCodeGen:
                 node, {"binding", "buffer"}, ("b", "u", "t")
             )
             return f" [[buffer({binding})]]" if binding is not None else ""
+        if self.is_intersection_function_table_type(raw_param_type):
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer"}, ("b", "u", "t")
+            )
+            return f" [[buffer({binding})]]" if binding is not None else ""
         if self.is_acceleration_structure_type(raw_param_type):
             binding = self.explicit_resource_binding_index(
                 node, {"binding", "buffer"}, ("b", "u", "t")
@@ -4834,6 +4943,10 @@ class MetalCodeGen:
             )
         if self.is_visible_function_table_type(raw_param_type):
             return self.format_visible_function_table_parameter(raw_param_type, name)
+        if self.is_intersection_function_table_type(raw_param_type):
+            return self.format_intersection_function_table_parameter(
+                raw_param_type, name
+            )
         array_type = self.resource_array_parameter(raw_param_type, node)
         if array_type is not None:
             resource_type, array_size = array_type

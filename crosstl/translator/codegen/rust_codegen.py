@@ -274,17 +274,38 @@ class RustCodeGen:
             "sqrt": "sqrt",
             "inversesqrt": "rsqrt",
             "pow": "pow",
+            "fma": "fma",
+            "mad": "fma",
             "exp": "exp",
             "exp2": "exp2",
             "log": "log",
             "log2": "log2",
             "abs": "abs",
+            "sign": "sign",
+            "isnan": "isnan",
+            "isinf": "isinf",
+            "isfinite": "isfinite",
             "min": "min",
             "max": "max",
             "clamp": "clamp",
             "mix": "lerp",
             "smoothstep": "smoothstep",
             "step": "step",
+            "dFdx": "dfdx",
+            "dFdy": "dfdy",
+            "ddx": "dfdx",
+            "ddy": "dfdy",
+            "dFdxFine": "dfdx_fine",
+            "dFdyFine": "dfdy_fine",
+            "ddx_fine": "dfdx_fine",
+            "ddy_fine": "dfdy_fine",
+            "dFdxCoarse": "dfdx_coarse",
+            "dFdyCoarse": "dfdy_coarse",
+            "ddx_coarse": "dfdx_coarse",
+            "ddy_coarse": "dfdy_coarse",
+            "fwidth": "fwidth",
+            "fwidthFine": "fwidth_fine",
+            "fwidthCoarse": "fwidth_coarse",
             "floor": "floor",
             "ceil": "ceil",
             "round": "round",
@@ -5483,16 +5504,23 @@ class RustCodeGen:
                 "degrees",
                 "radians",
                 "fract",
+                "sign",
             }
             and arg_types
         ):
             return arg_types[0]
+
+        if mapped_name in {"isnan", "isinf", "isfinite"} and arg_types:
+            return self.boolean_value_type(arg_types[0])
 
         if (
             mapped_name in {"min", "max", "pow", "modulo", "atan2"}
             and len(arg_types) >= 2
         ):
             return self.promoted_value_type(arg_types[0], arg_types[1])
+
+        if mapped_name == "fma" and len(arg_types) >= 3:
+            return self.promoted_argument_type(arg_types[:3])
 
         if mapped_name == "clamp" and arg_types:
             return arg_types[0]
@@ -5505,6 +5533,23 @@ class RustCodeGen:
 
         if mapped_name == "step" and len(arg_types) >= 2:
             return self.promoted_argument_type(arg_types[:2])
+
+        if (
+            mapped_name
+            in {
+                "dfdx",
+                "dfdy",
+                "dfdx_fine",
+                "dfdy_fine",
+                "dfdx_coarse",
+                "dfdy_coarse",
+                "fwidth",
+                "fwidth_fine",
+                "fwidth_coarse",
+            }
+            and arg_types
+        ):
+            return arg_types[0]
 
         return None
 
@@ -5623,6 +5668,14 @@ class RustCodeGen:
         if vector_info is not None:
             return vector_info["component_type"]
         return self.normalize_scalar_type(type_name)
+
+    def boolean_value_type(self, type_name):
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            return self.vector_type_for_components("bool", vector_info["size"])
+        if self.normalize_scalar_type(type_name) is not None:
+            return "bool"
+        return None
 
     def promoted_argument_type(self, arg_types):
         result_type = None

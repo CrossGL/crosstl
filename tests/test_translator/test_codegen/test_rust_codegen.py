@@ -458,6 +458,203 @@ mod math {
         left % right
     }
 
+    pub trait Sign {
+        type Output;
+
+        fn sign_value(self) -> Self::Output;
+    }
+
+    pub fn sign<T: Sign>(value: T) -> T::Output {
+        value.sign_value()
+    }
+
+    impl Sign for f32 {
+        type Output = f32;
+
+        fn sign_value(self) -> Self::Output {
+            self.signum()
+        }
+    }
+
+    impl Sign for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn sign_value(self) -> Self::Output {
+            self
+        }
+    }
+
+    pub trait IsNan {
+        type Output;
+
+        fn isnan_value(self) -> Self::Output;
+    }
+
+    pub fn isnan<T: IsNan>(value: T) -> T::Output {
+        value.isnan_value()
+    }
+
+    impl IsNan for f32 {
+        type Output = bool;
+
+        fn isnan_value(self) -> Self::Output {
+            self.is_nan()
+        }
+    }
+
+    impl IsNan for Vec3<f32> {
+        type Output = Vec3<bool>;
+
+        fn isnan_value(self) -> Self::Output {
+            Vec3::new(self.x.is_nan(), self.y.is_nan(), self.z.is_nan())
+        }
+    }
+
+    pub trait IsInf {
+        type Output;
+
+        fn isinf_value(self) -> Self::Output;
+    }
+
+    pub fn isinf<T: IsInf>(value: T) -> T::Output {
+        value.isinf_value()
+    }
+
+    impl IsInf for f32 {
+        type Output = bool;
+
+        fn isinf_value(self) -> Self::Output {
+            self.is_infinite()
+        }
+    }
+
+    impl IsInf for Vec3<f32> {
+        type Output = Vec3<bool>;
+
+        fn isinf_value(self) -> Self::Output {
+            Vec3::new(
+                self.x.is_infinite(),
+                self.y.is_infinite(),
+                self.z.is_infinite(),
+            )
+        }
+    }
+
+    pub trait IsFinite {
+        type Output;
+
+        fn isfinite_value(self) -> Self::Output;
+    }
+
+    pub fn isfinite<T: IsFinite>(value: T) -> T::Output {
+        value.isfinite_value()
+    }
+
+    impl IsFinite for f32 {
+        type Output = bool;
+
+        fn isfinite_value(self) -> Self::Output {
+            self.is_finite()
+        }
+    }
+
+    impl IsFinite for Vec3<f32> {
+        type Output = Vec3<bool>;
+
+        fn isfinite_value(self) -> Self::Output {
+            Vec3::new(
+                self.x.is_finite(),
+                self.y.is_finite(),
+                self.z.is_finite(),
+            )
+        }
+    }
+
+    pub trait Fma<Multiplier, Addend> {
+        type Output;
+
+        fn fma_value(self, multiplier: Multiplier, addend: Addend) -> Self::Output;
+    }
+
+    pub fn fma<Value, Multiplier, Addend>(
+        value: Value,
+        multiplier: Multiplier,
+        addend: Addend,
+    ) -> <Value as Fma<Multiplier, Addend>>::Output
+    where
+        Value: Fma<Multiplier, Addend>,
+    {
+        value.fma_value(multiplier, addend)
+    }
+
+    impl Fma<f32, f32> for f32 {
+        type Output = f32;
+
+        fn fma_value(self, multiplier: f32, addend: f32) -> Self::Output {
+            self.mul_add(multiplier, addend)
+        }
+    }
+
+    impl Fma<f32, Vec3<f32>> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn fma_value(self, multiplier: f32, addend: Vec3<f32>) -> Self::Output {
+            self * multiplier + addend
+        }
+    }
+
+    impl Fma<Vec3<f32>, f32> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn fma_value(self, multiplier: Vec3<f32>, addend: f32) -> Self::Output {
+            self * multiplier + Vec3::new(addend, addend, addend)
+        }
+    }
+
+    impl Fma<Vec3<f32>, Vec3<f32>> for Vec3<f32> {
+        type Output = Vec3<f32>;
+
+        fn fma_value(self, multiplier: Vec3<f32>, addend: Vec3<f32>) -> Self::Output {
+            self * multiplier + addend
+        }
+    }
+
+    pub fn dfdx<T: Copy>(value: T) -> T {
+        value
+    }
+
+    pub fn dfdy<T: Copy>(value: T) -> T {
+        value
+    }
+
+    pub fn dfdx_fine<T: Copy>(value: T) -> T {
+        value
+    }
+
+    pub fn dfdy_fine<T: Copy>(value: T) -> T {
+        value
+    }
+
+    pub fn dfdx_coarse<T: Copy>(value: T) -> T {
+        value
+    }
+
+    pub fn dfdy_coarse<T: Copy>(value: T) -> T {
+        value
+    }
+
+    pub fn fwidth<T: Copy>(value: T) -> T {
+        value
+    }
+
+    pub fn fwidth_fine<T: Copy>(value: T) -> T {
+        value
+    }
+
+    pub fn fwidth_coarse<T: Copy>(value: T) -> T {
+        value
+    }
+
     pub trait Step<Edge> {
         type Output;
 
@@ -4714,6 +4911,95 @@ def test_step_and_smoothstep_promote_vector_scalar_operands_and_smoke_compile(
     )
     assert "let vector_edge_gate: f32 = step" not in generated_code
     assert "let soft_edges: f32 = smoothstep" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_derivative_and_fused_math_intrinsics_infer_types_and_smoke_compile(
+    tmp_path,
+):
+    code = """
+    shader DerivativeIntrinsicInference {
+        fragment {
+            vec4 main(vec3 value, float scale, float bias) {
+                let dx = dFdx(value);
+                let dy = dFdy(value);
+                let fine = dFdxFine(value);
+                let coarse = dFdyCoarse(value);
+                let wide = fwidth(value);
+                let wide_fine = fwidthFine(value);
+                let wide_coarse = fwidthCoarse(value);
+                let fused = fma(value, scale, wide);
+                let mad_alias = mad(fused, value, bias);
+                let scalar_dx = ddx(scale);
+                let scalar_dy = ddy(scale);
+                return vec4(
+                    mad_alias + dx + dy + fine + coarse + wide + wide_fine + wide_coarse,
+                    scalar_dx + scalar_dy
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let dx: Vec3<f32> = dfdx(value);" in generated_code
+    assert "let dy: Vec3<f32> = dfdy(value);" in generated_code
+    assert "let fine: Vec3<f32> = dfdx_fine(value);" in generated_code
+    assert "let coarse: Vec3<f32> = dfdy_coarse(value);" in generated_code
+    assert "let wide: Vec3<f32> = fwidth(value);" in generated_code
+    assert "let wide_fine: Vec3<f32> = fwidth_fine(value);" in generated_code
+    assert "let wide_coarse: Vec3<f32> = fwidth_coarse(value);" in generated_code
+    assert "let fused: Vec3<f32> = fma(value, scale, wide);" in generated_code
+    assert "let mad_alias: Vec3<f32> = fma(fused, value, bias);" in generated_code
+    assert "let scalar_dx: f32 = dfdx(scale);" in generated_code
+    assert "let scalar_dy: f32 = dfdy(scale);" in generated_code
+    assert "let fused: f32 = fma" not in generated_code
+    assert "let dx: f32 = dfdx" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_sign_and_classification_intrinsics_infer_bool_vectors_and_smoke_compile(
+    tmp_path,
+):
+    code = """
+    shader ClassificationIntrinsicInference {
+        fragment {
+            vec4 main(vec3 value, float scale) {
+                let signed_value = sign(value);
+                let signed_scale = sign(scale);
+                let nan_mask = isnan(value);
+                let inf_mask = isinf(value);
+                let finite_mask = isfinite(value);
+                let scalar_nan = isnan(scale);
+                let scalar_inf = isinf(scale);
+                let scalar_finite = isfinite(scale);
+                let flags = vec3(
+                    nan_mask.x ? 1.0 : 0.0,
+                    inf_mask.y ? 1.0 : 0.0,
+                    finite_mask.z ? 1.0 : 0.0
+                );
+                let scalar_flags = (scalar_nan ? 1.0 : 0.0)
+                    + (scalar_inf ? 1.0 : 0.0)
+                    + (scalar_finite ? 1.0 : 0.0);
+                return vec4(signed_value + flags, signed_scale + scalar_flags);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let signed_value: Vec3<f32> = sign(value);" in generated_code
+    assert "let signed_scale: f32 = sign(scale);" in generated_code
+    assert "let nan_mask: Vec3<bool> = isnan(value);" in generated_code
+    assert "let inf_mask: Vec3<bool> = isinf(value);" in generated_code
+    assert "let finite_mask: Vec3<bool> = isfinite(value);" in generated_code
+    assert "let scalar_nan: bool = isnan(scale);" in generated_code
+    assert "let scalar_inf: bool = isinf(scale);" in generated_code
+    assert "let scalar_finite: bool = isfinite(scale);" in generated_code
+    assert "let nan_mask: bool = isnan(value)" not in generated_code
+    assert "let scalar_nan: f32 = isnan(scale)" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
