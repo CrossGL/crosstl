@@ -206,6 +206,82 @@ def test_native_hip_memory_lifecycle_parses_and_compiles_if_available(tmp_path):
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_managed_async_memory_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP managed, async, prefetch, and advisory memory APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void managed_async_memory(float* host, size_t n, hipStream_t stream) {
+        float* managed = NULL;
+        float* async_ptr = NULL;
+        unsigned long long access_flags = 0;
+        hipMemRangeAttribute attribute = hipMemRangeAttributeAccessedBy;
+
+        hipMallocManaged((void**)&managed, n * sizeof(float));
+        hipMallocAsync((void**)&async_ptr, n * sizeof(float), stream);
+        hipMemPrefetchAsync(managed, n * sizeof(float), 0, stream);
+        hipMemAdvise(managed, n * sizeof(float), hipMemAdviseSetReadMostly, 0);
+        hipMemRangeGetAttribute(
+            &access_flags, sizeof(access_flags), attribute,
+            managed, n * sizeof(float)
+        );
+        hipStreamAttachMemAsync(
+            stream, managed, n * sizeof(float), hipMemAttachSingle
+        );
+        hipMemcpyAsync(
+            async_ptr, host, n * sizeof(float), hipMemcpyHostToDevice, stream
+        );
+        hipFreeAsync(async_ptr, stream);
+        hipFree(managed);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: managed_async_memory" in crossgl
+    assert (
+        "void managed_async_memory(ptr<f32> host, u32 n, hipStream_t stream)" in crossgl
+    )
+    assert "var managed: ptr<f32> = NULL;" in crossgl
+    assert "var async_ptr: ptr<f32> = NULL;" in crossgl
+    assert "var access_flags: u64 = 0;" in crossgl
+    assert "var attribute: hipMemRangeAttribute = hipMemRangeAttributeAccessedBy;" in (
+        crossgl
+    )
+    assert "// HIP memory allocate: managed, bytes: (n * sizeof(float))" in crossgl
+    assert (
+        "// HIP async memory allocate: async_ptr, bytes: (n * sizeof(float)), "
+        "stream: stream"
+    ) in crossgl
+    assert (
+        "// HIP memory prefetch: pointer: managed, bytes: (n * sizeof(float)), "
+        "device: 0, stream: stream"
+    ) in crossgl
+    assert (
+        "// HIP memory advise: pointer: managed, bytes: (n * sizeof(float)), "
+        "advice: hipMemAdviseSetReadMostly, device: 0"
+    ) in crossgl
+    assert (
+        "// HIP memory range get attribute: output: access_flags, "
+        "output bytes: sizeof(access_flags), attribute: attribute, "
+        "pointer: managed, range bytes: (n * sizeof(float))"
+    ) in crossgl
+    assert (
+        "// HIP stream attach memory: stream: stream, pointer: managed, "
+        "bytes: (n * sizeof(float)), flags: hipMemAttachSingle"
+    ) in crossgl
+    assert (
+        "// HIP memory copy: host -> async_ptr, bytes: (n * sizeof(float)), "
+        "kind: hipMemcpyHostToDevice, stream: stream"
+    ) in crossgl
+    assert "// HIP async memory free: async_ptr, stream: stream" in crossgl
+    assert "// HIP memory free: managed" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_stream_event_lifecycle_parses_and_compiles_if_available(
     tmp_path,
 ):

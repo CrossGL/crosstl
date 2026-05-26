@@ -80,6 +80,32 @@ shader ExternalValidatorTypedBufferAtomics {
 """
 
 
+HLSL_RASTERIZER_ORDERED_VALIDATOR_SHADER = """
+shader HLSLRasterizerOrderedValidator {
+    uimage2D pixelCounts @rasterizer_ordered @register(u0);
+    image2DArray layers @rasterizer_ordered @register(u1);
+    RWBuffer<uint> bins @rasterizer_ordered @register(u2);
+    RWStructuredBuffer<int> values @rasterizer_ordered @register(u3);
+    RWByteAddressBuffer rawBytes @rasterizer_ordered @register(u4);
+
+    fragment {
+        vec4 main(uvec2 pixel @ TEXCOORD0, uint layer @ TEXCOORD1) @ SV_Target0 {
+            uint oldCount = imageAtomicAdd(pixelCounts, pixel, 1u);
+            imageStore(
+                layers,
+                uvec3(pixel, layer),
+                vec4(float(oldCount), 0.0, 0.0, 1.0)
+            );
+            uint oldBin = atomicAdd(bins[0], oldCount);
+            int oldValue = atomicMax(values[0], int(oldBin));
+            buffer_store(rawBytes, 0, oldBin);
+            return imageLoad(layers, uvec3(pixel, layer));
+        }
+    }
+}
+"""
+
+
 HLSL_DXR_LIBRARY_VALIDATOR_SHADER = """
 shader HLSLDXRLibraryValidator {
     RaytracingAccelerationStructure accel @register(t0);
@@ -947,6 +973,45 @@ def test_generated_hlsl_typed_buffer_atomics_compile_with_dxc(tmp_path):
             "cs_6_0",
             "-E",
             "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_generated_hlsl_rasterizer_ordered_resources_compile_with_dxc(tmp_path):
+    shader_path = tmp_path / "rasterizer_ordered_resources.hlsl"
+    output_path = tmp_path / "rasterizer_ordered_resources.dxil"
+
+    code = HLSLCodeGen().generate(
+        crosstl.translator.parse(HLSL_RASTERIZER_ORDERED_VALIDATOR_SHADER)
+    )
+    assert "RasterizerOrderedTexture2D<uint> pixelCounts : register(u0);" in code
+    assert "RasterizerOrderedTexture2DArray<float4> layers : register(u1);" in code
+    assert "RasterizerOrderedBuffer<uint> bins : register(u2);" in code
+    assert "RasterizerOrderedStructuredBuffer<int> values : register(u3);" in code
+    assert "RasterizerOrderedByteAddressBuffer rawBytes : register(u4);" in code
+    assert (
+        "uint imageAtomicAdd_uimage2D("
+        "RasterizerOrderedTexture2D<uint> image, int2 coord, uint value)"
+    ) in code
+    assert "InterlockedAdd(bins[0], oldCount, oldBin);" in code
+    assert "InterlockedMax(values[0], int(oldBin), oldValue);" in code
+    assert "rawBytes.Store(0, oldBin);" in code
+    assert "RWTexture2D<uint> pixelCounts" not in code
+    assert "RWBuffer<uint> bins : register(u2);" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    dxc = _require_tool("dxc")
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "ps_6_0",
+            "-E",
+            "PSMain",
             str(shader_path),
             "-Fo",
             str(output_path),

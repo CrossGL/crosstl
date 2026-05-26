@@ -1404,6 +1404,77 @@ def test_resource_placeholders_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_hlsl_sampled_texture_aliases_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    Texture2D<float4> colorMap : register(t0, space1);
+    Texture2DMS<float4> samples;
+    SamplerState linearSampler : register(s0);
+    SamplerComparisonState compareSampler : register(s1);
+    sampler2DShadow shadowMap;
+
+    vec4 sampleSplit(vec2 uv) {
+        return colorMap.Sample(linearSampler, uv);
+    }
+    vec4 sampleSplitLevel(vec2 uv) {
+        return colorMap.SampleLevel(linearSampler, uv, 1.0);
+    }
+    vec4 sampleSplitGrad(vec2 uv) {
+        return colorMap.SampleGrad(linearSampler, uv, uv, uv);
+    }
+    ivec2 querySplit() {
+        return colorMap.GetDimensions();
+    }
+    vec4 fetchSplit(ivec2 pixel, int sampleIndex) {
+        return samples.Load(pixel, sampleIndex);
+    }
+    float sampleShadow(vec3 uvDepth) {
+        return texture(shadowMap, compareSampler, uvDepth);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Sampler:" in generated_code
+    assert "struct Texture2D:" in generated_code
+    assert "struct Texture2DMS:" in generated_code
+    assert "var colorMap: Texture2D = Texture2D()" in generated_code
+    assert "var samples: Texture2DMS = Texture2DMS()" in generated_code
+    assert "var linearSampler: Sampler = Sampler()" in generated_code
+    assert "var compareSampler: Sampler = Sampler()" in generated_code
+    assert (
+        "# CrossGL resource metadata: name=linearSampler kind=sampler set=0 "
+        "binding=0 binding_source=explicit register=s0" in generated_code
+    )
+    assert "return sample(colorMap, uv)" in generated_code
+    assert "return sample_lod(colorMap, uv, 1.0)" in generated_code
+    assert "return sample_grad(colorMap, uv, uv, uv)" in generated_code
+    assert "return texture_size(colorMap)" in generated_code
+    assert "return texel_fetch(samples, pixel, sampleIndex)" in generated_code
+    assert "return sample(shadowMap, uvDepth)" in generated_code
+    assert "Texture2D<float4>" not in generated_code
+    assert "Texture2DMS<float4>" not in generated_code
+    assert "SamplerState" not in generated_code
+    assert "SamplerComparisonState" not in generated_code
+    assert ".Sample(" not in generated_code
+    assert ".SampleLevel(" not in generated_code
+    assert ".SampleGrad(" not in generated_code
+    assert ".GetDimensions(" not in generated_code
+    assert ".Load(" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "hlsl_sampled_texture_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     code = """
     sampler2D colorMap;

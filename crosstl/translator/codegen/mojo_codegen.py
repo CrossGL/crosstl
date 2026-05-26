@@ -309,6 +309,8 @@ MOJO_RESOURCE_TYPE_MAPPING = {
     "samplerCubeArrayShadow": "TextureCubeArrayShadow",
     "samplerCubeShadow": "TextureCubeShadow",
     "sampler": "Sampler",
+    "SamplerState": "Sampler",
+    "SamplerComparisonState": "Sampler",
     "image1D": "Image1D",
     "image1DArray": "Image1DArray",
     "image2D": "Image2D",
@@ -1182,6 +1184,24 @@ class MojoCodeGen:
             return None
         return base_type, generic_args[0]
 
+    def resource_type_alias(self, type_name):
+        type_name = self.type_name(type_name)
+        mapped_type = MOJO_RESOURCE_TYPE_MAPPING.get(type_name)
+        if mapped_type is not None:
+            return mapped_type
+
+        generic = self.parse_generic_type_name(type_name)
+        if generic is None:
+            return None
+
+        base_type, _ = generic
+        mapped_base_type = MOJO_RESOURCE_TYPE_MAPPING.get(base_type, base_type)
+        if self.is_mojo_resource_type(
+            mapped_base_type
+        ) and self.is_texture_resource_type(mapped_base_type):
+            return mapped_base_type
+        return None
+
     def mapped_buffer_type(self, buffer_type, element_type=None):
         if buffer_type in MOJO_TYPED_BUFFER_RESOURCE_TYPES and element_type is not None:
             return f"{buffer_type}[{self.map_type(element_type)}]"
@@ -1348,7 +1368,9 @@ class MojoCodeGen:
         base_type, _ = self.resource_base_type_and_count(type_name)
         if self.buffer_resource_info(base_type) is not None:
             return "buffer"
-        mapped_type = self.type_mapping.get(str(base_type), str(base_type))
+        mapped_type = self.resource_type_alias(base_type) or self.type_mapping.get(
+            str(base_type), str(base_type)
+        )
         if mapped_type == "Sampler":
             return "sampler"
         if mapped_type.startswith(("Image", "IImage", "UImage")):
@@ -3229,30 +3251,31 @@ class MojoCodeGen:
         args.extend(expr.arguments)
         return args
 
-    def generate_texture_op_node(self, expr):
-        operation = getattr(expr, "operation", "")
-        args = self.texture_op_args(expr)
+    def generate_texture_operation_call(
+        self, operation, args, argument_count, fetch_args=None
+    ):
+        resource_args = list(fetch_args if fetch_args is not None else args)
 
         if operation in {"Sample", "sample", "texture"}:
-            if len(expr.arguments) >= 2:
+            if argument_count >= 2:
                 return self.generate_resource_builtin_call(
                     args, "sample_offset", "vec4"
                 )
             return self.generate_texture_call(args, "sample")
         if operation in {"SampleLevel", "SampleLOD", "sample_lod", "textureLod"}:
-            if len(expr.arguments) >= 3:
+            if argument_count >= 3:
                 return self.generate_resource_builtin_call(
                     args, "sample_lod_offset", "vec4"
                 )
             return self.generate_texture_call(args, "sample_lod")
         if operation in {"SampleGrad", "sample_grad", "textureGrad"}:
-            if len(expr.arguments) >= 4:
+            if argument_count >= 4:
                 return self.generate_resource_builtin_call(
                     args, "sample_grad_offset", "vec4"
                 )
             return self.generate_texture_call(args, "sample_grad")
         if operation in {"SampleBias", "sample_bias"}:
-            if len(expr.arguments) >= 3:
+            if argument_count >= 3:
                 return self.generate_resource_builtin_call(
                     args, "sample_bias_offset", "vec4"
                 )
@@ -3262,7 +3285,7 @@ class MojoCodeGen:
             "SampleCmp": (
                 (
                     "texture_compare_offset"
-                    if len(expr.arguments) >= 3
+                    if argument_count >= 3
                     else "texture_compare"
                 ),
                 "float",
@@ -3270,7 +3293,7 @@ class MojoCodeGen:
             "SampleCmpLevel": (
                 (
                     "texture_compare_lod_offset"
-                    if len(expr.arguments) >= 4
+                    if argument_count >= 4
                     else "texture_compare_lod"
                 ),
                 "float",
@@ -3278,7 +3301,7 @@ class MojoCodeGen:
             "SampleCmpLevelZero": (
                 (
                     "texture_compare_offset"
-                    if len(expr.arguments) >= 3
+                    if argument_count >= 3
                     else "texture_compare"
                 ),
                 "float",
@@ -3286,55 +3309,35 @@ class MojoCodeGen:
             "SampleCmpGrad": (
                 (
                     "texture_compare_grad_offset"
-                    if len(expr.arguments) >= 5
+                    if argument_count >= 5
                     else "texture_compare_grad"
                 ),
                 "float",
             ),
             "Gather": (
-                (
-                    "texture_gather_offset"
-                    if len(expr.arguments) >= 2
-                    else "texture_gather"
-                ),
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
                 "vec4",
             ),
             "GatherRed": (
-                (
-                    "texture_gather_offset"
-                    if len(expr.arguments) >= 2
-                    else "texture_gather"
-                ),
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
                 "vec4",
             ),
             "GatherGreen": (
-                (
-                    "texture_gather_offset"
-                    if len(expr.arguments) >= 2
-                    else "texture_gather"
-                ),
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
                 "vec4",
             ),
             "GatherBlue": (
-                (
-                    "texture_gather_offset"
-                    if len(expr.arguments) >= 2
-                    else "texture_gather"
-                ),
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
                 "vec4",
             ),
             "GatherAlpha": (
-                (
-                    "texture_gather_offset"
-                    if len(expr.arguments) >= 2
-                    else "texture_gather"
-                ),
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
                 "vec4",
             ),
             "GatherCmp": (
                 (
                     "texture_gather_compare_offset"
-                    if len(expr.arguments) >= 3
+                    if argument_count >= 3
                     else "texture_gather_compare"
                 ),
                 "vec4",
@@ -3348,21 +3351,26 @@ class MojoCodeGen:
             helper_base, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[operation]
             return self.generate_resource_builtin_call(args, helper_base, return_kind)
         if operation in {"Load", "texelFetch"}:
-            fetch_args = self.texture_op_args(expr, include_sampler=False)
+            fetch_args = list(resource_args)
             if len(fetch_args) == 2:
                 fetch_args.append(0)
             return self.generate_texel_fetch_call(fetch_args)
         if operation in {"GetDimensions", "textureSize"}:
-            return self.generate_resource_size_call(
-                self.texture_op_args(expr, include_sampler=False),
-                "texture_size",
-            )
+            return self.generate_resource_size_call(resource_args, "texture_size")
         if operation == "textureQueryLevels":
-            return self.generate_resource_query_levels_call(
-                self.texture_op_args(expr, include_sampler=False)
-            )
+            return self.generate_resource_query_levels_call(resource_args)
 
         raise ValueError(f"Unsupported Mojo texture operation {operation}")
+
+    def generate_texture_op_node(self, expr):
+        operation = getattr(expr, "operation", "")
+        args = self.texture_op_args(expr)
+        return self.generate_texture_operation_call(
+            operation,
+            args,
+            len(expr.arguments),
+            fetch_args=self.texture_op_args(expr, include_sampler=False),
+        )
 
     def generate_sync_node(self, stmt, indent):
         sync_type = getattr(stmt, "sync_type", "")
@@ -3829,6 +3837,10 @@ class MojoCodeGen:
         return f"buffer_store{width}({generated_args})"
 
     def generate_member_function_call(self, func_expr, args):
+        texture_call = self.generate_texture_member_function_call(func_expr, args)
+        if texture_call is not None:
+            return texture_call
+
         member = getattr(func_expr, "member", None)
         obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
         obj_type = self.expression_result_type(obj_expr)
@@ -3935,6 +3947,19 @@ class MojoCodeGen:
             return f"buffer_dimensions({generated_args})"
 
         return None
+
+    def generate_texture_member_function_call(self, func_expr, args):
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        resource_type = self.map_type(self.expression_result_type(obj_expr))
+        if not self.is_texture_resource_type(resource_type):
+            return None
+
+        call_args = [obj_expr, *args]
+        stripped_arg_count = max(len(self.strip_split_sampler_arg(call_args)) - 1, 0)
+        return self.generate_texture_operation_call(
+            member, call_args, stripped_arg_count, fetch_args=[obj_expr, *args]
+        )
 
     def generate_reinterpret_call(self, func_name, args):
         if not args:
@@ -5447,6 +5472,10 @@ class MojoCodeGen:
         if not isinstance(func_expr, MemberAccessNode):
             return None
 
+        texture_result_type = self.texture_member_function_result_type(func_expr)
+        if texture_result_type is not None:
+            return texture_result_type
+
         member = getattr(func_expr, "member", None)
         obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
         info = self.buffer_resource_info(self.expression_result_type(obj_expr))
@@ -5473,6 +5502,32 @@ class MojoCodeGen:
         if member == "GetDimensions":
             return "void"
         return None
+
+    def texture_member_function_result_type(self, func_expr):
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        resource_type = self.map_type(self.expression_result_type(obj_expr))
+        if not self.is_texture_resource_type(resource_type):
+            return None
+
+        if member in {
+            "SampleCmp",
+            "SampleCmpLevel",
+            "SampleCmpLevelZero",
+            "SampleCmpGrad",
+        }:
+            return "float"
+        if member in {"GetDimensions", "textureSize"}:
+            size_type = MOJO_RESOURCE_SIZE_RETURNS.get(resource_type)
+            if size_type == "Int32":
+                return "int"
+            if size_type == "SIMD[DType.int32, 2]":
+                return "ivec2"
+            if size_type == "SIMD[DType.int32, 4]":
+                return "ivec3"
+        if member == "textureQueryLevels":
+            return "int"
+        return "vec4"
 
     def vector_type_info(self, type_name):
         if type_name is None:
@@ -5655,6 +5710,11 @@ class MojoCodeGen:
 
         vtype_str = self.normalize_generic_vector_type_name(vtype_str)
 
+        resource_alias = self.resource_type_alias(vtype_str)
+        if resource_alias is not None:
+            self.required_resource_types.add(resource_alias)
+            return resource_alias
+
         buffer_info = self.buffer_resource_info(vtype_str)
         if buffer_info is not None:
             self.register_buffer_resource_type(buffer_info[0])
@@ -5678,6 +5738,8 @@ class MojoCodeGen:
             base_type, _ = parse_array_type(str(type_name))
             return self.is_resource_type_name(base_type)
         if self.buffer_resource_info(type_name) is not None:
+            return True
+        if self.resource_type_alias(type_name) is not None:
             return True
         return self.is_mojo_resource_type(
             self.type_mapping.get(str(type_name), type_name)

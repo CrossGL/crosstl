@@ -47,6 +47,12 @@ def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
                 barrier();
                 memoryBarrier();
                 workgroupBarrier();
+                groupMemoryBarrier();
+                memoryBarrierShared();
+                memoryBarrierBuffer();
+                deviceMemoryBarrier();
+                memoryBarrierImage();
+                allMemoryBarrier();
             }
         }
     }
@@ -54,11 +60,22 @@ def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
-    assert "threadgroup_barrier(mem_flags::mem_device);" in generated_code
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 4
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_device);") == 3
+    assert "threadgroup_barrier(mem_flags::mem_texture);" in generated_code
+    assert (
+        "threadgroup_barrier(mem_flags::mem_device | "
+        "mem_flags::mem_threadgroup | mem_flags::mem_texture);"
+    ) in generated_code
     assert "barrier();" not in generated_code
     assert "memoryBarrier();" not in generated_code
     assert "workgroupBarrier();" not in generated_code
+    assert "groupMemoryBarrier();" not in generated_code
+    assert "memoryBarrierShared();" not in generated_code
+    assert "memoryBarrierBuffer();" not in generated_code
+    assert "deviceMemoryBarrier();" not in generated_code
+    assert "memoryBarrierImage();" not in generated_code
+    assert "allMemoryBarrier();" not in generated_code
 
 
 def test_metal_user_defined_synchronization_names_are_not_lowered():
@@ -77,10 +94,40 @@ def test_metal_user_defined_synchronization_names_are_not_lowered():
                 return;
             }
 
+            void groupMemoryBarrier() {
+                return;
+            }
+
+            void memoryBarrierShared() {
+                return;
+            }
+
+            void memoryBarrierBuffer() {
+                return;
+            }
+
+            void deviceMemoryBarrier() {
+                return;
+            }
+
+            void memoryBarrierImage() {
+                return;
+            }
+
+            void allMemoryBarrier() {
+                return;
+            }
+
             void main() {
                 barrier();
                 memoryBarrier();
                 workgroupBarrier();
+                groupMemoryBarrier();
+                memoryBarrierShared();
+                memoryBarrierBuffer();
+                deviceMemoryBarrier();
+                memoryBarrierImage();
+                allMemoryBarrier();
             }
         }
     }
@@ -91,9 +138,21 @@ def test_metal_user_defined_synchronization_names_are_not_lowered():
     assert "void barrier()" in generated_code
     assert "void memoryBarrier()" in generated_code
     assert "void workgroupBarrier()" in generated_code
+    assert "void groupMemoryBarrier()" in generated_code
+    assert "void memoryBarrierShared()" in generated_code
+    assert "void memoryBarrierBuffer()" in generated_code
+    assert "void deviceMemoryBarrier()" in generated_code
+    assert "void memoryBarrierImage()" in generated_code
+    assert "void allMemoryBarrier()" in generated_code
     assert "barrier();" in generated_code
     assert "memoryBarrier();" in generated_code
     assert "workgroupBarrier();" in generated_code
+    assert "groupMemoryBarrier();" in generated_code
+    assert "memoryBarrierShared();" in generated_code
+    assert "memoryBarrierBuffer();" in generated_code
+    assert "deviceMemoryBarrier();" in generated_code
+    assert "memoryBarrierImage();" in generated_code
+    assert "allMemoryBarrier();" in generated_code
     assert "threadgroup_barrier(" not in generated_code
 
 
@@ -117,6 +176,47 @@ def test_metal_shared_local_variables_use_threadgroup_address_space():
     assert "threadgroup int scratch[4];" in generated_code
     assert "\n    int data[4];" not in generated_code
     assert "\n    int scratch[4];" not in generated_code
+
+
+def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers():
+    shader = """
+    shader ThreadgroupHelperArray {
+        void writeScratch(threadgroup float scratch[64], uint index, float value) {
+            scratch[index] = value;
+        }
+
+        float readScratch(threadgroup float scratch[64], uint index) {
+            return scratch[index];
+        }
+
+        compute {
+            void main() {
+                shared float scratch[64];
+                uint index = gl_LocalInvocationIndex;
+                writeScratch(scratch, index, float(index));
+                groupMemoryBarrier();
+                memoryBarrierShared();
+                float value = readScratch(scratch, index);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "void writeScratch(threadgroup float scratch[64]" in generated_code
+    assert "float readScratch(threadgroup float scratch[64]" in generated_code
+    assert "threadgroup float scratch[64];" in generated_code
+    assert (
+        "uint gl_LocalInvocationIndex [[thread_index_in_threadgroup]]" in generated_code
+    )
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert "groupMemoryBarrier();" not in generated_code
+    assert "memoryBarrierShared();" not in generated_code
+    assert "writeScratch(scratch, index, float(index));" in generated_code
+    assert "float value = readScratch(scratch, index);" in generated_code
 
 
 def test_metal_parameter_address_space_qualifiers_lower_for_pointer_reference_and_array_types():

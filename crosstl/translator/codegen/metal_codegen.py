@@ -4099,7 +4099,16 @@ class MetalCodeGen:
         return {
             "barrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "workgroupBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
+            "groupMemoryBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
+            "memoryBarrierShared": "threadgroup_barrier(mem_flags::mem_threadgroup)",
+            "memoryBarrierBuffer": "threadgroup_barrier(mem_flags::mem_device)",
+            "deviceMemoryBarrier": "threadgroup_barrier(mem_flags::mem_device)",
+            "memoryBarrierImage": "threadgroup_barrier(mem_flags::mem_texture)",
             "memoryBarrier": "threadgroup_barrier(mem_flags::mem_device)",
+            "allMemoryBarrier": (
+                "threadgroup_barrier(mem_flags::mem_device | "
+                "mem_flags::mem_threadgroup | mem_flags::mem_texture)"
+            ),
         }.get(func_name)
 
     def generate_ray_tracing_op_expression(self, expr):

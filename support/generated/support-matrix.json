@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 497
+        "test_count": 498
       },
       "translator_codegen": {
         "exists": true,
@@ -629,7 +629,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 297
+        "test_count": 298
       },
       "translator_codegen": {
         "exists": true,
@@ -743,7 +743,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 300
+        "test_count": 301
       },
       "translator_codegen": {
         "exists": true,
@@ -881,7 +881,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 94,
+        "unsupported_marker_count": 95,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -949,6 +949,10 @@
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "diagnostic = self.unsupported_structured_buffer_call"
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "def unsupported_structured_buffer_call(self, operation, reason, result_type=None):"
           },
           {
@@ -958,10 +962,6 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "f\"/* unsupported Slang structured buffer: {operation} {reason} */ \""
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "def unsupported_byte_address_buffer_call(self, operation, reason, result_type=None):"
           }
         ]
       },
@@ -971,7 +971,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 315
+        "test_count": 316
       },
       "translator_codegen": {
         "exists": true,
@@ -1679,7 +1679,7 @@
       "category": "resources",
       "feature": "Structured/storage buffers",
       "feature_id": "resources.structured_buffers",
-      "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet.",
+      "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, explicit-result structured-buffer atomics, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet.",
       "status": "partial"
     },
     {
@@ -1949,7 +1949,7 @@
       "category": "textures",
       "feature": "Texture sampling",
       "feature_id": "texture.sampling",
-      "notes": "Basic sampled texture and shadow-sampler calls lower to compile-smoke Mojo placeholder helpers across common dimensions; real sampler filtering and texture memory semantics are not implemented.",
+      "notes": "Basic sampled texture and shadow-sampler calls lower to compile-smoke Mojo placeholder helpers across common dimensions, including HLSL sampled texture aliases, SamplerState aliases, and split-sampler member calls. Real sampler filtering and texture memory semantics are not implemented.",
       "status": "partial"
     },
     {
@@ -3933,9 +3933,11 @@
             "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_structured_buffer_access_contracts_are_preserved",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_structured_buffer_dimensions_lower_to_get_dimensions",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_structured_buffer_append_consume_lower_to_native_methods",
+            "tests/test_backend/test_directx/test_codegen.py::def test_codegen_rasterizer_ordered_resources_roundtrip",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_hlsl_rasterizer_ordered_resources_compile_with_dxc",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract"
           ],
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed and inferred resource arrays, load/store/dimensions helpers, register-space allocation, type aliases, append/consume buffers, and GLSL SSBO single-array round-trips.",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed and inferred resource arrays, load/store/dimensions helpers, register-space allocation, type aliases, append/consume buffers, rasterizer-ordered typed/structured buffers, and GLSL SSBO single-array round-trips.",
           "status": "supported"
         },
         "hip": {
@@ -3987,6 +3989,7 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_explicit_result_atomics_emit_slang_interlocked",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_append_consume_structured_buffers_emit_slang_methods_and_uav_bindings",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_append_consume_wrong_structured_buffer_kinds_emit_slang_diagnostics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffers_emit_slang_load_store_dimensions_and_bindings",
@@ -3994,7 +3997,7 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffer_store_to_readonly_helper_emits_slang_diagnostic",
             "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
           ],
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet.",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, explicit-result structured-buffer atomics, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet.",
           "status": "partial"
         },
         "vulkan": {
@@ -4416,9 +4419,10 @@
         "mojo": {
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_sampled_texture_aliases_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo"
           ],
-          "notes": "Basic sampled texture and shadow-sampler calls lower to compile-smoke Mojo placeholder helpers across common dimensions; real sampler filtering and texture memory semantics are not implemented.",
+          "notes": "Basic sampled texture and shadow-sampler calls lower to compile-smoke Mojo placeholder helpers across common dimensions, including HLSL sampled texture aliases, SamplerState aliases, and split-sampler member calls. Real sampler filtering and texture memory semantics are not implemented.",
           "status": "partial"
         },
         "opengl": {
@@ -5057,9 +5061,11 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_storage_image_load_store",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_explicit_rg_image_formats",
+            "tests/test_backend/test_directx/test_codegen.py::def test_codegen_rasterizer_ordered_resources_roundtrip",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_hlsl_rasterizer_ordered_resources_compile_with_dxc",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_compute_rg_image_validates_with_dxc"
           ],
-          "notes": "Covers typed RWTexture load/store for scalar, vector, narrow, explicit-format, array, and access-qualified images, with deterministic diagnostics for incompatible access.",
+          "notes": "Covers typed RWTexture load/store for scalar, vector, narrow, explicit-format, array, access-qualified, and rasterizer-ordered images, with deterministic diagnostics for incompatible access.",
           "status": "supported"
         },
         "hip": {
@@ -5135,9 +5141,10 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_integer_image_atomic_operations",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_integer_image_atomic_compare_swap",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_hlsl_rasterizer_ordered_resources_compile_with_dxc",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_compute_integer_image_atomics_validates_with_dxc"
           ],
-          "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported dimensions and emits deterministic diagnostics for unsupported formats and multisample atomics.",
+          "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported dimensions, including rasterizer-ordered textures, and emits deterministic diagnostics for unsupported formats and multisample atomics.",
           "status": "supported"
         },
         "hip": {
@@ -5505,10 +5512,12 @@
         "metal": {
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_synchronization_builtins_lower_to_threadgroup_barriers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_user_defined_synchronization_names_are_not_lowered",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_threadgroup_helper_barriers_compile_with_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_metal_compute_synchronization_compiles_with_xcrun_metal"
           ],
-          "notes": "barrier/workgroupBarrier lower to threadgroup barriers; memoryBarrier lowers to a device-memory threadgroup barrier; user-defined functions with the same names are preserved.",
+          "notes": "barrier/workgroupBarrier, groupMemoryBarrier, and memoryBarrierShared lower to threadgroup barriers; memoryBarrier, memoryBarrierBuffer, and deviceMemoryBarrier lower to device-memory barriers; memoryBarrierImage lowers to a texture-memory barrier; allMemoryBarrier lowers to combined device/threadgroup/texture flags; user-defined functions with the same names are preserved.",
           "status": "supported"
         },
         "mojo": {

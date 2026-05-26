@@ -4395,6 +4395,82 @@ def test_structured_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics():
     assert "buffer_store(" not in generated_code
 
 
+def test_structured_buffer_explicit_result_atomics_emit_slang_interlocked():
+    code = """
+    shader SlangStructuredBufferAtomics {
+        RWStructuredBuffer<uint> counters @binding(24);
+        RWStructuredBuffer<int> signedCounters @binding(25);
+        StructuredBuffer<uint> readOnlyCounters @binding(26);
+        RWStructuredBuffer<uint> attrReadOnlyCounters @access(read) @binding(27);
+        RWStructuredBuffer<float> floatCounters @binding(28);
+
+        compute {
+            void main(uint3 tid @gl_GlobalInvocationID) {
+                uint oldValue;
+                int oldSigned;
+                atomicAdd(counters[tid.x], 1u, oldValue);
+                atomicCompareExchange(counters[tid.x], 2u, 3u, oldValue);
+                atomicMax(signedCounters[tid.x], -1, oldSigned);
+                uint missingOutput = atomicAdd(counters[tid.x], 1u);
+                uint readOnlyBlocked = atomicAdd(readOnlyCounters[tid.x], 1u, oldValue);
+                uint attrReadOnlyBlocked = atomicAdd(
+                    attrReadOnlyCounters[tid.x],
+                    1u,
+                    oldValue
+                );
+                uint floatBlocked = atomicAdd(floatCounters[tid.x], 1.0, oldValue);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(24, 0)]] RWStructuredBuffer<uint> counters "
+        ": register(u24);" in generated_code
+    )
+    assert (
+        "[[vk::binding(25, 0)]] RWStructuredBuffer<int> signedCounters "
+        ": register(u25);" in generated_code
+    )
+    assert (
+        "[[vk::binding(26, 0)]] StructuredBuffer<uint> readOnlyCounters "
+        ": register(t26);" in generated_code
+    )
+    assert (
+        "[[vk::binding(27, 0)]] StructuredBuffer<uint> attrReadOnlyCounters "
+        ": register(t27);" in generated_code
+    )
+    assert "InterlockedAdd(counters[tid.x], 1u, oldValue);" in generated_code
+    assert (
+        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, oldValue);"
+        in generated_code
+    )
+    assert "InterlockedMax(signedCounters[tid.x], -1, oldSigned);" in generated_code
+    assert (
+        "uint missingOutput = /* unsupported Slang structured buffer: atomicAdd "
+        "requires target, value, and original output */ 0u;" in generated_code
+    )
+    assert (
+        "uint readOnlyBlocked = /* unsupported Slang structured buffer: "
+        "atomicAdd requires RWStructuredBuffer resource */ 0u;" in generated_code
+    )
+    assert (
+        "uint attrReadOnlyBlocked = /* unsupported Slang structured buffer: "
+        "atomicAdd requires writable structured buffer resource */ 0u;"
+        in generated_code
+    )
+    assert (
+        "uint floatBlocked = /* unsupported Slang structured buffer: atomicAdd "
+        "requires scalar int or uint RWStructuredBuffer element */ 0u;"
+        in generated_code
+    )
+    assert "atomicAdd(counters" not in generated_code
+    assert "atomicCompareExchange(counters" not in generated_code
+    assert "atomicMax(signedCounters" not in generated_code
+
+
 def test_append_consume_structured_buffers_emit_slang_methods_and_uav_bindings():
     code = """
     shader SlangAppendConsumeStructuredBuffers {

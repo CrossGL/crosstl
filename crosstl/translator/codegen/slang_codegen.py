@@ -5104,6 +5104,87 @@ class SlangCodeGen:
             return None
         return self.convert_type(element_type)
 
+    def structured_buffer_atomic_operations(self):
+        return {
+            "atomicAdd": ("InterlockedAdd", 1),
+            "atomicMin": ("InterlockedMin", 1),
+            "atomicMax": ("InterlockedMax", 1),
+            "atomicAnd": ("InterlockedAnd", 1),
+            "atomicOr": ("InterlockedOr", 1),
+            "atomicXor": ("InterlockedXor", 1),
+            "atomicExchange": ("InterlockedExchange", 1),
+            "atomicCompSwap": ("InterlockedCompareExchange", 2),
+            "atomicCompareExchange": ("InterlockedCompareExchange", 2),
+        }
+
+    def structured_buffer_atomic_target_resource_type(self, target):
+        if isinstance(target, ArrayAccessNode):
+            array_expr = getattr(target, "array", getattr(target, "array_expr", None))
+            array_type = self.structured_buffer_resource_type(array_expr)
+            if self.is_structured_buffer_resource_type(array_type):
+                return array_type
+            return self.structured_buffer_atomic_target_resource_type(array_expr)
+        if isinstance(target, MemberAccessNode):
+            object_expr = getattr(
+                target, "object", getattr(target, "object_expr", None)
+            )
+            return self.structured_buffer_atomic_target_resource_type(object_expr)
+        return self.structured_buffer_resource_type(target)
+
+    def structured_buffer_atomic_expression(self, func_name, args):
+        operation = self.structured_buffer_atomic_operations().get(func_name)
+        if operation is None or not args:
+            return None
+
+        diagnostic = self.unsupported_structured_buffer_call
+        target = args[0]
+        buffer_type = self.structured_buffer_atomic_target_resource_type(target)
+        if not self.is_structured_buffer_resource_type(buffer_type):
+            return None
+
+        element_type = self.structured_buffer_element_type(buffer_type) or "uint"
+        result_type = element_type if element_type in {"int", "uint"} else "uint"
+        if self.buffer_resource_access(target) == "readonly":
+            return diagnostic(
+                func_name,
+                "requires writable structured buffer resource",
+                result_type,
+            )
+        if not self.is_writable_structured_buffer_resource_type(buffer_type):
+            return diagnostic(
+                func_name,
+                "requires RWStructuredBuffer resource",
+                result_type,
+            )
+        if element_type not in {"int", "uint"}:
+            return diagnostic(
+                func_name,
+                "requires scalar int or uint RWStructuredBuffer element",
+                result_type,
+            )
+
+        intrinsic, value_arg_count = operation
+        required_args = 1 + value_arg_count + 1
+        if len(args) != required_args:
+            required_shape = (
+                "target, compare, value, and original output"
+                if value_arg_count == 2
+                else "target, value, and original output"
+            )
+            return diagnostic(
+                func_name,
+                f"requires {required_shape}",
+                result_type,
+            )
+
+        target_expr = self.generate_expression(target)
+        value_exprs = [
+            self.generate_expression_with_expected(value_arg, element_type)
+            for value_arg in args[1 : 1 + value_arg_count]
+        ]
+        original_expr = self.generate_expression(args[-1])
+        return f"{intrinsic}({', '.join([target_expr, *value_exprs, original_expr])})"
+
     def unsupported_structured_buffer_call(self, operation, reason, result_type=None):
         if result_type is None:
             return f"/* unsupported Slang structured buffer: {operation} {reason} */"
@@ -5700,6 +5781,12 @@ class SlangCodeGen:
             "imageAtomicCompSwap",
         }:
             return self.image_atomic_expression(func_name, args)
+
+        structured_buffer_atomic = self.structured_buffer_atomic_expression(
+            func_name, args
+        )
+        if structured_buffer_atomic is not None:
+            return structured_buffer_atomic
 
         if func_name in {"texture", "textureLod", "textureGrad"}:
             sample_args = self.sampled_texture_args(args)
