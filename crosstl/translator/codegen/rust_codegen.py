@@ -175,6 +175,12 @@ class RustCodeGen:
             "textureLod": "sample_lod",
             "textureGrad": "sample_grad",
             "textureOffset": "sample_offset",
+            "textureProj": "sample_projected",
+            "textureProjLod": "sample_projected_lod",
+            "textureProjGrad": "sample_projected_grad",
+            "textureProjOffset": "sample_projected_offset",
+            "textureProjLodOffset": "sample_projected_lod_offset",
+            "textureProjGradOffset": "sample_projected_grad_offset",
             "texelFetch": "texel_fetch",
             "texelFetchOffset": "texel_fetch_offset",
             "textureQueryLevels": "texture_query_levels",
@@ -1461,6 +1467,14 @@ class RustCodeGen:
 
         return "Default::default()"
 
+    def local_array_default_initializer(self, rust_type):
+        rust_type = str(rust_type)
+        if rust_type.startswith("Vec<"):
+            return "Vec::new()"
+        if self.parse_rust_array_type(rust_type) is not None:
+            return "std::array::from_fn(|_| Default::default())"
+        return None
+
     def parse_rust_array_type(self, rust_type):
         if not (rust_type.startswith("[") and rust_type.endswith("]")):
             return None
@@ -2205,6 +2219,10 @@ class RustCodeGen:
                 return f"{indent_str}{binding_keyword} {stmt.name}: {self.map_type(vtype)} = {init_expr};\n"
             elif self.is_generated_struct_type(vtype):
                 return f"{indent_str}{binding_keyword} {stmt.name}: {self.map_type(vtype)} = Default::default();\n"
+            elif self.local_array_default_initializer(self.map_type(vtype)) is not None:
+                rust_type = self.map_type(vtype)
+                initializer = self.local_array_default_initializer(rust_type)
+                return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = {initializer};\n"
             else:
                 return f"{indent_str}{binding_keyword} {stmt.name}: {self.map_type(vtype)};\n"
 
@@ -3882,6 +3900,24 @@ class RustCodeGen:
             return func_name
         if func_name == "textureSize":
             return "texture_size" if arg_count == 1 else "texture_size_lod"
+        if func_name == "textureGather":
+            return (
+                "texture_gather_component"
+                if arg_count and arg_count >= 3
+                else "texture_gather"
+            )
+        if func_name == "textureGatherOffset":
+            return (
+                "texture_gather_offset_component"
+                if arg_count and arg_count >= 4
+                else "texture_gather_offset"
+            )
+        if func_name == "textureGatherOffsets":
+            return (
+                "texture_gather_offsets_component"
+                if arg_count and arg_count >= 4
+                else "texture_gather_offsets"
+            )
         return self.function_map.get(func_name, func_name)
 
     def generate_qualified_generic_trait_method_call(self, func_expr, args):
@@ -5114,8 +5150,20 @@ class RustCodeGen:
             "sample_lod",
             "sample_grad",
             "sample_offset",
+            "sample_projected",
+            "sample_projected_lod",
+            "sample_projected_grad",
+            "sample_projected_offset",
+            "sample_projected_lod_offset",
+            "sample_projected_grad_offset",
             "texel_fetch",
             "texel_fetch_offset",
+            "texture_gather",
+            "texture_gather_component",
+            "texture_gather_offset",
+            "texture_gather_offset_component",
+            "texture_gather_offsets",
+            "texture_gather_offsets_component",
         }:
             return "vec4"
 

@@ -401,6 +401,81 @@ mod gpu {
         Vec4::default()
     }
 
+    pub fn sample_projected<Texture, Coord>(
+        _texture: Texture,
+        _coord: Coord,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn sample_projected_lod<Texture, Coord, Lod>(
+        _texture: Texture,
+        _coord: Coord,
+        _lod: Lod,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn sample_projected_grad<Texture, Coord, Grad>(
+        _texture: Texture,
+        _coord: Coord,
+        _ddx: Grad,
+        _ddy: Grad,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn sample_projected_offset<Texture, Coord, Offset>(
+        _texture: Texture,
+        _coord: Coord,
+        _offset: Offset,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn sample_projected_lod_offset<Texture, Coord, Lod, Offset>(
+        _texture: Texture,
+        _coord: Coord,
+        _lod: Lod,
+        _offset: Offset,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn sample_projected_grad_offset<Texture, Coord, Grad, Offset>(
+        _texture: Texture,
+        _coord: Coord,
+        _ddx: Grad,
+        _ddy: Grad,
+        _offset: Offset,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
     pub fn texel_fetch<Texture, Coord, Lod>(
         _texture: Texture,
         _coord: Coord,
@@ -466,6 +541,79 @@ mod gpu {
         Texture: TextureLike,
     {
         1
+    }
+
+    pub fn texture_gather<Texture, Coord>(
+        _texture: Texture,
+        _coord: Coord,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn texture_gather_component<Texture, Coord, Component>(
+        _texture: Texture,
+        _coord: Coord,
+        _component: Component,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn texture_gather_offset<Texture, Coord, Offset>(
+        _texture: Texture,
+        _coord: Coord,
+        _offset: Offset,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn texture_gather_offset_component<Texture, Coord, Offset, Component>(
+        _texture: Texture,
+        _coord: Coord,
+        _offset: Offset,
+        _component: Component,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn texture_gather_offsets<Texture, Coord, Offsets>(
+        _texture: Texture,
+        _coord: Coord,
+        _offsets: Offsets,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn texture_gather_offsets_component<Texture, Coord, Offsets, Component>(
+        _texture: Texture,
+        _coord: Coord,
+        _offsets: Offsets,
+        _component: Component,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
     }
 }
 """
@@ -1720,6 +1868,97 @@ def test_texel_fetch_and_texture_query_calls_map_to_rust_helpers_and_compile(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_projected_sampling_and_gather_calls_map_to_rust_helpers_and_compile(
+    tmp_path,
+):
+    code = """
+    shader TextureProjectedGatherProbe {
+        sampler2D mainTexture;
+
+        fragment {
+            vec4 main(vec2 uv, vec3 projected, vec2 ddx, vec2 ddy, ivec2 offset) @ gl_FragColor {
+                ivec2 offsets[4];
+                let projectedColor = textureProj(mainTexture, projected);
+                let projectedLod = textureProjLod(mainTexture, projected, 1.0);
+                let projectedGrad = textureProjGrad(mainTexture, projected, ddx, ddy);
+                let projectedOffset = textureProjOffset(mainTexture, projected, offset);
+                let projectedLodOffset = textureProjLodOffset(mainTexture, projected, 1.0, offset);
+                let projectedGradOffset = textureProjGradOffset(mainTexture, projected, ddx, ddy, offset);
+                let gather = textureGather(mainTexture, uv);
+                let gatherComponent = textureGather(mainTexture, uv, 2);
+                let gatherOffset = textureGatherOffset(mainTexture, uv, offset);
+                let gatherOffsetComponent = textureGatherOffset(mainTexture, uv, offset, 1);
+                let gatherOffsets = textureGatherOffsets(mainTexture, uv, offsets);
+                let gatherOffsetsComponent = textureGatherOffsets(mainTexture, uv, offsets, 3);
+                return projectedColor + projectedLod + projectedGrad + projectedOffset
+                    + projectedLodOffset + projectedGradOffset
+                    + gather + gatherComponent + gatherOffset + gatherOffsetComponent
+                    + gatherOffsets + gatherOffsetsComponent;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "let projectedColor: Vec4<f32> = sample_projected(*MAIN_TEXTURE, projected);"
+        in generated_code
+    )
+    assert (
+        "let projectedLod: Vec4<f32> = sample_projected_lod(*MAIN_TEXTURE, projected, 1.0);"
+        in generated_code
+    )
+    assert (
+        "let projectedGrad: Vec4<f32> = sample_projected_grad(*MAIN_TEXTURE, projected, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "let projectedOffset: Vec4<f32> = sample_projected_offset(*MAIN_TEXTURE, projected, offset);"
+        in generated_code
+    )
+    assert (
+        "let projectedLodOffset: Vec4<f32> = sample_projected_lod_offset(*MAIN_TEXTURE, projected, 1.0, offset);"
+        in generated_code
+    )
+    assert (
+        "let projectedGradOffset: Vec4<f32> = sample_projected_grad_offset(*MAIN_TEXTURE, projected, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "let offsets: [Vec2<i32>; 4] = std::array::from_fn(|_| Default::default());"
+        in generated_code
+    )
+    assert "let gather: Vec4<f32> = texture_gather(*MAIN_TEXTURE, uv);" in (
+        generated_code
+    )
+    assert (
+        "let gatherComponent: Vec4<f32> = texture_gather_component(*MAIN_TEXTURE, uv, 2);"
+        in generated_code
+    )
+    assert (
+        "let gatherOffset: Vec4<f32> = texture_gather_offset(*MAIN_TEXTURE, uv, offset);"
+        in generated_code
+    )
+    assert (
+        "let gatherOffsetComponent: Vec4<f32> = texture_gather_offset_component(*MAIN_TEXTURE, uv, offset, 1);"
+        in generated_code
+    )
+    assert (
+        "let gatherOffsets: Vec4<f32> = texture_gather_offsets(*MAIN_TEXTURE, uv, offsets);"
+        in generated_code
+    )
+    assert (
+        "let gatherOffsetsComponent: Vec4<f32> = texture_gather_offsets_component(*MAIN_TEXTURE, uv, offsets, 3);"
+        in generated_code
+    )
+    assert "textureProj" not in generated_code
+    assert "textureGather" not in generated_code
+    assert "textureGatherOffset" not in generated_code
+    assert "textureGatherOffsets" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_for_statement():
     code = """
     shader main {
@@ -2119,7 +2358,10 @@ def test_local_bindings_are_mutable_only_when_reassigned_or_mutated():
     assert "let immutableValue: i32 = 1;" in generated_code
     assert "let mut reassignedValue: i32 = 2;" in generated_code
     assert "let mut output: Output = Default::default();" in generated_code
-    assert "let mut values: [f32; 2];" in generated_code
+    assert (
+        "let mut values: [f32; 2] = std::array::from_fn(|_| Default::default());"
+        in generated_code
+    )
     assert "let mut immutableValue" not in generated_code
 
 
@@ -4944,8 +5186,14 @@ def test_generic_vector_composite_types_emit_rust_names():
         "pub fn passthrough(value: Vec2<f64>, index: Vec3<i32>, "
         "mask: Vec4<u32>, flags: Vec2<bool>) -> Vec2<f64>"
     ) in generated_code
-    assert "let mut localValues: [Vec2<f64>; 2];" in generated_code
-    assert "let mut values: [Vec2<f64>; 2];" in generated_code
+    assert (
+        "let mut localValues: [Vec2<f64>; 2] = "
+        "std::array::from_fn(|_| Default::default());" in generated_code
+    )
+    assert (
+        "let mut values: [Vec2<f64>; 2] = "
+        "std::array::from_fn(|_| Default::default());" in generated_code
+    )
     assert "LiteralNode(" not in generated_code
     assert "vec2<" not in generated_code
 
