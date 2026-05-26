@@ -1199,6 +1199,56 @@ def test_compute_layout_does_not_consume_resource_layouts():
         "sourceTexture",
         "sourceSampler",
     ]
+    assert [
+        attribute.name for attribute in compute_stage.local_variables[0].attributes
+    ] == [
+        "set",
+        "binding",
+    ]
+    assert [
+        attribute.arguments[0].value
+        for attribute in compute_stage.local_variables[0].attributes
+    ] == [0, 0]
+    assert [
+        attribute.name for attribute in compute_stage.local_variables[1].attributes
+    ] == [
+        "set",
+        "binding",
+    ]
+    assert compute_stage.local_variables[1].attributes[1].arguments[0].value == 1
+
+
+def test_global_resource_layout_attributes_are_preserved():
+    code = """
+    shader GlobalResourceLayouts {
+        layout(set = 2, binding = 7) uniform sampler2D sourceTexture;
+        layout(binding = 3) sampler sourceSampler;
+
+        fragment {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    source_texture, source_sampler = ast.global_variables
+
+    assert source_texture.name == "sourceTexture"
+    assert [attribute.name for attribute in source_texture.attributes] == [
+        "set",
+        "binding",
+    ]
+    assert [
+        attribute.arguments[0].value for attribute in source_texture.attributes
+    ] == [
+        2,
+        7,
+    ]
+
+    assert source_sampler.name == "sourceSampler"
+    assert [attribute.name for attribute in source_sampler.attributes] == ["binding"]
+    assert source_sampler.attributes[0].arguments[0].value == 3
 
 
 def test_stage_layout_qualifiers_preserve_geometry_and_tessellation_metadata():

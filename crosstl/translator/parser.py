@@ -131,6 +131,63 @@ MESH_INTRINSICS = {
     "DispatchMesh",
 }
 
+VARIABLE_QUALIFIER_TOKEN_TYPES = frozenset(
+    {
+        "CONST",
+        "STATIC",
+        "MUT",
+        "SHARED",
+        "UNIFORM",
+        "BUFFER",
+        "IN",
+        "PRIVATE",
+        "GLOBAL",
+        "LOCAL",
+        "THREADGROUP",
+        "WORKGROUP",
+    }
+)
+
+VARIABLE_QUALIFIER_NAMES = frozenset(
+    {
+        "out",
+        "inout",
+        "patch",
+        "flat",
+        "smooth",
+        "noperspective",
+        "centroid",
+        "sample",
+        "pervertex",
+        "perprimitive",
+        "perview",
+        "readonly",
+        "writeonly",
+        "readwrite",
+        "coherent",
+        "volatile",
+        "restrict",
+        "device",
+        "constant",
+        "thread",
+        "threadgroup",
+        "workgroup",
+        "storage",
+        "private",
+        "function",
+        "groupshared",
+        "row_major",
+        "column_major",
+        "precise",
+        "nointerpolation",
+        "linear",
+        "linear_centroid",
+        "linear_noperspective",
+        "linear_noperspective_centroid",
+        "linear_sample",
+    }
+)
+
 RAYQUERY_METHODS = {
     "Proceed",
     "Abort",
@@ -296,6 +353,12 @@ class Parser:
                 cbuffers.append(self.parse_cbuffer_as_struct())
             elif self.current_token[0] == "CONST":
                 constants.append(self.parse_constant())
+            elif self.current_token[0] == "LAYOUT":
+                attributes = self.parse_layout_attributes()
+                if self.is_variable_declaration():
+                    global_variables.append(self.parse_variable_declaration(attributes))
+                else:
+                    self.skip_unknown_token()
             elif self.is_function_declaration():
                 functions.append(self.parse_function())
             elif self.is_variable_declaration():
@@ -414,6 +477,12 @@ class Parser:
                 cbuffers.append(self.parse_cbuffer_as_struct())
             elif self.current_token[0] == "CONST":
                 constants.append(self.parse_constant())
+            elif self.current_token[0] == "LAYOUT":
+                attributes = self.parse_layout_attributes()
+                if self.is_variable_declaration():
+                    global_variables.append(self.parse_variable_declaration(attributes))
+                else:
+                    self.skip_unknown_token()
             elif self.is_function_declaration():
                 func = self.parse_function()
                 functions.append(func)
@@ -514,6 +583,12 @@ class Parser:
                 layout = self.parse_stage_layout_qualifier()
                 layout_qualifiers.append(layout)
                 execution_config.update(self.execution_config_from_layout(layout))
+            elif self.current_token[0] == "LAYOUT":
+                attributes = self.parse_layout_attributes()
+                if self.is_variable_declaration():
+                    local_variables.append(self.parse_variable_declaration(attributes))
+                else:
+                    self.skip_unknown_token()
             elif self.current_token[0] == "STRUCT":
                 struct_node = self.parse_struct()
                 if struct_node:
@@ -577,6 +652,29 @@ class Parser:
     def parse_compute_layout(self):
         """Parse compute local-size layout metadata inside a stage block."""
         return self.execution_config_from_layout(self.parse_stage_layout_qualifier())
+
+    def parse_layout_attributes(self):
+        """Parse a ``layout(...)`` qualifier into attributes."""
+        attributes = []
+        self.eat("LAYOUT")
+        self.eat("LPAREN")
+
+        while self.current_token[0] != "RPAREN":
+            name = self.current_token[1]
+            self.eat(self.current_token[0])
+
+            arguments = []
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                arguments.append(self.parse_expression())
+
+            attributes.append(AttributeNode(name=name, arguments=arguments))
+
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+
+        self.eat("RPAREN")
+        return attributes
 
     def parse_stage_layout_qualifier(self):
         """Parse stage-level ``layout(...) in/out;`` metadata."""
@@ -1167,24 +1265,13 @@ class Parser:
 
         return self.parse_type()
 
-    def parse_variable_declaration(self):
+    def parse_variable_declaration(self, leading_attributes=None):
         """Parse a variable declaration, including qualifiers and attributes."""
-        attributes = []
+        attributes = list(leading_attributes or [])
         if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes = self.parse_attributes()
+            attributes.extend(self.parse_attributes())
 
-        qualifiers = []
-
-        while self.current_token[0] in [
-            "CONST",
-            "STATIC",
-            "MUT",
-            "SHARED",
-            "UNIFORM",
-            "BUFFER",
-        ]:
-            qualifiers.append(self.current_token[1])
-            self.eat(self.current_token[0])
+        qualifiers = self.parse_variable_qualifiers()
 
         var_type = self.parse_type()
         name = self.current_token[1]
@@ -1225,6 +1312,24 @@ class Parser:
             is_mutable="const" not in qualifiers,
         )
 
+    def parse_variable_qualifiers(self):
+        """Parse declaration qualifiers that precede a variable type."""
+        qualifiers = []
+        while self.current_token_is_variable_qualifier():
+            token_type, token_value = self.current_token
+            qualifiers.append(str(token_value).lower())
+            self.eat(token_type)
+        return qualifiers
+
+    def current_token_is_variable_qualifier(self):
+        """Return whether the current token is a variable declaration qualifier."""
+        token_type, token_value = self.current_token
+        if token_type in VARIABLE_QUALIFIER_TOKEN_TYPES:
+            return True
+        return (
+            token_type == "IDENTIFIER" and str(token_value) in VARIABLE_QUALIFIER_NAMES
+        )
+
     def is_variable_declaration(self):
         """
         Lookahead check for variable declarations.
@@ -1237,15 +1342,7 @@ class Parser:
             if self.current_token[0] in ["AT", "ATTRIBUTE"]:
                 self.parse_attributes()
 
-            while self.current_token[0] in [
-                "CONST",
-                "STATIC",
-                "MUT",
-                "SHARED",
-                "UNIFORM",
-                "BUFFER",
-            ]:
-                self.eat(self.current_token[0])
+            self.parse_variable_qualifiers()
 
             if not self.is_type_token():
                 return False
