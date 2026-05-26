@@ -3053,6 +3053,12 @@ def test_directx_ray_stage_semantic_parameters_emit_and_validate():
                 data.value = 1u;
             }
         }
+
+        ray_miss {
+            void main(RayPayload payload @ payload) {
+                payload.color = vec3(0.0, 0.0, 0.0);
+            }
+        }
     }
     """
 
@@ -3063,6 +3069,8 @@ def test_directx_ray_stage_semantic_parameters_emit_and_validate():
     assert "HitAttributes attributes : hit_attribute" in generated
     assert '[shader("callable")]' in generated
     assert "CallableData data : callable_data" in generated
+    assert '[shader("miss")]' in generated
+    assert "void MissMain(RayPayload payload : payload)" in generated
 
 
 def test_directx_ray_stage_semantic_parameters_reject_invalid_stages_and_types():
@@ -3111,6 +3119,49 @@ def test_directx_ray_stage_semantic_parameters_reject_invalid_stages_and_types()
         )
 
 
+def test_directx_ray_stage_semantic_parameters_require_stage_roles():
+    miss_missing_payload_code = """
+    shader MissMissingPayload {
+        ray_miss {
+            void main() { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ray_miss.*requires.*payload"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(miss_missing_payload_code), "ray_miss"
+        )
+
+    closest_missing_attribute_code = """
+    shader ClosestHitMissingAttribute {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_closest_hit {
+            void main(RayPayload payload @ payload) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ray_closest_hit.*hit_attribute"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(closest_missing_attribute_code),
+            "ray_closest_hit",
+        )
+
+    callable_missing_data_code = """
+    shader CallableMissingData {
+        ray_callable {
+            void main() { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ray_callable.*callable_data"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(callable_missing_data_code), "ray_callable"
+        )
+
+
 def test_directx_ray_tracing_intrinsics_validate_stage_and_arity():
     wrong_stage_code = """
     shader BadTraceRayStage {
@@ -3156,8 +3207,19 @@ def test_directx_ray_tracing_intrinsics_validate_stage_and_arity():
 
     any_hit_ops_code = """
     shader ValidAnyHitOps {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
         ray_any_hit {
-            void main() {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute
+            ) {
                 IgnoreHit();
                 AcceptHitAndEndSearch();
             }
@@ -3169,6 +3231,143 @@ def test_directx_ray_tracing_intrinsics_validate_stage_and_arity():
     )
     assert "IgnoreHit();" in generated
     assert "AcceptHitAndEndSearch();" in generated
+
+
+def test_directx_ray_tracing_intrinsics_validate_payload_arguments():
+    valid_trace_ray_code = """
+    shader ValidTraceRayPayload {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(accel, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_trace_ray_code), "ray_generation"
+    )
+    assert "TraceRay(accel, 0, 255, 0, 1, 0, ray, payload);" in generated
+
+    scalar_trace_ray_payload_code = """
+    shader BadTraceRayScalarPayload {
+        ray_generation {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayDesc ray;
+                uint payload;
+                TraceRay(accel, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="TraceRay payload.*user-defined struct"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(scalar_trace_ray_payload_code),
+            "ray_generation",
+        )
+
+    expanded_trace_ray_payload_code = """
+    shader BadExpandedTraceRayScalarPayload {
+        ray_generation {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                uint payload;
+                TraceRay(
+                    accel,
+                    0,
+                    0xFF,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0, 0.0, 0.0),
+                    0.0,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0,
+                    payload
+                );
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="TraceRay payload.*user-defined struct"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(expanded_trace_ray_payload_code),
+            "ray_generation",
+        )
+
+
+def test_directx_ray_tracing_intrinsics_validate_callable_and_hit_arguments():
+    valid_callable_and_hit_code = """
+    shader ValidCallableAndHitArguments {
+        struct CallableData {
+            uint value;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        ray_generation {
+            void main() {
+                CallableData data;
+                CallShader(0, data);
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                ReportHit(1.0, 0, attributes);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate(
+        crosstl.translator.parse(valid_callable_and_hit_code)
+    )
+    assert "CallShader(0, data);" in generated
+    assert "ReportHit(1.0, 0, attributes);" in generated
+
+    scalar_callable_code = """
+    shader BadCallableScalarArgument {
+        ray_generation {
+            void main() {
+                uint data;
+                CallShader(0, data);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError, match="CallShader callable data.*user-defined struct"
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(scalar_callable_code), "ray_generation"
+        )
+
+    scalar_hit_attribute_code = """
+    shader BadReportHitScalarAttribute {
+        ray_intersection {
+            void main() {
+                uint attributes;
+                ReportHit(1.0, 0, attributes);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError, match="ReportHit hit attribute.*user-defined struct"
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(scalar_hit_attribute_code), "ray_intersection"
+        )
 
 
 def test_directx_mesh_task_stages_emit_numthreads_layouts():

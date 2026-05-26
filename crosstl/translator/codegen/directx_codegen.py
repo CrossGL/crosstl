@@ -5090,9 +5090,6 @@ class HLSLCodeGen:
             return
 
         role_parameters = self.hlsl_ray_role_parameters(parameters)
-        if not role_parameters:
-            return
-
         allowed_stages = {
             "payload": {
                 "ray_generation",
@@ -5124,6 +5121,21 @@ class HLSLCodeGen:
                 )
             self.validate_hlsl_ray_parameter_type(role_params[0], role)
 
+        required_roles = {
+            "ray_closest_hit": {"payload", "hit_attribute"},
+            "closesthit": {"payload", "hit_attribute"},
+            "ray_any_hit": {"payload", "hit_attribute"},
+            "anyhit": {"payload", "hit_attribute"},
+            "ray_miss": {"payload"},
+            "miss": {"payload"},
+            "ray_callable": {"callable_data"},
+            "callable": {"callable_data"},
+        }
+        for role in sorted(
+            required_roles.get(shader_type, set()) - set(role_parameters)
+        ):
+            raise ValueError(f"DirectX {shader_type} stage requires a {role} parameter")
+
     def hlsl_ray_tracing_calls(self, func):
         calls = []
         for node in self.walk_ast(getattr(func, "body", [])):
@@ -5144,6 +5156,37 @@ class HLSLCodeGen:
                         (name, getattr(node, "arguments", getattr(node, "args", [])))
                     )
         return calls
+
+    def validate_hlsl_ray_struct_argument(self, argument, shader_type, operation, role):
+        argument_type = self.expression_result_type(argument)
+        if argument_type is None:
+            return
+
+        mapped_type = self.map_type(argument_type)
+        base_type, array_suffix = split_array_type_suffix(mapped_type)
+        allowed_builtin_types = {"BuiltInTriangleIntersectionAttributes"}
+        if array_suffix or (
+            base_type not in self.structs_by_name
+            and base_type not in allowed_builtin_types
+        ):
+            raise ValueError(
+                f"DirectX {shader_type} {operation} {role} argument must use "
+                f"a user-defined struct type, got {mapped_type}"
+            )
+
+    def validate_hlsl_ray_tracing_call_arguments(self, operation, args, shader_type):
+        if operation == "TraceRay":
+            self.validate_hlsl_ray_struct_argument(
+                args[-1], shader_type, operation, "payload"
+            )
+        elif operation == "CallShader":
+            self.validate_hlsl_ray_struct_argument(
+                args[1], shader_type, operation, "callable data"
+            )
+        elif operation == "ReportHit" and len(args) == 3:
+            self.validate_hlsl_ray_struct_argument(
+                args[2], shader_type, operation, "hit attribute"
+            )
 
     def validate_hlsl_ray_tracing_calls(self, func, shader_type):
         calls = self.hlsl_ray_tracing_calls(func)
@@ -5178,22 +5221,38 @@ class HLSLCodeGen:
             "AcceptHitAndEndSearch": {0},
             "IgnoreHit": {0},
         }
-        for operation, args in calls:
-            if operation not in allowed_stages:
-                continue
-            if shader_type not in allowed_stages[operation]:
-                valid_stages = ", ".join(sorted(allowed_stages[operation]))
-                raise ValueError(
-                    f"DirectX {shader_type} stage cannot call {operation}; "
-                    f"{operation} is only valid in: {valid_stages}"
+        previous_local_variable_types = self.local_variable_types
+        self.local_variable_types = {
+            **previous_local_variable_types,
+            **self.function_scope_variable_types(func),
+        }
+        try:
+            for operation, args in calls:
+                if operation not in allowed_stages:
+                    continue
+                if (
+                    shader_type is not None
+                    and shader_type not in allowed_stages[operation]
+                ):
+                    valid_stages = ", ".join(sorted(allowed_stages[operation]))
+                    raise ValueError(
+                        f"DirectX {shader_type} stage cannot call {operation}; "
+                        f"{operation} is only valid in: {valid_stages}"
+                    )
+                expected_counts = expected_arg_counts[operation]
+                if len(args) not in expected_counts:
+                    expected = " or ".join(
+                        str(count) for count in sorted(expected_counts)
+                    )
+                    raise ValueError(
+                        f"DirectX {shader_type} {operation} requires {expected} "
+                        f"argument(s), got {len(args)}"
+                    )
+                self.validate_hlsl_ray_tracing_call_arguments(
+                    operation, args, shader_type
                 )
-            expected_counts = expected_arg_counts[operation]
-            if len(args) not in expected_counts:
-                expected = " or ".join(str(count) for count in sorted(expected_counts))
-                raise ValueError(
-                    f"DirectX {shader_type} {operation} requires {expected} "
-                    f"argument(s), got {len(args)}"
-                )
+        finally:
+            self.local_variable_types = previous_local_variable_types
 
     def validate_hlsl_function_return_semantic(
         self, func, shader_type, raw_return_type=None, semantic=None
