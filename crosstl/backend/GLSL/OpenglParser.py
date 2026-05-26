@@ -149,6 +149,13 @@ RAY_STORAGE_QUALIFIERS = {
     "callableDataInEXT",
 }
 
+MESH_STORAGE_QUALIFIERS = {
+    "perprimitiveEXT",
+    "taskPayloadSharedEXT",
+}
+
+IDENTIFIER_QUALIFIERS = RAY_STORAGE_QUALIFIERS | MESH_STORAGE_QUALIFIERS
+
 ASSIGNMENT_TOKENS = {
     "EQUALS": "=",
     "PLUS_EQUALS": "+=",
@@ -394,7 +401,7 @@ class GLSLParser:
         qualifiers = []
         while self.current_token[0] in QUALIFIER_TOKENS or (
             self.current_token[0] == "IDENTIFIER"
-            and self.current_token[1] in RAY_STORAGE_QUALIFIERS
+            and self.current_token[1] in IDENTIFIER_QUALIFIERS
         ):
             if self.current_token[0] == "SUBROUTINE":
                 self.advance()

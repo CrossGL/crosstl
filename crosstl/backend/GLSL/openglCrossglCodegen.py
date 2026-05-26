@@ -38,6 +38,25 @@ class GLSLToCrossGLConverter:
         "callabledataext": "callableDataEXT",
         "callabledatainext": "callableDataInEXT",
     }
+    STORAGE_QUALIFIER_ATTRIBUTES = {
+        **RAY_STORAGE_QUALIFIERS,
+        "taskpayloadsharedext": "taskPayloadSharedEXT",
+    }
+    INTERFACE_QUALIFIER_NAMES = {
+        "in": "in",
+        "out": "out",
+        "inout": "inout",
+        "patch": "patch",
+        "flat": "flat",
+        "smooth": "smooth",
+        "noperspective": "noperspective",
+        "centroid": "centroid",
+        "sample": "sample",
+        "perprimitive": "perprimitive",
+        "perprimitiveext": "perprimitive",
+        "pervertex": "pervertex",
+        "perview": "perview",
+    }
     NON_STRUCT_STAGE_TYPES = {
         "compute",
         "mesh",
@@ -87,6 +106,13 @@ class GLSLToCrossGLConverter:
             "distance": "distance",
             "reflect": "reflect",
             "refract": "refract",
+            "traceRayEXT": "TraceRay",
+            "reportIntersectionEXT": "ReportHit",
+            "executeCallableEXT": "CallShader",
+            "terminateRayEXT": "AcceptHitAndEndSearch",
+            "ignoreIntersectionEXT": "IgnoreHit",
+            "SetMeshOutputsEXT": "SetMeshOutputCounts",
+            "EmitMeshTasksEXT": "DispatchMesh",
         }
         self.texture_function_operations = {
             "texture": "sample",
@@ -505,8 +531,8 @@ class GLSLToCrossGLConverter:
 
     def image_resource_attribute_suffix(self, var):
         var_type = getattr(var, "vtype", None)
-        ray_attributes = self.ray_storage_qualifier_attributes(var)
-        if not self._is_resource_type(var_type) and not ray_attributes:
+        storage_attributes = self.storage_qualifier_attributes(var)
+        if not self._is_resource_type(var_type) and not storage_attributes:
             return ""
 
         attributes = []
@@ -532,17 +558,26 @@ class GLSLToCrossGLConverter:
             if qualifier in qualifiers:
                 attributes.append(f"@{qualifier}")
 
-        attributes.extend(ray_attributes)
+        attributes.extend(storage_attributes)
 
         return f" {' '.join(attributes)}" if attributes else ""
 
-    def ray_storage_qualifier_attributes(self, var):
+    def storage_qualifier_attributes(self, var):
         qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
         return [
             f"@{attribute}"
-            for qualifier, attribute in self.RAY_STORAGE_QUALIFIERS.items()
+            for qualifier, attribute in self.STORAGE_QUALIFIER_ATTRIBUTES.items()
             if qualifier in qualifiers
         ]
+
+    def interface_qualifier_prefix(self, var):
+        qualifiers = [str(q).lower() for q in getattr(var, "qualifiers", []) or []]
+        emitted = []
+        for qualifier in qualifiers:
+            mapped = self.INTERFACE_QUALIFIER_NAMES.get(qualifier)
+            if mapped is not None and mapped not in emitted:
+                emitted.append(mapped)
+        return " ".join(emitted)
 
     def format_layout(self, layout_entry):
         layout = (
@@ -732,6 +767,17 @@ class GLSLToCrossGLConverter:
                 self.indent_str + self.generate_variable_declaration(global_var) + ";\n"
             )
         if getattr(node, "global_variables", []):
+            result += "\n"
+
+        if self.shader_type in self.NON_STRUCT_STAGE_TYPES and (
+            self.inputs or self.outputs
+        ):
+            for interface_var in [*self.inputs, *self.outputs]:
+                result += (
+                    self.indent_str
+                    + self.generate_variable_declaration(interface_var)
+                    + ";\n"
+                )
             result += "\n"
 
         # Generate shader function
@@ -1307,11 +1353,13 @@ class GLSLToCrossGLConverter:
         var_type = self.convert_type(node.vtype)
         var_name = node.name
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", None) or []}
-        prefix = (
-            "const "
-            if getattr(node, "is_const", False) or "const" in qualifiers
-            else ""
-        )
+        prefix_parts = []
+        if getattr(node, "is_const", False) or "const" in qualifiers:
+            prefix_parts.append("const")
+        interface_prefix = self.interface_qualifier_prefix(node)
+        if interface_prefix:
+            prefix_parts.append(interface_prefix)
+        prefix = f"{' '.join(prefix_parts)} " if prefix_parts else ""
         array_suffix = self.array_suffix(node)
         attributes = self.image_resource_attribute_suffix(node)
 

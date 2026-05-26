@@ -115,6 +115,8 @@ def test_parse_ray_shader_record_layout_roundtrips_without_binding():
     assert "RayGenerationInput" not in crossgl
     assert "RayGenerationOutput" not in crossgl
     assert "void main()" in crossgl
+    assert "TraceRay(" in crossgl
+    assert "traceRayEXT(" not in crossgl
 
     glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
 
@@ -145,6 +147,90 @@ def test_parse_ray_shader_record_layout_rejects_binding():
         match="shaderRecordEXT buffer blocks cannot declare binding layout qualifiers",
     ):
         generate_crossgl(code, "ray_generation")
+
+
+@pytest.mark.parametrize(
+    ("shader_type", "glsl_call", "crossgl_call", "regenerated_call"),
+    [
+        (
+            "mesh",
+            "SetMeshOutputsEXT(3, 1)",
+            "SetMeshOutputCounts(3, 1)",
+            "SetMeshOutputsEXT(3, 1)",
+        ),
+        (
+            "task",
+            "EmitMeshTasksEXT(1, 1, 1)",
+            "DispatchMesh(1, 1, 1)",
+            "EmitMeshTasksEXT(1, 1, 1)",
+        ),
+    ],
+)
+def test_parse_mesh_intrinsics_roundtrip_through_canonical_crossgl(
+    shader_type,
+    glsl_call,
+    crossgl_call,
+    regenerated_call,
+):
+    code = f"""
+    #version 450 core
+    #extension GL_EXT_mesh_shader : require
+    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+    void main() {{
+        {glsl_call};
+    }}
+    """
+
+    crossgl = generate_crossgl(code, shader_type)
+
+    assert crossgl_call in crossgl
+    assert glsl_call not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "#extension GL_EXT_mesh_shader : require" in glsl
+    assert regenerated_call in glsl
+
+
+def test_parse_mesh_stage_interface_qualifiers_roundtrip():
+    code = """
+    #version 450 core
+    #extension GL_EXT_mesh_shader : require
+
+    struct TaskPayload {
+        uint meshlet;
+    };
+
+    taskPayloadSharedEXT TaskPayload payload;
+    perprimitiveEXT out vec3 primitiveNormal[32];
+    out vec4 vertexColor[64];
+    layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+    layout(triangles, max_vertices = 64, max_primitives = 32) out;
+
+    void main() {
+        SetMeshOutputsEXT(64, 32);
+        primitiveNormal[0] = vec3(0.0, 0.0, 1.0);
+        vertexColor[0] = vec4(float(payload.meshlet));
+    }
+    """
+
+    crossgl = generate_crossgl(code, "mesh")
+
+    assert "TaskPayload payload @taskPayloadSharedEXT;" in crossgl
+    assert "perprimitive out vec3 primitiveNormal[32];" in crossgl
+    assert "out vec4 vertexColor[64];" in crossgl
+    assert "SetMeshOutputCounts(64, 32);" in crossgl
+    assert "taskPayloadSharedEXT TaskPayload payload;" not in crossgl
+    assert "perprimitiveEXT out vec3 primitiveNormal[32];" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "#extension GL_EXT_mesh_shader : require" in glsl
+    assert "taskPayloadSharedEXT TaskPayload payload;" in glsl
+    assert "perprimitiveEXT out vec3 primitiveNormal[32];" in glsl
+    assert "out vec4 vertexColor[64];" in glsl
+    assert "SetMeshOutputsEXT(64, 32);" in glsl
 
 
 if __name__ == "__main__":
