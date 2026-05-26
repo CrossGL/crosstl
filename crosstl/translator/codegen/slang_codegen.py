@@ -33,6 +33,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
     DoWhileNode,
+    WaveOpNode,
     WhileNode,
     WildcardPatternNode,
 )
@@ -69,6 +70,31 @@ class SlangCodeGen:
         "%": 10,
     }
     ASSOCIATIVE_BINARY_OPS = {"+", "*", "&&", "||", "&", "|", "^"}
+    SLANG_WAVE_INTRINSIC_ARITIES = {
+        "WaveGetLaneCount": 0,
+        "WaveGetLaneIndex": 0,
+        "WaveIsFirstLane": 0,
+        "WaveActiveSum": 1,
+        "WaveActiveProduct": 1,
+        "WaveActiveBitAnd": 1,
+        "WaveActiveBitOr": 1,
+        "WaveActiveBitXor": 1,
+        "WaveActiveMin": 1,
+        "WaveActiveMax": 1,
+        "WaveActiveAllTrue": 1,
+        "WaveActiveAnyTrue": 1,
+        "WaveActiveBallot": 1,
+        "WaveReadLaneAt": 2,
+        "WaveReadLaneFirst": 1,
+        "WavePrefixSum": 1,
+        "WavePrefixProduct": 1,
+        "WaveMatch": 1,
+        "WaveMultiPrefixSum": 2,
+        "WaveMultiPrefixProduct": 2,
+        "WaveMultiPrefixBitAnd": 2,
+        "WaveMultiPrefixBitOr": 2,
+        "WaveMultiPrefixBitXor": 2,
+    }
 
     def __init__(self):
         """Initialize Slang generation state and helper caches."""
@@ -1539,6 +1565,7 @@ class SlangCodeGen:
                 "RWStructuredBuffer",
                 "AppendStructuredBuffer",
                 "ConsumeStructuredBuffer",
+                "RWByteAddressBuffer",
             )
         ):
             return "u"
@@ -3787,6 +3814,11 @@ class SlangCodeGen:
                 )
             if func_name == "buffer_dimensions":
                 return "uint"
+            byte_address_result_type = self.byte_address_member_call_result_type(
+                func_expr
+            )
+            if byte_address_result_type is not None:
+                return byte_address_result_type
             if isinstance(func_name, str) and func_name in {
                 "float",
                 "double",
@@ -3927,6 +3959,8 @@ class SlangCodeGen:
             return f"{obj}.{node.member}"
         elif isinstance(node, BinaryOpNode):
             return self.generate_binary_expression(node)
+        elif isinstance(node, WaveOpNode):
+            return self.generate_slang_wave_op_expression(node)
         elif isinstance(node, RayQueryOpNode):
             query = self.generate_expression(node.query_expr)
             args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
@@ -3945,6 +3979,12 @@ class SlangCodeGen:
                 resource_call = self.generate_resource_call(callee, node.args)
                 if resource_call is not None:
                     return resource_call
+            if isinstance(func_expr, MemberAccessNode):
+                resource_member_call = self.generate_resource_member_call(
+                    func_expr, node.args
+                )
+                if resource_member_call is not None:
+                    return resource_member_call
             if callee == "mix" and callee not in self.user_function_names:
                 bool_mix = self.generate_bool_mix_call(node.args)
                 if bool_mix is not None:
@@ -3994,6 +4034,36 @@ class SlangCodeGen:
             ray_desc = f"RayDesc({args[6]}, {args[7]}, {args[8]}, {args[9]})"
             args = args[:6] + [ray_desc, args[10]]
         return f"{node.operation}({', '.join(args)})"
+
+    def generate_slang_wave_op_expression(self, node):
+        expected_arity = self.SLANG_WAVE_INTRINSIC_ARITIES.get(node.operation)
+        if expected_arity is None:
+            return self.unsupported_slang_wave_op_expression(
+                node.operation, "is not recognized by the Slang backend"
+            )
+
+        actual_arity = len(node.arguments)
+        if actual_arity != expected_arity:
+            return self.unsupported_slang_wave_op_expression(
+                node.operation,
+                f"expects {expected_arity} arguments, got {actual_arity}",
+            )
+
+        args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
+        return f"{node.operation}({args})"
+
+    def unsupported_slang_wave_op_expression(self, operation, reason):
+        return (
+            f"/* unsupported Slang wave intrinsic: {operation} {reason} */ "
+            f"{self.slang_wave_default_value(operation)}"
+        )
+
+    def slang_wave_default_value(self, operation):
+        if operation in {"WaveIsFirstLane", "WaveActiveAllTrue", "WaveActiveAnyTrue"}:
+            return "false"
+        if operation in {"WaveActiveBallot", "WaveMatch"}:
+            return "uint4(0)"
+        return "0"
 
     def generate_lambda_expression(self, args):
         """Render supported CrossGL pseudo-lambdas as Slang lambda expressions."""
@@ -4675,6 +4745,14 @@ class SlangCodeGen:
         mapped_type = self.map_resource_type_with_format(buffer_type)
         return self.resource_base_type(mapped_type)
 
+    def is_byte_address_buffer_resource_type(self, buffer_type):
+        buffer_type = self.resource_base_type(buffer_type)
+        return buffer_type in {"ByteAddressBuffer", "RWByteAddressBuffer"}
+
+    def is_writable_byte_address_buffer_resource_type(self, buffer_type):
+        buffer_type = self.resource_base_type(buffer_type)
+        return buffer_type == "RWByteAddressBuffer"
+
     def is_structured_buffer_resource_type(self, buffer_type):
         buffer_type = self.resource_base_type(buffer_type)
         return isinstance(buffer_type, str) and buffer_type.startswith(
@@ -4720,6 +4798,14 @@ class SlangCodeGen:
             f"{self.zero_value_for_type(result_type)}"
         )
 
+    def unsupported_byte_address_buffer_call(self, operation, reason, result_type=None):
+        if result_type is None:
+            return f"/* unsupported Slang byte-address buffer: {operation} {reason} */"
+        return (
+            f"/* unsupported Slang byte-address buffer: {operation} {reason} */ "
+            f"{self.zero_value_for_type(result_type)}"
+        )
+
     def zero_value_for_type(self, type_name):
         type_name = self.convert_type(type_name)
         if type_name == "bool":
@@ -4743,6 +4829,11 @@ class SlangCodeGen:
 
         buffer_type = self.structured_buffer_resource_type(args[0])
         element_type = self.structured_buffer_element_type(buffer_type) or "uint"
+        if self.is_byte_address_buffer_resource_type(buffer_type):
+            buffer = self.generate_expression(args[0])
+            index = self.generate_expression(args[1])
+            return f"{buffer}.Load({index})"
+
         if not self.is_structured_buffer_resource_type(buffer_type):
             return self.unsupported_structured_buffer_call(
                 "buffer_load",
@@ -4761,6 +4852,16 @@ class SlangCodeGen:
             )
 
         buffer_type = self.structured_buffer_resource_type(args[0])
+        if self.is_byte_address_buffer_resource_type(buffer_type):
+            if not self.is_writable_byte_address_buffer_resource_type(buffer_type):
+                return self.unsupported_byte_address_buffer_call(
+                    "buffer_store", "requires RWByteAddressBuffer resource"
+                )
+            buffer = self.generate_expression(args[0])
+            index = self.generate_expression(args[1])
+            value = self.generate_expression(args[2])
+            return f"{buffer}.Store({index}, {value})"
+
         if not self.is_writable_structured_buffer_resource_type(buffer_type):
             return self.unsupported_structured_buffer_call(
                 "buffer_store", "requires RWStructuredBuffer resource"
@@ -4812,6 +4913,17 @@ class SlangCodeGen:
             )
 
         buffer_type = self.structured_buffer_resource_type(args[0])
+        if self.is_byte_address_buffer_resource_type(buffer_type):
+            buffer = self.generate_expression(args[0])
+            if len(args) >= 2:
+                dimensions = ", ".join(
+                    self.generate_expression(arg) for arg in args[1:]
+                )
+                return f"{buffer}.GetDimensions({dimensions})"
+
+            helper_name = self.buffer_dimensions_helper_name(buffer_type)
+            return f"{helper_name}({buffer})"
+
         if not self.is_structured_buffer_resource_type(buffer_type):
             return self.unsupported_structured_buffer_call(
                 "buffer_dimensions",
@@ -4824,20 +4936,20 @@ class SlangCodeGen:
             dimensions = ", ".join(self.generate_expression(arg) for arg in args[1:])
             return f"{buffer}.GetDimensions({dimensions})"
 
-        helper_name = self.structured_buffer_dimensions_helper_name(buffer_type)
+        helper_name = self.buffer_dimensions_helper_name(buffer_type)
         return f"{helper_name}({buffer})"
 
-    def structured_buffer_dimensions_helper_name(self, buffer_type):
+    def buffer_dimensions_helper_name(self, buffer_type):
         helper_name = self.helper_function_name(
             "cgl_bufferDimensions_" f"{self.resource_helper_type_suffix(buffer_type)}"
         )
         self.register_helper_function(
             helper_name,
-            self.build_structured_buffer_dimensions_helper(helper_name, buffer_type),
+            self.build_buffer_dimensions_helper(helper_name, buffer_type),
         )
         return helper_name
 
-    def build_structured_buffer_dimensions_helper(self, helper_name, buffer_type):
+    def build_buffer_dimensions_helper(self, helper_name, buffer_type):
         return (
             f"uint {helper_name}({buffer_type} buffer)\n"
             "{\n"
@@ -4846,6 +4958,45 @@ class SlangCodeGen:
             "    return count;\n"
             "}"
         )
+
+    def byte_address_member_call_result_type(self, func_expr):
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+        receiver = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        if not self.is_byte_address_buffer_resource_type(
+            self.structured_buffer_resource_type(receiver)
+        ):
+            return None
+        member = str(getattr(func_expr, "member", ""))
+        return {
+            "Load": "uint",
+            "Load2": "uint2",
+            "Load3": "uint3",
+            "Load4": "uint4",
+        }.get(member)
+
+    def generate_resource_member_call(self, func_expr, args):
+        receiver = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        receiver_type = self.structured_buffer_resource_type(receiver)
+        if not self.is_byte_address_buffer_resource_type(receiver_type):
+            return None
+
+        member = str(getattr(func_expr, "member", ""))
+        if member in {"Load", "Load2", "Load3", "Load4"}:
+            receiver_expr = self.generate_expression(receiver)
+            args_expr = ", ".join(self.generate_expression(arg) for arg in args)
+            return f"{receiver_expr}.{member}({args_expr})"
+
+        if member in {"Store", "Store2", "Store3", "Store4"}:
+            if not self.is_writable_byte_address_buffer_resource_type(receiver_type):
+                return self.unsupported_byte_address_buffer_call(
+                    member, "requires RWByteAddressBuffer receiver"
+                )
+            receiver_expr = self.generate_expression(receiver)
+            args_expr = ", ".join(self.generate_expression(arg) for arg in args)
+            return f"{receiver_expr}.{member}({args_expr})"
+
+        return None
 
     def image_atomic_intrinsic(self, operation):
         return {

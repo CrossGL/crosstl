@@ -1239,6 +1239,59 @@ def test_generated_glsl_mesh_shader_validates_with_glslangvalidator(
     _run_validator([glslang, "-S", "mesh", str(shader_path)])
 
 
+def test_generated_glsl_mesh_output_signature_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    _require_glslang_stage(glslang, "mesh")
+    shader_path = tmp_path / "mesh_output_signature.mesh"
+    shader = """
+    shader GLSLMeshOutputSignatureValidator {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct MeshPrimitive {
+            int primitiveId @ gl_PrimitiveID;
+            vec3 normal @ NORMAL;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(1, 1, 1)
+              @outputtopology(triangle)
+              @max_vertices(3)
+              @max_primitives(1)
+            {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                verts[0].uv = vec2(0.5, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+                prims[0].primitiveId = 7;
+                prims[0].normal = vec3(0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+    assert "layout(location = 5) out vec2 uv[3];" in code
+    assert "layout(location = 1) perprimitiveEXT out vec3 normal[1];" in code
+    assert "gl_MeshVerticesEXT[0].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);" in code
+    assert "gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);" in code
+    assert "gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 7;" in code
+    assert "verts[0]" not in code
+    assert "tris[0]" not in code
+    assert "prims[0]" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "mesh", str(shader_path)])
+
+
 def test_generated_glsl_ray_generation_validates_with_glslangvalidator(tmp_path):
     glslang = _require_tool("glslangValidator")
     _require_glslang_stage(glslang, "rgen")

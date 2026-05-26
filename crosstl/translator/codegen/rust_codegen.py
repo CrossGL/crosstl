@@ -380,6 +380,7 @@ class RustCodeGen:
         self.matrix_arg_temp_counter = 0
         self.assignment_lhs_depth = 0
         self.member_object_depth = 0
+        self.array_object_depth = 0
 
     def generate(self, ast):
         """Generate complete Rust-like shader source for a CrossGL AST."""
@@ -417,6 +418,7 @@ class RustCodeGen:
         self.matrix_arg_temp_counter = 0
         self.assignment_lhs_depth = 0
         self.member_object_depth = 0
+        self.array_object_depth = 0
         code = "// Generated Rust GPU Shader Code\n"
         code += "use gpu::*;\n"
         code += "use math::*;\n\n"
@@ -4117,10 +4119,10 @@ class RustCodeGen:
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             name = getattr(expr, "name", str(expr))
-            return self.lazy_static_identifier_expression(name)
+            return self.generate_identifier_value_expression(name)
         elif isinstance(expr, VariableNode):
             if hasattr(expr, "name"):
-                return self.lazy_static_identifier_expression(expr.name)
+                return self.generate_identifier_value_expression(expr.name)
             else:
                 return str(expr)
         elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
@@ -4149,7 +4151,11 @@ class RustCodeGen:
         elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
             array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
             index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
-            array = self.generate_expression(array_expr)
+            self.array_object_depth += 1
+            try:
+                array = self.generate_expression(array_expr)
+            finally:
+                self.array_object_depth -= 1
             array = self.lazy_static_object_expression(array_expr, array)
             index = self.generate_array_index_expression(index_expr)
             return f"{array}[{index}]"
@@ -4878,6 +4884,34 @@ class RustCodeGen:
             member_type,
             self.current_generic_param_names,
         )
+
+    def generate_identifier_value_expression(self, name):
+        value = self.lazy_static_identifier_expression(name)
+        if self.should_clone_identifier_value(name):
+            return self.clone_value_expression(value)
+        return value
+
+    def should_clone_identifier_value(self, name):
+        if (
+            self.assignment_lhs_depth > 0
+            or self.member_object_depth > 0
+            or self.array_object_depth > 0
+        ):
+            return False
+
+        value_type = self.variable_types.get(name)
+        if value_type is None:
+            return False
+
+        return not self.type_is_copy_derivable(
+            value_type,
+            self.current_generic_param_names,
+        )
+
+    def clone_value_expression(self, value):
+        if isinstance(value, str) and value.startswith("*"):
+            return f"({value}).clone()"
+        return f"{value}.clone()"
 
     def swizzle_constructor_type(self, obj_expr, component_count):
         object_type = self.expression_result_type(obj_expr)

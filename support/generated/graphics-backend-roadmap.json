@@ -143,6 +143,33 @@
       "feature_id": "texture.advanced_sampling",
       "notes": "Several unsupported combinations intentionally emit diagnostics.",
       "status": "partial"
+    },
+    {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "language",
+      "feature": "Wave/subgroup intrinsics",
+      "feature_id": "language.wave_intrinsics",
+      "notes": "WaveOpNode calls are preserved as native HLSL Wave* intrinsics. Current tests cover pass-through for WaveActiveSum; broader Shader Model wave validation is still needed.",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "language",
+      "feature": "Wave/subgroup intrinsics",
+      "feature_id": "language.wave_intrinsics",
+      "notes": "The frontend parses WaveOpNode and the OpenGL backend currently preserves the HLSL Wave* spelling, but native GLSL subgroup lowering and validator coverage are not implemented.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "language",
+      "feature": "Wave/subgroup intrinsics",
+      "feature_id": "language.wave_intrinsics",
+      "notes": "The Metal backend currently preserves WaveOpNode spellings rather than lowering to simdgroup intrinsics.",
+      "status": "unsupported"
     }
   ],
   "features": [
@@ -1400,6 +1427,35 @@
     },
     {
       "category": "language",
+      "description": "Lower CrossGL Wave* subgroup operations including lane queries, reductions, scans, votes, ballots, and lane reads.",
+      "id": "language.wave_intrinsics",
+      "name": "Wave/subgroup intrinsics",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_wave_and_rayquery_intrinsics_codegen"
+          ],
+          "notes": "WaveOpNode calls are preserved as native HLSL Wave* intrinsics. Current tests cover pass-through for WaveActiveSum; broader Shader Model wave validation is still needed.",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [
+            "crosstl/translator/codegen/metal_codegen.py::WaveOpNode"
+          ],
+          "notes": "The Metal backend currently preserves WaveOpNode spellings rather than lowering to simdgroup intrinsics.",
+          "status": "unsupported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_and_mesh_intrinsics"
+          ],
+          "notes": "The frontend parses WaveOpNode and the OpenGL backend currently preserves the HLSL Wave* spelling, but native GLSL subgroup lowering and validator coverage are not implemented.",
+          "status": "unsupported"
+        }
+      }
+    },
+    {
+      "category": "language",
       "description": "CrossGL match expressions and pattern arms.",
       "id": "language.match",
       "name": "Match/pattern lowering",
@@ -1508,31 +1564,32 @@
   "summary": {
     "backend_count": 3,
     "backlog": {
-      "backlog_count": 16,
+      "backlog_count": 19,
       "by_backend": {
-        "directx": 5,
-        "metal": 7,
-        "opengl": 4
+        "directx": 6,
+        "metal": 8,
+        "opengl": 5
       },
       "by_category": {
+        "language": 3,
         "resources": 2,
         "stages": 8,
         "textures": 6
       },
       "by_status": {
         "diagnostic": 0,
-        "partial": 14,
+        "partial": 15,
         "supported": 0,
         "unknown": 0,
-        "unsupported": 2,
+        "unsupported": 4,
         "validated_rejection": 0
       }
     },
-    "feature_count": 42,
+    "feature_count": 43,
     "status_counts": {
       "directx": {
         "diagnostic": 0,
-        "partial": 5,
+        "partial": 6,
         "supported": 37,
         "unknown": 0,
         "unsupported": 0,
@@ -1543,7 +1600,7 @@
         "partial": 5,
         "supported": 35,
         "unknown": 0,
-        "unsupported": 2,
+        "unsupported": 3,
         "validated_rejection": 0
       },
       "opengl": {
@@ -1551,7 +1608,7 @@
         "partial": 4,
         "supported": 38,
         "unknown": 0,
-        "unsupported": 0,
+        "unsupported": 1,
         "validated_rejection": 0
       }
     }

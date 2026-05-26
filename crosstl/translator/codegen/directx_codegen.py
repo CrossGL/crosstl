@@ -8890,6 +8890,13 @@ class HLSLCodeGen:
     def validate_image_store_value_type(self, image_type, image_format, value_arg):
         self.validate_image_store_value_shape(image_type, image_format, value_arg)
         expected_kind = self.image_store_expected_value_type(image_type, image_format)
+        if self.hlsl_expression_contains_image_atomic(value_arg):
+            previous_expected_type = self.current_expression_expected_type
+            self.current_expression_expected_type = expected_kind
+            try:
+                self.generate_expression(value_arg)
+            finally:
+                self.current_expression_expected_type = previous_expected_type
         value_kind = image_store_value_kind_mismatch(
             expected_kind, self.expression_component_kind(value_arg)
         )
@@ -10225,6 +10232,20 @@ class HLSLCodeGen:
                 continue
             args = getattr(node, "arguments", getattr(node, "args", []))
             if self.hlsl_typed_buffer_atomic_parts(func_name, args) is not None:
+                return True
+        return False
+
+    def hlsl_expression_contains_image_atomic(self, expr):
+        for node in self.walk_ast(expr):
+            if not (
+                isinstance(node, FunctionCallNode)
+                or (
+                    hasattr(node, "__class__") and "FunctionCall" in str(node.__class__)
+                )
+            ):
+                continue
+            func_name = self.function_call_name(node)
+            if isinstance(func_name, str) and is_image_atomic_operation(func_name):
                 return True
         return False
 

@@ -588,23 +588,27 @@
         "hip": {"status": "partial"},
         "mojo": {
           "status": "partial",
-          "notes": "StructuredBuffer, RWStructuredBuffer, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers; real GPU memory binding semantics remain incomplete.",
+          "notes": "StructuredBuffer, RWStructuredBuffer, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers and deterministic invalid member/free-helper diagnostics; real GPU memory binding semantics remain incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_structured_buffer_placeholders_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_typed_buffer_vector_alias_placeholders_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_buffer_placeholders_compile_with_mojo",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_vector_methods_and_reinterpret_compile_with_mojo"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_vector_methods_and_reinterpret_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen"
           ]
         },
         "rust": {"status": "unknown"},
         "slang": {
           "status": "partial",
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. Byte-address buffers and GLSL buffer-block round-trips are not implemented yet.",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_append_consume_structured_buffers_emit_slang_methods_and_uav_bindings",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_append_consume_wrong_structured_buffer_kinds_emit_slang_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffers_emit_slang_load_store_dimensions_and_bindings",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_vector_methods_and_readonly_stores_emit_slang",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffer_store_to_readonly_helper_emits_slang_diagnostic",
             "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
           ]
         }
@@ -1648,6 +1652,56 @@
       }
     },
     {
+      "id": "language.wave_intrinsics",
+      "category": "language",
+      "name": "Wave/subgroup intrinsics",
+      "description": "Lower CrossGL Wave* subgroup operations including lane queries, reductions, scans, votes, ballots, and lane reads.",
+      "support": {
+        "directx": {
+          "status": "partial",
+          "notes": "WaveOpNode calls are preserved as native HLSL Wave* intrinsics. Current tests cover pass-through for WaveActiveSum; broader Shader Model wave validation is still needed.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_wave_and_rayquery_intrinsics_codegen"
+          ]
+        },
+        "opengl": {
+          "status": "unsupported",
+          "notes": "The frontend parses WaveOpNode and the OpenGL backend currently preserves the HLSL Wave* spelling, but native GLSL subgroup lowering and validator coverage are not implemented.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_and_mesh_intrinsics"
+          ]
+        },
+        "metal": {
+          "status": "unsupported",
+          "notes": "The Metal backend currently preserves WaveOpNode spellings rather than lowering to simdgroup intrinsics.",
+          "evidence": ["crosstl/translator/codegen/metal_codegen.py::WaveOpNode"]
+        },
+        "vulkan": {
+          "status": "partial",
+          "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, and WaveReadLaneFirst to SPIR-V GroupNonUniform operations with Vulkan 1.1 spirv-as/spirv-val coverage. Quad, WaveMatch, and WaveMultiPrefix forms still emit deterministic diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_lane_intrinsics_emit_subgroup_builtins",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_intrinsics_emit_group_non_uniform_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_unsupported_wave_intrinsics_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_wave_intrinsics_compute_validates_with_spirv_tools"
+          ]
+        },
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {"status": "unknown"},
+        "rust": {"status": "unknown"},
+        "slang": {
+          "status": "partial",
+          "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, WaveMatch, and WaveMultiPrefix* forms to native Slang/HLSL wave intrinsics with deterministic arity diagnostics. slangc-backed coverage is optional and skips when slangc is unavailable locally.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsics_lower_to_native_slang_calls",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsics_compile_with_slangc_if_available",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsic_invalid_arities_emit_slang_diagnostics"
+          ]
+        }
+      }
+    },
+    {
       "id": "language.match",
       "category": "language",
       "name": "Match/pattern lowering",
@@ -1743,13 +1797,14 @@
         "hip": {"status": "partial"},
         "mojo": {
           "status": "partial",
-          "notes": "Mojo codegen validates several unsupported enum, parameter/return semantic, buffer, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
+          "notes": "Mojo codegen validates several unsupported enum, parameter/return semantic, buffer access/member-method, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_payload_enums_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_buffer_operations_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_guarded_arm_is_rejected_for_mojo_codegen"
           ]

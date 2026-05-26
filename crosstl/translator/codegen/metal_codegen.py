@@ -395,6 +395,7 @@ class MetalCodeGen:
         self.current_metal_mesh_payload_type = None
         self.current_metal_mesh_output_accumulators = {}
         self.current_metal_non_thread_payload_parameters = set()
+        self.current_readonly_raw_buffer_parameters = set()
         self.metal_program_mesh_payload_type = None
         self.lowered_glsl_buffer_block_struct_names = set()
         self.glsl_buffer_block_lowering_failures = {}
@@ -1679,6 +1680,9 @@ class MetalCodeGen:
         previous_metal_non_thread_payload_parameters = (
             self.current_metal_non_thread_payload_parameters
         )
+        previous_readonly_raw_buffer_parameters = (
+            self.current_readonly_raw_buffer_parameters
+        )
         self.current_function_name = getattr(func, "name", None)
         self.current_function_return_wrapper = None
         self.current_generic_function_substitutions = (
@@ -1708,6 +1712,7 @@ class MetalCodeGen:
         self.current_metal_mesh_payload_type = None
         self.current_metal_mesh_output_accumulators = {}
         self.current_metal_non_thread_payload_parameters = set()
+        self.current_readonly_raw_buffer_parameters = set()
         self.local_variable_types = {}
         for p in param_list:
             if hasattr(p, "param_type"):
@@ -1721,6 +1726,8 @@ class MetalCodeGen:
             else:
                 raw_param_type = "float"
             self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
+            if self.is_readonly_raw_buffer_parameter(raw_param_type, p, shader_type):
+                self.current_readonly_raw_buffer_parameters.add(p.name)
 
             if self.is_metal_mesh_output_parameter(shader_type, p):
                 continue
@@ -1899,6 +1906,9 @@ class MetalCodeGen:
             self.current_metal_non_thread_payload_parameters = (
                 previous_metal_non_thread_payload_parameters
             )
+            self.current_readonly_raw_buffer_parameters = (
+                previous_readonly_raw_buffer_parameters
+            )
             return code
 
         if shader_type == "vertex":
@@ -2061,6 +2071,9 @@ class MetalCodeGen:
         )
         self.current_metal_non_thread_payload_parameters = (
             previous_metal_non_thread_payload_parameters
+        )
+        self.current_readonly_raw_buffer_parameters = (
+            previous_readonly_raw_buffer_parameters
         )
         self.current_function_name = previous_function_name
         self.current_function_return_type = previous_function_return_type
@@ -3312,6 +3325,11 @@ class MetalCodeGen:
         )
         if unsupported_store is not None:
             return unsupported_store
+        readonly_raw_buffer_store = self.readonly_raw_buffer_assignment_diagnostic(
+            target
+        )
+        if readonly_raw_buffer_store is not None:
+            return readonly_raw_buffer_store
 
         lhs = self.generate_expression(target)
         return f"{lhs} {op} {rhs}"
@@ -5440,20 +5458,20 @@ class MetalCodeGen:
         self, raw_param_type, mapped_type, name, node=None, shader_type=None
     ):
         if isinstance(raw_param_type, PointerType):
-            default_space = self.default_parameter_address_space(
+            address_space = self.effective_parameter_address_space(
                 raw_param_type, node, shader_type
             )
-            address_space = self.parameter_address_space(node, default=default_space)
+            address_space = self.readonly_qualified_address_space(address_space, node)
             pointee_type = self.map_resource_type_with_format(
                 raw_param_type.pointee_type, node
             )
             return f"{address_space} {pointee_type}* {name}"
 
         if isinstance(raw_param_type, ReferenceType):
-            default_space = self.default_parameter_address_space(
+            address_space = self.effective_parameter_address_space(
                 raw_param_type, node, shader_type
             )
-            address_space = self.parameter_address_space(node, default=default_space)
+            address_space = self.readonly_qualified_address_space(address_space, node)
             referenced_type = self.map_resource_type_with_format(
                 raw_param_type.referenced_type, node
             )
@@ -5461,15 +5479,15 @@ class MetalCodeGen:
 
         if self.is_array_type_node(raw_param_type):
             binding = self.explicit_buffer_binding_index(node)
-            default_space = (
-                self.default_parameter_address_space(raw_param_type, node, shader_type)
-                if shader_type in {"vertex", "fragment", "compute", "ray_generation"}
-                and binding is not None
-                else None
+            address_space = self.effective_parameter_address_space(
+                raw_param_type,
+                node,
+                shader_type,
+                default_for_stage_binding=binding is not None,
             )
-            address_space = self.parameter_address_space(node, default=default_space)
             if address_space is None:
                 return None
+            address_space = self.readonly_qualified_address_space(address_space, node)
             if binding is not None and shader_type in {
                 "vertex",
                 "fragment",
@@ -5484,6 +5502,22 @@ class MetalCodeGen:
             return f"{address_space} {declaration}"
 
         return None
+
+    def effective_parameter_address_space(
+        self,
+        raw_param_type,
+        node=None,
+        shader_type=None,
+        default_for_stage_binding=True,
+    ):
+        default_space = None
+        if default_for_stage_binding or isinstance(
+            raw_param_type, (PointerType, ReferenceType)
+        ):
+            default_space = self.default_parameter_address_space(
+                raw_param_type, node, shader_type
+            )
+        return self.parameter_address_space(node, default=default_space)
 
     def default_parameter_address_space(
         self, raw_param_type, node=None, shader_type=None
@@ -5527,6 +5561,39 @@ class MetalCodeGen:
             return address_spaces[0]
         return default
 
+    def parameter_qualifier_names(self, node=None):
+        return {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+
+    def readonly_qualified_address_space(self, address_space, node=None):
+        if address_space == "device" and "readonly" in self.parameter_qualifier_names(
+            node
+        ):
+            return "const device"
+        return address_space
+
+    def is_readonly_raw_buffer_parameter(
+        self, raw_param_type, node=None, shader_type=None
+    ):
+        if not (
+            isinstance(raw_param_type, (PointerType, ReferenceType))
+            or self.is_array_type_node(raw_param_type)
+        ):
+            return False
+        qualifiers = self.parameter_qualifier_names(node)
+        if "readonly" in qualifiers:
+            return True
+        address_space = self.effective_parameter_address_space(
+            raw_param_type,
+            node,
+            shader_type,
+            default_for_stage_binding=self.explicit_buffer_binding_index(node)
+            is not None,
+        )
+        return address_space == "constant"
+
     def is_array_type_node(self, vtype):
         return (
             hasattr(vtype, "element_type") and str(type(vtype)).find("ArrayType") != -1
@@ -5558,6 +5625,26 @@ class MetalCodeGen:
         object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
         object_type = self.expression_result_type(object_expr)
         return self.pointer_pointee_type_name(object_type) is not None
+
+    def assignment_target_root_name(self, target):
+        if isinstance(target, MemberAccessNode):
+            return self.assignment_target_root_name(
+                getattr(target, "object", getattr(target, "object_expr", None))
+            )
+        if isinstance(target, ArrayAccessNode):
+            return self.assignment_target_root_name(
+                getattr(target, "array", getattr(target, "array_expr", None))
+            )
+        return self.expression_name(target)
+
+    def readonly_raw_buffer_assignment_diagnostic(self, target):
+        root_name = self.assignment_target_root_name(target)
+        if root_name not in self.current_readonly_raw_buffer_parameters:
+            return None
+        return (
+            "/* unsupported Metal raw buffer store: readonly buffer "
+            f"'{root_name}' cannot be written */"
+        )
 
     def metal_mesh_payload_parameter_declaration(
         self, mapped_type, name, node=None, shader_type=None

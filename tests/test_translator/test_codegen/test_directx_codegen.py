@@ -12389,6 +12389,141 @@ def test_directx_explicit_integer_image_formats_use_atomic_helpers():
     assert "imageAtomicExchange(image" not in generated_code
 
 
+def test_directx_float_image_atomic_exchange_emits_unsupported_fallback():
+    shader = """
+    shader FloatImageAtomicExchange {
+        image2D floatCounters @r32f;
+
+        float exchangeFloat(image2D image @r32f, ivec2 pixel, float value) {
+            return imageAtomicExchange(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                float oldValue = exchangeFloat(floatCounters, ivec2(0, 1), 2.0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert "RWTexture2D<float> floatCounters : register(u0);" in generated_code
+    assert (
+        "float exchangeFloat(RWTexture2D<float> image, int2 pixel, float value)"
+        in generated_code
+    )
+    assert (
+        "return /* unsupported DirectX image atomic resource call: "
+        "imageAtomicExchange on RWTexture2D<float> */ 0.0;" in generated_code
+    )
+    assert "imageAtomicExchange_" not in generated_code
+    assert "InterlockedExchange" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader InvalidAtomicVectorFormat {
+                image2D color @rgba32ui;
+
+                uint addColor(image2D image @rgba32ui, ivec2 pixel, uint value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "DirectX image atomic operation 'imageAtomicAdd' requires r32i or "
+            "r32ui image format, got rgba32ui",
+        ),
+        (
+            """
+            shader InvalidAtomicFloatAdd {
+                image2D values @r32f;
+
+                float addValue(image2D image @r32f, ivec2 pixel, float value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "DirectX image atomic operation 'imageAtomicAdd' requires r32i or "
+            "r32ui image format, got r32f",
+        ),
+        (
+            """
+            shader InvalidAtomicValueKind {
+                uimage2D counters @r32ui;
+
+                uint addCounter(uimage2D image @r32ui, ivec2 pixel, int value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "DirectX image atomic operation 'imageAtomicAdd' requires uint "
+            "data argument for r32ui images: value has type int",
+        ),
+        (
+            """
+            shader InvalidAtomicResultContext {
+                uimage2D counters @r32ui;
+
+                int addCounter(uimage2D image @r32ui, ivec2 pixel, uint value) {
+                    return imageAtomicAdd(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "DirectX image atomic operation 'imageAtomicAdd' requires uint "
+            "result context for r32ui images: expected int",
+        ),
+        (
+            """
+            shader InvalidFloatExchangeValueKind {
+                image2D values @r32f;
+
+                float exchangeValue(image2D image @r32f, ivec2 pixel, uint value) {
+                    return imageAtomicExchange(image, pixel, value);
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "DirectX image atomic operation 'imageAtomicExchange' requires float "
+            "data argument for r32f images: value has type uint",
+        ),
+    ],
+)
+def test_directx_rejects_invalid_image_atomic_format_and_type_context(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        HLSLCodeGen().generate(ast)
+
+
 def test_directx_explicit_vector_integer_image_formats():
     shader = """
     shader ExplicitVectorIntegerFormats {

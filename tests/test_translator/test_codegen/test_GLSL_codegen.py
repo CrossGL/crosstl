@@ -3951,6 +3951,65 @@ def test_glsl_mesh_topology_builtin_index_arrays(
     assert "SetMeshOutputCounts" not in generated_code
 
 
+def test_glsl_mesh_output_signature_parameters_lower_to_native_outputs():
+    shader = """
+    shader MeshOutputSignature {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct MeshPrimitive {
+            int primitiveId @ gl_PrimitiveID;
+            vec3 normal @ NORMAL;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(32, 1, 1)
+              @outputtopology(triangle)
+              @max_vertices(3)
+              @max_primitives(1)
+            {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                verts[0].uv = vec2(0.5, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+                prims[0].primitiveId = 7;
+                prims[0].normal = vec3(0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "mesh"
+    )
+
+    assert "layout(triangles, max_vertices = 3, max_primitives = 1) out;" in (
+        generated_code
+    )
+    assert "layout(location = 5) out vec2 uv[3];" in generated_code
+    assert "layout(location = 1) perprimitiveEXT out vec3 normal[1];" in generated_code
+    assert "gl_MeshVerticesEXT[0].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);" in (
+        generated_code
+    )
+    assert "uv[0] = vec2(0.5, 1.0);" in generated_code
+    assert "gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);" in generated_code
+    assert "gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 7;" in generated_code
+    assert "normal[0] = vec3(0.0, 0.0, 1.0);" in generated_code
+    assert "in MeshVertex verts[3];" not in generated_code
+    assert "in uvec3 tris[1];" not in generated_code
+    assert "in MeshPrimitive prims[1];" not in generated_code
+    assert "verts[0]" not in generated_code
+    assert "tris[0]" not in generated_code
+    assert "prims[0]" not in generated_code
+    assert "SetMeshOutputCounts" not in generated_code
+
+
 def test_glsl_ray_stage_entries_use_distinct_names():
     shader = """
     shader CombinedRayStages {

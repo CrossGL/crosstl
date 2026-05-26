@@ -3526,11 +3526,49 @@ def test_non_copy_member_access_clones_in_value_contexts_and_compile(tmp_path):
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "let payload: Payload = wrapper.payload.clone();" in generated_code
-    assert "let again: Wrapper = wrapper;" in generated_code
-    assert "let mut editable: Wrapper = wrapper;" in generated_code
-    assert "editable.payload = replacement;" in generated_code
+    assert "let again: Wrapper = wrapper.clone();" in generated_code
+    assert "let mut editable: Wrapper = wrapper.clone();" in generated_code
+    assert "editable.payload = replacement.clone();" in generated_code
     assert "editable.payload.clone() =" not in generated_code
     assert "editable.payload.count" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_non_copy_identifier_reads_clone_in_value_contexts_and_compile(tmp_path):
+    code = """
+    shader NonCopyIdentifierReuse {
+        struct Payload {
+            float weights[];
+            int count;
+        };
+
+        fn count(payload: Payload) -> int {
+            payload.count
+        }
+
+        fn sum(payload: Payload, replacement: Payload) -> int {
+            let first = payload;
+            let second = payload;
+            let callA = count(payload);
+            let callB = count(payload);
+            let editable = first;
+            editable = replacement;
+            second.count + callA + callB + editable.count
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub fn count(payload: Payload) -> i32" in generated_code
+    assert "payload.clone().count" not in generated_code
+    assert "let first: Payload = payload.clone();" in generated_code
+    assert "let second: Payload = payload.clone();" in generated_code
+    assert "let callA: i32 = count(payload.clone());" in generated_code
+    assert "let callB: i32 = count(payload.clone());" in generated_code
+    assert "let mut editable: Payload = first.clone();" in generated_code
+    assert "editable = replacement.clone();" in generated_code
+    assert "editable.clone() =" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

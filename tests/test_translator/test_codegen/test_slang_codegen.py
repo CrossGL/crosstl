@@ -2200,6 +2200,133 @@ def test_user_defined_workgroup_barrier_is_not_lowered_to_group_sync():
     assert "GroupMemoryBarrierWithGroupSync();" not in generated_code
 
 
+def test_wave_intrinsics_lower_to_native_slang_calls():
+    code = """
+    shader SlangWaveIntrinsics {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint count = WaveGetLaneCount();
+                bool first = WaveIsFirstLane();
+                uint sumValue = WaveActiveSum(lane);
+                uint productValue = WaveActiveProduct(lane + 1u);
+                uint minValue = WaveActiveMin(sumValue);
+                uint maxValue = WaveActiveMax(productValue);
+                uint andValue = WaveActiveBitAnd(maxValue);
+                uint orValue = WaveActiveBitOr(andValue);
+                uint xorValue = WaveActiveBitXor(orValue);
+                uint prefixSum = WavePrefixSum(xorValue);
+                uint prefixProduct = WavePrefixProduct(lane + 1u);
+                bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
+                bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
+                uvec4 ballot = WaveActiveBallot(anyLane);
+                uint broadcast = WaveReadLaneAt(prefixSum, 0u);
+                uint firstValue = WaveReadLaneFirst(broadcast);
+                uvec4 matchMask = WaveMatch(lane);
+                uint multiSum = WaveMultiPrefixSum(lane, matchMask);
+                uint multiProduct = WaveMultiPrefixProduct(lane + 1u, matchMask);
+                uint multiAnd = WaveMultiPrefixBitAnd(multiProduct, matchMask);
+                uint multiOr = WaveMultiPrefixBitOr(multiAnd, matchMask);
+                uint multiXor = WaveMultiPrefixBitXor(multiOr, matchMask);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint lane = WaveGetLaneIndex();" in generated_code
+    assert "uint count = WaveGetLaneCount();" in generated_code
+    assert "bool first = WaveIsFirstLane();" in generated_code
+    assert "uint sumValue = WaveActiveSum(lane);" in generated_code
+    assert "uint productValue = WaveActiveProduct(lane + 1u);" in generated_code
+    assert "uint minValue = WaveActiveMin(sumValue);" in generated_code
+    assert "uint maxValue = WaveActiveMax(productValue);" in generated_code
+    assert "uint andValue = WaveActiveBitAnd(maxValue);" in generated_code
+    assert "uint orValue = WaveActiveBitOr(andValue);" in generated_code
+    assert "uint xorValue = WaveActiveBitXor(orValue);" in generated_code
+    assert "uint prefixSum = WavePrefixSum(xorValue);" in generated_code
+    assert "uint prefixProduct = WavePrefixProduct(lane + 1u);" in generated_code
+    assert "bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);" in generated_code
+    assert "bool allLane = WaveActiveAllTrue(prefixProduct > 0u);" in generated_code
+    assert "uint4 ballot = WaveActiveBallot(anyLane);" in generated_code
+    assert "uint broadcast = WaveReadLaneAt(prefixSum, 0u);" in generated_code
+    assert "uint firstValue = WaveReadLaneFirst(broadcast);" in generated_code
+    assert "uint4 matchMask = WaveMatch(lane);" in generated_code
+    assert "uint multiSum = WaveMultiPrefixSum(lane, matchMask);" in generated_code
+    assert (
+        "uint multiProduct = WaveMultiPrefixProduct(lane + 1u, matchMask);"
+        in generated_code
+    )
+    assert "uint multiAnd = WaveMultiPrefixBitAnd(multiProduct, matchMask);" in (
+        generated_code
+    )
+    assert "uint multiOr = WaveMultiPrefixBitOr(multiAnd, matchMask);" in (
+        generated_code
+    )
+    assert "uint multiXor = WaveMultiPrefixBitXor(multiOr, matchMask);" in (
+        generated_code
+    )
+    assert "WaveOpNode" not in generated_code
+    assert "unsupported Slang wave intrinsic" not in generated_code
+
+
+def test_wave_intrinsics_compile_with_slangc_if_available(tmp_path):
+    code = """
+    shader SlangWaveCompileSmoke {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint sumValue = WaveActiveSum(lane);
+                bool anyLane = WaveActiveAnyTrue(sumValue > 0u);
+                uvec4 ballot = WaveActiveBallot(anyLane);
+                uint broadcast = WaveReadLaneAt(sumValue, 0u);
+                uint firstValue = WaveReadLaneFirst(broadcast);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    compile_generated_slang(generated_code, tmp_path, "compute")
+
+
+def test_wave_intrinsic_invalid_arities_emit_slang_diagnostics():
+    code = """
+    shader InvalidSlangWaveIntrinsics {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex(1u);
+                bool first = WaveIsFirstLane(false);
+                uvec4 ballot = WaveActiveBallot();
+                uint multi = WaveMultiPrefixSum(lane);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "uint lane = /* unsupported Slang wave intrinsic: WaveGetLaneIndex "
+        "expects 0 arguments, got 1 */ 0;" in generated_code
+    )
+    assert (
+        "bool first = /* unsupported Slang wave intrinsic: WaveIsFirstLane "
+        "expects 0 arguments, got 1 */ false;" in generated_code
+    )
+    assert (
+        "uint4 ballot = /* unsupported Slang wave intrinsic: WaveActiveBallot "
+        "expects 1 arguments, got 0 */ uint4(0);" in generated_code
+    )
+    assert (
+        "uint multi = /* unsupported Slang wave intrinsic: WaveMultiPrefixSum "
+        "expects 2 arguments, got 1 */ 0;" in generated_code
+    )
+    assert "WaveOpNode" not in generated_code
+
+
 def test_floating_binary_modulo_lowers_to_slang_fmod():
     code = """
     shader BinaryModuloGap {
@@ -4082,6 +4209,146 @@ def test_append_consume_wrong_structured_buffer_kinds_emit_slang_diagnostics():
     )
     assert "buffer_append(" not in generated_code
     assert "buffer_consume(" not in generated_code
+
+
+def test_byte_address_buffers_emit_slang_load_store_dimensions_and_bindings():
+    code = """
+    shader SlangByteAddressBuffers {
+        ByteAddressBuffer rawBytes @binding(1);
+        RWByteAddressBuffer rawOutput @binding(2);
+        RWByteAddressBuffer rawArray[2];
+
+        uint readRaw(ByteAddressBuffer input, uint offset) {
+            return buffer_load(input, offset);
+        }
+
+        float readFloat(ByteAddressBuffer input, uint offset) {
+            return asfloat(buffer_load(input, offset));
+        }
+
+        void writeRaw(
+            RWByteAddressBuffer output,
+            uint offset,
+            uint value,
+            float weight
+        ) {
+            buffer_store(output, offset, value);
+            buffer_store(output, offset + uint(4), asuint(weight));
+        }
+
+        uint updateArray(uint slot, uint offset) {
+            uint value = buffer_load(rawArray[slot], offset);
+            buffer_store(rawArray[slot], offset, value + uint(1));
+            return value;
+        }
+
+        uint queryRaw(ByteAddressBuffer input) {
+            return buffer_dimensions(input);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(1, 0)]] ByteAddressBuffer rawBytes "
+        ": register(t1);" in generated_code
+    )
+    assert (
+        "[[vk::binding(2, 0)]] RWByteAddressBuffer rawOutput "
+        ": register(u2);" in generated_code
+    )
+    assert (
+        "[[vk::binding(3, 0)]] RWByteAddressBuffer rawArray[2] "
+        ": register(u3);" in generated_code
+    )
+    assert (
+        "uint cgl_bufferDimensions_ByteAddressBuffer(ByteAddressBuffer buffer)"
+        in generated_code
+    )
+    assert "return input.Load(offset);" in generated_code
+    assert "return asfloat(input.Load(offset));" in generated_code
+    assert "output.Store(offset, value);" in generated_code
+    assert "output.Store(offset + uint(4), asuint(weight));" in generated_code
+    assert "uint value = rawArray[slot].Load(offset);" in generated_code
+    assert "rawArray[slot].Store(offset, value + uint(1));" in generated_code
+    assert "return cgl_bufferDimensions_ByteAddressBuffer(input);" in generated_code
+    assert "buffer_load(" not in generated_code
+    assert "buffer_store(" not in generated_code
+    assert "buffer_dimensions(" not in generated_code
+
+
+def test_byte_address_vector_methods_and_readonly_stores_emit_slang():
+    code = """
+    shader SlangByteAddressVectorMethods {
+        ByteAddressBuffer rawBytes;
+        RWByteAddressBuffer rawVectors;
+
+        vec2 readPair(uint offset) {
+            return asfloat(rawVectors.Load2(offset));
+        }
+
+        vec3 readTriple(uint offset) {
+            return asfloat(rawVectors.Load3(offset));
+        }
+
+        vec4 readQuad(uint offset) {
+            return asfloat(rawVectors.Load4(offset));
+        }
+
+        int readSigned(uint offset) {
+            return asint(rawVectors.Load(offset));
+        }
+
+        void writeVectors(uint offset, vec2 pair, vec3 normal, vec4 color, uint value) {
+            rawVectors.Store2(offset, asuint(pair));
+            rawVectors.Store3(offset + uint(16), asuint(normal));
+            rawVectors.Store4(offset + uint(32), asuint(color));
+            rawBytes.Store(offset, value);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "ByteAddressBuffer rawBytes : register(t0);" in generated_code
+    assert "RWByteAddressBuffer rawVectors : register(u0);" in generated_code
+    assert "return asfloat(rawVectors.Load2(offset));" in generated_code
+    assert "return asfloat(rawVectors.Load3(offset));" in generated_code
+    assert "return asfloat(rawVectors.Load4(offset));" in generated_code
+    assert "return asint(rawVectors.Load(offset));" in generated_code
+    assert "rawVectors.Store2(offset, asuint(pair));" in generated_code
+    assert "rawVectors.Store3(offset + uint(16), asuint(normal));" in generated_code
+    assert "rawVectors.Store4(offset + uint(32), asuint(color));" in generated_code
+    assert (
+        "/* unsupported Slang byte-address buffer: Store requires "
+        "RWByteAddressBuffer receiver */;" in generated_code
+    )
+    assert "None(" not in generated_code
+
+
+def test_byte_address_buffer_store_to_readonly_helper_emits_slang_diagnostic():
+    code = """
+    shader SlangReadonlyByteAddressBuffer {
+        ByteAddressBuffer rawBytes;
+
+        void invalidRaw(uint offset, uint value) {
+            buffer_store(rawBytes, offset, value);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "/* unsupported Slang byte-address buffer: buffer_store requires "
+        "RWByteAddressBuffer resource */;" in generated_code
+    )
+    assert "buffer_store(" not in generated_code
 
 
 @pytest.mark.parametrize(

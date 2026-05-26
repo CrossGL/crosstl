@@ -495,6 +495,7 @@ class GLSLCodeGen:
         self.current_stage_output_member_map = {}
         self.current_stage_parameter_aliases = {}
         self.current_identifier_aliases = {}
+        self.current_mesh_output_parameters = {}
         self.current_target_stage = None
         self.stage_io_used_locations = {}
         self.stage_io_declarations = {}
@@ -2311,13 +2312,9 @@ class GLSLCodeGen:
         return f"layout({', '.join(layout_parts)}) in;\n"
 
     def generate_mesh_stage_layout(self, func, stage_layout_qualifiers=None):
-        output_primitive = self.glsl_stage_bare_attribute(
-            func, {"points", "lines", "triangles"}, stage_layout_qualifiers, "out"
+        output_primitive = self.glsl_mesh_stage_output_topology_name(
+            func, stage_layout_qualifiers
         )
-        if output_primitive is None:
-            output_primitive = self.glsl_single_stage_attribute_argument(
-                func, "outputtopology", stage_layout_qualifiers, "out"
-            )
 
         max_vertices = self.glsl_single_stage_attribute_argument(
             func, "max_vertices", stage_layout_qualifiers, "out"
@@ -2337,7 +2334,7 @@ class GLSLCodeGen:
 
         layout_parts = []
         if output_primitive:
-            layout_parts.append(self.glsl_mesh_output_topology(output_primitive))
+            layout_parts.append(output_primitive)
         if max_vertices is not None:
             layout_parts.append(f"max_vertices = {max_vertices}")
         if max_primitives is not None:
@@ -2346,6 +2343,18 @@ class GLSLCodeGen:
         if not layout_parts:
             return ""
         return f"layout({', '.join(layout_parts)}) out;\n"
+
+    def glsl_mesh_stage_output_topology_name(self, func, stage_layout_qualifiers=None):
+        output_primitive = self.glsl_stage_bare_attribute(
+            func, {"points", "lines", "triangles"}, stage_layout_qualifiers, "out"
+        )
+        if output_primitive is None:
+            output_primitive = self.glsl_single_stage_attribute_argument(
+                func, "outputtopology", stage_layout_qualifiers, "out"
+            )
+        if output_primitive is None:
+            return None
+        return self.glsl_mesh_output_topology(output_primitive)
 
     def glsl_stage_bare_attribute(
         self, func, names, stage_layout_qualifiers=None, direction=None
@@ -2437,6 +2446,148 @@ class GLSLCodeGen:
             "DispatchMesh": "EmitMeshTasksEXT",
         }
         return mesh_intrinsics.get(operation, operation)
+
+    def mesh_output_parameter_role(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            normalized = str(attr_name).lower().replace("-", "_")
+            if normalized.startswith("glsl_"):
+                normalized = normalized[len("glsl_") :]
+            if normalized in {"vertices", "vertex", "mesh_vertices"}:
+                return "vertices"
+            if normalized in {"indices", "index", "primitive_indices"}:
+                return "indices"
+            if normalized in {"primitives", "primitive", "mesh_primitives"}:
+                return "primitives"
+        return None
+
+    def is_mesh_output_parameter(self, node):
+        if self.mesh_output_parameter_role(node) is None:
+            return False
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        return bool(qualifiers & {"out", "inout"})
+
+    def mesh_output_parameter_element_type(self, node):
+        node_type = self.resource_node_type(node)
+        if (
+            hasattr(node_type, "element_type")
+            and str(type(node_type)).find("ArrayType") != -1
+        ):
+            node_type = node_type.element_type
+        return self.type_name_string(node_type)
+
+    def mesh_output_parameter_count(self, node):
+        node_type = self.resource_node_type(node)
+        if not (
+            hasattr(node_type, "element_type")
+            and str(type(node_type)).find("ArrayType") != -1
+        ):
+            return None
+        size = getattr(node_type, "size", None)
+        return self.generate_expression(size) if size is not None else None
+
+    def mesh_primitive_index_builtin(self, topology):
+        return {
+            "points": "gl_PrimitivePointIndicesEXT",
+            "lines": "gl_PrimitiveLineIndicesEXT",
+            "triangles": "gl_PrimitiveTriangleIndicesEXT",
+        }.get(topology)
+
+    def mesh_output_parameter_infos(
+        self, func, shader_type, stage_layout_qualifiers=None
+    ):
+        if shader_type != "mesh":
+            return {}
+
+        topology = self.glsl_mesh_stage_output_topology_name(
+            func, stage_layout_qualifiers
+        )
+        infos = {}
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            if not self.is_mesh_output_parameter(param):
+                continue
+
+            role = self.mesh_output_parameter_role(param)
+            element_type = self.mesh_output_parameter_element_type(param)
+            info = {
+                "name": param.name,
+                "role": role,
+                "element_type": element_type,
+                "count": self.mesh_output_parameter_count(param),
+                "topology": topology,
+                "index_builtin": self.mesh_primitive_index_builtin(topology),
+                "members": {},
+            }
+
+            struct = self.structs_by_name.get(element_type)
+            if struct is not None:
+                for member in getattr(struct, "members", []) or []:
+                    mapped_semantic = self.map_semantic(self.semantic_from_node(member))
+                    info["members"][member.name] = {
+                        "node": member,
+                        "type": self.member_type_name(member),
+                        "output_name": member.name,
+                        "semantic": mapped_semantic,
+                    }
+
+            infos[param.name] = info
+        return infos
+
+    def generate_mesh_output_parameter_declarations(self, mesh_outputs):
+        code = ""
+        emitted = set()
+        for info in mesh_outputs.values():
+            role = info["role"]
+            if role == "indices":
+                continue
+            for member_name, member_info in info["members"].items():
+                semantic = member_info["semantic"]
+                if role == "vertices" and self.is_vertex_builtin_output(semantic):
+                    continue
+                if role == "primitives" and self.is_mesh_primitive_builtin(semantic):
+                    continue
+
+                member = member_info["node"]
+                output_name = member_info["output_name"]
+                declaration_key = (role, output_name)
+                if declaration_key in emitted:
+                    continue
+                emitted.add(declaration_key)
+
+                member_type = member_info["type"]
+                count = info["count"]
+                array_type = (
+                    f"{member_type}[{count}]"
+                    if count is not None
+                    else f"{member_type}[]"
+                )
+                declaration = format_c_style_array_declaration(array_type, output_name)
+                prefix = self.mesh_output_declaration_prefix(member, role)
+                code += f"{prefix} {declaration};\n"
+        return code
+
+    def mesh_output_declaration_prefix(self, member, role):
+        prefix = self.stage_io_declaration_prefix(member, "out")
+        if role != "primitives":
+            return prefix
+
+        parts = prefix.split()
+        if "perprimitiveEXT" in parts:
+            return prefix
+        if "out" in parts:
+            parts.insert(parts.index("out"), "perprimitiveEXT")
+            return " ".join(parts)
+        return f"{prefix} perprimitiveEXT".strip()
+
+    def is_mesh_primitive_builtin(self, semantic):
+        return semantic in {
+            "gl_PrimitiveID",
+            "gl_Layer",
+            "gl_ViewportIndex",
+            "gl_CullPrimitiveEXT",
+        }
 
     def map_ray_tracing_intrinsic(self, operation, args):
         ray_intrinsics = {
@@ -2659,9 +2810,16 @@ class GLSLCodeGen:
         if shader_type is not None:
             self.validate_function_return_semantic(func, shader_type)
 
+        mesh_output_parameters = self.mesh_output_parameter_infos(
+            func, shader_type, stage_layout_qualifiers
+        )
         stage_output = self.stage_return_output(func, shader_type)
         if stage_output and stage_output["declaration"]:
             code += f"{stage_output['declaration']}\n"
+        if mesh_output_parameters:
+            code += self.generate_mesh_output_parameter_declarations(
+                mesh_output_parameters
+            )
 
         stage_layout = self.generate_stage_layout(
             shader_type, func, stage_layout_qualifiers
@@ -2691,6 +2849,7 @@ class GLSLCodeGen:
         previous_stage_outputs = self.current_stage_outputs
         previous_stage_output_member_map = self.current_stage_output_member_map
         previous_stage_parameter_aliases = self.current_stage_parameter_aliases
+        previous_mesh_output_parameters = self.current_mesh_output_parameters
         previous_flattened_stage_variables = self.flattened_stage_variables
         previous_stage_return_type = self.current_stage_return_type
         previous_stage_entry_type = self.current_stage_entry_type
@@ -2728,6 +2887,7 @@ class GLSLCodeGen:
         self.current_stage_parameter_aliases = self.stage_parameter_aliases(
             func, shader_type
         )
+        self.current_mesh_output_parameters = mesh_output_parameters
         self.flattened_stage_variables = set(self.current_stage_outputs)
         self.current_stage_return_type = self.type_node_name(
             getattr(func, "return_type", None)
@@ -2754,6 +2914,7 @@ class GLSLCodeGen:
         self.current_stage_outputs = previous_stage_outputs
         self.current_stage_output_member_map = previous_stage_output_member_map
         self.current_stage_parameter_aliases = previous_stage_parameter_aliases
+        self.current_mesh_output_parameters = previous_mesh_output_parameters
         self.flattened_stage_variables = previous_flattened_stage_variables
         self.current_stage_return_type = previous_stage_return_type
         self.current_stage_entry_type = previous_stage_entry_type
@@ -3227,6 +3388,8 @@ class GLSLCodeGen:
         }
 
         def add_parameter(param, stage_name):
+            if stage_name == "mesh" and self.is_mesh_output_parameter(param):
+                return
             if not self.is_stage_entry_value_parameter(param):
                 return
             semantic = self.semantic_from_node(param)
@@ -4009,6 +4172,11 @@ class GLSLCodeGen:
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)
         elif isinstance(stmt, AssignmentNode):
+            mesh_assignment = self.generate_mesh_output_assignment_statement(
+                stmt, indent
+            )
+            if mesh_assignment is not None:
+                return mesh_assignment
             return f"{indent_str}{self.generate_assignment(stmt)};\n"
         elif isinstance(stmt, BlockNode):
             return self.generate_block(stmt, indent)
@@ -4080,6 +4248,11 @@ class GLSLCodeGen:
             tail_return = self.generate_tail_expression_statement(stmt, indent)
             if tail_return is not None:
                 return tail_return
+            mesh_assignment = self.generate_mesh_output_assignment_statement(
+                getattr(stmt, "expression", None), indent
+            )
+            if mesh_assignment is not None:
+                return mesh_assignment
             expr_code = self.generate_expression_statement(stmt)
             return f"{indent_str}{expr_code};\n"
         else:
@@ -4551,6 +4724,101 @@ class GLSLCodeGen:
                 return literal_type
         if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             return self.local_variable_types.get(getattr(expr, "name", None))
+        return None
+
+    def generate_mesh_output_assignment_statement(self, node, indent=0):
+        if (
+            not isinstance(node, AssignmentNode)
+            or not self.current_mesh_output_parameters
+        ):
+            return None
+
+        left_node = getattr(node, "target", getattr(node, "left", None))
+        right_node = getattr(node, "value", getattr(node, "right", None))
+        op = self.map_operator(getattr(node, "operator", getattr(node, "op", "=")))
+        indent_str = "    " * indent
+
+        target = self.mesh_output_assignment_target(left_node)
+        if target is not None:
+            right = self.generate_expression_with_expected(
+                right_node, self.expression_result_type(left_node)
+            )
+            return f"{indent_str}{target} {op} {right};\n"
+
+        expanded_targets = self.mesh_output_whole_assignment_targets(left_node)
+        if expanded_targets is None or op != "=":
+            return None
+
+        right = self.generate_expression_with_expected(
+            right_node, self.expression_result_type(left_node)
+        )
+        code = ""
+        for target, member_name in expanded_targets:
+            value = f"{right}.{member_name}"
+            code += f"{indent_str}{target} = {value};\n"
+        return code
+
+    def mesh_output_assignment_target(self, node):
+        if isinstance(node, MemberAccessNode):
+            access = self.mesh_output_array_access(getattr(node, "object", None))
+            if access is None:
+                return None
+            info, index = access
+            if info["role"] not in {"vertices", "primitives"}:
+                return None
+            return self.mesh_output_member_target(info, index, str(node.member))
+
+        access = self.mesh_output_array_access(node)
+        if access is None:
+            return None
+        info, index = access
+        if info["role"] != "indices":
+            return None
+        index_builtin = info.get("index_builtin")
+        return f"{index_builtin}[{index}]" if index_builtin else None
+
+    def mesh_output_whole_assignment_targets(self, node):
+        access = self.mesh_output_array_access(node)
+        if access is None:
+            return None
+        info, index = access
+        if info["role"] not in {"vertices", "primitives"}:
+            return None
+        targets = []
+        for member_name, member_info in info["members"].items():
+            target = self.mesh_output_member_target(info, index, member_name)
+            if target is None:
+                return None
+            targets.append((target, member_name))
+        return targets
+
+    def mesh_output_array_access(self, node):
+        if not isinstance(node, ArrayAccessNode):
+            return None
+        array_expr = getattr(node, "array", getattr(node, "array_expr", None))
+        name = self.expression_name(array_expr)
+        info = self.current_mesh_output_parameters.get(name)
+        if info is None:
+            return None
+        index_expr = getattr(node, "index", getattr(node, "index_expr", None))
+        return info, self.generate_expression(index_expr)
+
+    def mesh_output_member_target(self, info, index, member_name):
+        member_info = info["members"].get(member_name)
+        if member_info is None:
+            return None
+
+        semantic = member_info["semantic"]
+        if info["role"] == "vertices":
+            if self.is_vertex_builtin_output(semantic):
+                return f"gl_MeshVerticesEXT[{index}].{semantic}"
+            return f"{member_info['output_name']}[{index}]"
+
+        if info["role"] == "primitives":
+            if self.is_mesh_primitive_builtin(semantic):
+                return f"gl_MeshPrimitivesEXT[{index}].{semantic}"
+            return f"{member_info['output_name']}[{index}]"
+
         return None
 
     def generate_assignment(self, node, is_main=False):

@@ -22,28 +22,28 @@ implicitly supported.
 .. csv-table:: Backend inventory
    :header: "Backend", "Ext", "Target generator", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
-   "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "519", "277", "Microsoft Learn HLSL reference; HLSL specification project"
-   "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "719", "146", "GLSL 4.60 specification; OpenGL registry"
-   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "484", "360", "Apple Metal resources; Metal Shading Language specification"
-   "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "368", "11", "SPIR-V unified specification; Khronos SPIR-V registry"
+   "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "521", "277", "Microsoft Learn HLSL reference; HLSL specification project"
+   "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "720", "146", "GLSL 4.60 specification; OpenGL registry"
+   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "486", "361", "Apple Metal resources; Metal Shading Language specification"
+   "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "371", "13", "SPIR-V unified specification; Khronos SPIR-V registry"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "257", "36", "CUDA C++ programming guide"
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "280", "11", "ROCm HIP documentation"
-   "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "273", "20", "Mojo manual"
-   "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "483", "35", "Rust reference"
-   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "296", "58", "Slang user guide"
+   "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "274", "22", "Mojo manual"
+   "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "484", "35", "Rust reference"
+   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "302", "67", "Slang user guide"
 
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "37", "5", "0", "0", "0", "0"
-   "OpenGL / GLSL", "38", "4", "0", "0", "0", "0"
-   "Metal", "35", "5", "0", "0", "2", "0"
-   "Vulkan SPIR-V", "17", "15", "0", "0", "0", "10"
-   "CUDA", "11", "11", "0", "0", "3", "17"
-   "HIP", "10", "12", "0", "0", "3", "17"
-   "Mojo", "10", "27", "0", "0", "5", "0"
-   "Rust", "11", "6", "0", "0", "0", "25"
-   "Slang", "14", "11", "0", "0", "0", "17"
+   "DirectX / HLSL", "37", "6", "0", "0", "0", "0"
+   "OpenGL / GLSL", "38", "4", "0", "0", "1", "0"
+   "Metal", "35", "5", "0", "0", "3", "0"
+   "Vulkan SPIR-V", "17", "16", "0", "0", "0", "10"
+   "CUDA", "11", "11", "0", "0", "3", "18"
+   "HIP", "10", "12", "0", "0", "3", "18"
+   "Mojo", "10", "27", "0", "0", "5", "1"
+   "Rust", "11", "6", "0", "0", "0", "26"
+   "Slang", "14", "12", "0", "0", "0", "17"
 
 Graphics Backend Focus
 ----------------------
@@ -54,9 +54,9 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "37", "5", "0", "0", "0", "0"
-   "OpenGL / GLSL", "38", "4", "0", "0", "0", "0"
-   "Metal", "35", "5", "0", "0", "2", "0"
+   "DirectX / HLSL", "37", "6", "0", "0", "0", "0"
+   "OpenGL / GLSL", "38", "4", "0", "0", "1", "0"
+   "Metal", "35", "5", "0", "0", "3", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
@@ -77,6 +77,9 @@ scope for graphics backend completion work.
    "DirectX / HLSL", "textures", "Advanced texture operations", "partial", "Several unsupported combinations intentionally emit diagnostics."
    "OpenGL / GLSL", "textures", "Advanced texture operations", "partial", "Several unsupported combinations intentionally emit diagnostics."
    "Metal", "textures", "Advanced texture operations", "partial", "Several unsupported combinations intentionally emit diagnostics."
+   "DirectX / HLSL", "language", "Wave/subgroup intrinsics", "partial", "WaveOpNode calls are preserved as native HLSL Wave* intrinsics. Current tests cover pass-through for WaveActiveSum; broader Shader Model wave validation is still needed."
+   "OpenGL / GLSL", "language", "Wave/subgroup intrinsics", "unsupported", "The frontend parses WaveOpNode and the OpenGL backend currently preserves the HLSL Wave* spelling, but native GLSL subgroup lowering and validator coverage are not implemented."
+   "Metal", "language", "Wave/subgroup intrinsics", "unsupported", "The Metal backend currently preserves WaveOpNode spellings rather than lowering to simdgroup intrinsics."
 
 Feature Matrix
 --------------
@@ -152,6 +155,7 @@ Each category below uses the status codes from the legend.
    "Function declarations and calls", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
    "Control flow", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
    "Synchronization and memory barriers", "Y", "Y", "Y", "Y", "Y", "P", "P", "?", "Y"
+   "Wave/subgroup intrinsics", "P", "U", "U", "P", "?", "?", "?", "?", "P"
    "Match/pattern lowering", "Y", "Y", "Y", "?", "P", "P", "P", "Y", "P"
    "Vector and matrix expressions", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
    "Bitwise operations", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
@@ -245,9 +249,9 @@ need an audit before implementation work can be scoped accurately.
    "Vulkan SPIR-V", "resources", "Structured/storage buffers", "partial", "StructuredBuffer and RWStructuredBuffer globals lower to Vulkan-compatible SPIR-V BufferBlock descriptors with runtime-array storage, descriptor set/binding allocation, std430-style member/array layout decorations, buffer_load/buffer_store lowering, direct indexed member access, read-only store diagnostics, and spirv-as/spirv-val coverage. Append/consume and byte-address buffer operations are not implemented yet."
    "CUDA", "resources", "Structured/storage buffers", "partial", ""
    "HIP", "resources", "Structured/storage buffers", "partial", ""
-   "Mojo", "resources", "Structured/storage buffers", "partial", "StructuredBuffer, RWStructuredBuffer, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers; real GPU memory binding semantics remain incomplete."
+   "Mojo", "resources", "Structured/storage buffers", "partial", "StructuredBuffer, RWStructuredBuffer, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers and deterministic invalid member/free-helper diagnostics; real GPU memory binding semantics remain incomplete."
    "Rust", "resources", "Structured/storage buffers", "unknown", ""
-   "Slang", "resources", "Structured/storage buffers", "partial", "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. Byte-address buffers and GLSL buffer-block round-trips are not implemented yet."
+   "Slang", "resources", "Structured/storage buffers", "partial", "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet."
    "Vulkan SPIR-V", "resources", "Resource arrays", "unknown", ""
    "CUDA", "resources", "Resource arrays", "unknown", ""
    "HIP", "resources", "Resource arrays", "unknown", ""
@@ -352,6 +356,15 @@ need an audit before implementation work can be scoped accurately.
    "HIP", "language", "Synchronization and memory barriers", "partial", ""
    "Mojo", "language", "Synchronization and memory barriers", "partial", "barrier/workgroupBarrier and memoryBarrier lower to compile-smoke Mojo placeholder helpers, while user-defined functions with those names are preserved."
    "Rust", "language", "Synchronization and memory barriers", "unknown", ""
+   "DirectX / HLSL", "language", "Wave/subgroup intrinsics", "partial", "WaveOpNode calls are preserved as native HLSL Wave* intrinsics. Current tests cover pass-through for WaveActiveSum; broader Shader Model wave validation is still needed."
+   "OpenGL / GLSL", "language", "Wave/subgroup intrinsics", "unsupported", "The frontend parses WaveOpNode and the OpenGL backend currently preserves the HLSL Wave* spelling, but native GLSL subgroup lowering and validator coverage are not implemented."
+   "Metal", "language", "Wave/subgroup intrinsics", "unsupported", "The Metal backend currently preserves WaveOpNode spellings rather than lowering to simdgroup intrinsics."
+   "Vulkan SPIR-V", "language", "Wave/subgroup intrinsics", "partial", "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, and WaveReadLaneFirst to SPIR-V GroupNonUniform operations with Vulkan 1.1 spirv-as/spirv-val coverage. Quad, WaveMatch, and WaveMultiPrefix forms still emit deterministic diagnostics."
+   "CUDA", "language", "Wave/subgroup intrinsics", "unknown", ""
+   "HIP", "language", "Wave/subgroup intrinsics", "unknown", ""
+   "Mojo", "language", "Wave/subgroup intrinsics", "unknown", ""
+   "Rust", "language", "Wave/subgroup intrinsics", "unknown", ""
+   "Slang", "language", "Wave/subgroup intrinsics", "partial", "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, WaveMatch, and WaveMultiPrefix* forms to native Slang/HLSL wave intrinsics with deterministic arity diagnostics. slangc-backed coverage is optional and skips when slangc is unavailable locally."
    "Vulkan SPIR-V", "language", "Match/pattern lowering", "unknown", ""
    "CUDA", "language", "Match/pattern lowering", "partial", ""
    "HIP", "language", "Match/pattern lowering", "partial", ""
@@ -362,7 +375,7 @@ need an audit before implementation work can be scoped accurately.
    "Vulkan SPIR-V", "validation", "Invalid shader shape validation", "partial", ""
    "CUDA", "validation", "Invalid shader shape validation", "partial", ""
    "HIP", "validation", "Invalid shader shape validation", "partial", ""
-   "Mojo", "validation", "Invalid shader shape validation", "partial", "Mojo codegen validates several unsupported enum, parameter/return semantic, buffer, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete."
+   "Mojo", "validation", "Invalid shader shape validation", "partial", "Mojo codegen validates several unsupported enum, parameter/return semantic, buffer access/member-method, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete."
    "Rust", "validation", "Invalid shader shape validation", "partial", ""
    "Slang", "validation", "Invalid shader shape validation", "partial", ""
 

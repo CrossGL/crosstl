@@ -38,6 +38,7 @@ from ..ast import (
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    WaveOpNode,
     WhileNode,
     WildcardPatternNode,
 )
@@ -3284,6 +3285,296 @@ class VulkanSPIRVCodeGen:
 
         self.emit(f"OpMemoryBarrier %{scope.id} %{semantics.id}")
         return self.register_constant(0, self.register_primitive_type("int"))
+
+    def require_group_non_uniform(self, capability: Optional[str] = None):
+        self.require_capability("GroupNonUniform")
+        if capability is not None:
+            self.require_capability(capability)
+
+    def subgroup_scope_id(self) -> SpirvId:
+        self.require_group_non_uniform()
+        return self.spirv_scope_constant("Subgroup")
+
+    def wave_result_default(self, operation: str, args: List[SpirvId]) -> SpirvId:
+        if operation in {
+            "WaveActiveAllTrue",
+            "WaveActiveAnyTrue",
+            "WaveIsFirstLane",
+        }:
+            return self.default_value_for_type(self.register_primitive_type("bool"))
+        if operation in {"WaveActiveBallot", "WaveMatch"}:
+            uint_type = self.register_primitive_type("uint")
+            return self.default_value_for_type(self.register_vector_type(uint_type, 4))
+        if operation in {"WaveGetLaneCount", "WaveGetLaneIndex"}:
+            return self.default_value_for_type(self.register_primitive_type("uint"))
+        if args:
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
+        return self.default_value_for_type(self.register_primitive_type("uint"))
+
+    def call_wave_operation(
+        self, operation: str, argument_exprs: List
+    ) -> Optional[SpirvId]:
+        args = []
+        for argument in argument_exprs:
+            value = self.process_expression(argument)
+            if value is None:
+                self.emit(f"; WARNING: Failed to evaluate argument for {operation}")
+                value = self.default_value_for_type(
+                    self.register_primitive_type("uint")
+                )
+            args.append(value)
+
+        if operation == "WaveGetLaneCount":
+            if args:
+                self.emit("; WARNING: WaveGetLaneCount takes no arguments")
+                return self.wave_result_default(operation, args)
+            builtin = self.ensure_compute_builtin("gl_SubgroupSize")
+            return self.get_variable_value(builtin) if builtin is not None else None
+
+        if operation == "WaveGetLaneIndex":
+            if args:
+                self.emit("; WARNING: WaveGetLaneIndex takes no arguments")
+                return self.wave_result_default(operation, args)
+            builtin = self.ensure_compute_builtin("gl_SubgroupInvocationID")
+            return self.get_variable_value(builtin) if builtin is not None else None
+
+        if operation == "WaveIsFirstLane":
+            if args:
+                self.emit("; WARNING: WaveIsFirstLane takes no arguments")
+                return self.wave_result_default(operation, args)
+            self.require_group_non_uniform("GroupNonUniformVote")
+            bool_type = self.register_primitive_type("bool")
+            scope = self.subgroup_scope_id()
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpGroupNonUniformElect %{bool_type.id} %{scope.id}"
+            )
+            spirv_id = SpirvId(id_value, bool_type.type)
+            self.value_types[id_value] = bool_type
+            return spirv_id
+
+        if operation in {
+            "WaveActiveSum",
+            "WaveActiveProduct",
+            "WaveActiveMin",
+            "WaveActiveMax",
+            "WaveActiveBitAnd",
+            "WaveActiveBitOr",
+            "WaveActiveBitXor",
+            "WavePrefixSum",
+            "WavePrefixProduct",
+        }:
+            return self.call_group_non_uniform_arithmetic(operation, args)
+
+        if operation in {"WaveActiveAllTrue", "WaveActiveAnyTrue"}:
+            return self.call_group_non_uniform_vote(operation, args)
+
+        if operation == "WaveActiveBallot":
+            return self.call_group_non_uniform_ballot(operation, args)
+
+        if operation == "WaveReadLaneAt":
+            return self.call_group_non_uniform_broadcast(operation, args)
+
+        if operation == "WaveReadLaneFirst":
+            return self.call_group_non_uniform_broadcast_first(operation, args)
+
+        self.emit(f"; WARNING: {operation} is not supported by the SPIR-V backend yet")
+        return self.wave_result_default(operation, args)
+
+    def call_group_non_uniform_arithmetic(
+        self, operation: str, args: List[SpirvId]
+    ) -> SpirvId:
+        if len(args) != 1:
+            self.emit(f"; WARNING: {operation} requires exactly one argument")
+            return self.wave_result_default(operation, args)
+
+        result_type = self.ensure_registered_type(args[0].type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        group_operation = (
+            "ExclusiveScan"
+            if operation in {"WavePrefixSum", "WavePrefixProduct"}
+            else "Reduce"
+        )
+
+        arithmetic_ops = {
+            "WaveActiveSum": {
+                "float": "OpGroupNonUniformFAdd",
+                "double": "OpGroupNonUniformFAdd",
+                "int": "OpGroupNonUniformIAdd",
+                "uint": "OpGroupNonUniformIAdd",
+            },
+            "WavePrefixSum": {
+                "float": "OpGroupNonUniformFAdd",
+                "double": "OpGroupNonUniformFAdd",
+                "int": "OpGroupNonUniformIAdd",
+                "uint": "OpGroupNonUniformIAdd",
+            },
+            "WaveActiveProduct": {
+                "float": "OpGroupNonUniformFMul",
+                "double": "OpGroupNonUniformFMul",
+                "int": "OpGroupNonUniformIMul",
+                "uint": "OpGroupNonUniformIMul",
+            },
+            "WavePrefixProduct": {
+                "float": "OpGroupNonUniformFMul",
+                "double": "OpGroupNonUniformFMul",
+                "int": "OpGroupNonUniformIMul",
+                "uint": "OpGroupNonUniformIMul",
+            },
+            "WaveActiveMin": {
+                "float": "OpGroupNonUniformFMin",
+                "double": "OpGroupNonUniformFMin",
+                "int": "OpGroupNonUniformSMin",
+                "uint": "OpGroupNonUniformUMin",
+            },
+            "WaveActiveMax": {
+                "float": "OpGroupNonUniformFMax",
+                "double": "OpGroupNonUniformFMax",
+                "int": "OpGroupNonUniformSMax",
+                "uint": "OpGroupNonUniformUMax",
+            },
+            "WaveActiveBitAnd": {
+                "int": "OpGroupNonUniformBitwiseAnd",
+                "uint": "OpGroupNonUniformBitwiseAnd",
+            },
+            "WaveActiveBitOr": {
+                "int": "OpGroupNonUniformBitwiseOr",
+                "uint": "OpGroupNonUniformBitwiseOr",
+            },
+            "WaveActiveBitXor": {
+                "int": "OpGroupNonUniformBitwiseXor",
+                "uint": "OpGroupNonUniformBitwiseXor",
+            },
+        }
+        opcode = arithmetic_ops[operation].get(component_type)
+        if opcode is None:
+            self.emit(
+                f"; WARNING: {operation} does not support {result_type.type.base_type}"
+            )
+            return self.wave_result_default(operation, args)
+
+        self.require_group_non_uniform("GroupNonUniformArithmetic")
+        scope = self.subgroup_scope_id()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = {opcode} %{result_type.id} %{scope.id} "
+            f"{group_operation} %{args[0].id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_group_non_uniform_vote(
+        self, operation: str, args: List[SpirvId]
+    ) -> SpirvId:
+        if len(args) != 1:
+            self.emit(f"; WARNING: {operation} requires exactly one bool argument")
+            return self.wave_result_default(operation, args)
+
+        bool_type = self.register_primitive_type("bool")
+        if args[0].type.base_type != "bool":
+            self.emit(f"; WARNING: {operation} requires a scalar bool argument")
+            return self.wave_result_default(operation, args)
+
+        self.require_group_non_uniform("GroupNonUniformVote")
+        scope = self.subgroup_scope_id()
+        opcode = (
+            "OpGroupNonUniformAll"
+            if operation == "WaveActiveAllTrue"
+            else "OpGroupNonUniformAny"
+        )
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = {opcode} %{bool_type.id} %{scope.id} %{args[0].id}")
+
+        spirv_id = SpirvId(id_value, bool_type.type)
+        self.value_types[id_value] = bool_type
+        return spirv_id
+
+    def call_group_non_uniform_ballot(
+        self, operation: str, args: List[SpirvId]
+    ) -> SpirvId:
+        uint_type = self.register_primitive_type("uint")
+        ballot_type = self.register_vector_type(uint_type, 4)
+        if len(args) != 1:
+            self.emit(f"; WARNING: {operation} requires exactly one bool argument")
+            return self.wave_result_default(operation, args)
+
+        if args[0].type.base_type != "bool":
+            self.emit(f"; WARNING: {operation} requires a scalar bool argument")
+            return self.wave_result_default(operation, args)
+
+        self.require_group_non_uniform("GroupNonUniformBallot")
+        scope = self.subgroup_scope_id()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpGroupNonUniformBallot %{ballot_type.id} "
+            f"%{scope.id} %{args[0].id}"
+        )
+
+        spirv_id = SpirvId(id_value, ballot_type.type)
+        self.value_types[id_value] = ballot_type
+        return spirv_id
+
+    def call_group_non_uniform_broadcast(
+        self, operation: str, args: List[SpirvId]
+    ) -> SpirvId:
+        if len(args) != 2:
+            self.emit(f"; WARNING: {operation} requires value and lane arguments")
+            return self.wave_result_default(operation, args)
+
+        result_type = self.ensure_registered_type(args[0].type)
+        lane = self.convert_wave_lane_operand(operation, args[1])
+        if lane is None:
+            return self.wave_result_default(operation, args)
+
+        self.require_group_non_uniform("GroupNonUniformShuffle")
+        scope = self.subgroup_scope_id()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpGroupNonUniformBroadcast %{result_type.id} "
+            f"%{scope.id} %{args[0].id} %{lane.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_group_non_uniform_broadcast_first(
+        self, operation: str, args: List[SpirvId]
+    ) -> SpirvId:
+        if len(args) != 1:
+            self.emit(f"; WARNING: {operation} requires exactly one argument")
+            return self.wave_result_default(operation, args)
+
+        result_type = self.ensure_registered_type(args[0].type)
+        self.require_group_non_uniform("GroupNonUniformBallot")
+        scope = self.subgroup_scope_id()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpGroupNonUniformBroadcastFirst %{result_type.id} "
+            f"%{scope.id} %{args[0].id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def convert_wave_lane_operand(
+        self, operation: str, lane: SpirvId
+    ) -> Optional[SpirvId]:
+        if self.vector_component_type_and_count(lane.type.base_type) is not None:
+            self.emit(f"; WARNING: {operation} requires a scalar lane index")
+            return None
+
+        uint_type = self.register_primitive_type("uint")
+        converted = self.convert_scalar_to_type(lane, uint_type)
+        if converted.type.base_type != "uint":
+            self.emit(f"; WARNING: {operation} requires an integer lane index")
+            return None
+        return converted
 
     def call_builtin_function(
         self, function_name: str, args: List[SpirvId]
@@ -8519,6 +8810,9 @@ class VulkanSPIRVCodeGen:
                 result_type, condition, true_value, false_value
             )
 
+        elif isinstance(expr, WaveOpNode):
+            return self.call_wave_operation(expr.operation, expr.arguments)
+
         elif isinstance(expr, FunctionCallNode):
             callee_expr = getattr(expr, "function", getattr(expr, "name", None))
             callee_name = None
@@ -8696,6 +8990,12 @@ class VulkanSPIRVCodeGen:
             "gl_NumWorkGroups": ("uvec3", "NumWorkgroups", "Input"),
             "gl_LocalInvocationIndex": ("uint", "LocalInvocationIndex", "Input"),
             "gl_WorkGroupSize": ("uvec3", "WorkgroupSize", "Constant"),
+            "gl_SubgroupSize": ("uint", "SubgroupSize", "Input"),
+            "gl_SubgroupInvocationID": (
+                "uint",
+                "SubgroupLocalInvocationId",
+                "Input",
+            ),
         }
         return builtins.get(name)
 
@@ -8708,6 +9008,8 @@ class VulkanSPIRVCodeGen:
             return None
 
         type_name, builtin_name, storage_class = info
+        if builtin_name.startswith("Subgroup"):
+            self.require_group_non_uniform()
         type_id = self.map_crossgl_type(type_name)
         if storage_class == "Constant":
             builtin_id = self.register_workgroup_size_builtin(
@@ -8944,9 +9246,19 @@ class VulkanSPIRVCodeGen:
             if self.requires_compute_derivatives:
                 self.emit(f"OpExecutionMode %{function_id.id} DerivativeGroupQuadsKHR")
 
+    def spirv_module_version(self) -> str:
+        if any(
+            capability.startswith("GroupNonUniform")
+            for capability in self.required_capabilities
+        ):
+            return "1.3"
+        return "1.0"
+
     def ordered_module_lines(self) -> List[str]:
         """Return SPIR-V assembly lines in logical module-layout order."""
         header_lines = self.code_lines[:3]
+        if len(header_lines) > 1:
+            header_lines[1] = f"; Version: {self.spirv_module_version()}"
         bound_line = f"; Bound: {self.next_id}"
         raw_lines = self.code_lines[4:]
 

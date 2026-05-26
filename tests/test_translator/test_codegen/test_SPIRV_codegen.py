@@ -2631,6 +2631,137 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpFunctionCall") == 2
         assert "WARNING" not in spv_code
 
+    def test_compute_wave_lane_intrinsics_emit_subgroup_builtins(self):
+        source_code = """
+        shader ComputeWaveBuiltins {
+            compute {
+                void main() {
+                    uint lane = WaveGetLaneIndex();
+                    uint count = WaveGetLaneCount();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint GLCompute %(\d+) "main"(.+)', spv_code)
+        assert entry_match is not None
+        assert "; Version: 1.3" in spv_code
+        assert "OpCapability GroupNonUniform" in spv_code
+
+        subgroup_invocation = spirv_named_variable(
+            spv_code, "gl_SubgroupInvocationID", storage_class="Input"
+        )
+        subgroup_size = spirv_named_variable(
+            spv_code, "gl_SubgroupSize", storage_class="Input"
+        )
+        assert (
+            f"OpDecorate {subgroup_invocation} BuiltIn SubgroupLocalInvocationId"
+            in spv_code
+        )
+        assert f"OpDecorate {subgroup_size} BuiltIn SubgroupSize" in spv_code
+        assert subgroup_invocation in entry_match.group(2)
+        assert subgroup_size in entry_match.group(2)
+        assert "WaveGetLane" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_compute_wave_intrinsics_emit_group_non_uniform_operations(self):
+        source_code = """
+        shader ComputeWaveIntrinsics {
+            compute {
+                void main() {
+                    uint lane = WaveGetLaneIndex();
+                    uint sumValue = WaveActiveSum(lane);
+                    uint productValue = WaveActiveProduct(lane + 1u);
+                    uint minValue = WaveActiveMin(sumValue);
+                    uint maxValue = WaveActiveMax(productValue);
+                    uint andValue = WaveActiveBitAnd(maxValue);
+                    uint orValue = WaveActiveBitOr(andValue);
+                    uint xorValue = WaveActiveBitXor(orValue);
+                    uint prefixSum = WavePrefixSum(xorValue);
+                    uint prefixProduct = WavePrefixProduct(lane + 1u);
+                    int signedMin = WaveActiveMin(-1);
+                    int signedMax = WaveActiveMax(signedMin);
+                    float floatSum = WaveActiveSum(1.0);
+                    float floatMax = WaveActiveMax(floatSum);
+                    bool first = WaveIsFirstLane();
+                    bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
+                    bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
+                    uvec4 ballot = WaveActiveBallot(anyLane);
+                    uint broadcast = WaveReadLaneAt(prefixSum, 0u);
+                    uint firstValue = WaveReadLaneFirst(broadcast);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        for capability in (
+            "OpCapability GroupNonUniform",
+            "OpCapability GroupNonUniformArithmetic",
+            "OpCapability GroupNonUniformBallot",
+            "OpCapability GroupNonUniformShuffle",
+            "OpCapability GroupNonUniformVote",
+        ):
+            assert capability in spv_code
+
+        for operation in (
+            "OpGroupNonUniformIAdd",
+            "OpGroupNonUniformIMul",
+            "OpGroupNonUniformUMin",
+            "OpGroupNonUniformUMax",
+            "OpGroupNonUniformSMin",
+            "OpGroupNonUniformSMax",
+            "OpGroupNonUniformFAdd",
+            "OpGroupNonUniformFMax",
+            "OpGroupNonUniformBitwiseAnd",
+            "OpGroupNonUniformBitwiseOr",
+            "OpGroupNonUniformBitwiseXor",
+            "OpGroupNonUniformElect",
+            "OpGroupNonUniformAny",
+            "OpGroupNonUniformAll",
+            "OpGroupNonUniformBallot",
+            "OpGroupNonUniformBroadcast",
+            "OpGroupNonUniformBroadcastFirst",
+        ):
+            assert operation in spv_code
+
+        assert "Reduce" in spv_code
+        assert "ExclusiveScan" in spv_code
+        assert "WaveActive" not in spv_code
+        assert "WavePrefix" not in spv_code
+        assert "WaveReadLane" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_compute_unsupported_wave_intrinsics_emit_diagnostics(self):
+        source_code = """
+        shader ComputeWaveDiagnostics {
+            compute {
+                void main() {
+                    uint lane = WaveGetLaneIndex();
+                    uvec4 matched = WaveMatch(lane);
+                    uint quad = QuadReadAcrossX(lane);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "WARNING: WaveMatch is not supported by the SPIR-V backend yet" in (
+            spv_code
+        )
+        assert (
+            "WARNING: QuadReadAcrossX is not supported by the SPIR-V backend yet"
+            in (spv_code)
+        )
+        assert "Unknown expression type WaveOpNode" not in spv_code
+
     def test_integer_image_atomics_emit_spirv_atomic_operations(self):
         source_code = """
         shader ImageAtomics {

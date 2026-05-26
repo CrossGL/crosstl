@@ -290,6 +290,33 @@ shader SpirvSynchronizationValidation {
 """
 
 
+SPIRV_WAVE_INTRINSICS_COMPUTE_SHADER = """
+shader SpirvWaveValidation {
+    compute {
+        void main() {
+            uint lane = WaveGetLaneIndex();
+            uint count = WaveGetLaneCount();
+            uint sumValue = WaveActiveSum(lane);
+            uint productValue = WaveActiveProduct(lane + 1u);
+            uint minValue = WaveActiveMin(sumValue);
+            uint maxValue = WaveActiveMax(productValue);
+            uint andValue = WaveActiveBitAnd(maxValue);
+            uint orValue = WaveActiveBitOr(andValue);
+            uint xorValue = WaveActiveBitXor(orValue);
+            uint prefixSum = WavePrefixSum(xorValue);
+            uint prefixProduct = WavePrefixProduct(lane + 1u);
+            bool first = WaveIsFirstLane();
+            bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
+            bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
+            uvec4 ballot = WaveActiveBallot(anyLane);
+            uint broadcast = WaveReadLaneAt(prefixSum, 0u);
+            uint firstValue = WaveReadLaneFirst(broadcast + count);
+        }
+    }
+}
+"""
+
+
 SPIRV_UNIFORM_BUFFER_COMPUTE_SHADER = """
 shader SpirvUniformBufferValidation {
     cbuffer Camera @set(1) @binding(2) {
@@ -1668,6 +1695,44 @@ shader MetalIndexedPointerMemberAccessValidation {
 """
 
 
+METAL_READONLY_RAW_BUFFER_SHADER = """
+shader MetalReadonlyRawBufferValidation {
+    struct Payload {
+        float value;
+    };
+
+    compute {
+        void main(
+            readonly device Payload* payload @buffer(0),
+            readonly device float values[] @buffer(1),
+            constant uint& count @buffer(2)
+        ) {
+            float value = payload.value + values[count];
+        }
+    }
+}
+"""
+
+
+METAL_READONLY_RAW_BUFFER_DIAGNOSTIC_SHADER = """
+shader MetalReadonlyRawBufferDiagnosticValidation {
+    struct Payload {
+        float value;
+    };
+
+    compute {
+        void main(
+            readonly device Payload* payload @buffer(0),
+            readonly device float values[] @buffer(1)
+        ) {
+            payload.value = 1.0;
+            values[0] = 2.0;
+        }
+    }
+}
+"""
+
+
 METAL_MESH_OBJECT_SHADER = """
 shader MetalMeshObjectValidation {
     object {
@@ -2994,6 +3059,17 @@ def test_generated_spirv_synchronization_compute_validates_with_spirv_tools(
     run_validator([spirv_val, str(output)])
 
 
+def test_generated_spirv_wave_intrinsics_compute_validates_with_spirv_tools(
+    tmp_path,
+):
+    validate_spirv_shader_source(
+        tmp_path,
+        "wave_intrinsics_compute",
+        SPIRV_WAVE_INTRINSICS_COMPUTE_SHADER,
+        target_env="vulkan1.1",
+    )
+
+
 def test_generated_spirv_uniform_buffer_compute_validates_with_spirv_tools(
     tmp_path,
 ):
@@ -4172,6 +4248,41 @@ def test_generated_metal_indexed_pointer_member_access_compiles_with_metal(tmp_p
     output = tmp_path / "indexed_pointer_member_access.air"
     code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(METAL_INDEXED_POINTER_MEMBER_ACCESS_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_readonly_raw_buffers_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "readonly_raw_buffers.metal"
+    output = tmp_path / "readonly_raw_buffers.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_READONLY_RAW_BUFFER_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_readonly_raw_buffer_diagnostics_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "readonly_raw_buffer_diagnostics.metal"
+    output = tmp_path / "readonly_raw_buffer_diagnostics.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_READONLY_RAW_BUFFER_DIAGNOSTIC_SHADER),
         "compute",
     )
     source.write_text(code, encoding="utf-8")

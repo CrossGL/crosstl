@@ -233,6 +233,70 @@ def test_metal_indexed_pointer_member_access_uses_element_dot_operator():
     assert "payloads[0]->value" not in generated_code
 
 
+def test_metal_readonly_raw_buffer_parameters_use_const_device_address_space():
+    shader = """
+    shader MetalReadonlyRawBuffers {
+        struct Payload {
+            float value;
+        };
+
+        compute {
+            void main(
+                readonly device Payload* payload @buffer(0),
+                readonly device float values[] @buffer(1),
+                constant uint& count @buffer(2)
+            ) {
+                float value = payload.value + values[count];
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "const device Payload* payload [[buffer(0)]]" in generated_code
+    assert "const device float* values [[buffer(1)]]" in generated_code
+    assert "constant uint& count [[buffer(2)]]" in generated_code
+    assert "float value = payload->value + values[count];" in generated_code
+
+
+def test_metal_readonly_raw_buffer_stores_emit_diagnostics():
+    shader = """
+    shader MetalReadonlyRawBufferStores {
+        struct Payload {
+            float value;
+        };
+
+        compute {
+            void main(
+                readonly device Payload* payload @buffer(0),
+                readonly device float values[] @buffer(1)
+            ) {
+                payload.value = 1.0;
+                values[0] = 2.0;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert (
+        "/* unsupported Metal raw buffer store: readonly buffer 'payload' cannot be written */"
+        in generated_code
+    )
+    assert (
+        "/* unsupported Metal raw buffer store: readonly buffer 'values' cannot be written */"
+        in generated_code
+    )
+    assert "payload->value = 1.0;" not in generated_code
+    assert "values[0] = 2.0;" not in generated_code
+
+
 def test_metal_parameter_address_space_qualifiers_reject_conflicts():
     shader = """
     shader MetalConflictingAddressSpaceParameters {

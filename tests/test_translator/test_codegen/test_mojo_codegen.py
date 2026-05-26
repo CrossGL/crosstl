@@ -1947,6 +1947,50 @@ def test_invalid_buffer_operations_are_rejected_for_mojo_codegen():
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen():
+    invalid_member_load = """
+    AppendStructuredBuffer<int> values;
+
+    int invalidLoad(uint index) {
+        return values.Load(index);
+    }
+    """
+    with pytest.raises(ValueError, match="Unsupported Load.*AppendStructuredBuffer"):
+        generate_code(parse_code(tokenize_code(invalid_member_load)))
+
+    invalid_free_load = """
+    ConsumeStructuredBuffer<int> values;
+
+    int invalidFreeLoad(uint index) {
+        return buffer_load(values, index);
+    }
+    """
+    with pytest.raises(
+        ValueError, match="Unsupported buffer_load.*ConsumeStructuredBuffer"
+    ):
+        generate_code(parse_code(tokenize_code(invalid_free_load)))
+
+    invalid_append = """
+    RWStructuredBuffer<int> values;
+
+    void invalidAppend(int value) {
+        values.Append(value);
+    }
+    """
+    with pytest.raises(ValueError, match="Unsupported Append.*RWStructuredBuffer"):
+        generate_code(parse_code(tokenize_code(invalid_append)))
+
+    invalid_consume = """
+    ByteAddressBuffer rawBytes;
+
+    uint invalidConsume() {
+        return rawBytes.Consume();
+    }
+    """
+    with pytest.raises(ValueError, match="Unsupported Consume.*ByteAddressBuffer"):
+        generate_code(parse_code(tokenize_code(invalid_consume)))
+
+
 def test_advanced_texture_placeholder_builtins_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 

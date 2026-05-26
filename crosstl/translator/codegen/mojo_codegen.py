@@ -478,6 +478,18 @@ MOJO_BUFFER_STORE_RESOURCE_TYPES = {
     "RWByteAddressBuffer",
 }
 
+MOJO_BUFFER_LOAD_RESOURCE_TYPES = {
+    "StructuredBuffer",
+    "RWStructuredBuffer",
+    "ByteAddressBuffer",
+    "RWByteAddressBuffer",
+}
+
+MOJO_TYPED_BUFFER_LOAD_RESOURCE_TYPES = {
+    "StructuredBuffer",
+    "RWStructuredBuffer",
+}
+
 MOJO_REINTERPRET_BUILTINS = {
     "asfloat": "Float32",
     "asint": "Int32",
@@ -3307,6 +3319,9 @@ class MojoCodeGen:
         if args:
             self.validate_resource_read_access(args[0], "buffer_load")
             info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            self.validate_buffer_operation(
+                "buffer_load", info, MOJO_BUFFER_LOAD_RESOURCE_TYPES
+            )
             if info is not None and self.buffer_helper_element_type(*info) is not None:
                 self.register_buffer_resource_type(info[0])
                 self.required_buffer_load_helpers.add(info)
@@ -3421,6 +3436,9 @@ class MojoCodeGen:
 
         if member == "Load" and element_type is not None:
             self.validate_resource_read_access(obj_expr, "Load")
+            self.validate_buffer_operation(
+                "Load", info, MOJO_TYPED_BUFFER_LOAD_RESOURCE_TYPES
+            )
             self.register_buffer_resource_type(buffer_type)
             self.required_buffer_load_helpers.add(info)
             generated_args = ", ".join(
@@ -3440,7 +3458,12 @@ class MojoCodeGen:
             )
             return f"buffer_store({generated_args})"
 
-        if member == "Append" and buffer_type == "AppendStructuredBuffer":
+        if member == "Append":
+            if buffer_type != "AppendStructuredBuffer":
+                raise ValueError(
+                    "Unsupported Append for Mojo codegen; "
+                    f"{buffer_type} is not an append buffer"
+                )
             self.validate_resource_write_access(obj_expr, "Append")
             self.register_buffer_resource_type(buffer_type)
             self.required_buffer_append_helpers.add(info)
@@ -3449,7 +3472,12 @@ class MojoCodeGen:
             )
             return f"buffer_append({generated_args})"
 
-        if member == "Consume" and buffer_type == "ConsumeStructuredBuffer":
+        if member == "Consume":
+            if buffer_type != "ConsumeStructuredBuffer":
+                raise ValueError(
+                    "Unsupported Consume for Mojo codegen; "
+                    f"{buffer_type} is not a consume buffer"
+                )
             self.validate_resource_read_access(obj_expr, "Consume")
             self.register_buffer_resource_type(buffer_type)
             self.required_buffer_consume_helpers.add(info)
@@ -4888,11 +4916,15 @@ class MojoCodeGen:
             if member in MOJO_BYTE_ADDRESS_STORE_METHODS or member == "GetDimensions":
                 return "void"
 
-        if member == "Load":
+        if member == "Load" and buffer_type in MOJO_TYPED_BUFFER_LOAD_RESOURCE_TYPES:
             return element_type
         if member == "Consume" and buffer_type == "ConsumeStructuredBuffer":
             return element_type
-        if member in {"Store", "Append", "GetDimensions"}:
+        if member == "Store" and buffer_type in MOJO_BUFFER_STORE_RESOURCE_TYPES:
+            return "void"
+        if member == "Append" and buffer_type == "AppendStructuredBuffer":
+            return "void"
+        if member == "GetDimensions":
             return "void"
         return None
 

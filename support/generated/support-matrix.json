@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 519
+        "test_count": 521
       },
       "translator_codegen": {
         "exists": true,
@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 719
+        "test_count": 720
       },
       "translator_codegen": {
         "exists": true,
@@ -260,7 +260,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 360,
+        "unsupported_marker_count": 361,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 484
+        "test_count": 486
       },
       "translator_codegen": {
         "exists": true,
@@ -379,7 +379,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 11,
+        "unsupported_marker_count": 13,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -388,6 +388,14 @@
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "\"; WARNING: SPIR-V backend does not support CrossGL \""
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "self.emit(f\"; WARNING: {operation} is not supported by the SPIR-V backend yet\")"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "f\"; WARNING: {operation} does not support {result_type.type.base_type}\""
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -433,7 +441,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 368
+        "test_count": 371
       },
       "translator_codegen": {
         "exists": true,
@@ -649,7 +657,7 @@
         "path": "crosstl/backend/Mojo"
       },
       "signals": {
-        "unsupported_marker_count": 20,
+        "unsupported_marker_count": 22,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
@@ -717,7 +725,11 @@
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "f\"Unsupported {helper_base} for Mojo codegen; \""
+            "text": "\"Unsupported Append for Mojo codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "\"Unsupported Consume for Mojo codegen; \""
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
@@ -726,10 +738,6 @@
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
             "text": "f\"Unsupported {helper_base} for Mojo codegen; \""
-          },
-          {
-            "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "\"Unsupported image atomic for Mojo codegen; integer image required: \""
           }
         ]
       },
@@ -739,7 +747,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 273
+        "test_count": 274
       },
       "translator_codegen": {
         "exists": true,
@@ -853,7 +861,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 483
+        "test_count": 484
       },
       "translator_codegen": {
         "exists": true,
@@ -877,7 +885,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 58,
+        "unsupported_marker_count": 67,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -890,6 +898,22 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "if node.name not in unsupported_tess_factor_builtins:"
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "return self.unsupported_slang_wave_op_expression("
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "return self.unsupported_slang_wave_op_expression("
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "def unsupported_slang_wave_op_expression(self, operation, reason):"
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"/* unsupported Slang wave intrinsic: {operation} {reason} */ \""
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -909,7 +933,15 @@
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_structured_buffer_call("
+            "text": "def unsupported_byte_address_buffer_call(self, operation, reason, result_type=None):"
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "return f\"/* unsupported Slang byte-address buffer: {operation} {reason} */\""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"/* unsupported Slang byte-address buffer: {operation} {reason} */ \""
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -925,7 +957,7 @@
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_structured_buffer_call("
+            "text": "return self.unsupported_byte_address_buffer_call("
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -934,30 +966,6 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_structured_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_structured_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_structured_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_structured_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "def unsupported_image_atomic_call(self, operation, reason, image_type=None):"
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "f\"/* unsupported Slang image atomic: {operation} {reason} */ \""
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_image_atomic_call("
           }
         ]
       },
@@ -967,7 +975,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 296
+        "test_count": 302
       },
       "translator_codegen": {
         "exists": true,
@@ -1657,7 +1665,7 @@
       "category": "resources",
       "feature": "Structured/storage buffers",
       "feature_id": "resources.structured_buffers",
-      "notes": "StructuredBuffer, RWStructuredBuffer, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers; real GPU memory binding semantics remain incomplete.",
+      "notes": "StructuredBuffer, RWStructuredBuffer, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers and deterministic invalid member/free-helper diagnostics; real GPU memory binding semantics remain incomplete.",
       "status": "partial"
     },
     {
@@ -1675,7 +1683,7 @@
       "category": "resources",
       "feature": "Structured/storage buffers",
       "feature_id": "resources.structured_buffers",
-      "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. Byte-address buffers and GLSL buffer-block round-trips are not implemented yet.",
+      "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet.",
       "status": "partial"
     },
     {
@@ -2615,6 +2623,87 @@
       "status": "unknown"
     },
     {
+      "backend": "DirectX / HLSL",
+      "backend_id": "directx",
+      "category": "language",
+      "feature": "Wave/subgroup intrinsics",
+      "feature_id": "language.wave_intrinsics",
+      "notes": "WaveOpNode calls are preserved as native HLSL Wave* intrinsics. Current tests cover pass-through for WaveActiveSum; broader Shader Model wave validation is still needed.",
+      "status": "partial"
+    },
+    {
+      "backend": "OpenGL / GLSL",
+      "backend_id": "opengl",
+      "category": "language",
+      "feature": "Wave/subgroup intrinsics",
+      "feature_id": "language.wave_intrinsics",
+      "notes": "The frontend parses WaveOpNode and the OpenGL backend currently preserves the HLSL Wave* spelling, but native GLSL subgroup lowering and validator coverage are not implemented.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Metal",
+      "backend_id": "metal",
+      "category": "language",
+      "feature": "Wave/subgroup intrinsics",
+      "feature_id": "language.wave_intrinsics",
+      "notes": "The Metal backend currently preserves WaveOpNode spellings rather than lowering to simdgroup intrinsics.",
+      "status": "unsupported"
+    },
+    {
+      "backend": "Vulkan SPIR-V",
+      "backend_id": "vulkan",
+      "category": "language",
+      "feature": "Wave/subgroup intrinsics",
+      "feature_id": "language.wave_intrinsics",
+      "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, and WaveReadLaneFirst to SPIR-V GroupNonUniform operations with Vulkan 1.1 spirv-as/spirv-val coverage. Quad, WaveMatch, and WaveMultiPrefix forms still emit deterministic diagnostics.",
+      "status": "partial"
+    },
+    {
+      "backend": "CUDA",
+      "backend_id": "cuda",
+      "category": "language",
+      "feature": "Wave/subgroup intrinsics",
+      "feature_id": "language.wave_intrinsics",
+      "notes": "",
+      "status": "unknown"
+    },
+    {
+      "backend": "HIP",
+      "backend_id": "hip",
+      "category": "language",
+      "feature": "Wave/subgroup intrinsics",
+      "feature_id": "language.wave_intrinsics",
+      "notes": "",
+      "status": "unknown"
+    },
+    {
+      "backend": "Mojo",
+      "backend_id": "mojo",
+      "category": "language",
+      "feature": "Wave/subgroup intrinsics",
+      "feature_id": "language.wave_intrinsics",
+      "notes": "",
+      "status": "unknown"
+    },
+    {
+      "backend": "Rust",
+      "backend_id": "rust",
+      "category": "language",
+      "feature": "Wave/subgroup intrinsics",
+      "feature_id": "language.wave_intrinsics",
+      "notes": "",
+      "status": "unknown"
+    },
+    {
+      "backend": "Slang",
+      "backend_id": "slang",
+      "category": "language",
+      "feature": "Wave/subgroup intrinsics",
+      "feature_id": "language.wave_intrinsics",
+      "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, WaveMatch, and WaveMultiPrefix* forms to native Slang/HLSL wave intrinsics with deterministic arity diagnostics. slangc-backed coverage is optional and skips when slangc is unavailable locally.",
+      "status": "partial"
+    },
+    {
       "backend": "Vulkan SPIR-V",
       "backend_id": "vulkan",
       "category": "language",
@@ -2710,7 +2799,7 @@
       "category": "validation",
       "feature": "Invalid shader shape validation",
       "feature_id": "validation.invalid_shapes",
-      "notes": "Mojo codegen validates several unsupported enum, parameter/return semantic, buffer, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
+      "notes": "Mojo codegen validates several unsupported enum, parameter/return semantic, buffer access/member-method, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
       "status": "partial"
     },
     {
@@ -3838,9 +3927,10 @@
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_structured_buffer_placeholders_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_typed_buffer_vector_alias_placeholders_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_buffer_placeholders_compile_with_mojo",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_vector_methods_and_reinterpret_compile_with_mojo"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_vector_methods_and_reinterpret_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen"
           ],
-          "notes": "StructuredBuffer, RWStructuredBuffer, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers; real GPU memory binding semantics remain incomplete.",
+          "notes": "StructuredBuffer, RWStructuredBuffer, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers and deterministic invalid member/free-helper diagnostics; real GPU memory binding semantics remain incomplete.",
           "status": "partial"
         },
         "opengl": {
@@ -3865,9 +3955,12 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_append_consume_structured_buffers_emit_slang_methods_and_uav_bindings",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_append_consume_wrong_structured_buffer_kinds_emit_slang_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffers_emit_slang_load_store_dimensions_and_bindings",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_vector_methods_and_readonly_stores_emit_slang",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffer_store_to_readonly_helper_emits_slang_diagnostic",
             "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
           ],
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. Byte-address buffers and GLSL buffer-block round-trips are not implemented yet.",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet.",
           "status": "partial"
         },
         "vulkan": {
@@ -5386,6 +5479,74 @@
     },
     {
       "category": "language",
+      "description": "Lower CrossGL Wave* subgroup operations including lane queries, reductions, scans, votes, ballots, and lane reads.",
+      "id": "language.wave_intrinsics",
+      "name": "Wave/subgroup intrinsics",
+      "support": {
+        "cuda": {
+          "evidence": [],
+          "notes": "",
+          "status": "unknown"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_wave_and_rayquery_intrinsics_codegen"
+          ],
+          "notes": "WaveOpNode calls are preserved as native HLSL Wave* intrinsics. Current tests cover pass-through for WaveActiveSum; broader Shader Model wave validation is still needed.",
+          "status": "partial"
+        },
+        "hip": {
+          "evidence": [],
+          "notes": "",
+          "status": "unknown"
+        },
+        "metal": {
+          "evidence": [
+            "crosstl/translator/codegen/metal_codegen.py::WaveOpNode"
+          ],
+          "notes": "The Metal backend currently preserves WaveOpNode spellings rather than lowering to simdgroup intrinsics.",
+          "status": "unsupported"
+        },
+        "mojo": {
+          "evidence": [],
+          "notes": "",
+          "status": "unknown"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_and_mesh_intrinsics"
+          ],
+          "notes": "The frontend parses WaveOpNode and the OpenGL backend currently preserves the HLSL Wave* spelling, but native GLSL subgroup lowering and validator coverage are not implemented.",
+          "status": "unsupported"
+        },
+        "rust": {
+          "evidence": [],
+          "notes": "",
+          "status": "unknown"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsics_lower_to_native_slang_calls",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsics_compile_with_slangc_if_available",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsic_invalid_arities_emit_slang_diagnostics"
+          ],
+          "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, WaveMatch, and WaveMultiPrefix* forms to native Slang/HLSL wave intrinsics with deterministic arity diagnostics. slangc-backed coverage is optional and skips when slangc is unavailable locally.",
+          "status": "partial"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_lane_intrinsics_emit_subgroup_builtins",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_intrinsics_emit_group_non_uniform_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_unsupported_wave_intrinsics_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_wave_intrinsics_compute_validates_with_spirv_tools"
+          ],
+          "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, and WaveReadLaneFirst to SPIR-V GroupNonUniform operations with Vulkan 1.1 spirv-as/spirv-val coverage. Quad, WaveMatch, and WaveMultiPrefix forms still emit deterministic diagnostics.",
+          "status": "partial"
+        }
+      }
+    },
+    {
+      "category": "language",
       "description": "CrossGL match expressions and pattern arms.",
       "id": "language.match",
       "name": "Match/pattern lowering",
@@ -5591,10 +5752,11 @@
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_buffer_operations_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_guarded_arm_is_rejected_for_mojo_codegen"
           ],
-          "notes": "Mojo codegen validates several unsupported enum, parameter/return semantic, buffer, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
+          "notes": "Mojo codegen validates several unsupported enum, parameter/return semantic, buffer access/member-method, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
           "status": "partial"
         },
         "opengl": {
@@ -5640,20 +5802,20 @@
   },
   "summary": {
     "backend_count": 9,
-    "backlog_count": 195,
-    "feature_count": 42,
+    "backlog_count": 204,
+    "feature_count": 43,
     "status_counts": {
       "cuda": {
         "diagnostic": 0,
         "partial": 11,
         "supported": 11,
-        "unknown": 17,
+        "unknown": 18,
         "unsupported": 3,
         "validated_rejection": 0
       },
       "directx": {
         "diagnostic": 0,
-        "partial": 5,
+        "partial": 6,
         "supported": 37,
         "unknown": 0,
         "unsupported": 0,
@@ -5663,7 +5825,7 @@
         "diagnostic": 0,
         "partial": 12,
         "supported": 10,
-        "unknown": 17,
+        "unknown": 18,
         "unsupported": 3,
         "validated_rejection": 0
       },
@@ -5672,14 +5834,14 @@
         "partial": 5,
         "supported": 35,
         "unknown": 0,
-        "unsupported": 2,
+        "unsupported": 3,
         "validated_rejection": 0
       },
       "mojo": {
         "diagnostic": 0,
         "partial": 27,
         "supported": 10,
-        "unknown": 0,
+        "unknown": 1,
         "unsupported": 5,
         "validated_rejection": 0
       },
@@ -5688,20 +5850,20 @@
         "partial": 4,
         "supported": 38,
         "unknown": 0,
-        "unsupported": 0,
+        "unsupported": 1,
         "validated_rejection": 0
       },
       "rust": {
         "diagnostic": 0,
         "partial": 6,
         "supported": 11,
-        "unknown": 25,
+        "unknown": 26,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "slang": {
         "diagnostic": 0,
-        "partial": 11,
+        "partial": 12,
         "supported": 14,
         "unknown": 17,
         "unsupported": 0,
@@ -5709,7 +5871,7 @@
       },
       "vulkan": {
         "diagnostic": 0,
-        "partial": 15,
+        "partial": 16,
         "supported": 17,
         "unknown": 10,
         "unsupported": 0,
