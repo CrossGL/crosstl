@@ -331,6 +331,9 @@ class GLSLCodeGen:
         "CandidateRayT": ("rayQueryGetIntersectionTEXT", "false"),
         "CommittedRayT": ("rayQueryGetIntersectionTEXT", "true"),
     }
+    GLSL_RESERVED_IDENTIFIERS = {
+        "active",
+    }
 
     def __init__(self):
         """Initialize GLSL type maps and per-generation stage/resource state."""
@@ -339,6 +342,7 @@ class GLSLCodeGen:
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
         self.current_resource_aliases = {}
+        self.current_identifier_aliases = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
         self.image_variable_accesses = {}
@@ -2454,6 +2458,7 @@ class GLSLCodeGen:
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
         previous_resource_aliases = self.current_resource_aliases
+        previous_identifier_aliases = self.current_identifier_aliases
         previous_image_format_parameters = self.current_image_format_parameters
         previous_image_access_parameters = self.current_image_access_parameters
         previous_stage_output = self.current_stage_output
@@ -2473,6 +2478,7 @@ class GLSLCodeGen:
             },
         }
         self.current_resource_aliases = resource_aliases
+        self.current_identifier_aliases = {}
         self.current_image_format_parameters = {
             **image_format_parameters,
             **{
@@ -2517,6 +2523,7 @@ class GLSLCodeGen:
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
         self.current_resource_aliases = previous_resource_aliases
+        self.current_identifier_aliases = previous_identifier_aliases
         self.current_image_format_parameters = previous_image_format_parameters
         self.current_image_access_parameters = previous_image_access_parameters
         self.current_stage_output = previous_stage_output
@@ -3609,6 +3616,28 @@ class GLSLCodeGen:
 
         return None
 
+    def local_identifier_name(self, name):
+        if name in self.current_identifier_aliases:
+            return self.current_identifier_aliases[name]
+        if name not in self.GLSL_RESERVED_IDENTIFIERS:
+            return name
+
+        used_names = set(self.local_variable_types)
+        used_names.update(self.current_identifier_aliases.values())
+        used_names.update(self.current_resource_aliases)
+        used_names.update(self.current_stage_parameter_aliases.values())
+
+        candidate = f"{name}_"
+        while candidate in used_names or candidate in self.GLSL_RESERVED_IDENTIFIERS:
+            candidate += "_"
+        self.current_identifier_aliases[name] = candidate
+        return candidate
+
+    def expression_identifier_name(self, name):
+        if name in self.current_identifier_aliases:
+            return self.current_identifier_aliases[name]
+        return self.current_stage_parameter_aliases.get(name, name)
+
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as GLSL source."""
         indent_str = "    " * indent
@@ -3617,10 +3646,13 @@ class GLSLCodeGen:
             if stmt.name in self.flattened_stage_variables:
                 return ""
             var_type = self.local_variable_declared_type(stmt)
+            local_name = self.local_identifier_name(stmt.name)
             self.local_variable_types[stmt.name] = var_type
+            if local_name != stmt.name:
+                self.local_variable_types[local_name] = var_type
 
             declaration = format_c_style_array_declaration(
-                self.map_type(var_type), stmt.name
+                self.map_type(var_type), local_name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
             initial_value = getattr(stmt, "initial_value", None)
@@ -3629,7 +3661,7 @@ class GLSLCodeGen:
                 code += generate_match_expression_assignment(
                     self,
                     initial_value,
-                    stmt.name,
+                    local_name,
                     var_type,
                     indent,
                     "GLSL",
@@ -4152,6 +4184,7 @@ class GLSLCodeGen:
     def generate_for(self, node, indent, is_main=False):
         indent_str = "    " * indent
         previous_local_variable_types = dict(self.local_variable_types)
+        previous_identifier_aliases = dict(self.current_identifier_aliases)
 
         try:
             init = self.generate_for_initializer(getattr(node, "init", None))
@@ -4176,12 +4209,14 @@ class GLSLCodeGen:
             return code
         finally:
             self.local_variable_types = previous_local_variable_types
+            self.current_identifier_aliases = previous_identifier_aliases
 
     def generate_for_in(self, node, indent):
         indent_str = "    " * indent
         pattern = getattr(node, "pattern", "item")
         iterable_node = getattr(node, "iterable", "")
         previous_local_variable_types = dict(self.local_variable_types)
+        previous_identifier_aliases = dict(self.current_identifier_aliases)
 
         try:
             self.local_variable_types[pattern] = "int"
@@ -4208,6 +4243,7 @@ class GLSLCodeGen:
             return code
         finally:
             self.local_variable_types = previous_local_variable_types
+            self.current_identifier_aliases = previous_identifier_aliases
 
     def generate_while(self, node, indent):
         indent_str = "    " * indent
@@ -4316,10 +4352,12 @@ class GLSLCodeGen:
 
     def generate_scoped_statement_body(self, body, indent):
         previous_local_variable_types = dict(self.local_variable_types)
+        previous_identifier_aliases = dict(self.current_identifier_aliases)
         try:
             return self.generate_statement_body(body, indent)
         finally:
             self.local_variable_types = previous_local_variable_types
+            self.current_identifier_aliases = previous_identifier_aliases
 
     def generate_statement_body(self, body, indent):
         code = ""
@@ -4360,7 +4398,7 @@ class GLSLCodeGen:
                     return self.current_resource_aliases[expr.name]["expression"]
                 if expr.name in getattr(self, "enum_variant_constants", {}):
                     return enum_value_expression(self, expr.name)
-                return self.current_stage_parameter_aliases.get(expr.name, expr.name)
+                return self.expression_identifier_name(expr.name)
             else:
                 return str(expr)
         elif hasattr(expr, "__class__") and "IdentifierNode" in str(type(expr)):
@@ -4368,7 +4406,7 @@ class GLSLCodeGen:
                 return self.current_resource_aliases[expr.name]["expression"]
             if expr.name in getattr(self, "enum_variant_constants", {}):
                 return enum_value_expression(self, expr.name)
-            return self.current_stage_parameter_aliases.get(expr.name, expr.name)
+            return self.expression_identifier_name(expr.name)
         elif hasattr(expr, "__class__") and "LiteralNode" in str(type(expr)):
             literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
             if (

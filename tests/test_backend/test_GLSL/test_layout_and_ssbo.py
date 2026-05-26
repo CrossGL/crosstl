@@ -324,7 +324,8 @@ def test_parse_ray_query_type_and_functions_roundtrip():
     assert "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;" in glsl
     assert "rayQueryEXT rq;" in glsl
     assert "rayQueryInitializeEXT(" in glsl
-    assert "bool active = rayQueryProceedEXT(rq);" in glsl
+    assert "bool active_ = rayQueryProceedEXT(rq);" in glsl
+    assert "bool active =" not in glsl
     assert "uint hitType = rayQueryGetIntersectionTypeEXT(rq, true);" in glsl
     assert (
         "uint candidatePrimitive = "

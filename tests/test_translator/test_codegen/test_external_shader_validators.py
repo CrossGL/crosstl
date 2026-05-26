@@ -1041,6 +1041,8 @@ def test_generated_glsl_ray_query_compute_validates_with_glslangvalidator(tmp_pa
     assert "rayQueryEXT rayQuery;" in code
     assert "rayQueryProceedEXT(rayQuery)" in code
     assert "rayQueryGetIntersectionTypeEXT(rayQuery, true)" in code
+    assert "bool active_ = rayQueryProceedEXT(rayQuery);" in code
+    assert "bool active =" not in code
     assert ".Proceed(" not in code
     assert ".CommittedType(" not in code
     shader_path.write_text(code, encoding="utf-8")

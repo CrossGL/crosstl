@@ -4005,7 +4005,8 @@ def test_glsl_ray_query_methods_lower_to_ext_functions():
     )
     assert "rayQueryEXT rq;" in generated_code
     assert "rayQueryInitializeEXT(" in generated_code
-    assert "bool active = rayQueryProceedEXT(rq);" in generated_code
+    assert "bool active_ = rayQueryProceedEXT(rq);" in generated_code
+    assert "bool active =" not in generated_code
     assert (
         "uint candidateType = rayQueryGetIntersectionTypeEXT(rq, false);"
         in generated_code
