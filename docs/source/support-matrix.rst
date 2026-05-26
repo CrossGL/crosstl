@@ -23,7 +23,7 @@ implicitly supported.
    :header: "Backend", "Ext", "Target generator", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
    "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "460", "367", "Microsoft Learn HLSL reference; HLSL specification project"
-   "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "660", "995", "GLSL 4.60 specification; OpenGL registry"
+   "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "662", "995", "GLSL 4.60 specification; OpenGL registry"
    "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "410", "375", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "327", "19", "SPIR-V unified specification; Khronos SPIR-V registry"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "240", "56", "CUDA C++ programming guide"
@@ -36,8 +36,8 @@ implicitly supported.
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
    "DirectX / HLSL", "24", "17", "0", "0", "0", "0"
-   "OpenGL / GLSL", "25", "14", "0", "0", "0", "2"
-   "Metal", "21", "17", "0", "0", "2", "1"
+   "OpenGL / GLSL", "25", "16", "0", "0", "0", "0"
+   "Metal", "21", "18", "0", "0", "2", "0"
    "Vulkan SPIR-V", "6", "12", "0", "0", "0", "23"
    "CUDA", "10", "11", "0", "0", "3", "17"
    "HIP", "10", "11", "0", "0", "3", "17"
@@ -55,20 +55,20 @@ scope for graphics backend completion work.
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
    "DirectX / HLSL", "24", "17", "0", "0", "0", "0"
-   "OpenGL / GLSL", "25", "14", "0", "0", "0", "2"
-   "Metal", "21", "17", "0", "0", "2", "1"
+   "OpenGL / GLSL", "25", "16", "0", "0", "0", "0"
+   "Metal", "21", "18", "0", "0", "2", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
 
-   "Metal", "source", "Native preprocessor handling", "unknown", ""
+   "Metal", "source", "Native preprocessor handling", "partial", "Lexer/parser/codegen preserve native preprocessor directives; macro expansion and include evaluation are not implemented yet."
    "Metal", "stages", "Geometry stage", "unsupported", ""
    "Metal", "stages", "Tessellation stages", "unsupported", ""
    "DirectX / HLSL", "stages", "Mesh/task/amplification stages", "partial", ""
-   "OpenGL / GLSL", "stages", "Mesh/task/amplification stages", "unknown", ""
+   "OpenGL / GLSL", "stages", "Mesh/task/amplification stages", "partial", "Entry points and combined-stage names lower, but target-specific GLSL mesh/task layout and extension semantics are not complete."
    "Metal", "stages", "Mesh/task/amplification stages", "partial", ""
    "DirectX / HLSL", "stages", "Ray tracing stages", "partial", ""
-   "OpenGL / GLSL", "stages", "Ray tracing stages", "unknown", ""
+   "OpenGL / GLSL", "stages", "Ray tracing stages", "partial", "Entry points and combined-stage names lower, but target-specific GLSL ray tracing layout and extension semantics are not complete."
    "Metal", "stages", "Ray tracing stages", "partial", ""
    "DirectX / HLSL", "resources", "Structured/storage buffers", "partial", ""
    "OpenGL / GLSL", "resources", "Structured/storage buffers", "partial", ""
@@ -130,7 +130,7 @@ Each category below uses the status codes from the legend.
 
    "Native source to CrossGL", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Native lexer coverage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Native preprocessor handling", "Y", "Y", "?", "?", "?", "?", "?", "?", "?"
+   "Native preprocessor handling", "Y", "Y", "P", "?", "?", "?", "?", "?", "?"
 
 .. csv-table:: stages
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
@@ -140,8 +140,8 @@ Each category below uses the status codes from the legend.
    "Compute stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Geometry stage", "Y", "Y", "U", "?", "U", "U", "?", "?", "?"
    "Tessellation stages", "Y", "Y", "U", "?", "U", "U", "?", "?", "?"
-   "Mesh/task/amplification stages", "P", "?", "P", "?", "U", "U", "?", "?", "?"
-   "Ray tracing stages", "P", "?", "P", "?", "?", "?", "?", "?", "?"
+   "Mesh/task/amplification stages", "P", "P", "P", "?", "U", "U", "?", "?", "?"
+   "Ray tracing stages", "P", "P", "P", "?", "?", "?", "?", "?", "?"
 
 .. csv-table:: stage I/O
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
@@ -206,7 +206,7 @@ need an audit before implementation work can be scoped accurately.
 .. csv-table:: Non-supported or unaudited feature rows
    :header: "Backend", "Category", "Feature", "Status", "Notes"
 
-   "Metal", "source", "Native preprocessor handling", "unknown", ""
+   "Metal", "source", "Native preprocessor handling", "partial", "Lexer/parser/codegen preserve native preprocessor directives; macro expansion and include evaluation are not implemented yet."
    "Vulkan SPIR-V", "source", "Native preprocessor handling", "unknown", ""
    "CUDA", "source", "Native preprocessor handling", "unknown", ""
    "HIP", "source", "Native preprocessor handling", "unknown", ""
@@ -236,7 +236,7 @@ need an audit before implementation work can be scoped accurately.
    "Rust", "stages", "Tessellation stages", "unknown", ""
    "Slang", "stages", "Tessellation stages", "unknown", ""
    "DirectX / HLSL", "stages", "Mesh/task/amplification stages", "partial", ""
-   "OpenGL / GLSL", "stages", "Mesh/task/amplification stages", "unknown", ""
+   "OpenGL / GLSL", "stages", "Mesh/task/amplification stages", "partial", "Entry points and combined-stage names lower, but target-specific GLSL mesh/task layout and extension semantics are not complete."
    "Metal", "stages", "Mesh/task/amplification stages", "partial", ""
    "Vulkan SPIR-V", "stages", "Mesh/task/amplification stages", "unknown", ""
    "CUDA", "stages", "Mesh/task/amplification stages", "unsupported", ""
@@ -245,7 +245,7 @@ need an audit before implementation work can be scoped accurately.
    "Rust", "stages", "Mesh/task/amplification stages", "unknown", ""
    "Slang", "stages", "Mesh/task/amplification stages", "unknown", ""
    "DirectX / HLSL", "stages", "Ray tracing stages", "partial", ""
-   "OpenGL / GLSL", "stages", "Ray tracing stages", "unknown", ""
+   "OpenGL / GLSL", "stages", "Ray tracing stages", "partial", "Entry points and combined-stage names lower, but target-specific GLSL ray tracing layout and extension semantics are not complete."
    "Metal", "stages", "Ray tracing stages", "partial", ""
    "Vulkan SPIR-V", "stages", "Ray tracing stages", "unknown", ""
    "CUDA", "stages", "Ray tracing stages", "unknown", ""

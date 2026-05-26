@@ -6,8 +6,8 @@
       "category": "source",
       "feature": "Native preprocessor handling",
       "feature_id": "source.preprocessing",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Lexer/parser/codegen preserve native preprocessor directives; macro expansion and include evaluation are not implemented yet.",
+      "status": "partial"
     },
     {
       "backend": "Metal",
@@ -42,8 +42,8 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Entry points and combined-stage names lower, but target-specific GLSL mesh/task layout and extension semantics are not complete.",
+      "status": "partial"
     },
     {
       "backend": "Metal",
@@ -69,8 +69,8 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Entry points and combined-stage names lower, but target-specific GLSL ray tracing layout and extension semantics are not complete.",
+      "status": "partial"
     },
     {
       "backend": "Metal",
@@ -580,9 +580,13 @@
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_backend/test_metal/test_lexer.py::def test_preprocessor_does_not_break_tokenization",
+            "tests/test_backend/test_metal/test_parser.py::def test_parse_preprocessor_define",
+            "tests/test_backend/test_metal/test_codegen.py::def test_codegen_preserves_preprocessor_define"
+          ],
+          "notes": "Lexer/parser/codegen preserve native preprocessor directives; macro expansion and include evaluation are not implemented yet.",
+          "status": "partial"
         },
         "opengl": {
           "evidence": [
@@ -729,9 +733,11 @@
           "status": "partial"
         },
         "opengl": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_task_stage_entries_use_distinct_names"
+          ],
+          "notes": "Entry points and combined-stage names lower, but target-specific GLSL mesh/task layout and extension semantics are not complete.",
+          "status": "partial"
         }
       }
     },
@@ -752,9 +758,11 @@
           "status": "partial"
         },
         "opengl": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_ray_stage_entries_use_distinct_names"
+          ],
+          "notes": "Entry points and combined-stage names lower, but target-specific GLSL ray tracing layout and extension semantics are not complete.",
+          "status": "partial"
         }
       }
     },
@@ -1513,9 +1521,9 @@
       },
       "by_status": {
         "diagnostic": 0,
-        "partial": 48,
+        "partial": 51,
         "supported": 0,
-        "unknown": 3,
+        "unknown": 0,
         "unsupported": 2,
         "validated_rejection": 0
       }
@@ -1532,17 +1540,17 @@
       },
       "metal": {
         "diagnostic": 0,
-        "partial": 17,
+        "partial": 18,
         "supported": 21,
-        "unknown": 1,
+        "unknown": 0,
         "unsupported": 2,
         "validated_rejection": 0
       },
       "opengl": {
         "diagnostic": 0,
-        "partial": 14,
+        "partial": 16,
         "supported": 25,
-        "unknown": 2,
+        "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       }

@@ -3543,6 +3543,76 @@ def test_glsl_combined_advanced_stage_entries_use_distinct_names():
     assert "void geometry_main()" not in geometry_code
 
 
+def test_glsl_mesh_task_stage_entries_use_distinct_names():
+    shader = """
+    shader CombinedMeshTaskStages {
+        task {
+            void main() { }
+        }
+
+        mesh {
+            void main() { }
+        }
+
+        amplification {
+            void main() { }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    combined_code = GLSLCodeGen().generate(ast)
+    mesh_code = GLSLCodeGen().generate_stage(ast, "mesh")
+
+    assert "void task_main()" in combined_code
+    assert "void mesh_main()" in combined_code
+    assert "void amplification_main()" in combined_code
+    assert "void main()" not in combined_code
+
+    assert "void main()" in mesh_code
+    assert "void mesh_main()" not in mesh_code
+
+
+def test_glsl_ray_stage_entries_use_distinct_names():
+    shader = """
+    shader CombinedRayStages {
+        ray_generation {
+            void main() { }
+        }
+
+        ray_closest_hit {
+            void main() { }
+        }
+
+        ray_any_hit {
+            void main() { }
+        }
+
+        ray_miss {
+            void main() { }
+        }
+
+        ray_callable {
+            void main() { }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    combined_code = GLSLCodeGen().generate(ast)
+    ray_miss_code = GLSLCodeGen().generate_stage(ast, "ray_miss")
+
+    assert "void ray_generation_main()" in combined_code
+    assert "void ray_closest_hit_main()" in combined_code
+    assert "void ray_any_hit_main()" in combined_code
+    assert "void ray_miss_main()" in combined_code
+    assert "void ray_callable_main()" in combined_code
+    assert "void main()" not in combined_code
+
+    assert "void main()" in ray_miss_code
+    assert "void ray_miss_main()" not in ray_miss_code
+
+
 def test_glsl_stage_local_helpers_emit_before_entrypoint():
     shader = """
     shader StageLocalHelperOrder {
