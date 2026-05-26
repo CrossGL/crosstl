@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 428
+        "test_count": 429
       },
       "translator_codegen": {
         "exists": true,
@@ -433,7 +433,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 327
+        "test_count": 328
       },
       "translator_codegen": {
         "exists": true,
@@ -619,7 +619,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 221
+        "test_count": 225
       },
       "translator_codegen": {
         "exists": true,
@@ -733,7 +733,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 433
+        "test_count": 434
       },
       "translator_codegen": {
         "exists": true,
@@ -847,7 +847,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 214
+        "test_count": 217
       },
       "translator_codegen": {
         "exists": true,
@@ -3146,8 +3146,11 @@
           "status": "supported"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_compute_stage_emits_default_numthreads",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_compute_stage_uses_execution_layout_numthreads"
+          ],
+          "notes": "Compute entry points lower to Slang shader entries with HLSL-compatible numthreads defaults and parsed local-size layouts.",
           "status": "supported"
         },
         "vulkan": {
