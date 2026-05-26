@@ -758,6 +758,7 @@ class MetalCodeGen:
         self.current_unsupported_glsl_buffer_block_local_variables = set()
         self.current_glsl_buffer_block_parameter_failures = {}
         self.current_glsl_buffer_block_parameter_struct_failures = {}
+        self.current_metal_mesh_output_parameter = None
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
@@ -1521,6 +1522,7 @@ class MetalCodeGen:
         previous_structured_buffer_counter_parameters = (
             self.current_structured_buffer_counter_parameters
         )
+        previous_metal_mesh_output_parameter = self.current_metal_mesh_output_parameter
         self.current_function_name = getattr(func, "name", None)
         self.current_function_return_wrapper = None
         self.current_generic_function_substitutions = (
@@ -1689,6 +1691,9 @@ class MetalCodeGen:
             self.current_structured_buffer_counter_parameters = (
                 previous_structured_buffer_counter_parameters
             )
+            self.current_metal_mesh_output_parameter = (
+                previous_metal_mesh_output_parameter
+            )
             return code
 
         if shader_type == "vertex":
@@ -1729,6 +1734,16 @@ class MetalCodeGen:
             stage_attribute = self.metal_mesh_stage_attribute(
                 shader_type, func, execution_config
             )
+            mesh_output = self.metal_mesh_stage_output_config(
+                shader_type, func, function_name, reserved_parameter_names
+            )
+            if mesh_output is not None:
+                code += self.generate_metal_mesh_vertex_output_struct(mesh_output)
+                params_str = self.append_parameter_declaration(
+                    params_str,
+                    self.metal_mesh_stage_output_parameter_declaration(mesh_output),
+                )
+                self.current_metal_mesh_output_parameter = mesh_output["parameter_name"]
             code += (
                 f"{stage_attribute} {return_type} {function_name}({params_str}) {{\n"
             )
@@ -1786,6 +1801,7 @@ class MetalCodeGen:
         self.current_structured_buffer_counter_parameters = (
             previous_structured_buffer_counter_parameters
         )
+        self.current_metal_mesh_output_parameter = previous_metal_mesh_output_parameter
         self.current_function_name = previous_function_name
         self.current_function_return_type = previous_function_return_type
         self.current_function_return_wrapper = previous_function_return_wrapper
@@ -3199,6 +3215,9 @@ class MetalCodeGen:
             args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
             return f"{expr.operation}({args})"
         elif isinstance(expr, MeshOpNode):
+            mesh_call = self.generate_mesh_op_expression(expr)
+            if mesh_call is not None:
+                return mesh_call
             args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
             return f"{expr.operation}({args})"
         elif isinstance(expr, RayQueryOpNode):
@@ -3547,6 +3566,19 @@ class MetalCodeGen:
             "workgroupBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "memoryBarrier": "threadgroup_barrier(mem_flags::mem_device)",
         }.get(func_name)
+
+    def generate_mesh_op_expression(self, expr):
+        if (
+            expr.operation == "SetMeshOutputCounts"
+            and self.current_metal_mesh_output_parameter
+            and len(expr.arguments) >= 2
+        ):
+            primitive_count = self.generate_expression(expr.arguments[1])
+            return (
+                f"{self.current_metal_mesh_output_parameter}"
+                f".set_primitive_count({primitive_count})"
+            )
+        return None
 
     def generate_buffer_call(self, func_name, args):
         if func_name == "buffer_load" and len(args) >= 2:
@@ -4418,6 +4450,90 @@ class MetalCodeGen:
                 return " * ".join(f"({item})" for item in values)
         return str(literal_product)
 
+    def metal_mesh_stage_output_config(
+        self, shader_type, func, function_name, reserved_parameter_names
+    ):
+        if shader_type != "mesh":
+            return None
+
+        max_vertices = self.metal_single_stage_attribute_argument(func, "max_vertices")
+        max_primitives = self.metal_single_stage_attribute_argument(
+            func, "max_primitives"
+        )
+        topology = self.metal_single_stage_attribute_argument(func, "outputtopology")
+        if not (max_vertices and max_primitives and topology):
+            return None
+
+        vertex_type = self.unique_metal_generated_name(
+            f"_CrossGLMetalMeshVertex_{function_name}",
+            set(getattr(self, "structs_by_name", {})),
+        )
+        parameter_name = self.unique_metal_generated_name(
+            "_crossglMeshOut", reserved_parameter_names
+        )
+        return {
+            "parameter_name": parameter_name,
+            "vertex_type": vertex_type,
+            "max_vertices": max_vertices,
+            "max_primitives": max_primitives,
+            "topology": self.metal_mesh_topology(topology),
+        }
+
+    def unique_metal_generated_name(self, base_name, reserved_names):
+        reserved_names = set(reserved_names or ())
+        if base_name not in reserved_names:
+            return base_name
+        index = 1
+        while f"{base_name}_{index}" in reserved_names:
+            index += 1
+        return f"{base_name}_{index}"
+
+    def metal_single_stage_attribute_argument(self, func, attribute_name):
+        arguments = self.metal_stage_attribute_arguments(func, attribute_name)
+        if not arguments:
+            return None
+        if len(arguments) != 1:
+            raise ValueError(
+                f"Metal stage attribute {attribute_name} requires exactly one argument"
+            )
+        return self.attribute_value_to_string(arguments[0])
+
+    def metal_mesh_topology(self, topology):
+        topology_name = str(topology).strip().strip('"').lower()
+        topology_map = {
+            "point": "point",
+            "points": "point",
+            "line": "line",
+            "lines": "line",
+            "triangle": "triangle",
+            "triangles": "triangle",
+        }
+        mapped = topology_map.get(topology_name)
+        if mapped is None:
+            raise ValueError(
+                f"Metal mesh output topology cannot be lowered: {topology}"
+            )
+        return mapped
+
+    def generate_metal_mesh_vertex_output_struct(self, mesh_output):
+        return (
+            f"struct {mesh_output['vertex_type']} {{\n"
+            "    float4 position [[position]];\n"
+            "};\n"
+        )
+
+    def metal_mesh_stage_output_parameter_declaration(self, mesh_output):
+        return (
+            f"mesh<{mesh_output['vertex_type']}, void, "
+            f"{mesh_output['max_vertices']}, {mesh_output['max_primitives']}, "
+            f"topology::{mesh_output['topology']}> {mesh_output['parameter_name']}"
+        )
+
+    def append_parameter_declaration(self, params_str, declaration):
+        if not params_str:
+            return declaration
+        return f"{params_str}, {declaration}"
+
     def all_functions(self, ast):
         functions = list(getattr(ast, "functions", []) or [])
         for stage in getattr(ast, "stages", {}).values():
@@ -5163,6 +5279,7 @@ class MetalCodeGen:
             "local_size_x",
             "local_size_y",
             "local_size_z",
+            "max_primitives",
             "max_total_threads_per_threadgroup",
             "max_vertices",
             "maxvertexcount",

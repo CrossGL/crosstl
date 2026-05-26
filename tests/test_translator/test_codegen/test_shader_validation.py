@@ -994,7 +994,14 @@ shader MetalMeshObjectValidation {
     }
 
     mesh {
-        void main() @max_total_threads_per_threadgroup(96) { }
+        void main()
+            @max_total_threads_per_threadgroup(96)
+            @max_vertices(64)
+            @max_primitives(32)
+            @outputtopology(triangle)
+        {
+            SetMeshOutputCounts(64, 12);
+        }
     }
 }
 """

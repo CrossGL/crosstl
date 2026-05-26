@@ -410,7 +410,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 424
+        "test_count": 426
       },
       "translator_codegen": {
         "exists": true,
@@ -1419,7 +1419,7 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names and max_total_threads_per_threadgroup from local-size layouts or explicit attributes. Full mesh payload, topology, and output signature semantics are not complete.",
+      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, and explicit mesh output signatures/topology for SetMeshOutputCounts primitive counts. Full mesh payload and vertex/primitive write semantics are not complete.",
       "status": "partial"
     },
     {
@@ -3581,9 +3581,11 @@
         "metal": {
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_mesh_object_stage_codegen",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_object_stage_attributes_and_threadgroup_limits"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_object_stage_attributes_and_threadgroup_limits",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_stage_output_signature_and_counts",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_object_stages_compile_with_metal3"
           ],
-          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names and max_total_threads_per_threadgroup from local-size layouts or explicit attributes. Full mesh payload, topology, and output signature semantics are not complete.",
+          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, and explicit mesh output signatures/topology for SetMeshOutputCounts primitive counts. Full mesh payload and vertex/primitive write semantics are not complete.",
           "status": "partial"
         },
         "mojo": {

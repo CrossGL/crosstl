@@ -2798,6 +2798,59 @@ def test_metal_mesh_object_stage_attributes_and_threadgroup_limits():
     assert "[[object, max_total_threads_per_threadgroup(64)]]" not in mesh_code
 
 
+def test_metal_mesh_stage_output_signature_and_counts():
+    code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(64)
+                @max_primitives(32)
+                @outputtopology(triangle)
+            {
+                SetMeshOutputCounts(64, 12);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+    assert "struct _CrossGLMetalMeshVertex_mesh_main" in generated
+    assert (
+        "mesh<_CrossGLMetalMeshVertex_mesh_main, void, 64, 32, topology::triangle> "
+        "_crossglMeshOut"
+    ) in generated
+    assert "_crossglMeshOut.set_primitive_count(12);" in generated
+    assert "SetMeshOutputCounts" not in generated
+
+
+def test_metal_mesh_stage_output_signature_avoids_generated_name_collisions():
+    code = """
+    shader meshpipe {
+        struct _CrossGLMetalMeshVertex_mesh_main {
+            vec4 color;
+        };
+
+        mesh {
+            void main(int _crossglMeshOut)
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(64)
+                @max_primitives(32)
+                @outputtopology(triangle)
+            {
+                SetMeshOutputCounts(64, 12);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+    assert "struct _CrossGLMetalMeshVertex_mesh_main_1" in generated
+    assert "_crossglMeshOut_1.set_primitive_count(12);" in generated
+    assert "int _crossglMeshOut, mesh<" in generated
+    assert "topology::triangle> _crossglMeshOut_1" in generated
+
+
 def test_metal_rejects_unsupported_geometry_and_tessellation_stages():
     geometry_code = """
     shader geometry_stage {
