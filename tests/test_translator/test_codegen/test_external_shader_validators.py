@@ -19,6 +19,51 @@ shader ExternalValidatorSmoke {
 """
 
 
+GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER = """
+shader GLSLMultisampleStorageValidator {
+    image2DMS colorImage @rgba16f;
+    uimage2DMS counters @r32ui;
+    image2DMSArray layered @rgba16f;
+
+    vec4 touch(
+        image2DMS image @rgba16f,
+        uimage2DMS counterImage @r32ui,
+        ivec2 pixel,
+        int sampleIndex,
+        vec4 value,
+        uint count
+    ) {
+        vec4 oldColor = imageLoad(image, pixel, sampleIndex);
+        uint oldCount = imageLoad(counterImage, pixel, sampleIndex);
+        imageStore(image, pixel, sampleIndex, oldColor + value);
+        imageStore(counterImage, pixel, sampleIndex, oldCount + count);
+        uint atomicOld = imageAtomicAdd(counterImage, pixel, sampleIndex, count);
+        uint exchanged = imageAtomicExchange(counterImage, pixel, sampleIndex, atomicOld + count);
+        uint swapped = imageAtomicCompSwap(counterImage, pixel, sampleIndex, exchanged, count);
+        return oldColor + vec4(float(oldCount + atomicOld + swapped));
+    }
+
+    vec4 touchLayer(
+        image2DMSArray image @rgba16f,
+        ivec3 pixelLayer,
+        int sampleIndex,
+        vec4 value
+    ) {
+        vec4 oldLayer = imageLoad(image, pixelLayer, sampleIndex);
+        imageStore(image, pixelLayer, sampleIndex, oldLayer + value);
+        return oldLayer;
+    }
+
+    compute {
+        void main() {
+            vec4 color = touch(colorImage, counters, ivec2(0, 1), 2, vec4(1.0), 3u);
+            vec4 layerColor = touchLayer(layered, ivec3(2, 3, 1), 0, color);
+        }
+    }
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
 
@@ -92,6 +137,23 @@ def test_generated_glsl_fragment_validates_with_glslangvalidator(tmp_path):
     )
 
     _run_validator([glslang, "-S", "frag", str(shader_path)])
+
+
+def test_generated_glsl_multisample_storage_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "multisample_storage.comp"
+
+    shader_path.write_text(
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER),
+            "compute",
+        ),
+        encoding="utf-8",
+    )
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
 
 
 def test_generated_metal_fragment_compiles_with_xcrun_metal(tmp_path):

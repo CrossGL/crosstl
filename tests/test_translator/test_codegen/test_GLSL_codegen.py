@@ -17101,6 +17101,93 @@ def test_glsl_image_1d_and_1d_array_storage_operations():
     )
 
 
+def test_glsl_multisample_storage_images_lower_load_store_and_atomics():
+    shader = """
+    shader GLSLMultisampleStorageImages {
+        image2DMS colorImage @rgba16f;
+        uimage2DMS counters @r32ui;
+        image2DMSArray layered @rgba16f;
+
+        vec4 touch(
+            image2DMS image @rgba16f,
+            uimage2DMS counterImage @r32ui,
+            ivec2 pixel,
+            int sampleIndex,
+            vec4 value,
+            uint count
+        ) {
+            vec4 oldColor = imageLoad(image, pixel, sampleIndex);
+            uint oldCount = imageLoad(counterImage, pixel, sampleIndex);
+            imageStore(image, pixel, sampleIndex, oldColor + value);
+            imageStore(counterImage, pixel, sampleIndex, oldCount + count);
+            uint atomicOld = imageAtomicAdd(counterImage, pixel, sampleIndex, count);
+            uint exchanged = imageAtomicExchange(counterImage, pixel, sampleIndex, atomicOld + count);
+            uint swapped = imageAtomicCompSwap(counterImage, pixel, sampleIndex, exchanged, count);
+            return oldColor + vec4(float(oldCount + atomicOld + swapped));
+        }
+
+        vec4 touchLayer(image2DMSArray image @rgba16f, ivec3 pixelLayer, int sampleIndex, vec4 value) {
+            vec4 oldLayer = imageLoad(image, pixelLayer, sampleIndex);
+            imageStore(image, pixelLayer, sampleIndex, oldLayer + value);
+            return oldLayer;
+        }
+
+        compute {
+            void main() {
+                vec4 color = touch(colorImage, counters, ivec2(0, 1), 2, vec4(1.0), 3u);
+                vec4 layerColor = touchLayer(layered, ivec3(2, 3, 1), 0, color);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "layout(rgba16f, binding = 0) uniform image2DMS colorImage;" in generated_code
+    assert "layout(r32ui, binding = 1) uniform uimage2DMS counters;" in generated_code
+    assert (
+        "layout(rgba16f, binding = 2) uniform image2DMSArray layered;"
+        in generated_code
+    )
+    assert (
+        "vec4 touch(image2DMS image, uimage2DMS counterImage, ivec2 pixel, int sampleIndex, vec4 value, uint count)"
+        in generated_code
+    )
+    assert "vec4 oldColor = imageLoad(image, pixel, sampleIndex);" in generated_code
+    assert "uint oldCount = imageLoad(counterImage, pixel, sampleIndex).x;" in generated_code
+    assert (
+        "imageStore(image, pixel, sampleIndex, (oldColor + value));"
+        in generated_code
+    )
+    assert (
+        "imageStore(counterImage, pixel, sampleIndex, uvec4((oldCount + count)));"
+        in generated_code
+    )
+    assert (
+        "uint atomicOld = imageAtomicAdd(counterImage, pixel, sampleIndex, count);"
+        in generated_code
+    )
+    assert (
+        "uint exchanged = imageAtomicExchange(counterImage, pixel, sampleIndex, (atomicOld + count));"
+        in generated_code
+    )
+    assert (
+        "uint swapped = imageAtomicCompSwap(counterImage, pixel, sampleIndex, exchanged, count);"
+        in generated_code
+    )
+    assert (
+        "vec4 oldLayer = imageLoad(image, pixelLayer, sampleIndex);"
+        in generated_code
+    )
+    assert (
+        "imageStore(image, pixelLayer, sampleIndex, (oldLayer + value));"
+        in generated_code
+    )
+    diagnostic_token = "un" + "supported GLSL"
+    assert diagnostic_token not in generated_code
+
+
 def test_glsl_storage_image_access_attributes_emit_parameter_qualifiers():
     shader = """
     shader StorageImageAccess {
