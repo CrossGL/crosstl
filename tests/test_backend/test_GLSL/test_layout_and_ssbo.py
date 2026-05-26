@@ -1002,6 +1002,74 @@ def test_parse_mesh_topology_builtin_index_arrays_roundtrip(
     assert index_assignment in glsl
 
 
+def test_parse_mesh_dynamic_builtin_struct_writes_roundtrip():
+    code = """
+    #version 450 core
+    #extension GL_EXT_mesh_shader : require
+    layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+    layout(triangles, max_vertices = 64, max_primitives = 32) out;
+
+    void main() {
+        uint vertexIndex = gl_LocalInvocationID.x;
+        uint primitiveIndex = vertexIndex / 3u;
+        SetMeshOutputsEXT(64, 32);
+        if (vertexIndex < 64u) {
+            gl_MeshVerticesEXT[vertexIndex].gl_Position =
+                vec4(float(vertexIndex), 0.0, 0.0, 1.0);
+            gl_MeshVerticesEXT[vertexIndex].gl_ClipDistance[0] = 1.0;
+        }
+        if (primitiveIndex < 32u) {
+            gl_PrimitiveTriangleIndicesEXT[primitiveIndex] = uvec3(0u, 1u, 2u);
+            gl_MeshPrimitivesEXT[primitiveIndex].gl_PrimitiveID =
+                int(primitiveIndex);
+            gl_MeshPrimitivesEXT[primitiveIndex].gl_CullPrimitiveEXT = false;
+        }
+    }
+    """
+
+    crossgl = generate_crossgl(code, "mesh")
+
+    assert "layout(triangles, max_vertices = 64, max_primitives = 32) out;" in crossgl
+    assert "uint vertexIndex = gl_LocalInvocationID.x;" in crossgl
+    assert "uint primitiveIndex = (vertexIndex / 3u);" in crossgl
+    assert "SetMeshOutputCounts(64, 32);" in crossgl
+    assert "SetMeshOutputsEXT" not in crossgl
+    assert (
+        "gl_MeshVerticesEXT[vertexIndex].gl_Position = "
+        "vec4(float(vertexIndex), 0.0, 0.0, 1.0);" in crossgl
+    )
+    assert "gl_MeshVerticesEXT[vertexIndex].gl_ClipDistance[0] = 1.0;" in crossgl
+    assert (
+        "gl_PrimitiveTriangleIndicesEXT[primitiveIndex] = uvec3(0u, 1u, 2u);" in crossgl
+    )
+    assert (
+        "gl_MeshPrimitivesEXT[primitiveIndex].gl_PrimitiveID = "
+        "int(primitiveIndex);" in crossgl
+    )
+    assert (
+        "gl_MeshPrimitivesEXT[primitiveIndex].gl_CullPrimitiveEXT = false;" in crossgl
+    )
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "#extension GL_EXT_mesh_shader : require" in glsl
+    assert "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;" in glsl
+    assert "layout(triangles, max_vertices = 64, max_primitives = 32) out;" in glsl
+    assert "SetMeshOutputsEXT(64, 32);" in glsl
+    assert "SetMeshOutputCounts" not in glsl
+    assert (
+        "gl_MeshVerticesEXT[vertexIndex].gl_Position = "
+        "vec4(float(vertexIndex), 0.0, 0.0, 1.0);" in glsl
+    )
+    assert "gl_MeshVerticesEXT[vertexIndex].gl_ClipDistance[0] = 1.0;" in glsl
+    assert "gl_PrimitiveTriangleIndicesEXT[primitiveIndex] = uvec3(0u, 1u, 2u);" in glsl
+    assert (
+        "gl_MeshPrimitivesEXT[primitiveIndex].gl_PrimitiveID = "
+        "int(primitiveIndex);" in glsl
+    )
+    assert "gl_MeshPrimitivesEXT[primitiveIndex].gl_CullPrimitiveEXT = false;" in glsl
+
+
 @pytest.mark.parametrize(
     ("glsl_statement", "crossgl_call", "regenerated_statement"),
     [

@@ -27,6 +27,63 @@ class ASTNode:
         """Return an annotation value, or a default when it is absent."""
         return self.annotations.get(key, default)
 
+    def child_nodes(self):
+        """Yield direct structural AST children, excluding metadata backlinks."""
+        for field_name, value in vars(self).items():
+            if field_name in AST_CHILD_FIELD_EXCLUSIONS:
+                continue
+            yield from iter_ast_child_nodes(value)
+
+    def walk(self):
+        """Yield this node and all structural descendants once."""
+        visited = set()
+
+        def visit(node):
+            node_id = id(node)
+            if node_id in visited:
+                return
+            visited.add(node_id)
+            yield node
+            for child in node.child_nodes():
+                yield from visit(child)
+
+        yield from visit(self)
+
+    def bind_parent_links(self, parent=None):
+        """Set parent links for this structural subtree and return ``self``."""
+        visited = set()
+
+        def bind(node, parent_node):
+            node_id = id(node)
+            if node_id in visited:
+                return
+            visited.add(node_id)
+            node.parent = parent_node
+            for child in node.child_nodes():
+                bind(child, node)
+
+        bind(self, parent)
+        return self
+
+
+AST_CHILD_FIELD_EXCLUSIONS = frozenset({"annotations", "parent", "source_location"})
+
+
+def iter_ast_child_nodes(value):
+    """Yield ASTNode children from a nested structural field value."""
+    if isinstance(value, ASTNode):
+        yield value
+        return
+
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from iter_ast_child_nodes(item)
+        return
+
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from iter_ast_child_nodes(item)
+
 
 # ============================================================================
 # TYPE SYSTEM

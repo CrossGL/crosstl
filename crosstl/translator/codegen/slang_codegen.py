@@ -3967,6 +3967,11 @@ class SlangCodeGen:
             )
             if byte_address_result_type is not None:
                 return byte_address_result_type
+            structured_result_type = self.structured_buffer_member_call_result_type(
+                func_expr
+            )
+            if structured_result_type is not None:
+                return structured_result_type
             if isinstance(func_name, str) and func_name in {
                 "float",
                 "double",
@@ -5306,14 +5311,33 @@ class SlangCodeGen:
             "Load4": "uint4",
         }.get(member)
 
+    def structured_buffer_member_call_result_type(self, func_expr):
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+        receiver = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        member = str(getattr(func_expr, "member", ""))
+        if member != "Consume":
+            return None
+        receiver_type = self.structured_buffer_resource_type(receiver)
+        if not (
+            self.is_consume_structured_buffer_resource_type(receiver_type)
+            or self.is_structured_buffer_resource_type(receiver_type)
+            or self.is_append_structured_buffer_resource_type(receiver_type)
+        ):
+            return None
+        return self.structured_buffer_element_type(receiver_type) or "uint"
+
     def generate_resource_member_call(self, func_expr, args):
         receiver = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
         receiver_type = self.structured_buffer_resource_type(receiver)
-        if not self.is_byte_address_buffer_resource_type(receiver_type):
-            return None
 
         member = str(getattr(func_expr, "member", ""))
-        if member in {"Load", "Load2", "Load3", "Load4"}:
+        if self.is_byte_address_buffer_resource_type(receiver_type) and member in {
+            "Load",
+            "Load2",
+            "Load3",
+            "Load4",
+        }:
             if self.buffer_resource_access(receiver) == "writeonly":
                 result_type = self.byte_address_member_call_result_type(func_expr)
                 return self.unsupported_byte_address_buffer_call(
@@ -5325,7 +5349,12 @@ class SlangCodeGen:
             args_expr = ", ".join(self.generate_expression(arg) for arg in args)
             return f"{receiver_expr}.{member}({args_expr})"
 
-        if member in {"Store", "Store2", "Store3", "Store4"}:
+        if self.is_byte_address_buffer_resource_type(receiver_type) and member in {
+            "Store",
+            "Store2",
+            "Store3",
+            "Store4",
+        }:
             if self.buffer_resource_access(receiver) == "readonly":
                 return self.unsupported_byte_address_buffer_call(
                     member, "requires writable byte-address buffer receiver"
@@ -5337,6 +5366,51 @@ class SlangCodeGen:
             receiver_expr = self.generate_expression(receiver)
             args_expr = ", ".join(self.generate_expression(arg) for arg in args)
             return f"{receiver_expr}.{member}({args_expr})"
+
+        if member in {"Append", "Consume"} and not (
+            self.is_structured_buffer_resource_type(receiver_type)
+            or self.is_append_structured_buffer_resource_type(receiver_type)
+            or self.is_consume_structured_buffer_resource_type(receiver_type)
+        ):
+            return None
+
+        if member == "Append":
+            if len(args) < 1:
+                return self.unsupported_structured_buffer_call(
+                    "Append", "requires a value argument"
+                )
+            if self.buffer_resource_access(receiver) == "readonly":
+                return self.unsupported_structured_buffer_call(
+                    "Append", "requires writable structured buffer receiver"
+                )
+            if not self.is_append_structured_buffer_resource_type(receiver_type):
+                return self.unsupported_structured_buffer_call(
+                    "Append", "requires AppendStructuredBuffer receiver"
+                )
+            receiver_expr = self.generate_expression(receiver)
+            args_expr = ", ".join(self.generate_expression(arg) for arg in args)
+            return f"{receiver_expr}.{member}({args_expr})"
+
+        if member == "Consume":
+            result_type = self.structured_buffer_member_call_result_type(func_expr)
+            if args:
+                return self.unsupported_structured_buffer_call(
+                    "Consume", "requires no arguments", result_type or "uint"
+                )
+            if self.buffer_resource_access(receiver) == "writeonly":
+                return self.unsupported_structured_buffer_call(
+                    "Consume",
+                    "requires readable structured buffer receiver",
+                    result_type or "uint",
+                )
+            if not self.is_consume_structured_buffer_resource_type(receiver_type):
+                return self.unsupported_structured_buffer_call(
+                    "Consume",
+                    "requires ConsumeStructuredBuffer receiver",
+                    result_type or "uint",
+                )
+            receiver_expr = self.generate_expression(receiver)
+            return f"{receiver_expr}.{member}()"
 
         return None
 

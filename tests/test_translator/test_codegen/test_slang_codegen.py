@@ -4468,6 +4468,77 @@ def test_append_consume_wrong_structured_buffer_kinds_emit_slang_diagnostics():
     assert "buffer_consume(" not in generated_code
 
 
+def test_append_consume_member_calls_respect_access_qualifiers_and_kinds():
+    code = """
+    shader SlangAppendConsumeMemberAccessQualifiers {
+        struct Particle {
+            float mass;
+        };
+
+        AppendStructuredBuffer<Particle> appended @binding(14);
+        ConsumeStructuredBuffer<Particle> consumed @binding(15);
+        readonly AppendStructuredBuffer<Particle> readOnlyAppend @binding(16);
+        writeonly ConsumeStructuredBuffer<Particle> writeOnlyConsume @binding(17);
+        AppendStructuredBuffer<float> attrReadAppend @access(read) @binding(18);
+        ConsumeStructuredBuffer<float> attrWriteConsume @access(write) @binding(19);
+        RWStructuredBuffer<Particle> writableParticles;
+        StructuredBuffer<Particle> readOnlyParticles;
+
+        compute {
+            void main() {
+                Particle particle = consumed.Consume();
+                appended.Append(particle);
+                readOnlyAppend.Append(particle);
+                Particle blocked = writeOnlyConsume.Consume();
+                attrReadAppend.Append(1.0);
+                float attrBlocked = attrWriteConsume.Consume();
+                writableParticles.Append(particle);
+                Particle wrong = readOnlyParticles.Consume();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(16, 0)]] AppendStructuredBuffer<Particle> "
+        "readOnlyAppend : register(u16);" in generated_code
+    )
+    assert (
+        "[[vk::binding(17, 0)]] ConsumeStructuredBuffer<Particle> "
+        "writeOnlyConsume : register(u17);" in generated_code
+    )
+    assert "Particle particle = consumed.Consume();" in generated_code
+    assert "appended.Append(particle);" in generated_code
+    assert (
+        "/* unsupported Slang structured buffer: Append requires writable "
+        "structured buffer receiver */;" in generated_code
+    )
+    assert (
+        "Particle blocked = /* unsupported Slang structured buffer: Consume "
+        "requires readable structured buffer receiver */ Particle();" in generated_code
+    )
+    assert (
+        "float attrBlocked = /* unsupported Slang structured buffer: Consume "
+        "requires readable structured buffer receiver */ 0;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang structured buffer: Append requires "
+        "AppendStructuredBuffer receiver */;" in generated_code
+    )
+    assert (
+        "Particle wrong = /* unsupported Slang structured buffer: Consume "
+        "requires ConsumeStructuredBuffer receiver */ Particle();" in generated_code
+    )
+    assert "readOnlyAppend.Append" not in generated_code
+    assert "writeOnlyConsume.Consume" not in generated_code
+    assert "attrReadAppend.Append" not in generated_code
+    assert "attrWriteConsume.Consume" not in generated_code
+    assert "writableParticles.Append" not in generated_code
+    assert "readOnlyParticles.Consume" not in generated_code
+
+
 def test_byte_address_buffers_emit_slang_load_store_dimensions_and_bindings():
     code = """
     shader SlangByteAddressBuffers {

@@ -118,17 +118,37 @@ def test_normalize_stage_name_accepts_strings_and_enums():
     assert normalize_stage_name(DummyStage.FRAGMENT) == "fragment"
 
 
+def test_normalize_stage_name_canonicalizes_backend_aliases():
+    assert normalize_stage_name("pixel") == "fragment"
+    assert normalize_stage_name("hull") == "tessellation_control"
+    assert normalize_stage_name("domain") == "tessellation_evaluation"
+    assert normalize_stage_name("raygeneration") == "ray_generation"
+    assert normalize_stage_name("raygen") == "ray_generation"
+    assert normalize_stage_name("closesthit") == "ray_closest_hit"
+    assert normalize_stage_name("anyhit") == "ray_any_hit"
+    assert normalize_stage_name("callable") == "ray_callable"
+    assert normalize_stage_name("pixel-shader") == "fragment"
+
+
 def test_stage_matches_normalizes_target_and_stage():
     assert stage_matches(None, "vertex")
     assert stage_matches("ShaderStage.VERTEX", DummyStage.VERTEX)
+    assert stage_matches("hull", "ShaderStage.TESSELLATION_CONTROL")
+    assert stage_matches("domain", "tessellation_evaluation")
+    assert stage_matches("raygeneration", "ray_generation")
+    assert stage_matches("closesthit", "ray_closest_hit")
     assert not stage_matches("fragment", DummyStage.VERTEX)
+    assert not stage_matches("domain", "tessellation_control")
 
 
 def test_should_emit_qualified_function_keeps_helpers_and_filters_stages():
     assert should_emit_qualified_function("vertex", None)
     assert should_emit_qualified_function("vertex", "inline")
     assert should_emit_qualified_function("vertex", "ShaderStage.VERTEX")
+    assert should_emit_qualified_function("tessellation_control", "hull")
+    assert should_emit_qualified_function("ray_closest_hit", "closesthit")
     assert not should_emit_qualified_function("vertex", "fragment")
+    assert not should_emit_qualified_function("domain", "hull")
     assert not should_emit_qualified_function("vertex", "ray_miss")
 
 
@@ -167,6 +187,17 @@ def test_stage_entry_name_helpers_reserve_global_and_local_helpers():
     assert entries == [(id(entry), "fragment", entry)]
     assert reserved == {"PSMain", "PSMain_2"}
     assert names[id(entry)] == "PSMain_3"
+
+
+def test_stage_entry_name_helpers_canonicalize_alias_qualifiers():
+    entry = DummyFunction("main", qualifiers=["hull"])
+    ast = DummyAst(functions=[entry])
+
+    entries = collect_stage_entry_records(
+        ast, "tessellation_control", {"tessellation_control"}
+    )
+
+    assert entries == [(id(entry), "tessellation_control", entry)]
 
 
 def test_stage_entry_name_helpers_can_keep_single_default_entry():

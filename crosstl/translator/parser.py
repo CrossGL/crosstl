@@ -227,6 +227,55 @@ RAYQUERY_METHODS = {
     "CandidateRayT",
 }
 
+SHADER_STAGE_TOKEN_TYPES = frozenset(
+    {
+        "VERTEX",
+        "FRAGMENT",
+        "COMPUTE",
+        "GEOMETRY",
+        "TESSELLATION_CONTROL",
+        "TESSELLATION_EVALUATION",
+        "TASK",
+        "MESH",
+        "OBJECT",
+        "AMPLIFICATION",
+        "RAY_GENERATION",
+        "RAY_INTERSECTION",
+        "RAY_CLOSEST_HIT",
+        "RAY_MISS",
+        "RAY_ANY_HIT",
+        "RAY_CALLABLE",
+    }
+)
+
+SHADER_STAGE_NAME_ALIASES = {
+    "anyhit": "ray_any_hit",
+    "callable": "ray_callable",
+    "closesthit": "ray_closest_hit",
+    "domain": "tessellation_evaluation",
+    "hull": "tessellation_control",
+    "intersection": "ray_intersection",
+    "miss": "ray_miss",
+    "pixel": "fragment",
+    "pixel_shader": "fragment",
+    "raygen": "ray_generation",
+    "raygeneration": "ray_generation",
+    "tesscontrol": "tessellation_control",
+    "tesseval": "tessellation_evaluation",
+}
+
+SHADER_STAGE_NAMES = {stage.value: stage for stage in ShaderStage}
+
+
+def shader_stage_from_name(name):
+    """Return the canonical shader stage enum for a CrossGL or backend alias."""
+    if name is None:
+        return None
+    normalized = str(name).split(".")[-1].strip().lower()
+    normalized = normalized.replace("-", "_").replace(" ", "_")
+    normalized = SHADER_STAGE_NAME_ALIASES.get(normalized, normalized)
+    return SHADER_STAGE_NAMES.get(normalized)
+
 
 class Parser:
     """Recursive-descent parser for CrossGL Universal IR tokens."""
@@ -402,24 +451,7 @@ class Parser:
                 functions.append(self.parse_function())
             elif self.is_variable_declaration():
                 global_variables.append(self.parse_variable_declaration())
-            elif self.current_token[0] in [
-                "VERTEX",
-                "FRAGMENT",
-                "COMPUTE",
-                "GEOMETRY",
-                "TESSELLATION_CONTROL",
-                "TESSELLATION_EVALUATION",
-                "TASK",
-                "MESH",
-                "OBJECT",
-                "AMPLIFICATION",
-                "RAY_GENERATION",
-                "RAY_INTERSECTION",
-                "RAY_CLOSEST_HIT",
-                "RAY_MISS",
-                "RAY_ANY_HIT",
-                "RAY_CALLABLE",
-            ]:
+            elif self.current_token[0] in SHADER_STAGE_TOKEN_TYPES:
                 stage_func = self.parse_shader_stage()
                 functions.append(stage_func)
             else:
@@ -466,24 +498,7 @@ class Parser:
         self.eat("LBRACE")
 
         while self.current_token[0] != "RBRACE":
-            if self.current_token[0] in [
-                "VERTEX",
-                "FRAGMENT",
-                "COMPUTE",
-                "GEOMETRY",
-                "TESSELLATION_CONTROL",
-                "TESSELLATION_EVALUATION",
-                "TASK",
-                "MESH",
-                "OBJECT",
-                "AMPLIFICATION",
-                "RAY_GENERATION",
-                "RAY_INTERSECTION",
-                "RAY_CLOSEST_HIT",
-                "RAY_MISS",
-                "RAY_ANY_HIT",
-                "RAY_CALLABLE",
-            ]:
+            if self.current_token_starts_shader_stage_block():
                 stage_node = self.parse_shader_stage_block()
                 stages[stage_node.stage] = stage_node
             elif self.current_token_starts_attributed_cbuffer_declaration():
@@ -591,31 +606,7 @@ class Parser:
     def parse_shader_stage_block(self):
         """Parse a stage-qualified block into a ``StageNode``."""
         stage_type = self.current_token[1]
-        stage_enum = {
-            "vertex": ShaderStage.VERTEX,
-            "fragment": ShaderStage.FRAGMENT,
-            "compute": ShaderStage.COMPUTE,
-            "geometry": ShaderStage.GEOMETRY,
-            "tessellation_control": ShaderStage.TESSELLATION_CONTROL,
-            "tessellation_evaluation": ShaderStage.TESSELLATION_EVALUATION,
-            "hull": ShaderStage.TESSELLATION_CONTROL,
-            "domain": ShaderStage.TESSELLATION_EVALUATION,
-            "task": ShaderStage.TASK,
-            "amplification": ShaderStage.AMPLIFICATION,
-            "object": ShaderStage.OBJECT,
-            "mesh": ShaderStage.MESH,
-            "ray_generation": ShaderStage.RAY_GENERATION,
-            "ray_intersection": ShaderStage.RAY_INTERSECTION,
-            "ray_closest_hit": ShaderStage.RAY_CLOSEST_HIT,
-            "ray_miss": ShaderStage.RAY_MISS,
-            "ray_any_hit": ShaderStage.RAY_ANY_HIT,
-            "ray_callable": ShaderStage.RAY_CALLABLE,
-            "intersection": ShaderStage.RAY_INTERSECTION,
-            "closesthit": ShaderStage.RAY_CLOSEST_HIT,
-            "anyhit": ShaderStage.RAY_ANY_HIT,
-            "miss": ShaderStage.RAY_MISS,
-            "callable": ShaderStage.RAY_CALLABLE,
-        }.get(stage_type, ShaderStage.VERTEX)
+        stage_enum = shader_stage_from_name(stage_type) or ShaderStage.VERTEX
 
         self.eat(self.current_token[0])
 
@@ -3767,6 +3758,18 @@ class Parser:
             self.pos += 1
             self.current_token = self.tokens[self.pos]
 
+    def current_token_starts_shader_stage_block(self):
+        """Return whether the current token starts an explicit stage block."""
+        if self.current_token[0] in SHADER_STAGE_TOKEN_TYPES:
+            return True
+
+        if shader_stage_from_name(self.current_token[1]) is None:
+            return False
+
+        return self.peek()[0] == "LBRACE" or (
+            self.peek()[0] == "IDENTIFIER" and self.peek(2)[0] == "LBRACE"
+        )
+
     def parse_global(self):
         """Parse one top-level declaration or recover past unsupported input."""
         if self.current_token[0] == "EOF":
@@ -3818,24 +3821,7 @@ class Parser:
             self.skip_unknown_token()
             return None
 
-        if self.current_token[0] in [
-            "VERTEX",
-            "FRAGMENT",
-            "COMPUTE",
-            "GEOMETRY",
-            "TESSELLATION_CONTROL",
-            "TESSELLATION_EVALUATION",
-            "TASK",
-            "MESH",
-            "OBJECT",
-            "AMPLIFICATION",
-            "RAY_GENERATION",
-            "RAY_INTERSECTION",
-            "RAY_CLOSEST_HIT",
-            "RAY_MISS",
-            "RAY_ANY_HIT",
-            "RAY_CALLABLE",
-        ]:
+        if self.current_token_starts_shader_stage_block():
             return self.parse_shader_stage_block()
 
         # Functions take priority over variables to avoid misidentification.

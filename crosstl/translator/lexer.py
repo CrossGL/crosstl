@@ -212,11 +212,11 @@ TOKENS = OrderedDict(
         ("ASSIGN_SHIFT_LEFT", r"<<="),
         ("ASSIGN_SHIFT_RIGHT", r">>="),
         # Operators - Comparison
+        ("SPACESHIP", r"<=>"),
         ("EQUAL", r"=="),
         ("NOT_EQUAL", r"!="),
         ("LESS_EQUAL", r"<="),
         ("GREATER_EQUAL", r">="),
-        ("SPACESHIP", r"<=>"),
         # Operators - Logical
         ("LOGICAL_AND", r"&&"),
         ("LOGICAL_OR", r"\|\|"),
@@ -231,12 +231,12 @@ TOKENS = OrderedDict(
         # Operators - Arithmetic
         ("INCREMENT", r"\+\+"),
         ("DECREMENT", r"--"),
+        ("POWER", r"\*\*"),
         ("PLUS", r"\+"),
         ("MINUS", r"-"),
         ("MULTIPLY", r"\*"),
         ("DIVIDE", r"/"),
         ("MOD", r"%"),
-        ("POWER", r"\*\*"),
         # Operators - Other
         ("ARROW", r"->"),
         ("FAT_ARROW", r"=>"),

@@ -388,6 +388,116 @@ def test_native_hip_graph_exec_update_parses_and_compiles_if_available(tmp_path)
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_graph_dependency_queries_parse_and_compile_if_available(
+    tmp_path,
+):
+    """Smoke native HIP graph dependency and query APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void graph_dependency_queries() {
+        hipGraph_t graph;
+        hipGraph_t clone;
+        hipGraphNode_t root;
+        hipGraphNode_t child;
+        hipGraphNode_t cloned_child;
+        hipGraphNode_t nodes[4];
+        hipGraphNode_t edge_from[4];
+        hipGraphNode_t edge_to[4];
+        hipGraphNodeType node_type;
+        size_t num_nodes = 4;
+        size_t num_roots = 4;
+        size_t num_edges = 4;
+        size_t num_dependencies = 4;
+        size_t num_dependents = 4;
+
+        hipGraphCreate(&graph, 0);
+        hipGraphAddEmptyNode(&root, graph, NULL, 0);
+        hipGraphAddEmptyNode(&child, graph, NULL, 0);
+        hipGraphAddDependencies(graph, &root, &child, 1);
+        hipGraphGetNodes(graph, nodes, &num_nodes);
+        hipGraphGetRootNodes(graph, nodes, &num_roots);
+        hipGraphGetEdges(graph, edge_from, edge_to, &num_edges);
+        hipGraphNodeGetDependencies(child, nodes, &num_dependencies);
+        hipGraphNodeGetDependentNodes(root, nodes, &num_dependents);
+        hipGraphNodeGetType(child, &node_type);
+        hipGraphClone(&clone, graph);
+        hipGraphNodeFindInClone(&cloned_child, child, clone);
+        hipGraphRemoveDependencies(graph, &root, &child, 1);
+        hipGraphDestroyNode(child);
+        hipGraphDestroy(clone);
+        hipGraphDestroy(graph);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: graph_dependency_queries" in crossgl
+    assert "void graph_dependency_queries()" in crossgl
+    assert "var graph: hipGraph_t;" in crossgl
+    assert "var clone: hipGraph_t;" in crossgl
+    assert "var root: hipGraphNode_t;" in crossgl
+    assert "var child: hipGraphNode_t;" in crossgl
+    assert "var cloned_child: hipGraphNode_t;" in crossgl
+    assert "var nodes: array<hipGraphNode_t, 4>;" in crossgl
+    assert "var edge_from: array<hipGraphNode_t, 4>;" in crossgl
+    assert "var edge_to: array<hipGraphNode_t, 4>;" in crossgl
+    assert "var node_type: hipGraphNodeType;" in crossgl
+    assert "var num_nodes: u32 = 4;" in crossgl
+    assert "var num_roots: u32 = 4;" in crossgl
+    assert "var num_edges: u32 = 4;" in crossgl
+    assert "var num_dependencies: u32 = 4;" in crossgl
+    assert "var num_dependents: u32 = 4;" in crossgl
+    assert "// HIP graph create: output: graph, flags: 0" in crossgl
+    assert (
+        "// HIP graph add empty node: output: root, graph: graph, "
+        "dependencies: NULL, count: 0"
+    ) in crossgl
+    assert (
+        "// HIP graph add empty node: output: child, graph: graph, "
+        "dependencies: NULL, count: 0"
+    ) in crossgl
+    assert (
+        "// HIP graph add dependencies: graph: graph, from: (&root), "
+        "to: (&child), count: 1"
+    ) in crossgl
+    assert (
+        "// HIP graph get nodes: graph: graph, nodes output: nodes, "
+        "count output: num_nodes"
+    ) in crossgl
+    assert (
+        "// HIP graph get root nodes: graph: graph, nodes output: nodes, "
+        "count output: num_roots"
+    ) in crossgl
+    assert (
+        "// HIP graph get edges: graph: graph, from output: edge_from, "
+        "to output: edge_to, count output: num_edges"
+    ) in crossgl
+    assert (
+        "// HIP graph node get dependencies: node: child, nodes output: nodes, "
+        "count output: num_dependencies"
+    ) in crossgl
+    assert (
+        "// HIP graph node get dependent nodes: node: root, nodes output: nodes, "
+        "count output: num_dependents"
+    ) in crossgl
+    assert "// HIP graph node get type: node: child, output: node_type" in crossgl
+    assert "// HIP graph clone: output: clone, source: graph" in crossgl
+    assert (
+        "// HIP graph node find in clone: output: cloned_child, "
+        "original: child, clone graph: clone"
+    ) in crossgl
+    assert (
+        "// HIP graph remove dependencies: graph: graph, from: (&root), "
+        "to: (&child), count: 1"
+    ) in crossgl
+    assert "// HIP graph destroy node: child" in crossgl
+    assert "// HIP graph destroy: clone" in crossgl
+    assert "// HIP graph destroy: graph" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_device_error_runtime_parses_and_compiles_if_available(
     tmp_path,
 ):

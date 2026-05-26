@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 726
+        "test_count": 727
       },
       "translator_codegen": {
         "exists": true,
@@ -437,7 +437,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 383
+        "test_count": 385
       },
       "translator_codegen": {
         "exists": true,
@@ -629,7 +629,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 292
+        "test_count": 293
       },
       "translator_codegen": {
         "exists": true,
@@ -881,7 +881,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 84,
+        "unsupported_marker_count": 90,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -971,7 +971,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 312
+        "test_count": 313
       },
       "translator_codegen": {
         "exists": true,
@@ -1346,7 +1346,7 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "Registers RayQuery types as SPIR-V KHR ray-query objects and lowers Proceed, CandidateRayT, and CommittedRayT to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, acceleration-structure resources, ray-query initialization, object/world ray vectors, and broader intersection metadata remain incomplete.",
+      "notes": "Registers RayQuery types and acceleration-structure resources as SPIR-V KHR objects, lowers TraceRayInline to OpRayQueryInitializeKHR, and lowers Proceed, CandidateRayT, and CommittedRayT to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, TraceRay, acceleration-structure arrays, object/world ray vectors, and broader intersection metadata remain incomplete.",
       "status": "partial"
     },
     {
@@ -3596,10 +3596,12 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_proceed_and_intersection_t_emit_khr_instructions",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_parsed_ray_query_generic_type_lowers_to_khr_instructions",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_supported_operations_reject_unexpected_arguments",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_trace_ray_inline_expanded_operands_initialize_query",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_trace_ray_inline_raydesc_fields_initialize_query",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
           ],
-          "notes": "Registers RayQuery types as SPIR-V KHR ray-query objects and lowers Proceed, CandidateRayT, and CommittedRayT to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, acceleration-structure resources, ray-query initialization, object/world ray vectors, and broader intersection metadata remain incomplete.",
+          "notes": "Registers RayQuery types and acceleration-structure resources as SPIR-V KHR objects, lowers TraceRayInline to OpRayQueryInitializeKHR, and lowers Proceed, CandidateRayT, and CommittedRayT to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, TraceRay, acceleration-structure arrays, object/world ray vectors, and broader intersection metadata remain incomplete.",
           "status": "partial"
         }
       }

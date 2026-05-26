@@ -295,6 +295,25 @@ def test_assignment_shift_operators():
         pytest.fail("Shift operators tokenization failed.")
 
 
+def test_longest_operator_tokenization():
+    code = """
+    float power = 2.0 ** exponent;
+    int ordering = a <=> b;
+    bool le = a <= b;
+    bool ge = a >= b;
+    """
+
+    tokens = tokenize_code(code)
+
+    assert ("POWER", "**") in tokens
+    assert ("SPACESHIP", "<=>") in tokens
+    assert ("LESS_EQUAL", "<=") in tokens
+    assert ("GREATER_EQUAL", ">=") in tokens
+    assert tokens.count(("MULTIPLY", "*")) == 0
+    spaceship_index = tokens.index(("SPACESHIP", "<=>"))
+    assert ("LESS_EQUAL", "<=") not in tokens[:spaceship_index]
+
+
 def test_assignment_operators_tokenization():
     code = """
     int a = 1;

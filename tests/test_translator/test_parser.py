@@ -4410,6 +4410,144 @@ def test_hlsl_tessellation_and_ray_stage_aliases_parse_to_canonical_stages():
     assert ast.stages[ShaderStage.RAY_CALLABLE].entry_point.name == "CallableMain"
 
 
+def test_shader_stage_attribute_values_match_stage_aliases():
+    code = """
+    shader ShaderAttributeAliases {
+        vertex {
+            [shader("vertex")]
+            void main() { return; }
+        }
+        fragment {
+            [shader("pixel")]
+            void main() { return; }
+        }
+        compute {
+            void main() @shader(compute) { return; }
+        }
+        hull {
+            [shader("hull")]
+            void main() @outputcontrolpoints(3) { return; }
+        }
+        domain {
+            [shader("domain")]
+            void main() @domain(tri) { return; }
+        }
+        ray_generation {
+            [shader("raygeneration")]
+            void main() { return; }
+        }
+        closesthit {
+            [shader("closesthit")]
+            void main() { return; }
+        }
+        anyhit {
+            void main() @shader(anyhit) { return; }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert ast.stages[ShaderStage.VERTEX].entry_point.attributes[0].name == "shader"
+    assert ast.stages[ShaderStage.FRAGMENT].entry_point.attributes[0].name == "shader"
+    assert ast.stages[ShaderStage.COMPUTE].entry_point.attributes[0].name == "shader"
+    assert (
+        ast.stages[ShaderStage.TESSELLATION_CONTROL].entry_point.attributes[0].name
+        == "shader"
+    )
+    assert (
+        ast.stages[ShaderStage.TESSELLATION_EVALUATION].entry_point.attributes[0].name
+        == "shader"
+    )
+    assert (
+        ast.stages[ShaderStage.RAY_GENERATION]
+        .entry_point.attributes[0]
+        .arguments[0]
+        .value
+        == "raygeneration"
+    )
+    assert (
+        ast.stages[ShaderStage.RAY_CLOSEST_HIT]
+        .entry_point.attributes[0]
+        .arguments[0]
+        .value
+        == "closesthit"
+    )
+    assert (
+        ast.stages[ShaderStage.RAY_ANY_HIT].entry_point.attributes[0].name == "shader"
+    )
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            compute {
+                [shader("fragment")]
+                void main() { return; }
+            }
+            """,
+            "Function metadata '@shader\\(fragment\\)'.*conflicts with compute stage",
+        ),
+        (
+            """
+            fragment {
+                [shader("pixel", "compute")]
+                void main() { return; }
+            }
+            """,
+            "Function metadata '@shader\\(pixel, compute\\)'.*requires exactly one",
+        ),
+        (
+            """
+            mesh {
+                [shader("not_a_stage")]
+                void main() { return; }
+            }
+            """,
+            "Function metadata '@shader\\(not_a_stage\\)'.*unknown shader stage",
+        ),
+        (
+            """
+            compute {
+                void helper() @shader(fragment) { return; }
+                void main() { return; }
+            }
+            """,
+            "compute stage local function 'helper'.*conflicts with compute stage",
+        ),
+    ],
+)
+def test_shader_stage_attribute_values_require_matching_stage(stage_source, message):
+    code = f"""
+    shader InvalidShaderAttribute {{
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_global_shader_attribute_values_do_not_require_stage_block_context():
+    code = """
+    shader NativeEntrypointAttributes {
+        [shader("fragment")]
+        void helper() { return; }
+
+        compute {
+            void main() { return; }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert ast.functions[0].attributes[0].name == "shader"
+    assert ast.functions[0].attributes[0].arguments[0].value == "fragment"
+
+
 def test_wave_intrinsic_parses_to_node():
     code = """
     shader main {

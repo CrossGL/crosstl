@@ -3095,6 +3095,94 @@ class TestVulkanSPIRVCodeGen:
         assert "using a default" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_ray_query_trace_ray_inline_expanded_operands_initialize_query(
+        self, tmp_path
+    ):
+        source_code = """
+        shader RayQueryInitializeCompute {
+            accelerationStructureEXT topLevelAS @binding(0);
+
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    rq.TraceRayInline(
+                        topLevelAS,
+                        0u,
+                        255u,
+                        vec3(0.0, 1.0, 2.0),
+                        0.001,
+                        vec3(0.0, 0.0, 1.0),
+                        100.0
+                    );
+                    bool advanced = rq.Proceed();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert re.search(r"%\d+ = OpTypeAccelerationStructureKHR\b", spv_code)
+        assert re.search(r"%\d+ = OpTypeRayQueryKHR\b", spv_code)
+        accel_id = spirv_named_variable(
+            spv_code, "topLevelAS", storage_class="UniformConstant"
+        )
+        assert f"OpDecorate {accel_id} Binding 0" in spv_code
+        assert spv_code.count("OpRayQueryInitializeKHR") == 1
+        assert re.search(
+            r"OpRayQueryInitializeKHR %\d+ %\d+ %\d+ %\d+ %\d+ %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert "OpRayQueryProceedKHR" in spv_code
+        assert "TraceRayInline yet; using a default" not in spv_code
+        assert "WARNING: SPIR-V RayQuery.TraceRayInline" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_ray_query_trace_ray_inline_raydesc_fields_initialize_query(self, tmp_path):
+        source_code = """
+        shader RayQueryInitializeFromRayDesc {
+            struct RayDesc {
+                vec3 Origin;
+                float TMin;
+                vec3 Direction;
+                float TMax;
+            };
+
+            accelerationStructureEXT topLevelAS @binding(0);
+
+            compute {
+                void main() {
+                    RayDesc ray = RayDesc(
+                        vec3(0.0, 1.0, 2.0),
+                        0.001,
+                        vec3(0.0, 0.0, 1.0),
+                        100.0
+                    );
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    rq.TraceRayInline(topLevelAS, 0u, 255u, ray);
+                    bool advanced = rq.Proceed();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert "OpTypeAccelerationStructureKHR" in spv_code
+        assert spv_code.count("OpRayQueryInitializeKHR") == 1
+        assert spv_code.count("OpAccessChain") >= 4
+        assert "OpRayQueryProceedKHR" in spv_code
+        assert "TraceRayInline yet; using a default" not in spv_code
+        assert "RayDesc argument does not provide" not in spv_code
+        assert "WARNING: SPIR-V RayQuery.TraceRayInline" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_ray_query_supported_operations_reject_unexpected_arguments(self):
         source_code = """
         shader RayQueryBadArgs {

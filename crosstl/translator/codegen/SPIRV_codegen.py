@@ -339,6 +339,9 @@ class VulkanSPIRVCodeGen:
         if cache_key in self.resource_types:
             return self.resource_types[cache_key]
 
+        if info["kind"] == "acceleration_structure":
+            return self.register_acceleration_structure_type(type_name)
+
         if info["kind"] == "sampler":
             id_value = self.get_id()
             self.emit(f"%{id_value} = OpTypeSampler")
@@ -474,6 +477,27 @@ class VulkanSPIRVCodeGen:
 
         spirv_id = SpirvId(id_value, SpirvType(cache_key), cache_key)
         self.ray_query_types[cache_key] = spirv_id
+        return spirv_id
+
+    def register_acceleration_structure_type(self, type_name: str) -> SpirvId:
+        """Create and register the opaque SPIR-V acceleration-structure type."""
+        cache_key = (str(type_name), "acceleration_structure")
+        if cache_key in self.resource_types:
+            return self.resource_types[cache_key]
+
+        self.require_capability("RayQueryKHR")
+        self.require_extension("SPV_KHR_ray_query")
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpTypeAccelerationStructureKHR")
+
+        spirv_id = SpirvId(id_value, SpirvType(str(type_name)), str(type_name))
+        metadata = {
+            "kind": "acceleration_structure",
+            "type_name": str(type_name),
+        }
+        self.resource_type_metadata[spirv_id.id] = metadata
+        self.resource_types[cache_key] = spirv_id
+        self.resource_types[str(type_name)] = spirv_id
         return spirv_id
 
     def register_constant(
@@ -3156,6 +3180,227 @@ class VulkanSPIRVCodeGen:
 
         return self.register_constant(selector, self.register_primitive_type("uint"))
 
+    def format_expected_argument_counts(self, expected_counts) -> str:
+        return " or ".join(str(count) for count in sorted(expected_counts))
+
+    def registered_value_type(self, value_id: SpirvId) -> Optional[SpirvId]:
+        return self.value_types.get(value_id.id) or self.find_registered_type_by_base(
+            value_id.type.base_type
+        )
+
+    def acceleration_structure_value_from_expression(self, expr) -> Optional[SpirvId]:
+        value = self.process_expression(expr)
+        if value is None:
+            self.emit(
+                "; WARNING: SPIR-V RayQuery.TraceRayInline acceleration structure "
+                "argument could not be evaluated"
+            )
+            return None
+
+        value_type = self.registered_value_type(value)
+        type_name = (
+            value_type.type.base_type
+            if value_type is not None
+            else value.type.base_type
+        )
+        if not self.is_acceleration_structure_type_name(type_name):
+            self.emit(
+                "; WARNING: SPIR-V RayQuery.TraceRayInline acceleration structure "
+                f"argument must be accelerationStructureEXT, got {type_name}"
+            )
+            return None
+
+        return value
+
+    def ray_query_uint_operand(self, expr, role: str) -> Optional[SpirvId]:
+        value = self.process_expression(expr)
+        if value is None:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                "could not be evaluated"
+            )
+            return None
+
+        value_type = self.registered_value_type(value) or self.ensure_registered_type(
+            value.type
+        )
+        if self.vector_component_type_and_count(value_type.type.base_type) is not None:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                "must be a 32-bit integer scalar"
+            )
+            return None
+
+        component_type = self.normalize_primitive_name(value_type.type.base_type)
+        if component_type not in {"int", "uint"}:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                f"must be a 32-bit integer scalar, got {component_type}"
+            )
+            return None
+
+        return self.convert_value_to_type(value, self.register_primitive_type("uint"))
+
+    def ray_query_float_operand(self, expr, role: str) -> Optional[SpirvId]:
+        value = self.process_expression(expr)
+        if value is None:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                "could not be evaluated"
+            )
+            return None
+
+        value_type = self.registered_value_type(value) or self.ensure_registered_type(
+            value.type
+        )
+        if self.vector_component_type_and_count(value_type.type.base_type) is not None:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                "must be a 32-bit floating-point scalar"
+            )
+            return None
+
+        component_type = self.normalize_primitive_name(value_type.type.base_type)
+        if component_type not in {"float", "double", "int", "uint"}:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                f"must be a 32-bit floating-point scalar, got {component_type}"
+            )
+            return None
+
+        return self.convert_value_to_type(value, self.register_primitive_type("float"))
+
+    def ray_query_vec3_operand(self, expr, role: str) -> Optional[SpirvId]:
+        value = self.process_expression(expr)
+        if value is None:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                "could not be evaluated"
+            )
+            return None
+
+        float_type = self.register_primitive_type("float")
+        vec3_type = self.register_vector_type(float_type, 3)
+        value = self.convert_value_to_type(value, vec3_type)
+        vector_info = self.vector_component_type_and_count(value.type.base_type)
+        if vector_info != ("float", 3):
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                "must be a 32-bit floating-point vec3"
+            )
+            return None
+
+        return value
+
+    def ray_desc_member_expression(
+        self, ray_desc_expr, field_names
+    ) -> Optional[MemberAccessNode]:
+        ray_desc_pointer = self.variable_pointer_from_expression(ray_desc_expr)
+        if ray_desc_pointer is None:
+            self.emit(
+                "; WARNING: SPIR-V RayQuery.TraceRayInline RayDesc argument "
+                "must be an addressable value"
+            )
+            return None
+
+        ray_desc_type = self.pointer_pointee_type(ray_desc_pointer)
+        members = self.current_struct_members.get(
+            ray_desc_type.type.base_type if ray_desc_type is not None else None, []
+        )
+        available_names = {member_name for _, member_name in members}
+        for field_name in field_names:
+            if field_name in available_names:
+                return MemberAccessNode(ray_desc_expr, field_name)
+
+        expected = "/".join(field_names)
+        self.emit(
+            "; WARNING: SPIR-V RayQuery.TraceRayInline RayDesc argument "
+            f"does not provide {expected}"
+        )
+        return None
+
+    def ray_query_initialize_argument_expressions(self, arguments):
+        if len(arguments) == 7:
+            return tuple(arguments)
+
+        acceleration, ray_flags, cull_mask, ray_desc = arguments
+        origin = self.ray_desc_member_expression(
+            ray_desc, ("Origin", "origin", "rayOrigin", "RayOrigin")
+        )
+        tmin = self.ray_desc_member_expression(
+            ray_desc, ("TMin", "tMin", "Tmin", "tmin")
+        )
+        direction = self.ray_desc_member_expression(
+            ray_desc, ("Direction", "direction", "rayDirection", "RayDirection")
+        )
+        tmax = self.ray_desc_member_expression(
+            ray_desc, ("TMax", "tMax", "Tmax", "tmax")
+        )
+        if None in {origin, tmin, direction, tmax}:
+            return None
+        return acceleration, ray_flags, cull_mask, origin, tmin, direction, tmax
+
+    def process_ray_query_initialize(self, query_pointer: SpirvId, arguments) -> None:
+        expressions = self.ray_query_initialize_argument_expressions(arguments)
+        if expressions is None:
+            return None
+
+        (
+            acceleration_expr,
+            ray_flags_expr,
+            cull_mask_expr,
+            origin_expr,
+            tmin_expr,
+            direction_expr,
+            tmax_expr,
+        ) = expressions
+
+        acceleration = self.acceleration_structure_value_from_expression(
+            acceleration_expr
+        )
+        ray_flags = self.ray_query_uint_operand(ray_flags_expr, "ray flags")
+        cull_mask = self.ray_query_uint_operand(cull_mask_expr, "cull mask")
+        origin = self.ray_query_vec3_operand(origin_expr, "origin")
+        tmin = self.ray_query_float_operand(tmin_expr, "Tmin")
+        direction = self.ray_query_vec3_operand(direction_expr, "direction")
+        tmax = self.ray_query_float_operand(tmax_expr, "Tmax")
+
+        if None in {acceleration, ray_flags, cull_mask, origin, tmin, direction, tmax}:
+            return None
+
+        self.emit(
+            f"OpRayQueryInitializeKHR %{query_pointer.id} %{acceleration.id} "
+            f"%{ray_flags.id} %{cull_mask.id} %{origin.id} %{tmin.id} "
+            f"%{direction.id} %{tmax.id}"
+        )
+        return None
+
+    def ray_query_method_names(self):
+        return {
+            "Proceed",
+            "CandidateRayT",
+            "CommittedRayT",
+            "TraceRayInline",
+        }
+
+    def ray_query_call_from_function_call(self, expr) -> Optional[RayQueryOpNode]:
+        if not isinstance(expr, FunctionCallNode):
+            return None
+
+        func_expr = getattr(expr, "function", getattr(expr, "name", None))
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+
+        operation = str(getattr(func_expr, "member", ""))
+        if operation not in self.ray_query_method_names():
+            return None
+
+        return RayQueryOpNode(
+            operation,
+            getattr(func_expr, "object", getattr(func_expr, "object_expr", None)),
+            getattr(expr, "arguments", getattr(expr, "args", [])),
+        )
+
     def process_ray_query_operation(self, expr: RayQueryOpNode) -> SpirvId:
         operation = expr.operation
         arguments = getattr(expr, "args", getattr(expr, "arguments", [])) or []
@@ -3164,15 +3409,21 @@ class VulkanSPIRVCodeGen:
             "Proceed": 0,
             "CandidateRayT": 0,
             "CommittedRayT": 0,
+            "TraceRayInline": {4, 7},
         }
         if operation not in supported_argument_counts:
             return self.represented_ir_diagnostic_default_value("ray query", operation)
 
-        if len(arguments) != supported_argument_counts[operation]:
+        expected_counts = supported_argument_counts[operation]
+        if isinstance(expected_counts, int):
+            expected_counts = {expected_counts}
+        if len(arguments) not in expected_counts:
             self.emit(
                 f"; WARNING: SPIR-V RayQuery.{operation} requires "
-                f"{supported_argument_counts[operation]} arguments"
+                f"{self.format_expected_argument_counts(expected_counts)} arguments"
             )
+            if operation == "TraceRayInline":
+                return None
             return self.default_value_for_type(
                 self.represented_ir_diagnostic_result_type("ray query", operation)
             )
@@ -3183,6 +3434,9 @@ class VulkanSPIRVCodeGen:
 
         self.require_capability("RayQueryKHR")
         self.require_extension("SPV_KHR_ray_query")
+
+        if operation == "TraceRayInline":
+            return self.process_ray_query_initialize(query_pointer, arguments)
 
         if operation == "Proceed":
             result_type = self.register_primitive_type("bool")
@@ -4605,6 +4859,9 @@ class VulkanSPIRVCodeGen:
         if type_str in sampler_info:
             return sampler_info[type_str]
 
+        if self.is_acceleration_structure_type_name(type_str):
+            return {"kind": "acceleration_structure"}
+
         image_match = re.fullmatch(r"([iu]?image)(2D|3D|Cube)(MS)?(Array)?", type_str)
         if image_match:
             prefix, dim, ms_suffix, array_suffix = image_match.groups()
@@ -4630,6 +4887,15 @@ class VulkanSPIRVCodeGen:
 
     def is_resource_type_name(self, type_str: str) -> bool:
         return self.resource_type_info(type_str) is not None
+
+    def is_acceleration_structure_type_name(self, type_str: str) -> bool:
+        compact = re.sub(r"\s+", "", str(type_str))
+        return compact in {
+            "accelerationStructureEXT",
+            "AccelerationStructure",
+            "RaytracingAccelerationStructure",
+            "acceleration_structure",
+        }
 
     def is_ray_query_type_name(self, type_str: str) -> bool:
         compact = re.sub(r"\s+", "", str(type_str))
@@ -9142,6 +9408,10 @@ class VulkanSPIRVCodeGen:
             )
 
         elif isinstance(expr, FunctionCallNode):
+            ray_query_call = self.ray_query_call_from_function_call(expr)
+            if ray_query_call is not None:
+                return self.process_ray_query_operation(ray_query_call)
+
             callee_expr = getattr(expr, "function", getattr(expr, "name", None))
             callee_name = None
             if hasattr(callee_expr, "name"):

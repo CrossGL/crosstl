@@ -448,6 +448,43 @@ FUNCTION_STAGE_ATTRIBUTE_NAMES = {
     "workgroup_size": "threadgroup_size",
 }
 
+SHADER_STAGE_ATTRIBUTE_ALIASES = {
+    "anyhit": "ray_any_hit",
+    "callable": "ray_callable",
+    "closesthit": "ray_closest_hit",
+    "domain": "tessellation_evaluation",
+    "hull": "tessellation_control",
+    "intersection": "ray_intersection",
+    "miss": "ray_miss",
+    "pixel": "fragment",
+    "pixel_shader": "fragment",
+    "raygen": "ray_generation",
+    "raygeneration": "ray_generation",
+    "tesscontrol": "tessellation_control",
+    "tesseval": "tessellation_evaluation",
+}
+
+SHADER_STAGE_ATTRIBUTE_NAMES = frozenset(
+    {
+        "amplification",
+        "compute",
+        "fragment",
+        "geometry",
+        "mesh",
+        "object",
+        "ray_any_hit",
+        "ray_callable",
+        "ray_closest_hit",
+        "ray_generation",
+        "ray_intersection",
+        "ray_miss",
+        "task",
+        "tessellation_control",
+        "tessellation_evaluation",
+        "vertex",
+    }
+)
+
 STAGE_LAYOUT_DIRECTION_REQUIREMENTS = {
     "local_size_x": "in",
     "local_size_y": "in",
@@ -1074,6 +1111,7 @@ def validate_shader_metadata(shader):
     for node, context in _shader_metadata_nodes(shader):
         validate_node_metadata(node, context)
     for stage in getattr(shader, "stages", {}).values():
+        validate_stage_shader_attribute_metadata(stage)
         validate_stage_layout_metadata(stage)
     validate_tessellation_patch_cross_stage_metadata(shader)
     validate_cross_stage_interfaces(shader)
@@ -2184,6 +2222,49 @@ def validate_stage_function_attribute_placement(stage, function, attr_name):
         )
 
 
+def validate_stage_shader_attribute_metadata(stage):
+    """Validate function shader-stage attributes inside an explicit stage block."""
+    stage_name = _canonical_shader_stage_attribute_name(getattr(stage, "stage", None))
+    if stage_name is None:
+        return
+
+    functions = []
+    entry_point = getattr(stage, "entry_point", None)
+    if entry_point is not None:
+        functions.append(entry_point)
+    functions.extend(getattr(stage, "local_functions", []) or [])
+
+    for function in functions:
+        for attr in getattr(function, "attributes", []) or []:
+            attr_name = _normalized_metadata_name(getattr(attr, "name", None))
+            if attr_name != "shader":
+                continue
+
+            context = _stage_function_context(stage, function)
+            values = _attribute_metadata_values(attr)
+            attr_display = _shader_attribute_display(attr)
+            if len(values) != 1:
+                raise ValueError(
+                    f"Function metadata '{attr_display}' on {context} requires "
+                    "exactly one shader stage value"
+                )
+
+            requested_stage = _canonical_shader_stage_attribute_name(values[0])
+            if requested_stage not in SHADER_STAGE_ATTRIBUTE_NAMES:
+                valid_stages = ", ".join(sorted(SHADER_STAGE_ATTRIBUTE_NAMES))
+                raise ValueError(
+                    f"Function metadata '{attr_display}' on {context} uses "
+                    f"unknown shader stage '{values[0]}'; expected one of: "
+                    f"{valid_stages}"
+                )
+
+            if requested_stage != stage_name:
+                raise ValueError(
+                    f"Function metadata '{attr_display}' on {context} conflicts "
+                    f"with {stage_name} stage"
+                )
+
+
 def validate_tessellation_patch_parameter_metadata(stage):
     """Validate patch parameter placement and control-point counts."""
     stage_name = _normalized_metadata_name(getattr(stage, "stage", None))
@@ -2276,6 +2357,32 @@ def _stage_entry_function_context(stage, function):
         f"{stage_name or '<unknown>'} stage entry function "
         f"'{getattr(function, 'name', '<anonymous>')}'"
     )
+
+
+def _stage_function_context(stage, function):
+    stage_name = _normalized_metadata_name(getattr(stage, "stage", None))
+    function_name = getattr(function, "name", "<anonymous>")
+    if function is getattr(stage, "entry_point", None):
+        return f"{stage_name or '<unknown>'} stage entry function '{function_name}'"
+    return f"{stage_name or '<unknown>'} stage local function '{function_name}'"
+
+
+def _canonical_shader_stage_attribute_name(name):
+    if name is None:
+        return None
+    if hasattr(name, "value"):
+        name = getattr(name, "value")
+    normalized = str(name).split(".")[-1].strip().strip("\"'").lower()
+    normalized = normalized.replace("-", "_").replace(" ", "_")
+    return SHADER_STAGE_ATTRIBUTE_ALIASES.get(normalized, normalized)
+
+
+def _shader_attribute_display(attr):
+    attr_name = _normalized_metadata_name(getattr(attr, "name", None)) or "shader"
+    values = _attribute_metadata_values(attr)
+    if not values:
+        return f"@{attr_name}"
+    return f"@{attr_name}{_metadata_value_phrase(values)}"
 
 
 def _validate_function_stage_layout_flag(
