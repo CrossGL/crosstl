@@ -2242,6 +2242,362 @@ class TestHipCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
+    def test_hip_runtime_extended_graph_api_conversion(self):
+        """Test extended HIP graph APIs emit metadata comments."""
+        code = """
+        void tune_graph(hipStream_t stream) {
+            hipGraph_t graph;
+            hipGraph_t child;
+            hipGraph_t embeddedGraph;
+            hipGraphExec_t exec;
+            hipGraphNode_t genericNode;
+            hipGraphNode_t kernelNode;
+            hipGraphNode_t copy1DNode;
+            hipGraphNode_t fromSymbolNode;
+            hipGraphNode_t toSymbolNode;
+            hipGraphNode_t allocNode;
+            hipGraphNode_t freeNode;
+            hipGraphNode_t childNode;
+            hipGraphNode_t signalNode;
+            hipGraphNode_t waitNode;
+            hipGraphNode_t* deps;
+            hipGraphNodeParams nodeParams;
+            hipGraphInstantiateParams instantiateParams;
+            hipMemAllocNodeParams allocParams;
+            hipExternalSemaphoreSignalNodeParams signalParams;
+            hipExternalSemaphoreWaitNodeParams waitParams;
+            hipKernelNodeAttrValue attrValue;
+            hipStreamCaptureMode mode;
+            hipUserObject_t userObject;
+            hipHostFn_t destructor;
+            void* depData;
+            void* resource;
+            void* devicePtr;
+            void* dst;
+            void* src;
+            void* symbol;
+            int device = 0;
+            int enabled = 0;
+            unsigned long long execFlags = 0;
+            size_t numDeps = 0;
+            size_t bytes = 64;
+
+            hipStreamBeginCaptureToGraph(
+                stream, graph, deps, depData, numDeps, hipStreamCaptureModeGlobal
+            );
+            hipThreadExchangeStreamCaptureMode(&mode);
+            hipGraphAddNode(&genericNode, graph, deps, numDeps, &nodeParams);
+            hipGraphNodeSetParams(genericNode, &nodeParams);
+            hipGraphExecNodeSetParams(exec, genericNode, &nodeParams);
+            hipGraphInstantiateWithParams(&exec, graph, &instantiateParams);
+            hipGraphUpload(exec, stream);
+            hipGraphExecGetFlags(exec, &execFlags);
+            hipGraphAddMemAllocNode(&allocNode, graph, deps, numDeps, &allocParams);
+            hipGraphMemAllocNodeGetParams(allocNode, &allocParams);
+            hipGraphAddMemFreeNode(&freeNode, graph, deps, numDeps, devicePtr);
+            hipGraphMemFreeNodeGetParams(freeNode, &devicePtr);
+            hipGraphAddMemcpyNode1D(
+                &copy1DNode, graph, deps, numDeps, dst, src, bytes,
+                hipMemcpyDeviceToDevice
+            );
+            hipGraphMemcpyNodeSetParams1D(
+                copy1DNode, dst, src, bytes, hipMemcpyDeviceToDevice
+            );
+            hipGraphExecMemcpyNodeSetParams1D(
+                exec, copy1DNode, dst, src, bytes, hipMemcpyDeviceToDevice
+            );
+            hipGraphAddMemcpyNodeFromSymbol(
+                &fromSymbolNode, graph, deps, numDeps, dst, symbol, bytes, 4,
+                hipMemcpyDeviceToDevice
+            );
+            hipGraphMemcpyNodeSetParamsFromSymbol(
+                fromSymbolNode, dst, symbol, bytes, 4, hipMemcpyDeviceToDevice
+            );
+            hipGraphExecMemcpyNodeSetParamsFromSymbol(
+                exec, fromSymbolNode, dst, symbol, bytes, 4, hipMemcpyDeviceToDevice
+            );
+            hipGraphAddMemcpyNodeToSymbol(
+                &toSymbolNode, graph, deps, numDeps, symbol, src, bytes, 8,
+                hipMemcpyDeviceToDevice
+            );
+            hipGraphMemcpyNodeSetParamsToSymbol(
+                toSymbolNode, symbol, src, bytes, 8, hipMemcpyDeviceToDevice
+            );
+            hipGraphExecMemcpyNodeSetParamsToSymbol(
+                exec, toSymbolNode, symbol, src, bytes, 8, hipMemcpyDeviceToDevice
+            );
+            hipGraphChildGraphNodeGetGraph(childNode, &embeddedGraph);
+            hipGraphKernelNodeCopyAttributes(kernelNode, genericNode);
+            hipGraphKernelNodeSetAttribute(
+                kernelNode, hipKernelNodeAttributeCooperative, &attrValue
+            );
+            hipGraphKernelNodeGetAttribute(
+                kernelNode, hipKernelNodeAttributeCooperative, &attrValue
+            );
+            hipGraphNodeSetEnabled(exec, genericNode, 1);
+            hipGraphNodeGetEnabled(exec, genericNode, &enabled);
+            hipGraphAddExternalSemaphoresSignalNode(
+                &signalNode, graph, deps, numDeps, &signalParams
+            );
+            hipGraphExternalSemaphoresSignalNodeGetParams(signalNode, &signalParams);
+            hipGraphExternalSemaphoresSignalNodeSetParams(signalNode, &signalParams);
+            hipGraphExecExternalSemaphoresSignalNodeSetParams(
+                exec, signalNode, &signalParams
+            );
+            hipGraphAddExternalSemaphoresWaitNode(
+                &waitNode, graph, deps, numDeps, &waitParams
+            );
+            hipGraphExternalSemaphoresWaitNodeGetParams(waitNode, &waitParams);
+            hipGraphExternalSemaphoresWaitNodeSetParams(waitNode, &waitParams);
+            hipGraphExecExternalSemaphoresWaitNodeSetParams(
+                exec, waitNode, &waitParams
+            );
+            hipDeviceGetGraphMemAttribute(
+                device, hipGraphMemAttrUsedMemCurrent, &bytes
+            );
+            hipDeviceSetGraphMemAttribute(
+                device, hipGraphMemAttrReserveMemCurrent, &bytes
+            );
+            hipDeviceGraphMemTrim(device);
+            hipGraphDebugDotPrint(graph, "graph.dot", 0);
+            hipUserObjectCreate(&userObject, resource, destructor, 1, 0);
+            hipUserObjectRetain(userObject, 1);
+            hipGraphRetainUserObject(graph, userObject, 1, 0);
+            hipGraphReleaseUserObject(graph, userObject, 1);
+            hipUserObjectRelease(userObject, 1);
+            hipError_t err = hipGraphUpload(exec, stream);
+            err = hipGraphExecGetFlags(exec, &execFlags);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// HIP stream begin capture to graph: stream: stream, graph: graph, "
+            "dependencies: deps, dependency data: depData, count: numDeps, "
+            "mode: hipStreamCaptureModeGlobal"
+        ) in result
+        assert "// HIP exchange stream capture mode: output: mode" in result
+        assert (
+            "// HIP graph add generic node: output: genericNode, graph: graph, "
+            "dependencies: deps, count: numDeps, params: (&nodeParams)"
+        ) in result
+        assert (
+            "// HIP graph generic node set params: node: genericNode, "
+            "params: (&nodeParams)"
+        ) in result
+        assert (
+            "// HIP graph exec generic node set params: exec: exec, "
+            "node: genericNode, params: (&nodeParams)"
+        ) in result
+        assert (
+            "// HIP graph instantiate with params: output: exec, graph: graph, "
+            "params: (&instantiateParams)"
+        ) in result
+        assert result.count("// HIP graph upload: exec: exec, stream: stream") == 2
+        assert (
+            result.count("// HIP graph exec get flags: exec: exec, output: execFlags")
+            == 2
+        )
+        assert (
+            "// HIP graph add memory alloc node: output: allocNode, graph: graph, "
+            "dependencies: deps, count: numDeps, params: (&allocParams)"
+        ) in result
+        assert (
+            "// HIP graph memory alloc node get params: node: allocNode, "
+            "params output: allocParams"
+        ) in result
+        assert (
+            "// HIP graph add memory free node: output: freeNode, graph: graph, "
+            "dependencies: deps, count: numDeps, pointer: devicePtr"
+        ) in result
+        assert (
+            "// HIP graph memory free node get params: node: freeNode, "
+            "pointer output: devicePtr"
+        ) in result
+        assert (
+            "// HIP graph add memcpy 1D node: output: copy1DNode, graph: graph, "
+            "dependencies: deps, count: numDeps, destination: dst, source: src, "
+            "bytes: bytes, kind: hipMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// HIP graph memcpy 1D node set params: node: copy1DNode, "
+            "destination: dst, source: src, bytes: bytes, kind: hipMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// HIP graph exec memcpy 1D node set params: exec: exec, "
+            "node: copy1DNode, destination: dst, source: src, bytes: bytes, "
+            "kind: hipMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// HIP graph add memcpy from symbol node: output: fromSymbolNode, "
+            "graph: graph, dependencies: deps, count: numDeps, destination: dst, "
+            "source: symbol, bytes: bytes, offset: 4, kind: hipMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// HIP graph memcpy from symbol node set params: node: fromSymbolNode, "
+            "destination: dst, source: symbol, bytes: bytes, offset: 4, "
+            "kind: hipMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// HIP graph exec memcpy from symbol node set params: exec: exec, "
+            "node: fromSymbolNode, destination: dst, source: symbol, bytes: bytes, "
+            "offset: 4, kind: hipMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// HIP graph add memcpy to symbol node: output: toSymbolNode, "
+            "graph: graph, dependencies: deps, count: numDeps, destination: symbol, "
+            "source: src, bytes: bytes, offset: 8, kind: hipMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// HIP graph memcpy to symbol node set params: node: toSymbolNode, "
+            "destination: symbol, source: src, bytes: bytes, offset: 8, "
+            "kind: hipMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// HIP graph exec memcpy to symbol node set params: exec: exec, "
+            "node: toSymbolNode, destination: symbol, source: src, bytes: bytes, "
+            "offset: 8, kind: hipMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// HIP graph child node get graph: node: childNode, output: embeddedGraph"
+            in result
+        )
+        assert (
+            "// HIP graph kernel node copy attributes: source: kernelNode, "
+            "destination: genericNode"
+        ) in result
+        assert (
+            "// HIP graph kernel node set attribute: node: kernelNode, "
+            "attribute: hipKernelNodeAttributeCooperative, value: attrValue"
+        ) in result
+        assert (
+            "// HIP graph kernel node get attribute: node: kernelNode, "
+            "attribute: hipKernelNodeAttributeCooperative, output: attrValue"
+        ) in result
+        assert (
+            "// HIP graph node set enabled: exec: exec, node: genericNode, value: 1"
+            in result
+        )
+        assert (
+            "// HIP graph node get enabled: exec: exec, node: genericNode, "
+            "output: enabled"
+        ) in result
+        assert (
+            "// HIP graph add external semaphore signal node: output: signalNode, "
+            "graph: graph, dependencies: deps, count: numDeps, params: (&signalParams)"
+        ) in result
+        assert (
+            "// HIP graph external semaphore signal node get params: node: signalNode, "
+            "params: (&signalParams)"
+        ) in result
+        assert (
+            "// HIP graph external semaphore signal node set params: node: signalNode, "
+            "params: (&signalParams)"
+        ) in result
+        assert (
+            "// HIP graph exec external semaphore signal node set params: exec: exec, "
+            "node: signalNode, params: (&signalParams)"
+        ) in result
+        assert (
+            "// HIP graph add external semaphore wait node: output: waitNode, "
+            "graph: graph, dependencies: deps, count: numDeps, params: (&waitParams)"
+        ) in result
+        assert (
+            "// HIP graph external semaphore wait node get params: node: waitNode, "
+            "params: (&waitParams)"
+        ) in result
+        assert (
+            "// HIP graph external semaphore wait node set params: node: waitNode, "
+            "params: (&waitParams)"
+        ) in result
+        assert (
+            "// HIP graph exec external semaphore wait node set params: exec: exec, "
+            "node: waitNode, params: (&waitParams)"
+        ) in result
+        assert (
+            "// HIP device graph memory get attribute: device: device, "
+            "attribute: hipGraphMemAttrUsedMemCurrent, output: bytes"
+        ) in result
+        assert (
+            "// HIP device graph memory set attribute: device: device, "
+            "attribute: hipGraphMemAttrReserveMemCurrent, value: bytes"
+        ) in result
+        assert "// HIP device graph memory trim: device: device" in result
+        assert (
+            '// HIP graph debug dot print: graph: graph, path: "graph.dot", flags: 0'
+            in result
+        )
+        assert (
+            "// HIP user object create: output: userObject, resource: resource, "
+            "destructor: destructor, initial refcount: 1, flags: 0"
+        ) in result
+        assert "// HIP user object retain: object: userObject, count: 1" in result
+        assert (
+            "// HIP graph retain user object: graph: graph, object: userObject, "
+            "count: 1, flags: 0"
+        ) in result
+        assert (
+            "// HIP graph release user object: graph: graph, object: userObject, "
+            "count: 1"
+        ) in result
+        assert "// HIP user object release: object: userObject, count: 1" in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert "err = hipSuccess;" in result
+
+        for function_name in [
+            "hipStreamBeginCaptureToGraph",
+            "hipThreadExchangeStreamCaptureMode",
+            "hipGraphAddNode",
+            "hipGraphNodeSetParams",
+            "hipGraphExecNodeSetParams",
+            "hipGraphInstantiateWithParams",
+            "hipGraphUpload",
+            "hipGraphExecGetFlags",
+            "hipGraphAddMemAllocNode",
+            "hipGraphMemAllocNodeGetParams",
+            "hipGraphAddMemFreeNode",
+            "hipGraphMemFreeNodeGetParams",
+            "hipGraphAddMemcpyNode1D",
+            "hipGraphMemcpyNodeSetParams1D",
+            "hipGraphExecMemcpyNodeSetParams1D",
+            "hipGraphAddMemcpyNodeFromSymbol",
+            "hipGraphMemcpyNodeSetParamsFromSymbol",
+            "hipGraphExecMemcpyNodeSetParamsFromSymbol",
+            "hipGraphAddMemcpyNodeToSymbol",
+            "hipGraphMemcpyNodeSetParamsToSymbol",
+            "hipGraphExecMemcpyNodeSetParamsToSymbol",
+            "hipGraphChildGraphNodeGetGraph",
+            "hipGraphKernelNodeCopyAttributes",
+            "hipGraphKernelNodeSetAttribute",
+            "hipGraphKernelNodeGetAttribute",
+            "hipGraphNodeSetEnabled",
+            "hipGraphNodeGetEnabled",
+            "hipGraphAddExternalSemaphoresSignalNode",
+            "hipGraphExternalSemaphoresSignalNodeGetParams",
+            "hipGraphExternalSemaphoresSignalNodeSetParams",
+            "hipGraphExecExternalSemaphoresSignalNodeSetParams",
+            "hipGraphAddExternalSemaphoresWaitNode",
+            "hipGraphExternalSemaphoresWaitNodeGetParams",
+            "hipGraphExternalSemaphoresWaitNodeSetParams",
+            "hipGraphExecExternalSemaphoresWaitNodeSetParams",
+            "hipDeviceGetGraphMemAttribute",
+            "hipDeviceSetGraphMemAttribute",
+            "hipDeviceGraphMemTrim",
+            "hipGraphDebugDotPrint",
+            "hipUserObjectCreate",
+            "hipUserObjectRetain",
+            "hipGraphRetainUserObject",
+            "hipGraphReleaseUserObject",
+            "hipUserObjectRelease",
+        ]:
+            assert f"{function_name}(" not in result
+
     def test_hip_runtime_stream_create_with_priority_status_conversion(self):
         """Test hipStreamCreateWithPriority emits priority metadata"""
         code = """

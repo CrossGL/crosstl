@@ -54,6 +54,10 @@ class RustToCrossGLConverter:
         "tanh": "tanh",
         "to_degrees": "degrees",
         "to_radians": "radians",
+        "signum": "sign",
+        "is_nan": "isnan",
+        "is_infinite": "isinf",
+        "is_finite": "isfinite",
     }
     SCALAR_ONE_ARG_METHOD_MAP = {
         "min": "min",
@@ -65,6 +69,7 @@ class RustToCrossGLConverter:
     SCALAR_TWO_ARG_METHOD_MAP = {
         "clamp": "clamp",
         "lerp": "mix",
+        "mul_add": "fma",
     }
 
     def __init__(self):
@@ -218,14 +223,28 @@ class RustToCrossGLConverter:
             "round": "round",
             "sqrt": "sqrt",
             "pow": "pow",
+            "fma": "fma",
             "modulo": "mod",
             "step": "step",
             "smoothstep": "smoothstep",
+            "dfdx": "dFdx",
+            "dfdy": "dFdy",
+            "dfdx_fine": "dFdxFine",
+            "dfdy_fine": "dFdyFine",
+            "dfdx_coarse": "dFdxCoarse",
+            "dfdy_coarse": "dFdyCoarse",
+            "fwidth": "fwidth",
+            "fwidth_fine": "fwidthFine",
+            "fwidth_coarse": "fwidthCoarse",
             "exp": "exp",
             "exp2": "exp2",
             "log": "log",
             "ln": "log",
             "log2": "log2",
+            "sign": "sign",
+            "isnan": "isnan",
+            "isinf": "isinf",
+            "isfinite": "isfinite",
             "sin": "sin",
             "cos": "cos",
             "tan": "tan",

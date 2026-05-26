@@ -950,6 +950,72 @@ def test_step_and_smoothstep_calls_convert_to_crossgl_intrinsics():
     assert "crate::math::smoothstep" not in result
 
 
+def test_derivative_and_fused_math_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn derivative_ops(value: Vec3<f32>, scale: f32, bias: f32) -> Vec3<f32> {
+        let dx = dfdx(value);
+        let dy = crate::math::dfdy(value);
+        let fine = dfdx_fine(value);
+        let coarse = crate::math::dfdy_coarse(value);
+        let wide = fwidth(value);
+        let wide_fine = fwidth_fine(value);
+        let wide_coarse = crate::math::fwidth_coarse(value);
+        let fused = fma(value, scale, wide);
+        let scalar = scale.mul_add(bias, 1.0);
+        return dx + dy + fine + coarse + wide + wide_fine + wide_coarse + fused;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec3 derivative_ops(vec3 value, float scale, float bias)" in result
+    assert "dx = dFdx(value);" in result
+    assert "dy = dFdy(value);" in result
+    assert "fine = dFdxFine(value);" in result
+    assert "coarse = dFdyCoarse(value);" in result
+    assert "wide = fwidth(value);" in result
+    assert "wide_fine = fwidthFine(value);" in result
+    assert "wide_coarse = fwidthCoarse(value);" in result
+    assert "fused = fma(value, scale, wide);" in result
+    assert "scalar = fma(scale, bias, 1.0);" in result
+    assert "crate::math::dfdy" not in result
+    assert "crate::math::fwidth_coarse" not in result
+    assert ".mul_add(" not in result
+
+
+def test_sign_and_classification_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn classify(value: Vec3<f32>, scale: f32) -> f32 {
+        let signed_value = sign(value);
+        let signed_scale = scale.signum();
+        let nan_mask = isnan(value);
+        let inf_mask = crate::math::isinf(value);
+        let finite_mask = isfinite(value);
+        let scalar_nan = scale.is_nan();
+        let scalar_inf = scale.is_infinite();
+        let scalar_finite = scale.is_finite();
+        return signed_scale;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "float classify(vec3 value, float scale)" in result
+    assert "signed_value = sign(value);" in result
+    assert "signed_scale = sign(scale);" in result
+    assert "nan_mask = isnan(value);" in result
+    assert "inf_mask = isinf(value);" in result
+    assert "finite_mask = isfinite(value);" in result
+    assert "scalar_nan = isnan(scale);" in result
+    assert "scalar_inf = isinf(scale);" in result
+    assert "scalar_finite = isfinite(scale);" in result
+    assert "crate::math::isinf" not in result
+    assert ".signum(" not in result
+    assert ".is_nan(" not in result
+    assert ".is_infinite(" not in result
+    assert ".is_finite(" not in result
+
+
 def test_lerp_function_converts_to_crossgl_mix():
     code = """
     fn blend(a: f32, b: f32, t: f32) -> f32 {
