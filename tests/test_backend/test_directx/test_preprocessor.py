@@ -148,7 +148,8 @@ def test_builtin_file_macro_uses_nested_include_path(tmp_path):
         file_path=str(main_path),
     )
 
-    assert f'const char* includedFile = "{include_path}";' in output
+    escaped_include_path = str(include_path).replace("\\", "\\\\").replace('"', '\\"')
+    assert f'const char* includedFile = "{escaped_include_path}";' in output
     assert "int includedLine = 2;" in output
 
 
