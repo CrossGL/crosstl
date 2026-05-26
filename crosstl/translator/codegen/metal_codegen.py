@@ -2930,6 +2930,14 @@ class MetalCodeGen:
             return "const "
         return ""
 
+    def local_variable_address_space(self, node):
+        address_space = self.parameter_address_space(node)
+        if address_space is not None:
+            return self.normalized_address_space(address_space)
+        if self.is_metal_atomic_value_type(self.local_variable_declared_type(node)):
+            return "threadgroup"
+        return "thread"
+
     def is_metal_atomic_value_type(self, vtype):
         return self.type_name_string(vtype) in {
             "atomic_bool",
@@ -5594,12 +5602,38 @@ class MetalCodeGen:
             for qualifier in getattr(node, "qualifiers", []) or []
         }
 
+    def normalized_address_space(self, address_space):
+        if address_space is None:
+            return None
+        address_space = str(address_space).strip()
+        if address_space.startswith("const "):
+            address_space = address_space[len("const ") :].strip()
+        return address_space or None
+
     def readonly_qualified_address_space(self, address_space, node=None):
         if address_space == "device" and "readonly" in self.parameter_qualifier_names(
             node
         ):
             return "const device"
         return address_space
+
+    def parameter_variable_address_space(
+        self, raw_param_type, node=None, shader_type=None
+    ):
+        if not (
+            isinstance(raw_param_type, (PointerType, ReferenceType))
+            or self.is_array_type_node(raw_param_type)
+        ):
+            return None
+        return self.normalized_address_space(
+            self.effective_parameter_address_space(
+                raw_param_type,
+                node,
+                shader_type,
+                default_for_stage_binding=self.explicit_buffer_binding_index(node)
+                is not None,
+            )
+        )
 
     def is_readonly_raw_buffer_parameter(
         self, raw_param_type, node=None, shader_type=None
