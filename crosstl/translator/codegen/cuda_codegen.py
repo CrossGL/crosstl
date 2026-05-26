@@ -914,17 +914,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def structured_buffer_atomic_operations(self):
         """Return generic atomic mappings for RWStructuredBuffer element targets."""
         integer_kinds = {"int", "uint"}
+        add_exchange_kinds = {*integer_kinds, "float"}
         return {
-            "atomicAdd": ("atomicAdd", 2, integer_kinds),
-            "atomicSub": ("atomicSub", 2, integer_kinds),
-            "atomicMin": ("atomicMin", 2, integer_kinds),
-            "atomicMax": ("atomicMax", 2, integer_kinds),
-            "atomicAnd": ("atomicAnd", 2, integer_kinds),
-            "atomicOr": ("atomicOr", 2, integer_kinds),
-            "atomicXor": ("atomicXor", 2, integer_kinds),
-            "atomicExchange": ("atomicExch", 2, integer_kinds),
-            "atomicCompareExchange": ("atomicCAS", 3, integer_kinds),
-            "atomicCompSwap": ("atomicCAS", 3, integer_kinds),
+            "atomicAdd": ("atomicAdd", 2, add_exchange_kinds, "int/uint/float"),
+            "atomicSub": ("atomicSub", 2, integer_kinds, "int/uint"),
+            "atomicMin": ("atomicMin", 2, integer_kinds, "int/uint"),
+            "atomicMax": ("atomicMax", 2, integer_kinds, "int/uint"),
+            "atomicAnd": ("atomicAnd", 2, integer_kinds, "int/uint"),
+            "atomicOr": ("atomicOr", 2, integer_kinds, "int/uint"),
+            "atomicXor": ("atomicXor", 2, integer_kinds, "int/uint"),
+            "atomicExchange": ("atomicExch", 2, add_exchange_kinds, "int/uint/float"),
+            "atomicCompareExchange": ("atomicCAS", 3, integer_kinds, "int/uint"),
+            "atomicCompSwap": ("atomicCAS", 3, integer_kinds, "int/uint"),
         }
 
     def generate_structured_buffer_atomic_call(self, func_name, raw_args, args):
@@ -937,7 +938,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if target is None:
             return None
 
-        intrinsic, required_arg_count, supported_kinds = operation
+        intrinsic, required_arg_count, supported_kinds, supported_kinds_label = (
+            operation
+        )
         target_type = target["target_type"]
         fallback = self.diagnostic_zero_value_for_type(target_type)
 
@@ -963,7 +966,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.unsupported_structured_buffer_atomic_call(
                 func_name,
                 target["buffer_type"],
-                "requires supported scalar int/uint target",
+                f"requires supported scalar {supported_kinds_label} target",
                 fallback,
             )
 
@@ -1020,6 +1023,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return "uint"
         if type_name in {"int", "i32"} or mapped_type == "int":
             return "int"
+        if type_name in {"float", "f32"} or mapped_type == "float":
+            return "float"
         return None
 
     def unsupported_structured_buffer_atomic_call(

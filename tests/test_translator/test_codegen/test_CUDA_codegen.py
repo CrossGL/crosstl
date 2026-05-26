@@ -3753,11 +3753,54 @@ class TestCudaCodeGen:
         assert (
             "uint2 vectorOld = /* unsupported CUDA structured buffer atomic: "
             "atomicAdd on RWStructuredBuffer<uint2> requires supported scalar "
-            "int/uint target */ make_uint2(0u, 0u);" in cuda_code
+            "int/uint/float target */ make_uint2(0u, 0u);" in cuda_code
         )
         assert "atomicExchange(" not in cuda_code
         assert "atomicCompareExchange(" not in cuda_code
         assert "atomicCompSwap(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_float_structured_buffer_add_and_exchange_atomics_emit_cuda_atomics(
+        self, tmp_path
+    ):
+        """Test CUDA supports float add/exchange atomics on RWStructuredBuffer."""
+        source_code = """
+        shader FloatStructuredBufferAtomicsCUDA {
+            RWStructuredBuffer<float> values;
+
+            void process(uint index, float value) {
+                float oldAdd = atomicAdd(values[index], value);
+                float oldExchange = atomicExchange(values[index], value);
+                float oldMin = atomicMin(values[index], value);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float* values;" in cuda_code
+        assert "float oldAdd = atomicAdd(&values[index], value);" in cuda_code
+        assert "float oldExchange = atomicExch(&values[index], value);" in cuda_code
+        assert (
+            "float oldMin = /* unsupported CUDA structured buffer atomic: "
+            "atomicMin on RWStructuredBuffer<float> requires supported scalar "
+            "int/uint target */ 0.0f;" in cuda_code
+        )
+        assert "float oldAdd = /* unsupported CUDA structured buffer atomic" not in (
+            cuda_code
+        )
+        assert (
+            "float oldExchange = /* unsupported CUDA structured buffer atomic"
+            not in cuda_code
+        )
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_byte_address_buffer_resources_emit_cuda_byte_pointer_helpers(

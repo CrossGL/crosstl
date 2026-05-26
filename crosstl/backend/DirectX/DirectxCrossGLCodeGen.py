@@ -325,6 +325,9 @@ class HLSLToCrossGLConverter:
                 "buffer_when_max_args": None,
             }
         if member in self.texture_method_map:
+            texture_function = self.texture_method_map[member]
+            if member == "SampleBias" and arg_count is not None and arg_count >= 4:
+                texture_function = "textureOffset"
             usage = (
                 "comparison"
                 if member in {"SampleCmp", "SampleCmpLevelZero"}
@@ -332,8 +335,8 @@ class HLSLToCrossGLConverter:
             )
             return {
                 "member": member,
-                "function": self.texture_method_map[member],
-                "texture_function": self.texture_method_map[member],
+                "function": texture_function,
+                "texture_function": texture_function,
                 "buffer_function": None,
                 "component": None,
                 "usage": usage,
@@ -388,6 +391,21 @@ class HLSLToCrossGLConverter:
                 ),
             }
         return None
+
+    def resource_method_arguments(self, obj, member, rendered_args, descriptor):
+        if (
+            member == "SampleBias"
+            and descriptor["function"] == "textureOffset"
+            and len(rendered_args) >= 4
+        ):
+            sampler, coords, bias, offset = rendered_args[:4]
+            method_args = [obj, sampler, coords, offset, bias]
+        else:
+            method_args = [obj, *rendered_args]
+
+        if descriptor["component"] is not None:
+            method_args.append(descriptor["component"])
+        return method_args
 
     def get_indent(self):
         return "    " * self.indentation
@@ -1226,9 +1244,9 @@ class HLSLToCrossGLConverter:
                 args = ", ".join(rendered_args)
                 descriptor = self.resource_method_descriptor(member, len(expr.args))
                 if descriptor:
-                    method_args = [obj, *rendered_args]
-                    if descriptor["component"] is not None:
-                        method_args.append(descriptor["component"])
+                    method_args = self.resource_method_arguments(
+                        obj, member, rendered_args, descriptor
+                    )
                     return f"{descriptor['function']}({', '.join(method_args)})"
                 return f"{obj}.{member}({args})"
 

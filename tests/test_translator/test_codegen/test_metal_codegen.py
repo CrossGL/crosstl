@@ -4583,6 +4583,82 @@ def test_metal_mesh_output_signature_multi_member_partial_writes_use_accumulator
     assert "_crossglMeshOut.set_index((0) * 3, uint3(0u, 1u, 2u).x);" in generated
 
 
+def test_metal_mesh_output_variable_member_writes_use_indexed_accumulators():
+    code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct MeshPrimitive {
+            uint layer @ gl_PrimitiveID;
+            vec2 bary @ TEXCOORD1;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[4],
+                @indices out uvec3 tris[2],
+                @primitives out MeshPrimitive prims[2]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                uint vertexIndex = 1u;
+                uint primitiveIndex = 0u;
+                SetMeshOutputCounts(4, 2);
+                verts[vertexIndex].position = vec4(1.0, 0.0, 0.0, 1.0);
+                verts[vertexIndex].uv = vec2(0.5, 1.0);
+                tris[primitiveIndex] = uvec3(0u, 1u, 2u);
+                prims[primitiveIndex].layer = 2u;
+                prims[primitiveIndex].bary = vec2(0.25, 0.75);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+    assert (
+        "mesh<MeshVertex, MeshPrimitive, 4, 2, topology::triangle> _crossglMeshOut"
+        in generated
+    )
+    assert "MeshVertex _crossglMeshVertices_verts_vertexIndex = {};" in generated
+    assert (
+        "MeshPrimitive _crossglMeshPrimitives_prims_primitiveIndex = {};" in generated
+    )
+    assert (
+        "_crossglMeshVertices_verts_vertexIndex.position = "
+        "float4(1.0, 0.0, 0.0, 1.0);"
+    ) in generated
+    assert (
+        "_crossglMeshOut.set_vertex(vertexIndex, "
+        "_crossglMeshVertices_verts_vertexIndex);"
+    ) in generated
+    assert "_crossglMeshVertices_verts_vertexIndex.uv = float2(0.5, 1.0);" in (
+        generated
+    )
+    assert "_crossglMeshOut.set_index((primitiveIndex) * 3, uint3(0u, 1u, 2u).x);" in (
+        generated
+    )
+    assert (
+        "_crossglMeshOut.set_index(((primitiveIndex) * 3) + 1, " "uint3(0u, 1u, 2u).y);"
+    ) in generated
+    assert (
+        "_crossglMeshOut.set_index(((primitiveIndex) * 3) + 2, " "uint3(0u, 1u, 2u).z);"
+    ) in generated
+    assert "_crossglMeshPrimitives_prims_primitiveIndex.layer = 2u;" in generated
+    assert (
+        "_crossglMeshOut.set_primitive(primitiveIndex, "
+        "_crossglMeshPrimitives_prims_primitiveIndex);"
+    ) in generated
+    assert (
+        "_crossglMeshPrimitives_prims_primitiveIndex.bary = float2(0.25, 0.75);"
+        in generated
+    )
+    assert "verts[vertexIndex]" not in generated
+    assert "tris[primitiveIndex]" not in generated
+    assert "prims[primitiveIndex]" not in generated
+    assert "unsupported Metal mesh output assignment" not in generated
+
+
 def test_metal_mesh_output_writes_validate_order_and_literal_bounds():
     write_before_count_code = """
     shader meshpipe {

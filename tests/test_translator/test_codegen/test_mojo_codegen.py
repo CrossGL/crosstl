@@ -8,6 +8,7 @@ from crosstl.translator.parser import Parser
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.ast import (
     AtomicOpNode,
+    BufferOpNode,
     BuiltinVariableNode,
     CastNode,
     LiteralNode,
@@ -1029,6 +1030,127 @@ def test_direct_atomic_op_nodes_reject_unsupported_targets_and_operations():
 
     with pytest.raises(ValueError, match="Unsupported Mojo atomic operation atomicInc"):
         codegen.generate_expression(AtomicOpNode("atomicInc", image, [pixel, value]))
+
+
+def test_direct_buffer_op_nodes_emit_mojo_helpers_without_ast_repr():
+    codegen = MojoCodeGen()
+    values = VariableNode("values", PrimitiveType("StructuredBuffer<int>"))
+    output = VariableNode("output", PrimitiveType("RWStructuredBuffer<int>"))
+    appended = VariableNode("appended", PrimitiveType("AppendStructuredBuffer<int>"))
+    consumed = VariableNode("consumed", PrimitiveType("ConsumeStructuredBuffer<int>"))
+    raw = VariableNode("raw", PrimitiveType("RWByteAddressBuffer"))
+    index = VariableNode("index", PrimitiveType("uint"))
+    value = VariableNode("value", PrimitiveType("int"))
+    count = VariableNode("count", PrimitiveType("uint"))
+    raw_vec = VariableNode("rawVec", PrimitiveType("uvec4"))
+
+    codegen.register_variable_type("values", "StructuredBuffer<int>")
+    codegen.register_variable_type("output", "RWStructuredBuffer<int>")
+    codegen.register_variable_type("appended", "AppendStructuredBuffer<int>")
+    codegen.register_variable_type("consumed", "ConsumeStructuredBuffer<int>")
+    codegen.register_variable_type("raw", "RWByteAddressBuffer")
+    codegen.register_variable_type("index", "uint")
+    codegen.register_variable_type("value", "int")
+    codegen.register_variable_type("count", "uint")
+    codegen.register_variable_type("rawVec", "uvec4")
+
+    load_call = codegen.generate_expression(BufferOpNode("Load", values, [index]))
+    store_call = codegen.generate_expression(
+        BufferOpNode("Store", output, [index, value])
+    )
+    append_call = codegen.generate_expression(BufferOpNode("Append", appended, [value]))
+    consume_call = codegen.generate_expression(BufferOpNode("Consume", consumed, []))
+    dimensions_call = codegen.generate_expression(
+        BufferOpNode("GetDimensions", values, [count])
+    )
+    vector_load_call = codegen.generate_expression(BufferOpNode("Load3", raw, [index]))
+    vector_store_call = codegen.generate_expression(
+        BufferOpNode("Store4", raw, [index, raw_vec])
+    )
+
+    assert load_call == "buffer_load(values, index)"
+    assert store_call == "buffer_store(output, index, value)"
+    assert append_call == "buffer_append(appended, value)"
+    assert consume_call == "buffer_consume(consumed)"
+    assert dimensions_call == "buffer_dimensions(values, count)"
+    assert vector_load_call == "buffer_load3(raw, index)"
+    assert vector_store_call == "buffer_store4(raw, index, rawVec)"
+    assert "BufferOpNode(" not in "".join(
+        [
+            load_call,
+            store_call,
+            append_call,
+            consume_call,
+            dimensions_call,
+            vector_load_call,
+            vector_store_call,
+        ]
+    )
+    assert ("StructuredBuffer", "int") in codegen.required_buffer_load_helpers
+    assert ("RWStructuredBuffer", "int") in codegen.required_buffer_store_helpers
+    assert ("AppendStructuredBuffer", "int") in codegen.required_buffer_append_helpers
+    assert ("ConsumeStructuredBuffer", "int") in codegen.required_buffer_consume_helpers
+    assert ("StructuredBuffer", "int") in codegen.required_buffer_dimensions_helpers
+    assert (
+        "RWByteAddressBuffer",
+        3,
+    ) in codegen.required_byte_address_vector_load_helpers
+    assert (
+        "RWByteAddressBuffer",
+        4,
+    ) in codegen.required_byte_address_vector_store_helpers
+    assert (
+        codegen.expression_result_type(BufferOpNode("Load", values, [index])) == "int"
+    )
+    assert (
+        codegen.expression_result_type(BufferOpNode("Load3", raw, [index])) == "uvec3"
+    )
+    assert (
+        codegen.expression_result_type(BufferOpNode("Consume", consumed, [])) == "int"
+    )
+    assert (
+        codegen.expression_result_type(BufferOpNode("Store", output, [index, value]))
+        == "void"
+    )
+    assert (
+        codegen.expression_result_type(BufferOpNode("Append", appended, [value]))
+        == "void"
+    )
+    assert (
+        codegen.expression_result_type(BufferOpNode("GetDimensions", values, [count]))
+        == "void"
+    )
+
+
+def test_direct_buffer_op_nodes_reject_unsupported_operations_and_targets():
+    codegen = MojoCodeGen()
+    values = VariableNode("values", PrimitiveType("StructuredBuffer<int>"))
+    output = VariableNode("output", PrimitiveType("RWStructuredBuffer<int>"))
+    raw = VariableNode("raw", PrimitiveType("ByteAddressBuffer"))
+    index = VariableNode("index", PrimitiveType("uint"))
+    value = VariableNode("value", PrimitiveType("int"))
+
+    codegen.register_variable_type("values", "StructuredBuffer<int>")
+    codegen.register_variable_type("output", "RWStructuredBuffer<int>")
+    codegen.register_variable_type("raw", "ByteAddressBuffer")
+    codegen.register_variable_type("index", "uint")
+    codegen.register_variable_type("value", "int")
+
+    with pytest.raises(ValueError, match="Invalid Load2.*byte-address buffer"):
+        codegen.generate_expression(BufferOpNode("Load2", values, [index]))
+
+    with pytest.raises(ValueError, match="Unsupported buffer_store.*ByteAddressBuffer"):
+        codegen.generate_expression(BufferOpNode("Store", raw, [index, value]))
+
+    with pytest.raises(
+        ValueError, match="Unsupported buffer_append.*RWStructuredBuffer"
+    ):
+        codegen.generate_expression(BufferOpNode("Append", output, [value]))
+
+    with pytest.raises(
+        ValueError, match="Unsupported Mojo buffer operation IncrementCounter"
+    ):
+        codegen.generate_expression(BufferOpNode("IncrementCounter", values, [index]))
 
 
 def test_if_statement():

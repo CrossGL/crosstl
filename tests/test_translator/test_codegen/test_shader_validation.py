@@ -1862,6 +1862,38 @@ shader MetalMeshOutputSignatureValidation {
 """
 
 
+METAL_MESH_OUTPUT_VARIABLE_MEMBER_WRITES_SHADER = """
+shader MetalMeshOutputVariableMemberWritesValidation {
+    struct MeshVertex {
+        vec4 position @ gl_Position;
+        vec2 uv @ TEXCOORD0;
+    };
+
+    struct MeshPrimitive {
+        uint layer @ gl_PrimitiveID;
+        vec2 bary @ TEXCOORD1;
+    };
+
+    mesh {
+        void main(
+            @vertices out MeshVertex verts[4],
+            @indices out uvec3 tris[2],
+            @primitives out MeshPrimitive prims[2]
+        ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+            uint vertexIndex = 1u;
+            uint primitiveIndex = 0u;
+            SetMeshOutputCounts(4, 2);
+            verts[vertexIndex].position = vec4(1.0, 0.0, 0.0, 1.0);
+            verts[vertexIndex].uv = vec2(0.5, 1.0);
+            tris[primitiveIndex] = uvec3(0u, 1u, 2u);
+            prims[primitiveIndex].layer = 2u;
+            prims[primitiveIndex].bary = vec2(0.25, 0.75);
+        }
+    }
+}
+"""
+
+
 METAL_MESH_PAYLOAD_DISPATCH_SHADER = """
 shader MetalMeshPayloadDispatchValidation {
     struct MeshPayload {
@@ -4013,6 +4045,59 @@ def test_generated_metal_mesh_output_signature_compiles_with_metal3(tmp_path):
     assert "MeshPrimitive prims[1]" not in code
     assert "MeshVertex _crossglMeshVertices_verts_i_0 = {};" in code
     assert "_crossglMeshVertices_verts_i_0.uv = float2(0.0);" in code
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_mesh_output_variable_member_writes_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "mesh_output_variable_member_writes.metal"
+    output = tmp_path / "mesh_output_variable_member_writes.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_MESH_OUTPUT_VARIABLE_MEMBER_WRITES_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "MeshVertex _crossglMeshVertices_verts_vertexIndex = {};" in code
+    assert "MeshPrimitive _crossglMeshPrimitives_prims_primitiveIndex = {};" in code
+    assert (
+        "_crossglMeshOut.set_vertex(vertexIndex, "
+        "_crossglMeshVertices_verts_vertexIndex);"
+    ) in code
+    assert (
+        "_crossglMeshOut.set_primitive(primitiveIndex, "
+        "_crossglMeshPrimitives_prims_primitiveIndex);"
+    ) in code
+    assert "verts[vertexIndex]" not in code
+    assert "tris[primitiveIndex]" not in code
+    assert "prims[primitiveIndex]" not in code
+    assert "unsupported Metal mesh output assignment" not in code
 
     run_validator(
         [

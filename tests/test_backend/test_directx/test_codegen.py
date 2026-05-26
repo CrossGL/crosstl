@@ -677,6 +677,11 @@ def test_codegen_texture_method_descriptors():
         "buffer_when_max_args": None,
     }
     assert converter.texture_method_descriptor("SampleCmp", 3)["usage"] == "comparison"
+    assert converter.texture_method_descriptor("SampleBias", 3)["function"] == "texture"
+    assert (
+        converter.texture_method_descriptor("SampleBias", 4)["function"]
+        == "textureOffset"
+    )
     assert converter.texture_method_descriptor("GatherBlue", 2) == {
         "member": "GatherBlue",
         "function": "textureGather",
@@ -767,6 +772,30 @@ def test_codegen_texture_methods_roundtrip_through_translator_codegen():
     assert "textureGrad(tex, uv, vec2(1.0, 0.0), vec2(0.0, 1.0))" in glsl
     assert "textureGather(tex, uv, 0)" in glsl
     assert "texture_sample" not in glsl
+
+
+def test_codegen_sample_bias_offset_roundtrip_through_translator_codegen():
+    code = textwrap.dedent("""
+        Texture2D tex : register(t0);
+        SamplerState samp : register(s0);
+
+        float4 main(float2 uv : TEXCOORD0, float bias : TEXCOORD1) : SV_Target {
+            float4 biased = tex.SampleBias(samp, uv, bias);
+            float4 offsetBiased = tex.SampleBias(samp, uv, bias, int2(1, 0));
+            return biased + offsetBiased;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "texture(tex, samp, uv, bias)" in crossgl
+    assert "textureOffset(tex, samp, uv, ivec2(1, 0), bias)" in crossgl
+    assert "texture(tex, samp, uv, bias, ivec2(1, 0))" not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(shader_ast)
+    assert "tex.SampleBias(samp, uv, bias)" in hlsl
+    assert "tex.SampleBias(samp, uv, bias, int2(1, 0))" in hlsl
 
 
 def test_codegen_resource_array_receivers_use_canonical_calls():

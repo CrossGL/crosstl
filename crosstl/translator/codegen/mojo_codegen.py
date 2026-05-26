@@ -10,6 +10,7 @@ from ..ast import (
     AssignmentNode,
     BinaryOpNode,
     BreakNode,
+    BufferOpNode,
     BuiltinVariableNode,
     CaseNode,
     CastNode,
@@ -548,6 +549,27 @@ MOJO_BYTE_ADDRESS_STORE_METHODS = {
     "Store2": 2,
     "Store3": 3,
     "Store4": 4,
+}
+
+MOJO_BUFFER_OP_ALIASES = {
+    "Append": "Append",
+    "append": "Append",
+    "buffer_append": "Append",
+    "Consume": "Consume",
+    "consume": "Consume",
+    "buffer_consume": "Consume",
+    "GetDimensions": "GetDimensions",
+    "getDimensions": "GetDimensions",
+    "dimensions": "GetDimensions",
+    "buffer_dimensions": "GetDimensions",
+    "Load": "Load",
+    "load": "Load",
+    "buffer_load": "Load",
+    "Store": "Store",
+    "store": "Store",
+    "buffer_store": "Store",
+    **{name: name for name in MOJO_BYTE_ADDRESS_LOAD_METHODS},
+    **{name: name for name in MOJO_BYTE_ADDRESS_STORE_METHODS},
 }
 
 MOJO_INTEGER_DTYPES = {
@@ -2925,6 +2947,8 @@ class MojoCodeGen:
             return self.generate_texture_op_node(expr)
         elif isinstance(expr, AtomicOpNode):
             return self.generate_atomic_op_node(expr)
+        elif isinstance(expr, BufferOpNode):
+            return self.generate_buffer_op_node(expr)
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand)
             op = self.map_operator(expr.op)
@@ -3714,6 +3738,73 @@ class MojoCodeGen:
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"buffer_dimensions({generated_args})"
+
+    def generate_buffer_op_node(self, expr):
+        raw_operation = getattr(expr, "operation", "")
+        operation = MOJO_BUFFER_OP_ALIASES.get(raw_operation)
+        if operation is None:
+            raise ValueError(f"Unsupported Mojo buffer operation {raw_operation}")
+
+        buffer_expr = getattr(expr, "buffer_expr", None)
+        if buffer_expr is None:
+            raise ValueError(
+                f"Invalid Mojo buffer operation {raw_operation}; "
+                "missing buffer expression"
+            )
+
+        arguments = getattr(expr, "arguments", [])
+        args = [buffer_expr, *arguments]
+        if operation == "Load":
+            return self.generate_buffer_load_call(args)
+        if operation == "Store":
+            return self.generate_buffer_store_call(args)
+        if operation == "Append":
+            return self.generate_buffer_append_call(args)
+        if operation == "Consume":
+            return self.generate_buffer_consume_call(args)
+        if operation == "GetDimensions":
+            return self.generate_buffer_dimensions_call(args)
+        if operation in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+            return self.generate_byte_address_vector_buffer_op(
+                buffer_expr, arguments, operation
+            )
+        if operation in MOJO_BYTE_ADDRESS_STORE_METHODS:
+            return self.generate_byte_address_vector_buffer_op(
+                buffer_expr, arguments, operation
+            )
+        raise ValueError(f"Invalid Mojo buffer operation {raw_operation}")
+
+    def generate_byte_address_vector_buffer_op(self, buffer_expr, args, operation):
+        info = self.buffer_resource_info(self.expression_result_type(buffer_expr))
+        if info is None or info[0] not in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+            raise ValueError(
+                f"Invalid {operation} for Mojo codegen; byte-address buffer required"
+            )
+
+        obj = self.generate_expression(buffer_expr)
+        buffer_type, _ = info
+        width = (
+            MOJO_BYTE_ADDRESS_LOAD_METHODS.get(operation)
+            or MOJO_BYTE_ADDRESS_STORE_METHODS[operation]
+        )
+        self.register_buffer_resource_type(buffer_type)
+        if operation in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+            self.validate_resource_read_access(buffer_expr, operation)
+            self.required_byte_address_vector_load_helpers.add((buffer_type, width))
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_load{width}({generated_args})"
+
+        self.validate_resource_write_access(buffer_expr, operation)
+        self.validate_buffer_operation(
+            operation, info, MOJO_BUFFER_STORE_RESOURCE_TYPES
+        )
+        self.required_byte_address_vector_store_helpers.add((buffer_type, width))
+        generated_args = ", ".join(
+            [obj, *[self.generate_expression(arg) for arg in args]]
+        )
+        return f"buffer_store{width}({generated_args})"
 
     def generate_member_function_call(self, func_expr, args):
         member = getattr(func_expr, "member", None)
@@ -5262,6 +5353,8 @@ class MojoCodeGen:
             if value_type == "UInt32":
                 return "uint"
             return "int"
+        if isinstance(expr, BufferOpNode):
+            return self.buffer_op_result_type(expr)
         if isinstance(expr, MemberAccessNode):
             obj_type = self.expression_result_type(expr.object)
             if (
@@ -5292,6 +5385,37 @@ class MojoCodeGen:
             return func_expr.name
         if isinstance(func_expr, str):
             return func_expr
+        return None
+
+    def buffer_op_result_type(self, expr):
+        operation = MOJO_BUFFER_OP_ALIASES.get(getattr(expr, "operation", ""))
+        if operation is None:
+            return None
+
+        info = self.buffer_resource_info(
+            self.expression_result_type(getattr(expr, "buffer_expr", None))
+        )
+        if operation == "Load":
+            if info is None:
+                return None
+            return self.buffer_helper_element_type(*info)
+        if operation in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+            if info is None or info[0] not in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+                return None
+            return self.byte_address_load_result_type(
+                MOJO_BYTE_ADDRESS_LOAD_METHODS[operation]
+            )
+        if operation == "Consume":
+            if info is None or info[0] != "ConsumeStructuredBuffer":
+                return None
+            return info[1]
+        if operation in {
+            "Append",
+            "GetDimensions",
+            "Store",
+            *MOJO_BYTE_ADDRESS_STORE_METHODS,
+        }:
+            return "void"
         return None
 
     def member_function_result_type(self, expr):
