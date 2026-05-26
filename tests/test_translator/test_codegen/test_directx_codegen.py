@@ -170,6 +170,30 @@ def test_hlsl_float16_matrix_ir_aliases_map_to_half_matrices():
     assert "f16mat3" not in generated_code
 
 
+def test_hlsl_vector_constructor_scalar_splats_expand_for_dxc():
+    shader = """
+    shader HLSLVectorSplat {
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5);
+                float2 aliasUv = float2(0.25);
+                ivec3 cell = ivec3(1);
+                uvec4 mask = uvec4(2u);
+                bvec2 flags = bvec2(true);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float2 uv = float2(0.5, 0.5);" in generated_code
+    assert "float2 aliasUv = float2(0.25, 0.25);" in generated_code
+    assert "int3 cell = int3(1, 1, 1);" in generated_code
+    assert "uint4 mask = uint4(2u, 2u, 2u, 2u);" in generated_code
+    assert "bool2 flags = bool2(true, true);" in generated_code
+
+
 def test_hlsl_narrow_integer_aliases_map_to_valid_hlsl_integer_types():
     shader = """
     shader NarrowIntegerAliasSmoke {
@@ -1620,7 +1644,10 @@ def test_hlsl_default_float_image_scalar_and_vector_load_store():
     )
 
     assert "float scalarOld = image[pixel].x;" in generated_code
-    assert "image[pixel] = float4((scalarOld + value));" in generated_code
+    assert (
+        "image[pixel] = float4((scalarOld + value), (scalarOld + value), "
+        "(scalarOld + value), (scalarOld + value));" in generated_code
+    )
     assert "float4 vectorOld = image[pixel];" in generated_code
     assert "image[pixel] = (vectorOld + value);" in generated_code
     assert "float4 vectorOld = image[pixel].x;" not in generated_code
@@ -7308,13 +7335,17 @@ def test_directx_direct_stage_explicit_image_formats_use_input_members():
     assert "uint2 layerValue = unsignedLayers[input.pixelLayer];" in generated_code
     assert "int signedValue = signedVolume[input.voxel];" in generated_code
     assert "scalarFloat[input.pixel] = (scalarValue + input.amount);" in generated_code
-    assert "rgFloat[input.pixel] = (rgValue + float2(input.amount));" in generated_code
+    assert (
+        "rgFloat[input.pixel] = (rgValue + float2(input.amount, input.amount));"
+        in generated_code
+    )
     assert (
         "unsignedScalar[input.pixel] = (unsignedValue + input.unsignedAmount);"
         in generated_code
     )
     assert (
-        "unsignedLayers[input.pixelLayer] = (layerValue + uint2(input.unsignedAmount));"
+        "unsignedLayers[input.pixelLayer] = "
+        "(layerValue + uint2(input.unsignedAmount, input.unsignedAmount));"
         in generated_code
     )
     assert (
@@ -9003,7 +9034,10 @@ def test_directx_formatted_image_arrays_preserve_expression_sizes():
     assert "images[1][pixel] = (oldValue + value);" in generated_code
     assert "float2 oldValue = images[2][pixel];" in generated_code
     assert "uint a = touchCounters(counters, int2(1, 2), 3);" in generated_code
-    assert "float2 b = touchPairs(rgPairs, int2(2, 3), float2(0.5));" in generated_code
+    assert (
+        "float2 b = touchPairs(rgPairs, int2(2, 3), float2(0.5, 0.5));"
+        in generated_code
+    )
     assert "RWTexture2D<uint> afterCounters : register(u4);" not in generated_code
     assert "RWTexture2D<float4> counters" not in generated_code
     assert "RWTexture2D<float4> rgPairs" not in generated_code
@@ -9105,7 +9139,10 @@ def test_directx_formatted_image_arrays_infer_named_constant_size():
     assert "float2 oldValue = images[LAYER][pixel];" in generated_code
     assert "images[0][pixel] = (oldValue + value);" in generated_code
     assert "uint a = touchCounters(counters, int2(1, 2), 3);" in generated_code
-    assert "float2 b = touchPairs(rgPairs, int2(2, 3), float2(0.5));" in generated_code
+    assert (
+        "float2 b = touchPairs(rgPairs, int2(2, 3), float2(0.5, 0.5));"
+        in generated_code
+    )
     assert "RWTexture2D<float2> rgPairs[] : register(u3);" not in generated_code
     assert "RWTexture2D<uint> afterCounters : register(u2);" not in generated_code
     assert "RWTexture2D<float4> counters" not in generated_code
@@ -9220,7 +9257,8 @@ def test_directx_formatted_image_arrays_infer_transitive_helper_size():
     assert "return touchPairsDeep(images, pixel, value);" in generated_code
     assert "uint a = touchCountersMid(counters, int2(1, 2), 3);" in generated_code
     assert (
-        "float2 b = touchPairsMid(rgPairs, int2(2, 3), float2(0.5));" in generated_code
+        "float2 b = touchPairsMid(rgPairs, int2(2, 3), float2(0.5, 0.5));"
+        in generated_code
     )
     assert "RWTexture2D<uint> counters[] : register(u0);" not in generated_code
     assert "RWTexture2D<float2> rgPairs[] : register(u4);" not in generated_code
@@ -10590,7 +10628,7 @@ def test_directx_texture_array_helper_operation_variants():
     )
     assert "textures[layer].SampleLevel(samplers[layer], uv, 2.0)" in generated_code
     assert (
-        "textures[layer].SampleGrad(samplers[layer], uv, float2(0.1), float2(0.2))"
+        "textures[layer].SampleGrad(samplers[layer], uv, float2(0.1, 0.1), float2(0.2, 0.2))"
         in generated_code
     )
     assert "textures[layer].Gather(samplers[layer], uv)" in generated_code
@@ -10659,7 +10697,10 @@ def test_directx_array_texture_types_and_shadow_compares():
     )
     assert "tex.Sample(s, uvLayer)" in generated_code
     assert "tex.SampleLevel(s, uvLayer, 1.0)" in generated_code
-    assert "tex.SampleGrad(s, uvLayer, float2(0.1), float2(0.2))" in generated_code
+    assert (
+        "tex.SampleGrad(s, uvLayer, float2(0.1, 0.1), float2(0.2, 0.2))"
+        in generated_code
+    )
     assert "tex.Gather(s, uvLayer)" in generated_code
     assert "tex.Load(int4(pixelLayer, 0))" in generated_code
     assert (
@@ -18020,7 +18061,7 @@ def test_directx_texture_operation_variants():
 
     assert "colorMap.SampleLevel(colorMapSampler, input.uv, 1.0)" in generated_code
     assert (
-        "colorMap.SampleGrad(colorMapSampler, input.uv, float2(0.1), float2(0.2))"
+        "colorMap.SampleGrad(colorMapSampler, input.uv, float2(0.1, 0.1), float2(0.2, 0.2))"
         in generated_code
     )
     assert "colorMap.Load(int3(input.pixel, 0))" in generated_code
@@ -18157,7 +18198,7 @@ def test_directx_struct_member_sampler_expression_is_explicit_sampler():
         in generated_code
     )
     assert "return tex.Sample(pack.samplers[index], uv);" in generated_code
-    assert "return samplePacked(colorMap, pack, 0, float2(0.5));" in generated_code
+    assert "return samplePacked(colorMap, pack, 0, float2(0.5, 0.5));" in generated_code
     assert "texSampler" not in generated_code
     assert "SampleBias(tex" not in generated_code
 
@@ -18195,7 +18236,8 @@ def test_directx_struct_member_sampler_expression_used_for_compare_is_comparison
     )
     assert "return tex.SampleCmp(pack.samplers[index], uv, depth);" in generated_code
     assert (
-        "return samplePacked(shadowMap, pack, 0, float2(0.5), 0.5);" in generated_code
+        "return samplePacked(shadowMap, pack, 0, float2(0.5, 0.5), 0.5);"
+        in generated_code
     )
     assert "texSampler" not in generated_code
 
@@ -19455,7 +19497,10 @@ def test_directx_image_1d_and_1d_array_storage_operations():
     assert "int imageSize(RWTexture1D<float4> image)" in generated_code
     assert "int2 imageSize(RWTexture1DArray<float4> image)" in generated_code
     assert "float oldValue = image[x].x;" in generated_code
-    assert "image[x] = float4((oldValue + value));" in generated_code
+    assert (
+        "image[x] = float4((oldValue + value), (oldValue + value), "
+        "(oldValue + value), (oldValue + value));" in generated_code
+    )
     assert "float4 oldValue = image[coord];" in generated_code
     assert "image[coord] = (oldValue + value);" in generated_code
     assert (
@@ -19781,7 +19826,10 @@ def test_directx_storage_image_access_allows_compatible_helper_calls():
     generated_code = HLSLCodeGen().generate(ast)
 
     assert "float value = readPixel(source, int2(0, 0));" in generated_code
-    assert "writePixel(target, int2(0, 0), float4(value));" in generated_code
+    assert (
+        "writePixel(target, int2(0, 0), float4(value, value, value, value));"
+        in generated_code
+    )
 
 
 @pytest.mark.parametrize(

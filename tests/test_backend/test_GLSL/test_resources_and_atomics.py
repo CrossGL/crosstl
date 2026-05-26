@@ -2131,7 +2131,7 @@ def test_codegen_mixed_ssbo_nested_aggregate_leaf_compound_offsets():
     assert (
         "compoundAggregateBlock.Store2((8 + i * 48 + 8 + 16), "
         "asuint((asfloat(compoundAggregateBlock.Load2((8 + i * 48 + 8 + 16))) "
-        "+ float2(0.5))));" in hlsl
+        "+ float2(0.5, 0.5))));" in hlsl
     )
     assert "bool2 __crossgl_bool_store_0 = bool2(true, false);" in hlsl
     assert (
@@ -2614,7 +2614,7 @@ def test_codegen_mixed_ssbo_helper_array_store_uses_indexed_byte_address_receive
 
     assert "RWByteAddressBuffer helperWriteBlocks[3] : register(u79);" in hlsl
     assert "uint i = helperWriteBlocks[2].Load(0);" in hlsl
-    assert "writeValue(i, float4(1.0));" in hlsl
+    assert "writeValue(i, float4(1.0, 1.0, 1.0, 1.0));" in hlsl
     assert "helperWriteBlocks[2].Store4((16 + i * 16), asuint(value));" in hlsl
 
     assert "array<device uchar*, 3> helperWriteBlocks [[buffer(79)]]" in metal
@@ -2660,7 +2660,7 @@ def test_codegen_mixed_ssbo_helper_array_compound_store_uses_indexed_receiver():
     assert "uint i = helperCompoundBlocks[1].Load(0);" in hlsl
     assert (
         "helperCompoundBlocks[1].Store2((8 + i * 8), "
-        "asuint((asfloat(helperCompoundBlocks[1].Load2((8 + i * 8))) + float2(1.0))));"
+        "asuint((asfloat(helperCompoundBlocks[1].Load2((8 + i * 8))) + float2(1.0, 1.0))));"
         in hlsl
     )
 
@@ -2978,7 +2978,7 @@ def test_codegen_mixed_ssbo_nested_helper_write_threads_metal_resource_array():
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "RWByteAddressBuffer nestedWriteBlocks[3] : register(u87);" in hlsl
-    assert "middle(i, float4(1.0));" in hlsl
+    assert "middle(i, float4(1.0, 1.0, 1.0, 1.0));" in hlsl
     assert "leaf(i, value);" in hlsl
     assert "nestedWriteBlocks[2].Store4((16 + i * 16), asuint(value));" in hlsl
 
@@ -3551,11 +3551,13 @@ def test_codegen_mixed_ssbo_unsupported_nested_fallback_keeps_expression_type():
     assert "bool choose = true;" in hlsl
     assert (
         "dot(float4(0) /* unsupported HLSL GLSL buffer block access block: "
-        "no target-side fallback declaration emitted */, float4(1.0))" in hlsl
+        "no target-side fallback declaration emitted */, "
+        "float4(1.0, 1.0, 1.0, 1.0))" in hlsl
     )
     assert (
         "dot(float4(0) /* unsupported HLSL GLSL buffer block function call "
-        "readParam: target function omitted */, float4(1.0))" in hlsl
+        "readParam: target function omitted */, "
+        "float4(1.0, 1.0, 1.0, 1.0))" in hlsl
     )
     assert "dot(0 /* unsupported HLSL GLSL buffer block access block" not in hlsl
     assert (
@@ -3585,10 +3587,10 @@ def test_codegen_mixed_ssbo_unsupported_nested_fallback_keeps_expression_type():
     assert (
         "float4 viaTernaryAccess = (choose ? float4(0) /* unsupported HLSL "
         "GLSL buffer block access block: no target-side fallback declaration "
-        "emitted */ : float4(1.0));" in hlsl
+        "emitted */ : float4(1.0, 1.0, 1.0, 1.0));" in hlsl
     )
     assert (
-        "float4 viaTernaryCall = (choose ? float4(1.0) : float4(0) "
+        "float4 viaTernaryCall = (choose ? float4(1.0, 1.0, 1.0, 1.0) : float4(0) "
         "/* unsupported HLSL GLSL buffer block function call readParam: "
         "target function omitted */);" in hlsl
     )
@@ -14404,11 +14406,11 @@ def test_codegen_allows_explicit_image_atomic_result_casts():
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert (
-        "float scalarCast = float(imageAtomicAdd_uimage2D(counters, int2(0), 1u));"
+        "float scalarCast = float(imageAtomicAdd_uimage2D(counters, int2(0, 0), 1u));"
         in hlsl
     )
     assert (
-        "target[int2(0)] = float(imageAtomicAdd_uimage2D(counters, int2(1), 2u));"
+        "target[int2(0, 0)] = float(imageAtomicAdd_uimage2D(counters, int2(1, 1), 2u));"
         in hlsl
     )
 
@@ -14513,9 +14515,9 @@ def test_codegen_allows_explicit_image_load_result_casts():
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
-    assert "float floatCast = float(counters[int2(0)]);" in hlsl
-    assert "uint uintCast = uint(values[int2(1)]);" in hlsl
-    assert "target[int2(0)] = float(counters[int2(2)]);" in hlsl
+    assert "float floatCast = float(counters[int2(0, 0)]);" in hlsl
+    assert "uint uintCast = uint(values[int2(1, 1)]);" in hlsl
+    assert "target[int2(0, 0)] = float(counters[int2(2, 2)]);" in hlsl
 
     assert "float floatCast = float(counters.read(uint2(int2(0))).x);" in metal
     assert "uint uintCast = uint(values.read(uint2(int2(1))).x);" in metal
@@ -14626,11 +14628,11 @@ def test_codegen_allows_matching_image_load_result_contexts():
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
-    assert "float scalarFromRg = rgFloat[int2(0)].x;" in hlsl
-    assert "float2 rgExact = rgFloat[int2(1)];" in hlsl
-    assert "float4 rgbaExact = rgbaFloat[int2(2)];" in hlsl
-    assert "float2 explicitScalarCast = float2(scalarFloat[int2(3)]);" in hlsl
-    assert "uint2 unsignedExact = rgUnsigned[int2(4)];" in hlsl
+    assert "float scalarFromRg = rgFloat[int2(0, 0)].x;" in hlsl
+    assert "float2 rgExact = rgFloat[int2(1, 1)];" in hlsl
+    assert "float4 rgbaExact = rgbaFloat[int2(2, 2)];" in hlsl
+    assert "float2 explicitScalarCast = ((float2)(scalarFloat[int2(3, 3)]));" in hlsl
+    assert "uint2 unsignedExact = rgUnsigned[int2(4, 4)];" in hlsl
 
     assert "float scalarFromRg = rgFloat.read(uint2(int2(0))).x;" in metal
     assert "float2 rgExact = rgFloat.read(uint2(int2(1))).xy;" in metal
@@ -14753,14 +14755,14 @@ def test_codegen_allows_matching_multicomponent_image_store_values():
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
-    assert "unsignedTarget[int2(0)] = uint2(1u, 0u);" in hlsl
-    assert "unsignedTarget[int2(1)] = uint2(2u);" in hlsl
-    assert "floatTarget[int2(2)] = float2(1.0, 0.0);" in hlsl
-    assert "floatTarget[int2(3)] = float2(2.0);" in hlsl
-    assert "floatTarget[int2(4)] = source[int2(5)];" in hlsl
-    assert "rgbaTarget[int2(6)] = float4(3.0);" in hlsl
-    assert "rgbaTarget[int2(7)] = float4(4.0);" in hlsl
-    assert "floatTarget[int2(8)] = float2(5.0);" in hlsl
+    assert "unsignedTarget[int2(0, 0)] = uint2(1u, 0u);" in hlsl
+    assert "unsignedTarget[int2(1, 1)] = uint2(2u, 2u);" in hlsl
+    assert "floatTarget[int2(2, 2)] = float2(1.0, 0.0);" in hlsl
+    assert "floatTarget[int2(3, 3)] = float2(2.0, 2.0);" in hlsl
+    assert "floatTarget[int2(4, 4)] = source[int2(5, 5)];" in hlsl
+    assert "rgbaTarget[int2(6, 6)] = float4(3.0, 3.0, 3.0, 3.0);" in hlsl
+    assert "rgbaTarget[int2(7, 7)] = float4(4.0, 4.0, 4.0, 4.0);" in hlsl
+    assert "floatTarget[int2(8, 8)] = float2(5.0, 5.0);" in hlsl
 
     assert "unsignedTarget.write(uint4(1u, 0u, 0u, 0u), uint2(int2(0)));" in metal
     assert "unsignedTarget.write(uint4(uint2(2u), 0u, 0u), uint2(int2(1)));" in metal
@@ -17662,7 +17664,7 @@ def test_codegen_mixed_ssbo_hlsl_dynamic_indices_into_fixed_arrays():
     assert "float2 o = asfloat(fixedDynamicBlock.Load2((8 + i * 8)));" in hlsl
     assert (
         "fixedDynamicBlock.Store2((8 + i * 8), "
-        "asuint((asfloat(fixedDynamicBlock.Load2((8 + i * 8))) + float2(1.0))));"
+        "asuint((asfloat(fixedDynamicBlock.Load2((8 + i * 8))) + float2(1.0, 1.0))));"
         in hlsl
     )
 

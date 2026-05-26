@@ -3001,6 +3001,21 @@ class HLSLCodeGen:
                 "bvec2",
                 "bvec3",
                 "bvec4",
+                "float2",
+                "float3",
+                "float4",
+                "double2",
+                "double3",
+                "double4",
+                "int2",
+                "int3",
+                "int4",
+                "uint2",
+                "uint3",
+                "uint4",
+                "bool2",
+                "bool3",
+                "bool4",
                 "packed_float2",
                 "packed_float3",
                 "packed_float4",
@@ -3089,11 +3104,7 @@ class HLSLCodeGen:
                 "min16uint3",
                 "min16uint4",
             ]:
-                mapped_type = self.map_type(func_name)
-                args_str = ", ".join(
-                    self.generate_expression_with_expected(arg, None) for arg in args
-                )
-                return f"{mapped_type}({args_str})"
+                return self.hlsl_constructor_expression(func_name, args)
             self.validate_function_image_access_arguments(func_name, args)
             args_str = ", ".join(
                 self.generate_call_arguments(call_argument_func_name, args)
@@ -6910,6 +6921,64 @@ class HLSLCodeGen:
             excluded_type_markers=("x",),
         )
 
+    def hlsl_expression_is_repeatable(self, expr):
+        if expr is None:
+            return False
+        if isinstance(expr, (int, float, str)):
+            return True
+        if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
+            return True
+        if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
+            return True
+        if isinstance(expr, VariableNode):
+            return True
+        if isinstance(expr, MemberAccessNode):
+            return self.hlsl_expression_is_repeatable(
+                getattr(expr, "object", getattr(expr, "object_expr", None))
+            )
+        if isinstance(expr, ArrayAccessNode):
+            index = getattr(expr, "index", None)
+            indices = getattr(expr, "indices", None)
+            if indices is None and index is not None:
+                indices = [index]
+            return self.hlsl_expression_is_repeatable(
+                getattr(expr, "array", None)
+            ) and all(
+                self.hlsl_expression_is_repeatable(item) for item in indices or []
+            )
+        if isinstance(expr, UnaryOpNode):
+            return self.hlsl_expression_is_repeatable(getattr(expr, "operand", None))
+        if isinstance(expr, BinaryOpNode):
+            return self.hlsl_expression_is_repeatable(
+                getattr(expr, "left", None)
+            ) and self.hlsl_expression_is_repeatable(getattr(expr, "right", None))
+        if isinstance(expr, TernaryOpNode) or (
+            hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__)
+        ):
+            return all(
+                self.hlsl_expression_is_repeatable(getattr(expr, name, None))
+                for name in ("condition", "true_expr", "false_expr")
+            )
+        return False
+
+    def hlsl_scalar_splat_cast(self, constructor_type, rendered_arg):
+        return f"(({self.map_type(constructor_type)})({rendered_arg}))"
+
+    def hlsl_constructor_expression(self, constructor_type, args):
+        mapped_type = self.map_type(constructor_type)
+        rendered_args = [
+            self.generate_expression_with_expected(arg, None) for arg in args
+        ]
+        component_count = self.value_component_count(constructor_type)
+        if component_count and component_count > 1 and len(args) == 1:
+            arg_component_count = self.expression_component_count(args[0])
+            if arg_component_count == 1:
+                rendered_arg = rendered_args[0]
+                if not self.hlsl_expression_is_repeatable(args[0]):
+                    return self.hlsl_scalar_splat_cast(mapped_type, rendered_arg)
+                rendered_args = [rendered_arg] * component_count
+        return f"{mapped_type}({', '.join(rendered_args)})"
+
     def image_store_channel_count(self, image_type, image_format):
         return image_format_or_default_channel_count(
             image_format,
@@ -9670,7 +9739,18 @@ class HLSLCodeGen:
             if four_component_constructor and self.is_scalar_value_type(
                 self.expression_result_type(value_arg)
             ):
-                value = f"{four_component_constructor}({value})"
+                if self.hlsl_expression_is_repeatable(value_arg):
+                    component_count = self.value_component_count(
+                        four_component_constructor
+                    )
+                    value = (
+                        f"{four_component_constructor}"
+                        f"({', '.join([value] * (component_count or 4))})"
+                    )
+                else:
+                    value = self.hlsl_scalar_splat_cast(
+                        four_component_constructor, value
+                    )
             two_component_constructor = self.two_component_image_store_constructor(
                 texture_type
             )

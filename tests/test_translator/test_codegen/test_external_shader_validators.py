@@ -1177,7 +1177,7 @@ def test_mixed_glsl_ssbo_nested_aggregate_leaf_compound_hlsl_output_compiles_wit
     assert (
         "compoundAggregateBlock.Store2((8 + i * 48 + 8 + 16), "
         "asuint((asfloat(compoundAggregateBlock.Load2((8 + i * 48 + 8 + 16))) "
-        "+ float2(0.5))))" in code
+        "+ float2(0.5, 0.5))))" in code
     )
     assert "compoundAggregateBlock.Store2((8 + i * 48 + 8 + 8), uint2" in code
     assert ("un" + "supported HLSL GLSL buffer block") not in code
