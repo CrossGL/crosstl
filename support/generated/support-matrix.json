@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 486
+        "test_count": 490
       },
       "translator_codegen": {
         "exists": true,
@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 689
+        "test_count": 691
       },
       "translator_codegen": {
         "exists": true,
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 442
+        "test_count": 443
       },
       "translator_codegen": {
         "exists": true,
@@ -433,7 +433,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 331
+        "test_count": 335
       },
       "translator_codegen": {
         "exists": true,
@@ -457,7 +457,7 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 10,
+        "unsupported_marker_count": 13,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -470,6 +470,18 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_shadow_resource_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_sampled_resource_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_shadow_resource_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_multisample_resource_call("
           },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -631,7 +643,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 239
+        "test_count": 240
       },
       "translator_codegen": {
         "exists": true,
@@ -745,7 +757,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 441
+        "test_count": 443
       },
       "translator_codegen": {
         "exists": true,
@@ -859,7 +871,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 255
+        "test_count": 258
       },
       "translator_codegen": {
         "exists": true,
@@ -1225,7 +1237,7 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "Ray generation payloads lower to device references; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray pipeline object/signature coverage remains incomplete.",
+      "notes": "Ray generation payloads lower to device references; acceleration structures lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal visible-function-table and callable-dispatch semantics remain incomplete.",
       "status": "partial"
     },
     {
@@ -1900,7 +1912,7 @@
       "category": "textures",
       "feature": "Texture LOD, gradient, and offset operations",
       "feature_id": "texture.lod_grad_offset",
-      "notes": "Covers explicit LOD, gradient, offset, combined LOD/gradient-offset, and shadow compare LOD/gradient-offset forms with spirv-as/spirv-val coverage. Bias and projected forms are tracked separately and remain incomplete.",
+      "notes": "Covers explicit LOD, gradient, offset, combined LOD/gradient-offset, fragment bias operands, compute-stage bias diagnostics, and shadow compare LOD/gradient-offset forms. Non-bias forms have spirv-as/spirv-val coverage; projected forms are tracked separately.",
       "status": "partial"
     },
     {
@@ -1981,8 +1993,8 @@
       "category": "textures",
       "feature": "Projected texture operations",
       "feature_id": "texture.projected",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Covers projected color sampling for 2D, 2D-array, and 3D textures plus projected 2D and 2D-array shadow comparisons across offset, LOD, gradient, and fragment bias variants. Non-bias projected forms have spirv-as/spirv-val coverage; cube/cube-array projection diagnostics remain incomplete.",
+      "status": "partial"
     },
     {
       "backend": "CUDA",
@@ -2296,7 +2308,7 @@
       "category": "textures",
       "feature": "Advanced texture operations",
       "feature_id": "texture.advanced_sampling",
-      "notes": "Covers non-projected LOD, gradient, offset, gather, shadow compare, texel fetch, query, and multisample fetch/query forms with spirv-as/spirv-val coverage. Projected texture operations, bias variants, and fetch-offset diagnostics remain incomplete.",
+      "notes": "Covers LOD, gradient, offset, projected sampling, fragment bias operands, gather, shadow compare, texel fetch, query, and multisample fetch/query forms. Most non-fragment-only forms have spirv-as/spirv-val coverage; projected cube/cube-array diagnostics remain incomplete.",
       "status": "partial"
     },
     {
@@ -3312,11 +3324,15 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_payload_semantics",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_hit_and_callable_stages_lower_to_visible_functions",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_callable_data_semantic_uses_ray_data_address_space",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_acceleration_structure_globals_lower_to_buffer_parameters",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_full_signature_lowers_to_intersector_query",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_acceleration_structure_globals_thread_through_helpers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_unsupported_ray_intrinsics_emit_compile_safe_diagnostics",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_lowers_to_metal_intersection_attribute",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_accepts_bounding_box_result_struct",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
           ],
-          "notes": "Ray generation payloads lower to device references; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray pipeline object/signature coverage remains incomplete.",
+          "notes": "Ray generation payloads lower to device references; acceleration structures lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal visible-function-table and callable-dispatch semantics remain incomplete.",
           "status": "partial"
         },
         "mojo": {
@@ -4118,10 +4134,12 @@
         "vulkan": {
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_lod_and_grad_emit_explicit_lod_sampling",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_bias_variants_emit_spirv_bias_operands",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_texture_bias_variants_emit_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
           ],
-          "notes": "Covers explicit LOD, gradient, offset, combined LOD/gradient-offset, and shadow compare LOD/gradient-offset forms with spirv-as/spirv-val coverage. Bias and projected forms are tracked separately and remain incomplete.",
+          "notes": "Covers explicit LOD, gradient, offset, combined LOD/gradient-offset, fragment bias operands, compute-stage bias diagnostics, and shadow compare LOD/gradient-offset forms. Non-bias forms have spirv-as/spirv-val coverage; projected forms are tracked separately.",
           "status": "partial"
         }
       }
@@ -4186,9 +4204,14 @@
           "status": "unknown"
         },
         "vulkan": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_projected_texture_operations_emit_divided_spirv_coordinates",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_projected_shadow_compare_operations_emit_dref_sampling",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_bias_variants_emit_spirv_bias_operands",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ],
+          "notes": "Covers projected color sampling for 2D, 2D-array, and 3D textures plus projected 2D and 2D-array shadow comparisons across offset, LOD, gradient, and fragment bias variants. Non-bias projected forms have spirv-as/spirv-val coverage; cube/cube-array projection diagnostics remain incomplete.",
+          "status": "partial"
         }
       }
     },
@@ -4599,10 +4622,12 @@
         "vulkan": {
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_lod_and_grad_emit_explicit_lod_sampling",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_projected_texture_operations_emit_divided_spirv_coordinates",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_bias_variants_emit_spirv_bias_operands",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
           ],
-          "notes": "Covers non-projected LOD, gradient, offset, gather, shadow compare, texel fetch, query, and multisample fetch/query forms with spirv-as/spirv-val coverage. Projected texture operations, bias variants, and fetch-offset diagnostics remain incomplete.",
+          "notes": "Covers LOD, gradient, offset, projected sampling, fragment bias operands, gather, shadow compare, texel fetch, query, and multisample fetch/query forms. Most non-fragment-only forms have spirv-as/spirv-val coverage; projected cube/cube-array diagnostics remain incomplete.",
           "status": "partial"
         }
       }
@@ -5403,9 +5428,9 @@
       },
       "vulkan": {
         "diagnostic": 0,
-        "partial": 15,
+        "partial": 16,
         "supported": 13,
-        "unknown": 14,
+        "unknown": 13,
         "unsupported": 0,
         "validated_rejection": 0
       }

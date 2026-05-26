@@ -250,11 +250,15 @@
         },
         "metal": {
           "status": "partial",
-          "notes": "Ray generation payloads lower to device references; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray pipeline object/signature coverage remains incomplete.",
+          "notes": "Ray generation payloads lower to device references; acceleration structures lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal visible-function-table and callable-dispatch semantics remain incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_payload_semantics",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_hit_and_callable_stages_lower_to_visible_functions",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_callable_data_semantic_uses_ray_data_address_space",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_acceleration_structure_globals_lower_to_buffer_parameters",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_full_signature_lowers_to_intersector_query",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_acceleration_structure_globals_thread_through_helpers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_unsupported_ray_intrinsics_emit_compile_safe_diagnostics",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_lowers_to_metal_intersection_attribute",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_accepts_bounding_box_result_struct",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
@@ -672,9 +676,11 @@
         },
         "vulkan": {
           "status": "partial",
-          "notes": "Covers explicit LOD, gradient, offset, combined LOD/gradient-offset, and shadow compare LOD/gradient-offset forms with spirv-as/spirv-val coverage. Bias and projected forms are tracked separately and remain incomplete.",
+          "notes": "Covers explicit LOD, gradient, offset, combined LOD/gradient-offset, fragment bias operands, compute-stage bias diagnostics, and shadow compare LOD/gradient-offset forms. Non-bias forms have spirv-as/spirv-val coverage; projected forms are tracked separately.",
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_lod_and_grad_emit_explicit_lod_sampling",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_bias_variants_emit_spirv_bias_operands",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_texture_bias_variants_emit_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
           ]
@@ -720,7 +726,16 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_forms"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "partial",
+          "notes": "Covers projected color sampling for 2D, 2D-array, and 3D textures plus projected 2D and 2D-array shadow comparisons across offset, LOD, gradient, and fragment bias variants. Non-bias projected forms have spirv-as/spirv-val coverage; cube/cube-array projection diagnostics remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_projected_texture_operations_emit_divided_spirv_coordinates",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_projected_shadow_compare_operations_emit_dref_sampling",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_bias_variants_emit_spirv_bias_operands",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {"status": "unknown"},
@@ -997,9 +1012,11 @@
         "metal": {"status": "partial", "notes": "Several unsupported combinations intentionally emit diagnostics."},
         "vulkan": {
           "status": "partial",
-          "notes": "Covers non-projected LOD, gradient, offset, gather, shadow compare, texel fetch, query, and multisample fetch/query forms with spirv-as/spirv-val coverage. Projected texture operations, bias variants, and fetch-offset diagnostics remain incomplete.",
+          "notes": "Covers LOD, gradient, offset, projected sampling, fragment bias operands, gather, shadow compare, texel fetch, query, and multisample fetch/query forms. Most non-fragment-only forms have spirv-as/spirv-val coverage; projected cube/cube-array diagnostics remain incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_lod_and_grad_emit_explicit_lod_sampling",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_projected_texture_operations_emit_divided_spirv_coordinates",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_bias_variants_emit_spirv_bias_operands",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
           ]
