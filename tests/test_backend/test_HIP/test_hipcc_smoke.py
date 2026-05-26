@@ -255,6 +255,65 @@ def test_native_hip_stream_event_lifecycle_parses_and_compiles_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_graph_lifecycle_parses_and_compiles_if_available(tmp_path):
+    """Smoke native HIP graph capture, node creation, instantiate, and launch APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void graph_lifecycle(hipStream_t stream) {
+        hipGraph_t graph;
+        hipGraph_t captured_graph;
+        hipGraphExec_t exec;
+        hipGraphNode_t empty_node;
+        hipGraphNode_t error_node;
+        char log[128];
+        hipStreamBeginCapture(stream, hipStreamCaptureModeGlobal);
+        hipStreamEndCapture(stream, &captured_graph);
+        hipGraphDestroy(captured_graph);
+        hipGraphCreate(&graph, 0);
+        hipGraphAddEmptyNode(&empty_node, graph, NULL, 0);
+        hipGraphInstantiate(&exec, graph, &error_node, log, 128);
+        hipGraphLaunch(exec, stream);
+        hipGraphExecDestroy(exec);
+        hipGraphDestroy(graph);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: graph_lifecycle" in crossgl
+    assert "void graph_lifecycle(hipStream_t stream)" in crossgl
+    assert "var graph: hipGraph_t;" in crossgl
+    assert "var captured_graph: hipGraph_t;" in crossgl
+    assert "var exec: hipGraphExec_t;" in crossgl
+    assert "var empty_node: hipGraphNode_t;" in crossgl
+    assert "var error_node: hipGraphNode_t;" in crossgl
+    assert "var log: array<i8, 128>;" in crossgl
+    assert (
+        "// HIP stream begin capture: stream: stream, "
+        "mode: hipStreamCaptureModeGlobal"
+    ) in crossgl
+    assert (
+        "// HIP stream end capture: stream: stream, graph output: captured_graph"
+        in crossgl
+    )
+    assert "// HIP graph destroy: captured_graph" in crossgl
+    assert "// HIP graph create: output: graph, flags: 0" in crossgl
+    assert (
+        "// HIP graph add empty node: output: empty_node, graph: graph, "
+        "dependencies: NULL, count: 0"
+    ) in crossgl
+    assert (
+        "// HIP graph instantiate: output: exec, graph: graph, "
+        "error node output: error_node, log buffer: log, log bytes: 128"
+    ) in crossgl
+    assert "// HIP graph launch: exec: exec, stream: stream" in crossgl
+    assert "// HIP graph exec destroy: exec" in crossgl
+    assert "// HIP graph destroy: graph" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_device_error_runtime_parses_and_compiles_if_available(
     tmp_path,
 ):

@@ -3,6 +3,7 @@
 import re
 
 from ..ast import (
+    AtomicOpNode,
     ArrayNode,
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -466,6 +467,28 @@ MOJO_IMAGE_ATOMIC_BUILTINS = {
     "imageAtomicXor": "image_atomic_xor",
     "imageAtomicExchange": "image_atomic_exchange",
     "imageAtomicCompSwap": "image_atomic_comp_swap",
+}
+
+MOJO_ATOMIC_OP_ALIASES = {
+    **MOJO_IMAGE_ATOMIC_BUILTINS,
+    "atomicAdd": "image_atomic_add",
+    "atomicMin": "image_atomic_min",
+    "atomicMax": "image_atomic_max",
+    "atomicAnd": "image_atomic_and",
+    "atomicOr": "image_atomic_or",
+    "atomicXor": "image_atomic_xor",
+    "atomicExchange": "image_atomic_exchange",
+    "atomicCompSwap": "image_atomic_comp_swap",
+    "atomicCompareExchange": "image_atomic_comp_swap",
+    "Add": "image_atomic_add",
+    "Min": "image_atomic_min",
+    "Max": "image_atomic_max",
+    "And": "image_atomic_and",
+    "Or": "image_atomic_or",
+    "Xor": "image_atomic_xor",
+    "Exchange": "image_atomic_exchange",
+    "CompareExchange": "image_atomic_comp_swap",
+    "CompSwap": "image_atomic_comp_swap",
 }
 
 MOJO_TYPED_BUFFER_RESOURCE_TYPES = {
@@ -2900,6 +2923,8 @@ class MojoCodeGen:
             return self.generate_texture_node(expr)
         elif isinstance(expr, TextureOpNode):
             return self.generate_texture_op_node(expr)
+        elif isinstance(expr, AtomicOpNode):
+            return self.generate_atomic_op_node(expr)
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand)
             op = self.map_operator(expr.op)
@@ -3307,6 +3332,15 @@ class MojoCodeGen:
         self.required_sync_helpers.add(helper_name)
         indent_str = "    " * indent
         return f"{indent_str}{helper_name}()\n"
+
+    def generate_atomic_op_node(self, expr):
+        operation = getattr(expr, "operation", "")
+        helper_base = MOJO_ATOMIC_OP_ALIASES.get(operation)
+        if helper_base is None:
+            raise ValueError(f"Unsupported Mojo atomic operation {operation}")
+        return self.generate_image_atomic_call(
+            [expr.target, *getattr(expr, "arguments", [])], helper_base
+        )
 
     def builtin_variable_result_type(self, name):
         if name in {
@@ -5222,6 +5256,12 @@ class MojoCodeGen:
                 if size_type == "SIMD[DType.int32, 4]":
                     return "ivec3"
             return "vec4"
+        if isinstance(expr, AtomicOpNode):
+            resource_type = self.map_type(self.expression_result_type(expr.target))
+            value_type = self.image_value_type(resource_type)
+            if value_type == "UInt32":
+                return "uint"
+            return "int"
         if isinstance(expr, MemberAccessNode):
             obj_type = self.expression_result_type(expr.object)
             if (

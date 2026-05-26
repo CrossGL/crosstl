@@ -6935,6 +6935,9 @@ class MetalCodeGen:
         return next(iter(payload_types), None)
 
     def metal_dispatch_mesh_payload_type(self, expr, declared_types):
+        if isinstance(expr, ArrayAccessNode):
+            payload_type = self.expression_result_type(expr)
+            return self.map_type(payload_type) if payload_type else None
         expr_name = self.expression_name(expr)
         if expr_name in declared_types:
             return self.map_type(declared_types[expr_name])

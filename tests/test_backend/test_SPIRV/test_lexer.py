@@ -38,6 +38,18 @@ def test_bitwise_not_tokenization():
     assert has_not, "Bitwise NOT operator (~) not tokenized correctly"
 
 
+def test_hex_integer_literal_tokenization():
+    tokens = tokenize_code("""
+        uint mask = 0xFFu;
+        uint upper = 0X10U;
+    """)
+
+    assert ("NUMBER", "0xFFu") in tokens
+    assert ("NUMBER", "0X10U") in tokens
+    assert ("IDENTIFIER", "xFFu") not in tokens
+    assert ("IDENTIFIER", "X10U") not in tokens
+
+
 def test_array_bracket_tokenization():
     code = """
         mat4 transforms[64];

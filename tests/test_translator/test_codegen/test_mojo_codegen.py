@@ -7,6 +7,7 @@ import crosstl.translator
 from crosstl.translator.parser import Parser
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.ast import (
+    AtomicOpNode,
     BuiltinVariableNode,
     CastNode,
     LiteralNode,
@@ -947,6 +948,87 @@ def test_direct_sync_nodes_reject_unknown_or_argument_forms():
         codegen.generate_statement(
             SyncNode("barrier", [LiteralNode(1, PrimitiveType("int"))])
         )
+
+
+def test_direct_atomic_op_nodes_emit_mojo_image_atomic_helpers_without_ast_repr():
+    codegen = MojoCodeGen()
+    image = VariableNode("image", PrimitiveType("uimage2D"))
+    signed_image = VariableNode("signedImage", PrimitiveType("iimage2D"))
+    pixel = VariableNode("pixel", VectorType(PrimitiveType("int"), 2))
+    value = VariableNode("value", PrimitiveType("uint"))
+    replacement = VariableNode("replacement", PrimitiveType("uint"))
+    signed_value = VariableNode("signedValue", PrimitiveType("int"))
+
+    codegen.register_variable_type("image", "uimage2D")
+    codegen.register_variable_type("signedImage", "iimage2D")
+    codegen.register_variable_type("pixel", "ivec2")
+    codegen.register_variable_type("value", "uint")
+    codegen.register_variable_type("replacement", "uint")
+    codegen.register_variable_type("signedValue", "int")
+
+    add_call = codegen.generate_expression(
+        AtomicOpNode("imageAtomicAdd", image, [pixel, value])
+    )
+    compare_call = codegen.generate_expression(
+        AtomicOpNode("atomicCompareExchange", image, [pixel, replacement, value])
+    )
+    signed_call = codegen.generate_expression(
+        AtomicOpNode("Add", signed_image, [pixel, signed_value])
+    )
+
+    assert add_call.startswith("_crossgl_image_atomic_add_UImage2D")
+    assert add_call.endswith("(image, pixel, value)")
+    assert compare_call.startswith("_crossgl_image_atomic_comp_swap_UImage2D")
+    assert compare_call.endswith("(image, pixel, replacement, value)")
+    assert signed_call.startswith("_crossgl_image_atomic_add_IImage2D")
+    assert signed_call.endswith("(signedImage, pixel, signedValue)")
+    assert "AtomicOpNode(" not in add_call
+    assert (
+        codegen.expression_result_type(
+            AtomicOpNode("imageAtomicAdd", image, [pixel, value])
+        )
+        == "uint"
+    )
+    assert (
+        codegen.expression_result_type(
+            AtomicOpNode("Add", signed_image, [pixel, signed_value])
+        )
+        == "int"
+    )
+    helper_names = {
+        helper["name"] for helper in codegen.required_resource_builtin_helpers.values()
+    }
+    assert any(
+        name.startswith("_crossgl_image_atomic_add_UImage2D") for name in helper_names
+    )
+    assert any(
+        name.startswith("_crossgl_image_atomic_comp_swap_UImage2D")
+        for name in helper_names
+    )
+    assert any(
+        name.startswith("_crossgl_image_atomic_add_IImage2D") for name in helper_names
+    )
+
+
+def test_direct_atomic_op_nodes_reject_unsupported_targets_and_operations():
+    codegen = MojoCodeGen()
+    color_image = VariableNode("colorImage", PrimitiveType("image2D"))
+    image = VariableNode("image", PrimitiveType("uimage2D"))
+    pixel = VariableNode("pixel", VectorType(PrimitiveType("int"), 2))
+    value = VariableNode("value", PrimitiveType("uint"))
+
+    codegen.register_variable_type("colorImage", "image2D")
+    codegen.register_variable_type("image", "uimage2D")
+    codegen.register_variable_type("pixel", "ivec2")
+    codegen.register_variable_type("value", "uint")
+
+    with pytest.raises(ValueError, match="integer image required"):
+        codegen.generate_expression(
+            AtomicOpNode("atomicAdd", color_image, [pixel, value])
+        )
+
+    with pytest.raises(ValueError, match="Unsupported Mojo atomic operation atomicInc"):
+        codegen.generate_expression(AtomicOpNode("atomicInc", image, [pixel, value]))
 
 
 def test_if_statement():

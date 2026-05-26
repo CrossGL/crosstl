@@ -1278,7 +1278,9 @@ class GLSLCodeGen:
             )
         )
         self.task_payload_shared_variables = (
-            self.glsl_task_payload_shared_variable_infos(stage_local_interface_vars)
+            self.glsl_task_payload_shared_variable_infos(
+                global_vars + stage_local_interface_vars
+            )
         )
         self.structs_by_name = {
             node.name: node for node in structs if isinstance(node, StructNode)

@@ -391,6 +391,7 @@ class GLSLToCrossGLConverter:
         self.structured_buffer_instance_members = {}
         self.converted_ssbo_struct_names = set()
         self.interface_block_struct_names = set()
+        self.task_payload_shared_names = set()
 
     def indent(self):
         return self.indent_str * self.indent_level
@@ -665,6 +666,10 @@ class GLSLToCrossGLConverter:
             if qualifier in qualifiers
         ]
 
+    def is_task_payload_shared_variable(self, var):
+        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
+        return "taskpayloadsharedext" in qualifiers
+
     def variable_qualifier_attribute_suffix(self, var):
         qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
         attributes = [
@@ -864,6 +869,11 @@ class GLSLToCrossGLConverter:
         self.inputs = []
         self.outputs = []
         self.local_vars = []
+        self.task_payload_shared_names = {
+            var.name
+            for var in getattr(node, "global_variables", []) or []
+            if self.is_task_payload_shared_variable(var)
+        }
         self.prepare_structured_buffers(node)
 
         for var in node.io_variables:
@@ -1108,8 +1118,8 @@ class GLSLToCrossGLConverter:
                 result += self.indent() + f"{output_type} {output_name};\n"
 
             # Generate statements for the main function
-            for statement in main_function.body:
-                result += self.indent() + self.generate_statement(statement) + "\n"
+            for statement in self.generate_statement_sequence(main_function.body):
+                result += self.indent() + statement + "\n"
 
             # Add implicit return for stages with output struct if not present
             if self.shader_type in ("vertex",) and not any(
@@ -1195,12 +1205,73 @@ class GLSLToCrossGLConverter:
         result = f"{return_type} {name}({params_str}) {{\n"
 
         self.increase_indent()
-        for statement in node.body:
-            result += self.indent() + self.generate_statement(statement) + "\n"
+        for statement in self.generate_statement_sequence(node.body):
+            result += self.indent() + statement + "\n"
         self.decrease_indent()
 
         result += self.indent() + "}"
         return result
+
+    def generate_statement_sequence(self, statements):
+        generated = []
+        index = 0
+        while index < len(statements):
+            folded = self.generate_task_payload_dispatch_statement(statements, index)
+            if folded is not None:
+                generated.append(folded)
+                index += 2
+                continue
+            generated.append(self.generate_statement(statements[index]))
+            index += 1
+        return generated
+
+    def generate_task_payload_dispatch_statement(self, statements, index):
+        if self.shader_type not in {"task", "amplification", "object"}:
+            return None
+        if index + 1 >= len(statements):
+            return None
+
+        assignment = statements[index]
+        dispatch = statements[index + 1]
+        payload_expr = self.task_payload_assignment_expression(assignment)
+        if payload_expr is None:
+            return None
+        if not self.is_emit_mesh_tasks_call(dispatch):
+            return None
+
+        dispatch_args = [
+            self.generate_expression(arg) for arg in getattr(dispatch, "args", [])[:3]
+        ]
+        payload = self.generate_expression(payload_expr)
+        return f"DispatchMesh({', '.join(dispatch_args + [payload])});"
+
+    def task_payload_assignment_expression(self, statement):
+        if not isinstance(statement, AssignmentNode):
+            return None
+        if getattr(statement, "operator", "=") != "=":
+            return None
+        if not self.task_payload_shared_names:
+            return None
+
+        target = self.expression_base_name(getattr(statement, "left", None))
+        if target not in self.task_payload_shared_names:
+            return None
+        return getattr(statement, "right", None)
+
+    def is_emit_mesh_tasks_call(self, statement):
+        if not isinstance(statement, FunctionCallNode):
+            return False
+        if len(getattr(statement, "args", []) or []) != 3:
+            return False
+        return self.function_call_name(statement) == "EmitMeshTasksEXT"
+
+    def function_call_name(self, node):
+        name = getattr(node, "name", None)
+        if isinstance(name, VariableNode):
+            return name.name
+        if isinstance(name, MemberAccessNode):
+            return self.generate_member_access(name)
+        return name
 
     def generate_statement(self, node):
         """Render a GLSL statement node as CrossGL source."""

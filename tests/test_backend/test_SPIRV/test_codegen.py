@@ -1238,6 +1238,28 @@ def test_vulkan_bitwise_or_xor_and_precedence_codegen():
     assert "int orRelational = ((a | b) < c);" not in generated_code
 
 
+def test_vulkan_hex_integer_literals_codegen():
+    code = """
+    void main() {
+        uint mask = 0xFFu;
+        uint upper = 0X10U;
+        uint shifted = 0x10u << 2u;
+        bool selected = (flags & 0x1u) == 0x1u;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint mask = 0xFF;" in generated_code
+    assert "uint upper = 0X10;" in generated_code
+    assert "uint shifted = (0x10 << 2);" in generated_code
+    assert "bool selected = ((flags & 0x1) == 0x1);" in generated_code
+    assert "xFFu" not in generated_code
+    assert "X10U" not in generated_code
+
+
 def test_struct_codegen():
     code = """
     struct VertexInput {

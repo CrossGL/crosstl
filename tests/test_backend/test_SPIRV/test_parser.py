@@ -1359,6 +1359,31 @@ def test_logical_and_keeps_equality_operands_grouped():
     assert expression.right.op == "=="
 
 
+def test_hex_integer_literals_parse_as_single_numeric_values():
+    code = """
+    void main() {
+        uint mask = 0xFFu;
+        uint upper = 0X10U;
+        uint shifted = 0x10u << 2u;
+        bool selected = (flags & 0x1u) == 0x1u;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    mask, upper, shifted, selected = ast.functions[0].body
+
+    assert mask.right == "0xFF"
+    assert upper.right == "0X10"
+    assert isinstance(shifted.right, BinaryOpNode)
+    assert shifted.right.op == "<<"
+    assert shifted.right.left == "0x10"
+    assert shifted.right.right == "2"
+    assert isinstance(selected.right, BinaryOpNode)
+    assert selected.right.op == "=="
+    assert selected.right.right == "0x1"
+
+
 def test_unknown_identifier_statement_is_rejected_instead_of_dropped():
     code = """
     void main() {

@@ -4161,6 +4161,56 @@ def test_metal_mesh_payload_dispatch_argument_generates_object_data_payload():
     assert "DispatchMesh" not in generated
 
 
+def test_metal_mesh_payload_dispatch_accepts_threadgroup_array_elements():
+    code = """
+    shader meshpipe {
+        struct MeshPayload {
+            uint meshlet;
+            uint lane;
+        };
+
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                groupshared MeshPayload payloads[2];
+                groupshared MeshPayload copied;
+                payloads[0].meshlet = 3u;
+                payloads[0].lane = 4u;
+                copied = payloads[0];
+                payloads[1] = copied;
+                DispatchMesh(1, 1, 1, payloads[1]);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[1],
+                @indices out uint points[1]
+            ) @numthreads(1, 1, 1) @outputtopology(point) {
+                SetMeshOutputCounts(1, 1);
+                verts[0].position =
+                    vec4(float(payload.meshlet + payload.lane), 0.0, 0.0, 1.0);
+                points[0] = 0u;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "threadgroup MeshPayload payloads[2];" in generated
+    assert "threadgroup MeshPayload copied;" in generated
+    assert "copied = payloads[0];" in generated
+    assert "payloads[1] = copied;" in generated
+    assert "_crossglMeshPayload = payloads[1];" in generated
+    assert "_crossglMeshGrid.set_threadgroups_per_grid(uint3(1, 1, 1));" in generated
+    assert "unsupported Metal mesh payload dispatch" not in generated
+    assert "DispatchMesh" not in generated
+
+
 def test_metal_mesh_payload_dispatch_generated_name_avoids_local_collision():
     code = """
     shader meshpipe {

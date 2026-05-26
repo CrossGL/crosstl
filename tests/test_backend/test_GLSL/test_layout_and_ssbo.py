@@ -846,6 +846,44 @@ def test_parse_mesh_intrinsics_roundtrip_through_canonical_crossgl(
     assert regenerated_call in glsl
 
 
+def test_parse_task_payload_dispatch_pattern_roundtrips_as_payload_argument():
+    code = """
+    #version 450 core
+    #extension GL_EXT_mesh_shader : require
+
+    struct TaskPayload {
+        uint meshlet;
+    };
+
+    taskPayloadSharedEXT TaskPayload payload;
+    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+    void main() {
+        TaskPayload localPayload;
+        localPayload.meshlet = 7u;
+        payload = localPayload;
+        EmitMeshTasksEXT(2, 3, 4);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "task")
+
+    assert "TaskPayload payload @taskPayloadSharedEXT;" in crossgl
+    assert "TaskPayload localPayload;" in crossgl
+    assert "localPayload.meshlet = 7u;" in crossgl
+    assert "DispatchMesh(2, 3, 4, localPayload);" in crossgl
+    assert "payload = localPayload;" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "taskPayloadSharedEXT TaskPayload payload;" in glsl
+    assert "TaskPayload localPayload;" in glsl
+    assert "localPayload.meshlet = 7u;" in glsl
+    assert "payload = localPayload;" in glsl
+    assert "EmitMeshTasksEXT(2, 3, 4);" in glsl
+    assert "EmitMeshTasksEXT(2, 3, 4, localPayload)" not in glsl
+
+
 def test_parse_mesh_stage_interface_qualifiers_roundtrip():
     code = """
     #version 450 core
