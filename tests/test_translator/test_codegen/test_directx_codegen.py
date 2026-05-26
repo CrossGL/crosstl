@@ -3134,6 +3134,181 @@ def test_directx_mesh_task_stage_validates_system_value_parameter_types():
     assert "uint groupIndex : SV_GroupIndex" in generated
 
 
+def test_directx_mesh_output_signature_roles_emit_validator_compatible_hlsl():
+    shader = """
+    shader MeshOutputSignature {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct MeshPrimitive {
+            bool culled @ SV_CullPrimitive;
+            uint layer @ SV_RenderTargetArrayIndex;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                verts[1].position = vec4(1.0, 0.0, 0.0, 1.0);
+                verts[2].position = vec4(0.0, 1.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+                prims[0].culled = false;
+                prims[0].layer = 0u;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+    assert "out vertices MeshVertex verts[3]" in generated
+    assert "out indices uint3 tris[1]" in generated
+    assert "out primitives MeshPrimitive prims[1]" in generated
+    assert "bool culled: SV_CullPrimitive;" in generated
+    assert "uint layer: SV_RenderTargetArrayIndex;" in generated
+    assert ": vertices" not in generated
+    assert ": indices" not in generated
+    assert ": primitives" not in generated
+
+
+def test_directx_mesh_output_signature_validates_required_roles_and_counts():
+    missing_vertices_code = """
+    shader MissingMeshVertices {
+        mesh {
+            void main(@indices out uvec3 tris[1])
+                @numthreads(32, 1, 1)
+                @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="out vertices"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_vertices_code), "mesh"
+        )
+
+    wrong_index_type_code = """
+    shader WrongMeshIndexType {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec2 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="triangle.*uint3"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(wrong_index_type_code), "mesh"
+        )
+
+    mismatched_primitives_code = """
+    shader MismatchedMeshPrimitiveCount {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        struct MeshPrimitive {
+            bool culled @ SV_CullPrimitive;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[2],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="primitives.*match.*indices"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(mismatched_primitives_code), "mesh"
+        )
+
+
+def test_directx_mesh_output_signature_validates_struct_semantics():
+    missing_position_code = """
+    shader MeshMissingPosition {
+        struct MeshVertex {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_Position"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_position_code), "mesh"
+        )
+
+    missing_semantic_code = """
+    shader MeshMissingSemantic {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+            vec2 uv;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="member 'uv'.*semantic"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_semantic_code), "mesh"
+        )
+
+    primitive_only_vertex_semantic_code = """
+    shader MeshPrimitiveOnlyVertexSemantic {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+            bool culled @ SV_CullPrimitive;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="per-primitive semantic"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(primitive_only_vertex_semantic_code), "mesh"
+        )
+
+
 def test_directx_advanced_stage_entries_use_stage_specific_names():
     code = """
     shader advanced {

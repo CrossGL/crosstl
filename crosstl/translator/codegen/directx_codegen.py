@@ -4774,6 +4774,10 @@ class HLSLCodeGen:
             if normalized in allowed_qualifiers:
                 qualifiers.append(normalized)
 
+        for role in self.hlsl_mesh_parameter_roles(parameter):
+            if role not in qualifiers:
+                qualifiers.append(role)
+
         for attr in getattr(parameter, "attributes", []) or []:
             if getattr(attr, "name", None) != "primitive":
                 continue
@@ -4786,6 +4790,43 @@ class HLSLCodeGen:
                 qualifiers.append(normalized)
 
         return qualifiers
+
+    def hlsl_mesh_parameter_role_attribute_name(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return None
+
+        normalized = str(attr_name).lower()
+        if normalized.startswith("hlsl_"):
+            normalized = normalized[len("hlsl_") :]
+        if normalized in {"vertices", "indices", "primitives"}:
+            return normalized
+        return None
+
+    def hlsl_mesh_parameter_roles(self, parameter):
+        roles = []
+        for qualifier in getattr(parameter, "qualifiers", []) or []:
+            normalized = str(qualifier).lower()
+            if normalized in {"vertices", "indices", "primitives"}:
+                roles.append(normalized)
+
+        for attr in getattr(parameter, "attributes", []) or []:
+            role = self.hlsl_mesh_parameter_role_attribute_name(attr)
+            if role:
+                roles.append(role)
+
+        ordered_roles = []
+        for role in ("vertices", "indices", "primitives"):
+            if role in roles:
+                ordered_roles.append(role)
+        return ordered_roles
+
+    def hlsl_parameter_direction_qualifiers(self, parameter):
+        return {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+            if str(qualifier).lower() in {"const", "in", "out", "inout"}
+        }
 
     def apply_hlsl_parameter_qualifiers(self, param_type, parameter):
         qualifiers = self.hlsl_parameter_qualifiers(parameter)
@@ -5217,6 +5258,9 @@ class HLSLCodeGen:
         if shader_type in {"mesh", "task", "amplification", "object"}:
             self.validate_hlsl_thread_system_value_types(parameters, shader_type)
 
+        if shader_type == "mesh":
+            self.validate_hlsl_mesh_output_parameters(func, parameters)
+
     def validate_hlsl_geometry_stream_output_semantics(self, parameters):
         stream_types = {"PointStream", "LineStream", "TriangleStream"}
         for parameter in parameters:
@@ -5241,6 +5285,237 @@ class HLSLCodeGen:
                     f"output stream struct '{stream_type_name}' member",
                     getattr(member, "name", "<anonymous>"),
                 )
+
+    def hlsl_parameter_array_size_expression(self, parameter):
+        param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        if str(type(param_type)).find("ArrayType") != -1:
+            return getattr(param_type, "size", None)
+
+        type_name = self.type_name_string(param_type)
+        if not type_name:
+            return None
+        _base_type, array_suffix = split_array_type_suffix(str(type_name))
+        if not array_suffix:
+            return None
+        first_dimension = array_suffix[1:].split("]", 1)[0]
+        return first_dimension if first_dimension else None
+
+    def validate_hlsl_mesh_output_array_parameter(self, parameter, role):
+        if "out" not in self.hlsl_parameter_direction_qualifiers(parameter):
+            raise ValueError(
+                f"DirectX mesh stage {role} parameter '{parameter.name}' "
+                "must use the out qualifier"
+            )
+
+        if not self.hlsl_parameter_is_array(parameter):
+            raise ValueError(
+                f"DirectX mesh stage {role} parameter '{parameter.name}' "
+                "must be a statically sized array"
+            )
+
+        if self.hlsl_parameter_array_size_expression(parameter) is None:
+            raise ValueError(
+                f"DirectX mesh stage {role} parameter '{parameter.name}' "
+                "must declare a static array size"
+            )
+
+        array_count = self.hlsl_parameter_array_count(parameter)
+        if array_count is not None and not 1 <= array_count <= 256:
+            raise ValueError(
+                f"DirectX mesh stage {role} parameter '{parameter.name}' "
+                "array size must be in the range 1..256"
+            )
+
+    def hlsl_mesh_output_struct(self, parameter, role):
+        base_type, _array_suffix = self.hlsl_parameter_mapped_base_and_array_suffix(
+            parameter
+        )
+        if base_type is None:
+            return None
+
+        struct_name = base_type.split("<", 1)[0].strip()
+        struct_node = self.structs_by_name.get(struct_name)
+        if struct_node is None:
+            raise ValueError(
+                f"DirectX mesh stage {role} parameter '{parameter.name}' "
+                "must use a user-defined struct type"
+            )
+        return struct_node
+
+    def hlsl_struct_member_type_name(self, member):
+        if isinstance(member, ArrayNode):
+            return self.type_name_string(
+                getattr(member, "element_type", getattr(member, "vtype", None))
+            )
+        return self.type_name_string(
+            getattr(member, "member_type", getattr(member, "vtype", None))
+        )
+
+    def validate_hlsl_mesh_output_struct(self, parameter, role):
+        struct_node = self.hlsl_mesh_output_struct(parameter, role)
+        if struct_node is None:
+            return
+
+        primitive_only_semantics = {
+            "SV_CULLPRIMITIVE",
+            "SV_RENDERTARGETARRAYINDEX",
+            "SV_VIEWPORTARRAYINDEX",
+            "SV_SHADINGRATE",
+        }
+        primitive_expected_types = {
+            "SV_CULLPRIMITIVE": "bool",
+            "SV_RENDERTARGETARRAYINDEX": "uint",
+            "SV_VIEWPORTARRAYINDEX": "uint",
+            "SV_SHADINGRATE": "uint",
+        }
+
+        has_position = False
+        for member in getattr(struct_node, "members", []) or []:
+            member_name = getattr(member, "name", "<anonymous>")
+            semantic = self.semantic_from_struct_member(member)
+            if semantic is None:
+                raise ValueError(
+                    f"DirectX mesh stage {role} output struct "
+                    f"'{struct_node.name}' member '{member_name}' "
+                    "must declare a semantic"
+                )
+
+            mapped_semantic = self.hlsl_canonical_semantic(semantic)
+            semantic_key = str(mapped_semantic).upper()
+            self.validate_hlsl_stage_output_semantic(
+                "mesh",
+                semantic,
+                f"{role} output struct '{struct_node.name}' member",
+                member_name,
+            )
+
+            if role == "vertices" and semantic_key in primitive_only_semantics:
+                raise ValueError(
+                    f"DirectX mesh stage vertices output struct "
+                    f"'{struct_node.name}' member '{member_name}' cannot use "
+                    f"per-primitive semantic '{mapped_semantic}'"
+                )
+
+            expected_type = primitive_expected_types.get(semantic_key)
+            if role == "primitives" and expected_type is not None:
+                actual_type = self.map_type(self.hlsl_struct_member_type_name(member))
+                actual_base_type, array_suffix = split_array_type_suffix(actual_type)
+                if array_suffix or actual_base_type != expected_type:
+                    raise ValueError(
+                        f"DirectX mesh stage primitives output struct "
+                        f"'{struct_node.name}' semantic '{mapped_semantic}' "
+                        f"requires member '{member_name}' to have type "
+                        f"{expected_type}, got {actual_type}"
+                    )
+
+            if role == "vertices" and semantic_key == "SV_POSITION":
+                has_position = True
+
+        if role == "vertices" and not has_position:
+            raise ValueError(
+                f"DirectX mesh stage vertices output struct '{struct_node.name}' "
+                "must declare an SV_Position member"
+            )
+
+    def hlsl_mesh_output_parameter_literal_count(self, parameter):
+        return self.hlsl_parameter_array_count(parameter)
+
+    def hlsl_mesh_output_call_count(self, func):
+        count = 0
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if isinstance(node, FunctionCallNode):
+                if self.function_call_name(node) == "SetMeshOutputCounts":
+                    count += 1
+            elif isinstance(node, MeshOpNode):
+                if getattr(node, "operation", None) == "SetMeshOutputCounts":
+                    count += 1
+        return count
+
+    def validate_hlsl_mesh_output_parameters(self, func, parameters):
+        role_parameters = {}
+        for parameter in parameters:
+            roles = self.hlsl_mesh_parameter_roles(parameter)
+            if len(roles) > 1:
+                raise ValueError(
+                    f"DirectX mesh stage parameter '{parameter.name}' "
+                    "can use only one mesh role qualifier"
+                )
+            if roles:
+                role_parameters.setdefault(roles[0], []).append(parameter)
+
+        mesh_output_roles = {"vertices", "indices", "primitives"}
+        if not (set(role_parameters) & mesh_output_roles):
+            return
+
+        for role, role_params in role_parameters.items():
+            if role not in mesh_output_roles:
+                continue
+            if len(role_params) > 1:
+                raise ValueError(
+                    f"DirectX mesh stage must declare at most one {role} "
+                    "output parameter"
+                )
+            self.validate_hlsl_mesh_output_array_parameter(role_params[0], role)
+
+        if "vertices" not in role_parameters:
+            raise ValueError(
+                "DirectX mesh stage output signature must declare an out vertices "
+                "array"
+            )
+        if "indices" not in role_parameters:
+            raise ValueError(
+                "DirectX mesh stage output signature must declare an out indices "
+                "array"
+            )
+
+        topology = self.normalized_hlsl_stage_attribute_argument(func, "outputtopology")
+        expected_index_types = {
+            "line": "uint2",
+            "triangle": "uint3",
+        }
+        expected_index_type = expected_index_types.get(topology)
+        if expected_index_type is not None:
+            index_param = role_parameters["indices"][0]
+            index_base_type, _array_suffix = (
+                self.hlsl_parameter_mapped_base_and_array_suffix(index_param)
+            )
+            if index_base_type != expected_index_type:
+                raise ValueError(
+                    f"DirectX mesh stage outputtopology '{topology}' requires "
+                    f"indices parameter '{index_param.name}' to use "
+                    f"{expected_index_type}, got {index_base_type}"
+                )
+
+        self.validate_hlsl_mesh_output_struct(
+            role_parameters["vertices"][0], "vertices"
+        )
+        if "primitives" in role_parameters:
+            self.validate_hlsl_mesh_output_struct(
+                role_parameters["primitives"][0], "primitives"
+            )
+
+            index_count = self.hlsl_mesh_output_parameter_literal_count(
+                role_parameters["indices"][0]
+            )
+            primitive_count = self.hlsl_mesh_output_parameter_literal_count(
+                role_parameters["primitives"][0]
+            )
+            if (
+                index_count is not None
+                and primitive_count is not None
+                and index_count != primitive_count
+            ):
+                raise ValueError(
+                    "DirectX mesh stage primitives output array size must match "
+                    "the indices output array size"
+                )
+
+        output_count_calls = self.hlsl_mesh_output_call_count(func)
+        if output_count_calls != 1:
+            raise ValueError(
+                "DirectX mesh stage output signature must call "
+                "SetMeshOutputCounts exactly once"
+            )
 
     def validate_hlsl_patch_constant_function(self, func, shader_type):
         if shader_type != "tessellation_control":
@@ -8614,6 +8889,7 @@ class HLSLCodeGen:
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
+                or self.hlsl_mesh_parameter_role_attribute_name(attr)
             ):
                 continue
             if hasattr(attr, "name"):
@@ -8635,6 +8911,7 @@ class HLSLCodeGen:
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
+                or self.hlsl_mesh_parameter_role_attribute_name(attr)
             ):
                 continue
             if hasattr(attr, "name"):
