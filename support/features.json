@@ -89,15 +89,7 @@
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_preprocessor_metal_output_compiles_with_xcrun_metal"
           ]
         },
-        "vulkan": {
-          "status": "partial",
-          "notes": "Covers explicit LOD, gradient, offset, combined LOD/gradient-offset, and shadow compare LOD/gradient-offset forms with spirv-as/spirv-val coverage. Bias and projected forms are tracked separately and remain incomplete.",
-          "evidence": [
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_lod_and_grad_emit_explicit_lod_sampling",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
-          ]
-        },
+        "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {"status": "unknown"},
@@ -172,16 +164,7 @@
         "directx": {"status": "supported"},
         "opengl": {"status": "supported"},
         "metal": {"status": "unsupported", "evidence": ["crosstl/translator/codegen/metal_codegen.py::does not support stage type"]},
-        "vulkan": {
-          "status": "supported",
-          "notes": "Covers gather, gather-offset, gather-offsets, dynamic component selection, resource arrays, and shadow gather-compare forms with spirv-as/spirv-val coverage.",
-          "evidence": [
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_offset_gather_and_fetch_emit_image_operations",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_gather_offsets_emit_lane_specific_spirv_gathers",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
-          ]
-        },
+        "vulkan": {"status": "unknown"},
         "cuda": {"status": "unsupported"},
         "hip": {"status": "unsupported"},
         "mojo": {"status": "unknown"},
@@ -198,15 +181,7 @@
         "directx": {"status": "supported"},
         "opengl": {"status": "supported"},
         "metal": {"status": "unsupported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::unsupported_geometry_and_tessellation"]},
-        "vulkan": {
-          "status": "supported",
-          "notes": "Covers shadow comparison sampling, LOD/gradient/offset variants, gather-compare, resource arrays, and explicit sampler arguments with spirv-as/spirv-val coverage.",
-          "evidence": [
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_emits_dref_sampling",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
-          ]
-        },
+        "vulkan": {"status": "unknown"},
         "cuda": {"status": "unsupported"},
         "hip": {"status": "unsupported"},
         "mojo": {"status": "unknown"},
@@ -246,16 +221,7 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_object_stages_compile_with_metal3"
           ]
         },
-        "vulkan": {
-          "status": "supported",
-          "notes": "Covers textureSize, imageSize, textureQueryLevels, textureQueryLod, textureSamples, imageSamples, array/cube-array coordinate trimming, and multisample query forms with spirv-as/spirv-val coverage.",
-          "evidence": [
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_query_shapes_for_array_cube_and_multisample_samplers",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texture_samples_query_emits_image_query_samples",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_storage_image_samples_query_emits_image_query_samples",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
-          ]
-        },
+        "vulkan": {"status": "unknown"},
         "cuda": {"status": "unsupported"},
         "hip": {"status": "unsupported"},
         "mojo": {"status": "unknown"},
@@ -284,21 +250,17 @@
         },
         "metal": {
           "status": "partial",
-          "notes": "Ray entry points lower to Metal-style entry keywords and payload attributes, but full Metal ray tracing pipeline semantics remain incomplete.",
+          "notes": "Ray generation payloads lower to device references; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray pipeline object/signature coverage remains incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_payload_semantics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_hit_and_callable_stages_lower_to_visible_functions",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_callable_data_semantic_uses_ray_data_address_space",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_lowers_to_metal_intersection_attribute",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_accepts_bounding_box_result_struct",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
           ]
         },
-        "vulkan": {
-          "status": "partial",
-          "notes": "Covers regular, array, and multisample texelFetch lowering to OpImageFetch with spirv-as/spirv-val coverage. Fetch-offset forms remain incomplete.",
-          "evidence": [
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_offset_gather_and_fetch_emit_image_operations",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texel_fetch_uses_sample_operand",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
-          ]
-        },
+        "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {"status": "unknown"},
@@ -332,15 +294,7 @@
         "directx": {"status": "supported"},
         "opengl": {"status": "supported"},
         "metal": {"status": "supported"},
-        "vulkan": {
-          "status": "partial",
-          "notes": "Covers multisample texture fetches and sample-count/size queries for 2D and 2D-array resources with spirv-as/spirv-val coverage. Unsupported multisample compare/gather diagnostics are not complete.",
-          "evidence": [
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texel_fetch_uses_sample_operand",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texture_samples_query_emits_image_query_samples",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
-          ]
-        },
+        "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {"status": "unknown"},
@@ -439,15 +393,7 @@
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract"
           ]
         },
-        "vulkan": {
-          "status": "partial",
-          "notes": "Covers non-projected LOD, gradient, offset, gather, shadow compare, texel fetch, query, and multisample fetch/query forms with spirv-as/spirv-val coverage. Projected texture operations, bias variants, and fetch-offset diagnostics remain incomplete.",
-          "evidence": [
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_lod_and_grad_emit_explicit_lod_sampling",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
-          ]
-        },
+        "vulkan": {"status": "unknown"},
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
         "mojo": {"status": "unknown"},
@@ -724,7 +670,15 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_fragment_texture_3d_sample_offset_compiles_with_metal"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "partial",
+          "notes": "Covers explicit LOD, gradient, offset, combined LOD/gradient-offset, and shadow compare LOD/gradient-offset forms with spirv-as/spirv-val coverage. Bias and projected forms are tracked separately and remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_lod_and_grad_emit_explicit_lod_sampling",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {"status": "unknown"},
@@ -807,7 +761,16 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_fragment_texture_gather_offset_compiles_with_metal"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "Covers gather, gather-offset, gather-offsets, dynamic component selection, resource arrays, and shadow gather-compare forms with spirv-as/spirv-val coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_offset_gather_and_fetch_emit_image_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_gather_offsets_emit_lane_specific_spirv_gathers",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {"status": "unknown"},
@@ -848,7 +811,15 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_fragment_shadow_compare_lod_grad_compiles_with_metal"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "Covers shadow comparison sampling, LOD/gradient/offset variants, gather-compare, resource arrays, and explicit sampler arguments with spirv-as/spirv-val coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_emits_dref_sampling",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {"status": "unknown"},
@@ -892,7 +863,16 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_array_shadow_texture_query_functions"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "Covers textureSize, imageSize, textureQueryLevels, textureQueryLod, textureSamples, imageSamples, array/cube-array coordinate trimming, and multisample query forms with spirv-as/spirv-val coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_query_shapes_for_array_cube_and_multisample_samplers",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texture_samples_query_emits_image_query_samples",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_storage_image_samples_query_emits_image_query_samples",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {"status": "unknown"},
@@ -936,7 +916,15 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_cube_texel_fetches_emit_diagnostics"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "partial",
+          "notes": "Covers regular, array, and multisample texelFetch lowering to OpImageFetch with spirv-as/spirv-val coverage. Fetch-offset forms remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_offset_gather_and_fetch_emit_image_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texel_fetch_uses_sample_operand",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {"status": "unknown"},
@@ -980,7 +968,15 @@
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "partial",
+          "notes": "Covers multisample texture fetches and sample-count/size queries for 2D and 2D-array resources with spirv-as/spirv-val coverage. Unsupported multisample compare/gather diagnostics are not complete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texel_fetch_uses_sample_operand",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texture_samples_query_emits_image_query_samples",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {"status": "unknown"},
@@ -997,7 +993,15 @@
         "directx": {"status": "partial", "notes": "Several unsupported combinations intentionally emit diagnostics."},
         "opengl": {"status": "partial", "notes": "Several unsupported combinations intentionally emit diagnostics."},
         "metal": {"status": "partial", "notes": "Several unsupported combinations intentionally emit diagnostics."},
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "partial",
+          "notes": "Covers non-projected LOD, gradient, offset, gather, shadow compare, texel fetch, query, and multisample fetch/query forms with spirv-as/spirv-val coverage. Projected texture operations, bias variants, and fetch-offset diagnostics remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_lod_and_grad_emit_explicit_lod_sampling",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {"status": "unknown"},
