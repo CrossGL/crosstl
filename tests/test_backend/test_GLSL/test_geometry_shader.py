@@ -1,8 +1,10 @@
 import pytest
 
+import crosstl.translator
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
@@ -26,6 +28,18 @@ void main() {
 """
 
 
+GEOMETRY_ADJACENCY_LAYOUT_GLSL = """
+#version 450 core
+layout(lines_adjacency, invocations = 2) in;
+layout(triangle_strip, max_vertices = 6) out;
+
+void main() {
+    EmitVertex();
+    EndPrimitive();
+}
+"""
+
+
 def parse_glsl(code: str, shader_type: str):
     tokens = GLSLLexer(code).tokenize()
     return GLSLParser(tokens, shader_type).parse()
@@ -41,6 +55,12 @@ def parse_crossgl(code: str):
     return CrossGLParser(tokens).parse()
 
 
+def regenerate_glsl(code: str, shader_type: str):
+    return GLSLCodeGen().generate(
+        crosstl.translator.parse(generate_crossgl(code, shader_type))
+    )
+
+
 def test_parse_geometry_shader():
     ast = parse_glsl(GEOMETRY_GLSL, "geometry")
     assert ast is not None
@@ -53,6 +73,20 @@ def test_codegen_geometry_roundtrip():
     assert "EmitVertex" in output
     shader_ast = parse_crossgl(output)
     assert ShaderStage.GEOMETRY in shader_ast.stages
+
+
+def test_codegen_geometry_layout_roundtrip_preserves_adjacency_and_invocations():
+    crossgl = generate_crossgl(GEOMETRY_ADJACENCY_LAYOUT_GLSL, "geometry")
+
+    assert "layout(lines_adjacency, invocations = 2) in;" in crossgl
+    assert "layout(triangle_strip, max_vertices = 6) out;" in crossgl
+    assert "// layout(" not in crossgl
+
+    glsl = regenerate_glsl(GEOMETRY_ADJACENCY_LAYOUT_GLSL, "geometry")
+
+    assert "layout(lines_adjacency, invocations = 2) in;" in glsl
+    assert "layout(triangle_strip, max_vertices = 6) out;" in glsl
+    assert "return output;" not in glsl
 
 
 if __name__ == "__main__":

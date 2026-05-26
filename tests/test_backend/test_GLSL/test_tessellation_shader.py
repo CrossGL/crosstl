@@ -1,8 +1,10 @@
 import pytest
 
+import crosstl.translator
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
@@ -53,6 +55,12 @@ def parse_crossgl(code: str):
     return CrossGLParser(tokens).parse()
 
 
+def regenerate_glsl(code: str, shader_type: str):
+    return GLSLCodeGen().generate(
+        crosstl.translator.parse(generate_crossgl(code, shader_type))
+    )
+
+
 def test_parse_tess_control_shader():
     ast = parse_glsl(TESSELLATION_CONTROL_GLSL, "tessellation_control")
     assert ast is not None
@@ -66,15 +74,48 @@ def test_parse_tess_eval_shader():
 def test_codegen_tess_control_roundtrip():
     output = generate_crossgl(TESSELLATION_CONTROL_GLSL, "tessellation_control")
     assert "tessellation_control" in output.lower()
+    assert "layout(vertices = 3) out;" in output
+    assert "// layout(" not in output
     shader_ast = parse_crossgl(output)
     assert ShaderStage.TESSELLATION_CONTROL in shader_ast.stages
+
+    glsl = regenerate_glsl(TESSELLATION_CONTROL_GLSL, "tessellation_control")
+    assert "layout(vertices = 3) out;" in glsl
+    assert "return output;" not in glsl
 
 
 def test_codegen_tess_eval_roundtrip():
     output = generate_crossgl(TESSELLATION_EVAL_GLSL, "tessellation_evaluation")
     assert "tessellation_evaluation" in output.lower()
+    assert "layout(triangles, equal_spacing, cw) in;" in output
+    assert "// layout(" not in output
     shader_ast = parse_crossgl(output)
     assert ShaderStage.TESSELLATION_EVALUATION in shader_ast.stages
+
+    glsl = regenerate_glsl(TESSELLATION_EVAL_GLSL, "tessellation_evaluation")
+    assert "layout(triangles, equal_spacing, cw) in;" in glsl
+    assert "return output;" not in glsl
+
+
+def test_codegen_tess_eval_layout_roundtrip_preserves_quads_spacing_and_point_mode():
+    code = """
+    #version 450 core
+    layout(quads, fractional_even_spacing, ccw, point_mode) in;
+
+    void main() {
+        gl_Position = vec4(1.0);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "tessellation_evaluation")
+
+    assert "layout(quads, fractional_even_spacing, ccw, point_mode) in;" in crossgl
+    assert "// layout(" not in crossgl
+
+    glsl = regenerate_glsl(code, "tessellation_evaluation")
+
+    assert "layout(quads, fractional_even_spacing, ccw, point_mode) in;" in glsl
+    assert "return output;" not in glsl
 
 
 if __name__ == "__main__":

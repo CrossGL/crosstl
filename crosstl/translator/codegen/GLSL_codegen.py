@@ -337,6 +337,7 @@ class GLSLCodeGen:
         self.vertex_input_member_names = set()
         self.current_function_return_type = None
         self.current_stage_return_type = None
+        self.current_stage_entry_type = None
         self.current_expression_expected_type = None
         self.current_generic_function_substitutions = {}
         self.match_temp_variable_index = 0
@@ -829,6 +830,7 @@ class GLSLCodeGen:
         self.fragment_output_member_layout_maps = {}
         self.current_function_return_type = None
         self.current_stage_return_type = None
+        self.current_stage_entry_type = None
         self.current_expression_expected_type = None
         self.match_temp_variable_index = 0
         self.local_variable_types = {}
@@ -1928,6 +1930,13 @@ class GLSLCodeGen:
         output_primitive = self.glsl_single_stage_attribute_argument(
             func, "outputtopology", stage_layout_qualifiers, "out"
         )
+        if output_primitive is None:
+            output_primitive = self.glsl_stage_bare_attribute(
+                func,
+                {"points", "line_strip", "triangle_strip"},
+                stage_layout_qualifiers,
+                "out",
+            )
         max_vertices = self.glsl_single_stage_attribute_argument(
             func, "max_vertices", stage_layout_qualifiers, "out"
         )
@@ -1976,12 +1985,27 @@ class GLSLCodeGen:
         domain = self.glsl_single_stage_attribute_argument(
             func, "domain", stage_layout_qualifiers, "in"
         )
+        if domain is None:
+            domain = self.glsl_stage_bare_attribute(
+                func, {"triangles", "quads", "isolines"}, stage_layout_qualifiers, "in"
+            )
         if domain:
             layout_parts.append(self.glsl_tessellation_domain(domain))
 
         partitioning = self.glsl_single_stage_attribute_argument(
             func, "partitioning", stage_layout_qualifiers, "in"
         )
+        if partitioning is None:
+            partitioning = self.glsl_stage_bare_attribute(
+                func,
+                {
+                    "equal_spacing",
+                    "fractional_even_spacing",
+                    "fractional_odd_spacing",
+                },
+                stage_layout_qualifiers,
+                "in",
+            )
         if partitioning:
             layout_parts.append(self.glsl_tessellation_partitioning(partitioning))
 
@@ -2371,6 +2395,7 @@ class GLSLCodeGen:
         previous_stage_parameter_aliases = self.current_stage_parameter_aliases
         previous_flattened_stage_variables = self.flattened_stage_variables
         previous_stage_return_type = self.current_stage_return_type
+        previous_stage_entry_type = self.current_stage_entry_type
         self.current_sampler_parameters = sampler_parameters
         self.current_texture_parameters = {
             **texture_parameters,
@@ -2409,6 +2434,7 @@ class GLSLCodeGen:
         self.current_stage_return_type = self.type_node_name(
             getattr(func, "return_type", None)
         )
+        self.current_stage_entry_type = shader_type
         body = getattr(func, "body", [])
         if unsupported_buffer_array_info:
             code += self.unsupported_structured_buffer_array_function_body(
@@ -2432,6 +2458,7 @@ class GLSLCodeGen:
         self.current_stage_parameter_aliases = previous_stage_parameter_aliases
         self.flattened_stage_variables = previous_flattened_stage_variables
         self.current_stage_return_type = previous_stage_return_type
+        self.current_stage_entry_type = previous_stage_entry_type
         self.current_function_return_type = previous_function_return_type
         self.local_variable_types = previous_local_variable_types
         self.current_generic_function_substitutions = (
@@ -3318,6 +3345,24 @@ class GLSLCodeGen:
             return self.vertex_stage_output(func)
         return None
 
+    def is_void_stage_return_value(self, return_value_name):
+        if self.current_stage_output is not None:
+            return False
+        if self.current_stage_entry_type is None:
+            return False
+        if not return_value_name:
+            return False
+        if (
+            return_value_name == "output"
+            and self.current_stage_return_type
+            and self.current_stage_return_type != "void"
+        ):
+            return True
+        return (
+            self.local_variable_types.get(return_value_name)
+            == self.current_stage_return_type
+        )
+
     def vertex_stage_output(self, func):
         output_type = self.function_return_type(func)
         if output_type == "void":
@@ -3571,6 +3616,8 @@ class GLSLCodeGen:
                 return f"{indent_str}return;\n"
             return_value_name = self.expression_name(stmt.value)
             if return_value_name in self.flattened_stage_variables:
+                return f"{indent_str}return;\n"
+            if self.is_void_stage_return_value(return_value_name):
                 return f"{indent_str}return;\n"
             stage_struct_return = self.generate_stage_struct_constructor_return(
                 stmt.value, indent
