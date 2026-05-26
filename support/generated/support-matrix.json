@@ -132,7 +132,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 466
+        "test_count": 467
       },
       "translator_codegen": {
         "exists": true,
@@ -271,7 +271,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 686
+        "test_count": 688
       },
       "translator_codegen": {
         "exists": true,
@@ -571,102 +571,102 @@
         "unsupported_marker_count": 56,
         "unsupported_marker_samples": [
           {
-            "line": 1331,
+            "line": 1336,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "\"Unsupported match arm for CUDA codegen; only unguarded \""
           },
           {
-            "line": 1730,
+            "line": 1735,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_resource_query_call("
           },
           {
-            "line": 1754,
+            "line": 1759,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_shadow_resource_call("
           },
           {
-            "line": 1771,
+            "line": 1776,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_sampled_resource_call("
           },
           {
-            "line": 1790,
+            "line": 1795,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_image_atomic_resource_call("
           },
           {
-            "line": 1799,
+            "line": 1804,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
           },
           {
-            "line": 1897,
+            "line": 1902,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
           },
           {
-            "line": 1929,
+            "line": 1934,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
           },
           {
-            "line": 1956,
+            "line": 1961,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
           },
           {
-            "line": 2720,
+            "line": 2758,
             "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
             "text": "\"\"\"Test CUDA makes unsupported shadow sampler calls explicit.\"\"\""
           },
           {
-            "line": 2773,
+            "line": 2811,
             "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
             "text": "\"float paramValue = /* unsupported CUDA shadow resource call: \""
           },
           {
-            "line": 2777,
+            "line": 2815,
             "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
             "text": "\"float shadow = /* unsupported CUDA shadow resource call: \""
           },
           {
-            "line": 2781,
+            "line": 2819,
             "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
             "text": "\"float cascade = /* unsupported CUDA shadow resource call: \""
           },
           {
-            "line": 2785,
+            "line": 2823,
             "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
             "text": "\"float cube = /* unsupported CUDA shadow resource call: \""
           },
           {
-            "line": 2789,
+            "line": 2827,
             "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
             "text": "\"float cubeArray = /* unsupported CUDA shadow resource call: \""
           },
           {
-            "line": 2793,
+            "line": 2831,
             "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
             "text": "\"float compared = /* unsupported CUDA shadow resource call: \""
           },
           {
-            "line": 2797,
+            "line": 2835,
             "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
             "text": "\"float comparedLod = /* unsupported CUDA shadow resource call: \""
           },
           {
-            "line": 2801,
+            "line": 2839,
             "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
             "text": "\"float comparedGrad = /* unsupported CUDA shadow resource call: \""
           },
           {
-            "line": 2805,
+            "line": 2843,
             "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
             "text": "\"float comparedOffset = /* unsupported CUDA shadow resource call: \""
           },
           {
-            "line": 2809,
+            "line": 2847,
             "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
             "text": "\"float4 gathered = /* unsupported CUDA shadow resource call: \""
           }
@@ -705,102 +705,102 @@
         "unsupported_marker_count": 60,
         "unsupported_marker_samples": [
           {
-            "line": 356,
+            "line": 367,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "\"\"\"Raise a clear error for unsupported AST nodes.\"\"\""
           },
           {
-            "line": 357,
+            "line": 368,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "raise NotImplementedError("
           },
           {
-            "line": 729,
+            "line": 754,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "\"Unsupported match arm for HIP codegen; only unguarded \""
           },
           {
-            "line": 1587,
+            "line": 1612,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_resource_query_call("
           },
           {
-            "line": 1611,
+            "line": 1636,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_shadow_resource_call("
           },
           {
-            "line": 1628,
+            "line": 1653,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_sampled_resource_call("
           },
           {
-            "line": 1647,
+            "line": 1672,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_image_atomic_resource_call("
           },
           {
-            "line": 1656,
+            "line": 1681,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
           },
           {
-            "line": 1738,
+            "line": 1763,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
           },
           {
-            "line": 1770,
+            "line": 1795,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
           },
           {
-            "line": 1800,
+            "line": 1825,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
           },
           {
-            "line": 2546,
+            "line": 2563,
             "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
             "text": "\"\"\"Test HIP makes unsupported shadow sampler calls explicit.\"\"\""
           },
           {
-            "line": 2599,
+            "line": 2616,
             "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
             "text": "\"float paramValue = /* unsupported HIP shadow resource call: \""
           },
           {
-            "line": 2603,
+            "line": 2620,
             "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
             "text": "\"float shadow = /* unsupported HIP shadow resource call: \""
           },
           {
-            "line": 2607,
+            "line": 2624,
             "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
             "text": "\"float cascade = /* unsupported HIP shadow resource call: \""
           },
           {
-            "line": 2611,
+            "line": 2628,
             "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
             "text": "\"float cube = /* unsupported HIP shadow resource call: \""
           },
           {
-            "line": 2615,
+            "line": 2632,
             "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
             "text": "\"float cubeArray = /* unsupported HIP shadow resource call: \""
           },
           {
-            "line": 2619,
+            "line": 2636,
             "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
             "text": "\"float compared = /* unsupported HIP shadow resource call: \""
           },
           {
-            "line": 2623,
+            "line": 2640,
             "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
             "text": "\"float comparedLod = /* unsupported HIP shadow resource call: \""
           },
           {
-            "line": 2627,
+            "line": 2644,
             "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
             "text": "\"float comparedGrad = /* unsupported HIP shadow resource call: \""
           }
@@ -893,12 +893,12 @@
         "unsupported_marker_count": 36,
         "unsupported_marker_samples": [
           {
-            "line": 2374,
+            "line": 2378,
             "path": "crosstl/translator/codegen/rust_codegen.py",
             "text": "raise ValueError(\"Unsupported match arm for Rust codegen\")"
           },
           {
-            "line": 2930,
+            "line": 2934,
             "path": "crosstl/translator/codegen/rust_codegen.py",
             "text": "raise ValueError(f\"Unsupported match pattern for Rust codegen: {pattern!r}\")"
           },
@@ -1000,7 +1000,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 432
+        "test_count": 433
       },
       "translator_codegen": {
         "exists": true,
