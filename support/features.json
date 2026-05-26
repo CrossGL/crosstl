@@ -1033,9 +1033,33 @@
       "name": "Match/pattern lowering",
       "description": "CrossGL match expressions and pattern arms.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
+        "directx": {
+          "status": "supported",
+          "notes": "Covers switch-lowerable literal/wildcard arms, guarded if-chain arms, identifier bindings, struct fields, enum path and payload patterns, generic enum matches, match expressions, scoped case bodies, and shader validation with texture/image resources.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_match_literal_and_wildcard_arms_lower_to_switch",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_generic_enum_match_expression_initializes_vector_local",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_compute_do_while_switch_match_image_validates_with_dxc"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Covers switch-lowerable literal/wildcard arms, guarded if-chain arms, identifier bindings, struct fields, enum path and payload patterns, generic enum matches, match expressions, scoped case bodies, and shader validation with texture/image resources.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_match_literal_and_wildcard_arms_lower_to_switch",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_generic_enum_match_expression_initializes_vector_local",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_compute_do_while_switch_match_image_validates_with_glslang"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Covers switch-lowerable literal/wildcard arms, guarded if-chain arms, identifier bindings, struct fields, enum path and payload patterns, generic enum matches, match expressions, scoped case bodies, and shader validation with texture/image resources.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_match_literal_and_wildcard_arms_lower_to_switch",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_generic_enum_match_expression_initializes_vector_local",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_compute_do_while_switch_match_image_compiles_with_metal"
+          ]
+        },
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},

@@ -35,9 +35,9 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "35", "6", "0", "0", "0", "0"
-   "OpenGL / GLSL", "35", "6", "0", "0", "0", "0"
-   "Metal", "32", "7", "0", "0", "2", "0"
+   "DirectX / HLSL", "36", "5", "0", "0", "0", "0"
+   "OpenGL / GLSL", "36", "5", "0", "0", "0", "0"
+   "Metal", "33", "6", "0", "0", "2", "0"
    "Vulkan SPIR-V", "6", "12", "0", "0", "0", "23"
    "CUDA", "10", "11", "0", "0", "3", "17"
    "HIP", "10", "11", "0", "0", "3", "17"
@@ -54,9 +54,9 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "35", "6", "0", "0", "0", "0"
-   "OpenGL / GLSL", "35", "6", "0", "0", "0", "0"
-   "Metal", "32", "7", "0", "0", "2", "0"
+   "DirectX / HLSL", "36", "5", "0", "0", "0", "0"
+   "OpenGL / GLSL", "36", "5", "0", "0", "0", "0"
+   "Metal", "33", "6", "0", "0", "2", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
@@ -79,9 +79,6 @@ scope for graphics backend completion work.
    "DirectX / HLSL", "textures", "Advanced texture operations", "partial", "Several unsupported combinations intentionally emit diagnostics."
    "OpenGL / GLSL", "textures", "Advanced texture operations", "partial", "Several unsupported combinations intentionally emit diagnostics."
    "Metal", "textures", "Advanced texture operations", "partial", "Several unsupported combinations intentionally emit diagnostics."
-   "DirectX / HLSL", "language", "Match/pattern lowering", "partial", ""
-   "OpenGL / GLSL", "language", "Match/pattern lowering", "partial", ""
-   "Metal", "language", "Match/pattern lowering", "partial", ""
 
 Feature Matrix
 --------------
@@ -156,7 +153,7 @@ Each category below uses the status codes from the legend.
    "Array declarations and access", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
    "Function declarations and calls", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
    "Control flow", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
-   "Match/pattern lowering", "P", "P", "P", "?", "P", "P", "P", "Y", "P"
+   "Match/pattern lowering", "Y", "Y", "Y", "?", "P", "P", "P", "Y", "P"
    "Vector and matrix expressions", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
    "Bitwise operations", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
 
@@ -366,9 +363,6 @@ need an audit before implementation work can be scoped accurately.
    "Vulkan SPIR-V", "language", "Array declarations and access", "partial", ""
    "Vulkan SPIR-V", "language", "Function declarations and calls", "partial", ""
    "Vulkan SPIR-V", "language", "Control flow", "partial", ""
-   "DirectX / HLSL", "language", "Match/pattern lowering", "partial", ""
-   "OpenGL / GLSL", "language", "Match/pattern lowering", "partial", ""
-   "Metal", "language", "Match/pattern lowering", "partial", ""
    "Vulkan SPIR-V", "language", "Match/pattern lowering", "unknown", ""
    "CUDA", "language", "Match/pattern lowering", "partial", ""
    "HIP", "language", "Match/pattern lowering", "partial", ""

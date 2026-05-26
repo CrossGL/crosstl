@@ -161,33 +161,6 @@
       "feature_id": "texture.advanced_sampling",
       "notes": "Several unsupported combinations intentionally emit diagnostics.",
       "status": "partial"
-    },
-    {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
-      "category": "language",
-      "feature": "Match/pattern lowering",
-      "feature_id": "language.match",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "language",
-      "feature": "Match/pattern lowering",
-      "feature_id": "language.match",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "language",
-      "feature": "Match/pattern lowering",
-      "feature_id": "language.match",
-      "notes": "",
-      "status": "partial"
     }
   ],
   "features": [
@@ -1281,19 +1254,31 @@
       "name": "Match/pattern lowering",
       "support": {
         "directx": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_match_literal_and_wildcard_arms_lower_to_switch",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_generic_enum_match_expression_initializes_vector_local",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_compute_do_while_switch_match_image_validates_with_dxc"
+          ],
+          "notes": "Covers switch-lowerable literal/wildcard arms, guarded if-chain arms, identifier bindings, struct fields, enum path and payload patterns, generic enum matches, match expressions, scoped case bodies, and shader validation with texture/image resources.",
+          "status": "supported"
         },
         "metal": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_match_literal_and_wildcard_arms_lower_to_switch",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_generic_enum_match_expression_initializes_vector_local",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_compute_do_while_switch_match_image_compiles_with_metal"
+          ],
+          "notes": "Covers switch-lowerable literal/wildcard arms, guarded if-chain arms, identifier bindings, struct fields, enum path and payload patterns, generic enum matches, match expressions, scoped case bodies, and shader validation with texture/image resources.",
+          "status": "supported"
         },
         "opengl": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_match_literal_and_wildcard_arms_lower_to_switch",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_generic_enum_match_expression_initializes_vector_local",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_compute_do_while_switch_match_image_validates_with_glslang"
+          ],
+          "notes": "Covers switch-lowerable literal/wildcard arms, guarded if-chain arms, identifier bindings, struct fields, enum path and payload patterns, generic enum matches, match expressions, scoped case bodies, and shader validation with texture/image resources.",
+          "status": "supported"
         }
       }
     },
@@ -1372,21 +1357,20 @@
   "summary": {
     "backend_count": 3,
     "backlog": {
-      "backlog_count": 21,
+      "backlog_count": 18,
       "by_backend": {
-        "directx": 6,
-        "metal": 9,
-        "opengl": 6
+        "directx": 5,
+        "metal": 8,
+        "opengl": 5
       },
       "by_category": {
-        "language": 3,
         "resources": 4,
         "stages": 8,
         "textures": 6
       },
       "by_status": {
         "diagnostic": 0,
-        "partial": 19,
+        "partial": 16,
         "supported": 0,
         "unknown": 0,
         "unsupported": 2,
@@ -1397,24 +1381,24 @@
     "status_counts": {
       "directx": {
         "diagnostic": 0,
-        "partial": 6,
-        "supported": 35,
+        "partial": 5,
+        "supported": 36,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "metal": {
         "diagnostic": 0,
-        "partial": 7,
-        "supported": 32,
+        "partial": 6,
+        "supported": 33,
         "unknown": 0,
         "unsupported": 2,
         "validated_rejection": 0
       },
       "opengl": {
         "diagnostic": 0,
-        "partial": 6,
-        "supported": 35,
+        "partial": 5,
+        "supported": 36,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

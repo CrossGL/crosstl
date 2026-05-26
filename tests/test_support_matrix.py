@@ -125,6 +125,22 @@ def test_graphics_texel_fetch_row_is_supported_with_evidence():
     )
 
 
+def test_graphics_match_row_is_supported_with_evidence():
+    roadmap_path = ROOT / "support" / "generated" / "graphics-backend-roadmap.json"
+    roadmap = json.loads(roadmap_path.read_text(encoding="utf-8"))
+
+    match_lowering = next(
+        feature for feature in roadmap["features"] if feature["id"] == "language.match"
+    )
+
+    for backend_id in ("directx", "opengl", "metal"):
+        support = match_lowering["support"][backend_id]
+        assert support["status"] == "supported"
+        assert support["evidence"]
+
+    assert all(item["feature_id"] != "language.match" for item in roadmap["backlog"])
+
+
 def test_support_matrix_audit_writes_filtered_json(tmp_path):
     output_path = tmp_path / "graphics-partial.json"
     result = subprocess.run(
