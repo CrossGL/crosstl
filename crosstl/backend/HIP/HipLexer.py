@@ -160,7 +160,7 @@ TOKENS = tuple(
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         (
             "FLOAT",
-            r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFdDlL]*|\d+[eE][+-]?\d+[fFdDlL]*|\d+[fFdDlL]",
+            r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFdDlL]*|\d+[eE][+-]?\d+[fFdDlL]*|\d+[fFdD]",
         ),
         ("INTEGER", r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[lLuU]*"),
         ("STRING", r'"([^"\\]|\\.)*"'),

@@ -654,7 +654,12 @@ class HipParser:
         qualifiers = []
 
         while self.match(
-            "__SHARED__", "__CONSTANT__", "__DEVICE__", "STATIC", "EXTERN"
+            "__SHARED__",
+            "__CONSTANT__",
+            "__MANAGED__",
+            "__DEVICE__",
+            "STATIC",
+            "EXTERN",
         ):
             qualifiers.append(self.current_token.value)
             self.advance()
@@ -681,7 +686,12 @@ class HipParser:
         qualifiers = []
 
         while self.match(
-            "__SHARED__", "__CONSTANT__", "__DEVICE__", "STATIC", "EXTERN"
+            "__SHARED__",
+            "__CONSTANT__",
+            "__MANAGED__",
+            "__DEVICE__",
+            "STATIC",
+            "EXTERN",
         ):
             qualifiers.append(self.current_token.value)
             self.advance()
@@ -842,7 +852,12 @@ class HipParser:
 
     def parse_type_name(self):
         type_name = self.current_token.value
+        token_type = self.current_token.type
         self.advance()
+
+        if token_type == "LONG" and self.match("LONG"):
+            type_name += " long"
+            self.advance()
 
         while self.match("SCOPE"):
             self.consume("SCOPE")
@@ -2120,7 +2135,10 @@ class HipParser:
             ):
                 return False
 
+            token_type = self.current_token.type
             self.advance()
+            if token_type == "LONG" and self.match("LONG"):
+                self.advance()
             while self.match("ASTERISK", "STAR"):
                 self.advance()
 
@@ -2185,6 +2203,7 @@ class HipParser:
         while index < len(self.tokens) and self.tokens[index].type in {
             "__SHARED__",
             "__CONSTANT__",
+            "__MANAGED__",
             "__DEVICE__",
             "STATIC",
             "EXTERN",
@@ -2225,6 +2244,9 @@ class HipParser:
         type_value = self.tokens[index].value
         has_qualified_suffix = False
         index += 1
+        if type_token == "LONG" and index < len(self.tokens):
+            if self.tokens[index].type == "LONG":
+                index += 1
 
         while (
             index + 1 < len(self.tokens)
