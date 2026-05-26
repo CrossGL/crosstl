@@ -1971,6 +1971,8 @@ def texture_vector_zero_value(backend_name):
     """Return the backend vector fallback value for texture diagnostics."""
     if backend_name == "GLSL":
         return "vec4(0.0)"
+    if backend_name == "DirectX":
+        return "float4(0.0, 0.0, 0.0, 0.0)"
     return "float4(0.0)"
 
 
@@ -1983,6 +1985,8 @@ def texture_query_lod_zero_value(backend_name):
     """Return the backend vector fallback value for textureQueryLod diagnostics."""
     if backend_name == "GLSL":
         return "vec2(0.0)"
+    if backend_name == "DirectX":
+        return "float2(0.0, 0.0)"
     return "float2(0.0)"
 
 

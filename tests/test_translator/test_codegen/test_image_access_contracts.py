@@ -1728,7 +1728,7 @@ def test_unsupported_texture_query_fallback_helpers_build_backend_expressions():
         "textureQueryLod on Texture2DMS<float4> */ float2(0.0)"
     )
     assert texture_query_lod_zero_value("GLSL") == "vec2(0.0)"
-    assert texture_query_lod_zero_value("DirectX") == "float2(0.0)"
+    assert texture_query_lod_zero_value("DirectX") == "float2(0.0, 0.0)"
     assert texture_query_lod_zero_value("Metal") == "float2(0.0)"
     assert (
         unsupported_texture_query_lod_expression("GLSL", "image2D")
@@ -1738,7 +1738,7 @@ def test_unsupported_texture_query_fallback_helpers_build_backend_expressions():
     assert (
         unsupported_texture_query_lod_expression("DirectX", "RWTexture2D<float4>")
         == "/* unsupported DirectX texture query: textureQueryLod on "
-        "RWTexture2D<float4> */ float2(0.0)"
+        "RWTexture2D<float4> */ float2(0.0, 0.0)"
     )
     assert (
         unsupported_multisample_texture_query_lod_expression("GLSL", "sampler2DMS")
@@ -1787,7 +1787,7 @@ def test_unsupported_multisample_texture_fallback_helpers_build_backend_expressi
             "DirectX", "textureGrad", "Texture2DMS<float4>"
         )
         == "/* unsupported DirectX multisample texture call: "
-        "textureGrad on Texture2DMS<float4> */ float4(0.0)"
+        "textureGrad on Texture2DMS<float4> */ float4(0.0, 0.0, 0.0, 0.0)"
     )
     assert (
         unsupported_multisample_texture_call_vector_expression(
@@ -1897,7 +1897,7 @@ def test_unsupported_storage_image_texture_helpers_build_backend_expressions():
             "DirectX", "textureGather", "RWTexture2D<float4>"
         )
         == "/* unsupported DirectX storage image texture operation: "
-        "textureGather on RWTexture2D<float4> */ float4(0.0)"
+        "textureGather on RWTexture2D<float4> */ float4(0.0, 0.0, 0.0, 0.0)"
     )
 
 
@@ -2285,7 +2285,7 @@ def test_unsupported_texture_gather_and_texel_fetch_helpers_build_backend_expres
         "texturecube<float> */ float4(0.0)"
     )
     assert texel_fetch_zero_value("GLSL") == "vec4(0.0)"
-    assert texel_fetch_zero_value("DirectX") == "float4(0.0)"
+    assert texel_fetch_zero_value("DirectX") == "float4(0.0, 0.0, 0.0, 0.0)"
     assert texel_fetch_zero_value("Metal") == "float4(0.0)"
     assert (
         unsupported_cube_texel_fetch_expression(
@@ -2299,7 +2299,7 @@ def test_unsupported_texture_gather_and_texel_fetch_helpers_build_backend_expres
             "DirectX", "texelFetch", "TextureCubeArray"
         )
         == "/* unsupported DirectX texel fetch: texelFetch on "
-        "TextureCubeArray */ float4(0.0)"
+        "TextureCubeArray */ float4(0.0, 0.0, 0.0, 0.0)"
     )
     assert (
         unsupported_cube_texel_fetch_expression(
@@ -2334,7 +2334,7 @@ def test_unsupported_texture_offset_helpers_build_backend_expressions():
         "offset and optional bias arguments */ vec4(0.0)"
     )
     assert texture_vector_zero_value("GLSL") == "vec4(0.0)"
-    assert texture_vector_zero_value("DirectX") == "float4(0.0)"
+    assert texture_vector_zero_value("DirectX") == "float4(0.0, 0.0, 0.0, 0.0)"
     assert texture_vector_zero_value("Metal") == "float4(0.0)"
     assert (
         unsupported_texture_offset_call_expression(
@@ -2343,7 +2343,8 @@ def test_unsupported_texture_offset_helpers_build_backend_expressions():
             "offsets require 1D, 2D, 2D-array, or 3D textures",
         )
         == "/* unsupported DirectX texture offset: textureGradOffset "
-        "offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0)"
+        "offsets require 1D, 2D, 2D-array, or 3D textures */ "
+        "float4(0.0, 0.0, 0.0, 0.0)"
     )
     assert (
         unsupported_texture_offset_call_expression(
@@ -2380,7 +2381,7 @@ def test_unsupported_texture_offset_helpers_build_backend_expressions():
     assert (
         unsupported_multisample_texel_fetch_offset_expression("DirectX")
         == "/* unsupported DirectX texel fetch offset: multisample "
-        "textures do not support offsets */ float4(0.0)"
+        "textures do not support offsets */ float4(0.0, 0.0, 0.0, 0.0)"
     )
     assert (
         unsupported_multisample_texel_fetch_offset_expression("Metal")
@@ -2417,7 +2418,7 @@ def test_unsupported_projected_texture_helper_builds_backend_expressions():
             "requires 1D, 2D, or 3D projection coordinates",
         )
         == "/* unsupported DirectX projected texture: textureProj requires "
-        "1D, 2D, or 3D projection coordinates */ float4(0.0)"
+        "1D, 2D, or 3D projection coordinates */ float4(0.0, 0.0, 0.0, 0.0)"
     )
     assert (
         unsupported_projected_texture_call_expression(

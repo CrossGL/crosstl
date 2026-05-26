@@ -3550,12 +3550,12 @@ def test_codegen_mixed_ssbo_unsupported_nested_fallback_keeps_expression_type():
 
     assert "bool choose = true;" in hlsl
     assert (
-        "dot(float4(0) /* unsupported HLSL GLSL buffer block access block: "
+        "dot(float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block access block: "
         "no target-side fallback declaration emitted */, "
         "float4(1.0, 1.0, 1.0, 1.0))" in hlsl
     )
     assert (
-        "dot(float4(0) /* unsupported HLSL GLSL buffer block function call "
+        "dot(float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block function call "
         "readParam: target function omitted */, "
         "float4(1.0, 1.0, 1.0, 1.0))" in hlsl
     )
@@ -3569,13 +3569,13 @@ def test_codegen_mixed_ssbo_unsupported_nested_fallback_keeps_expression_type():
         "no target-side fallback declaration emitted */;" in hlsl
     )
     assert (
-        "float4 viaVectorAdd = (float4(0) /* unsupported HLSL GLSL buffer block "
+        "float4 viaVectorAdd = (float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "access block: no target-side fallback declaration emitted */ + 0 "
         "/* unsupported HLSL GLSL buffer block access scalarBlock: no target-side "
         "fallback declaration emitted */);" in hlsl
     )
     assert (
-        "float4 viaFunctionAdd = (float4(0) /* unsupported HLSL GLSL buffer block "
+        "float4 viaFunctionAdd = (float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "function call readParam: target function omitted */ + 0 "
         "/* unsupported HLSL GLSL buffer block access scalarBlock: no target-side "
         "fallback declaration emitted */);" in hlsl
@@ -3585,12 +3585,12 @@ def test_codegen_mixed_ssbo_unsupported_nested_fallback_keeps_expression_type():
         "scalarBlock: no target-side fallback declaration emitted */ + 1.0);" in hlsl
     )
     assert (
-        "float4 viaTernaryAccess = (choose ? float4(0) /* unsupported HLSL "
+        "float4 viaTernaryAccess = (choose ? float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL "
         "GLSL buffer block access block: no target-side fallback declaration "
         "emitted */ : float4(1.0, 1.0, 1.0, 1.0));" in hlsl
     )
     assert (
-        "float4 viaTernaryCall = (choose ? float4(1.0, 1.0, 1.0, 1.0) : float4(0) "
+        "float4 viaTernaryCall = (choose ? float4(1.0, 1.0, 1.0, 1.0) : float4(0.0, 0.0, 0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readParam: "
         "target function omitted */);" in hlsl
     )
@@ -4148,20 +4148,20 @@ def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types():
     assert (
         "float4 sampledDirect = sampleArray(textures, samplers, 0 /* unsupported "
         "HLSL GLSL buffer block access arrayBlock: no target-side fallback "
-        "declaration emitted */, float2(0) /* unsupported HLSL GLSL buffer "
+        "declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer "
         "block access arrayBlock: no target-side fallback declaration emitted */);"
         in hlsl
     )
     assert (
         "float4 sampledCall = sampleArray(textures, samplers, 0 /* unsupported "
         "HLSL GLSL buffer block function call readLayer: target function "
-        "omitted */, float2(0) /* unsupported HLSL GLSL buffer block function "
+        "omitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block function "
         "call readUv: target function omitted */);" in hlsl
     )
     assert (
         "uint incrementedDirect = incrementArray(counters, 0 /* unsupported "
         "HLSL GLSL buffer block access arrayBlock: no target-side fallback "
-        "declaration emitted */, int2(0) /* unsupported HLSL GLSL buffer block "
+        "declaration emitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block "
         "access arrayBlock: no target-side fallback declaration emitted */, 0u "
         "/* unsupported HLSL GLSL buffer block access arrayBlock: no target-side "
         "fallback declaration emitted */);" in hlsl
@@ -4169,7 +4169,7 @@ def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types():
     assert (
         "uint incrementedCall = incrementArray(counters, 0 /* unsupported "
         "HLSL GLSL buffer block function call readLayer: target function "
-        "omitted */, int2(0) /* unsupported HLSL GLSL buffer block function "
+        "omitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block function "
         "call readPixel: target function omitted */, 0u /* unsupported HLSL "
         "GLSL buffer block function call readAmount: target function omitted */);"
         in hlsl
@@ -4348,7 +4348,7 @@ def test_codegen_mixed_ssbo_shadow_resource_array_helpers_infer_fallback_arg_typ
     assert (
         "float direct = shadowLayer(shadowMaps, shadowSamplers, 0 /* unsupported "
         "HLSL GLSL buffer block access shadowBlock: no target-side fallback "
-        "declaration emitted */, float2(0) /* unsupported HLSL GLSL buffer block "
+        "declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "access shadowBlock: no target-side fallback declaration emitted */, 0 "
         "/* unsupported HLSL GLSL buffer block access shadowBlock: no target-side "
         "fallback declaration emitted */);" in hlsl
@@ -4356,14 +4356,14 @@ def test_codegen_mixed_ssbo_shadow_resource_array_helpers_infer_fallback_arg_typ
     assert (
         "float call = shadowLayer(shadowMaps, shadowSamplers, 0 /* unsupported "
         "HLSL GLSL buffer block function call readLayer: target function omitted */, "
-        "float2(0) /* unsupported HLSL GLSL buffer block function call readUv: "
+        "float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block function call readUv: "
         "target function omitted */, 0 /* unsupported HLSL GLSL buffer block "
         "function call readDepth: target function omitted */);" in hlsl
     )
     assert (
         "float4 cubeDirect = cubeGatherLayer(cubeShadowArrays, shadowSamplers, 0 "
         "/* unsupported HLSL GLSL buffer block access shadowBlock: no target-side "
-        "fallback declaration emitted */, float4(0) /* unsupported HLSL GLSL "
+        "fallback declaration emitted */, float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL "
         "buffer block access shadowBlock: no target-side fallback declaration "
         "emitted */, 0 /* unsupported HLSL GLSL buffer block access shadowBlock: "
         "no target-side fallback declaration emitted */);" in hlsl
@@ -4371,7 +4371,7 @@ def test_codegen_mixed_ssbo_shadow_resource_array_helpers_infer_fallback_arg_typ
     assert (
         "float4 cubeCall = cubeGatherLayer(cubeShadowArrays, shadowSamplers, 0 "
         "/* unsupported HLSL GLSL buffer block function call readLayer: target "
-        "function omitted */, float4(0) /* unsupported HLSL GLSL buffer block "
+        "function omitted */, float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "function call readCubeLayer: target function omitted */, 0 /* unsupported "
         "HLSL GLSL buffer block function call readDepth: target function omitted */);"
         in hlsl
@@ -4560,9 +4560,9 @@ def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types
     assert (
         "float4 direct = fetchSamples(msTextures, msArrays, 0 /* unsupported "
         "HLSL GLSL buffer block access msBlock: no target-side fallback "
-        "declaration emitted */, int2(0) /* unsupported HLSL GLSL buffer block "
+        "declaration emitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block "
         "access msBlock: no target-side fallback declaration emitted */, "
-        "int3(0) /* unsupported HLSL GLSL buffer block access msBlock: "
+        "int3(0, 0, 0) /* unsupported HLSL GLSL buffer block access msBlock: "
         "no target-side fallback declaration emitted */, 0 /* unsupported HLSL "
         "GLSL buffer block access msBlock: no target-side fallback declaration "
         "emitted */);" in hlsl
@@ -4570,8 +4570,8 @@ def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types
     assert (
         "float4 call = fetchSamples(msTextures, msArrays, 0 /* unsupported HLSL "
         "GLSL buffer block function call readLayer: target function omitted */, "
-        "int2(0) /* unsupported HLSL GLSL buffer block function call readPixel: "
-        "target function omitted */, int3(0) /* unsupported HLSL GLSL buffer "
+        "int2(0, 0) /* unsupported HLSL GLSL buffer block function call readPixel: "
+        "target function omitted */, int3(0, 0, 0) /* unsupported HLSL GLSL buffer "
         "block function call readPixelLayer: target function omitted */, 0 "
         "/* unsupported HLSL GLSL buffer block function call readSample: target "
         "function omitted */);" in hlsl
@@ -4579,7 +4579,7 @@ def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types
     assert (
         "float4 inlineFetch = msTextures[0 /* unsupported HLSL GLSL buffer block "
         "access msBlock: no target-side fallback declaration emitted */].Load("
-        "int2(0) /* unsupported HLSL GLSL buffer block access msBlock: "
+        "int2(0, 0) /* unsupported HLSL GLSL buffer block access msBlock: "
         "no target-side fallback declaration emitted */, 0 /* unsupported HLSL "
         "GLSL buffer block access msBlock: no target-side fallback declaration "
         "emitted */);" in hlsl
@@ -4590,8 +4590,10 @@ def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types
         in hlsl
     )
     assert ".Load(0 /* unsupported HLSL GLSL buffer block" not in hlsl
-    assert ".Load(int2(0) /* unsupported HLSL GLSL buffer block access msBlock" in hlsl
-    assert ".Load(int3(0) /* unsupported HLSL GLSL buffer block" not in hlsl
+    assert (
+        ".Load(int2(0, 0) /* unsupported HLSL GLSL buffer block access msBlock" in hlsl
+    )
+    assert ".Load(int3(0, 0, 0) /* unsupported HLSL GLSL buffer block" not in hlsl
     assert "msBlock.layer" not in hlsl
     assert "msBlock.pixel" not in hlsl
     assert "msBlock.pixelLayer" not in hlsl
@@ -4803,19 +4805,19 @@ def test_codegen_mixed_ssbo_multisample_diagnostics_preserve_fallback_arg_types(
     )
     assert (
         "unsupported DirectX multisample texture call: texture on "
-        "Texture2DMS<float4> */ float4(0.0)" in hlsl
+        "Texture2DMS<float4> */ float4(0.0, 0.0, 0.0, 0.0)" in hlsl
     )
     assert (
         "unsupported DirectX multisample texture call: textureGrad on "
-        "Texture2DMS<float4> */ float4(0.0)" in hlsl
+        "Texture2DMS<float4> */ float4(0.0, 0.0, 0.0, 0.0)" in hlsl
     )
     assert (
         "unsupported DirectX multisample texture query: textureQueryLod on "
-        "Texture2DMS<float4> */ float2(0.0)" in hlsl
+        "Texture2DMS<float4> */ float2(0.0, 0.0)" in hlsl
     )
     assert (
         "unsupported DirectX multisample texture query: textureQueryLod on "
-        "Texture2DMSArray<float4> */ float2(0.0)" in hlsl
+        "Texture2DMSArray<float4> */ float2(0.0, 0.0)" in hlsl
     )
     assert (
         "unsupported DirectX multisample texture comparison: textureCompare on "
@@ -4823,7 +4825,8 @@ def test_codegen_mixed_ssbo_multisample_diagnostics_preserve_fallback_arg_types(
     )
     assert (
         "unsupported DirectX multisample texture gather comparison: "
-        "textureGatherCompare on Texture2DMSArray<float4> */ float4(0.0)" in hlsl
+        "textureGatherCompare on Texture2DMSArray<float4> */ "
+        "float4(0.0, 0.0, 0.0, 0.0)" in hlsl
     )
     assert (
         hlsl.count(
@@ -4832,27 +4835,27 @@ def test_codegen_mixed_ssbo_multisample_diagnostics_preserve_fallback_arg_types(
         == 3
     )
     assert (
-        "float4 direct2D = invalid2D(msTex, float2(0) /* unsupported HLSL "
+        "float4 direct2D = invalid2D(msTex, float2(0.0, 0.0) /* unsupported HLSL "
         "GLSL buffer block access msDiag" in hlsl
     )
     assert (
-        "float4 call2D = invalid2D(msTex, float2(0) /* unsupported HLSL GLSL "
+        "float4 call2D = invalid2D(msTex, float2(0.0, 0.0) /* unsupported HLSL GLSL "
         "buffer block function call readUv" in hlsl
     )
     assert (
-        "float4 directArray = invalidArray(msArray, float3(0) /* unsupported "
+        "float4 directArray = invalidArray(msArray, float3(0.0, 0.0, 0.0) /* unsupported "
         "HLSL GLSL buffer block access msDiag" in hlsl
     )
     assert (
-        "float4 callArray = invalidArray(msArray, float3(0) /* unsupported "
+        "float4 callArray = invalidArray(msArray, float3(0.0, 0.0, 0.0) /* unsupported "
         "HLSL GLSL buffer block function call readUvLayer" in hlsl
     )
     assert (
-        "int3(0) /* unsupported HLSL GLSL buffer block function call "
+        "int3(0, 0, 0) /* unsupported HLSL GLSL buffer block function call "
         "readPixelLayer: target function omitted */" in hlsl
     )
     assert (
-        "float compareValue = invalidCompare(msTex, linearSampler, float2(0) "
+        "float compareValue = invalidCompare(msTex, linearSampler, float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access msDiag" in hlsl
     )
     assert "texture(msTex," not in hlsl
@@ -5111,14 +5114,15 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
     )
     assert (
         "float4 direct = touchImages(msColor, msLayers, counters, signedLayers, "
-        "int2(0) /* unsupported HLSL GLSL buffer block access msImageBlock" in hlsl
+        "int2(0, 0) /* unsupported HLSL GLSL buffer block access msImageBlock" in hlsl
     )
     assert (
         "float4 call = touchImages(msColor, msLayers, counters, signedLayers, "
-        "int2(0) /* unsupported HLSL GLSL buffer block function call readPixel" in hlsl
+        "int2(0, 0) /* unsupported HLSL GLSL buffer block function call readPixel"
+        in hlsl
     )
     assert (
-        "float4 inlineColor = msColor.Load(int2(0) /* unsupported HLSL GLSL "
+        "float4 inlineColor = msColor.Load(int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block access msImageBlock: no target-side fallback "
         "declaration emitted */, 0 /* unsupported HLSL GLSL buffer block "
         "access msImageBlock: no target-side fallback declaration emitted */);" in hlsl
@@ -5128,7 +5132,7 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
         "RWTexture2DMS<uint>" in hlsl
     )
     assert (
-        "float4(0) /* unsupported HLSL GLSL buffer block function call readColor"
+        "float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block function call readColor"
         in hlsl
     )
     assert "0u /* unsupported HLSL GLSL buffer block function call readCount" in hlsl
@@ -13748,25 +13752,25 @@ def test_codegen_mixed_ssbo_multisample_integer_image_values_pack_fallbacks():
     assert "Texture2DMS<int4> signedImage : register(t0);" in hlsl
     assert "Texture2DMSArray<uint4> unsignedLayers : register(t1);" in hlsl
     assert (
-        "int4 signedDirect = signedImage.Load(int2(0) /* unsupported HLSL GLSL "
+        "int4 signedDirect = signedImage.Load(int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block access intBlock: no target-side fallback declaration "
         "emitted */, 0 /* unsupported HLSL GLSL buffer block access intBlock: "
         "no target-side fallback declaration emitted */);" in hlsl
     )
     assert (
-        "uint4 unsignedCall = unsignedLayers.Load(int3(0) /* unsupported HLSL "
+        "uint4 unsignedCall = unsignedLayers.Load(int3(0, 0, 0) /* unsupported HLSL "
         "GLSL buffer block function call readPixelLayer: target function "
         "omitted */, 0 /* unsupported HLSL GLSL buffer block function call "
         "readSample: target function omitted */);" in hlsl
     )
     assert (
-        "int signedScalar = signedImage.Load(int2(0) /* unsupported HLSL GLSL "
+        "int signedScalar = signedImage.Load(int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block function call readPixel: target function omitted */, 0 "
         "/* unsupported HLSL GLSL buffer block function call readSample: target "
         "function omitted */).x;" in hlsl
     )
     assert (
-        "uint unsignedScalar = unsignedLayers.Load(int3(0) /* unsupported HLSL GLSL "
+        "uint unsignedScalar = unsignedLayers.Load(int3(0, 0, 0) /* unsupported HLSL GLSL "
         "buffer block access intBlock: no target-side fallback declaration "
         "emitted */, 0 /* unsupported HLSL GLSL buffer block access intBlock: "
         "no target-side fallback declaration emitted */).x;" in hlsl
@@ -15147,48 +15151,48 @@ def test_codegen_mixed_ssbo_unsupported_sampling_vectors_are_typed_diagnostics()
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert (
-        "float4 lodDirect = textures[0].SampleLevel(samplers[0], float2(0) "
+        "float4 lodDirect = textures[0].SampleLevel(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access coordBlock: no target-side "
         "fallback declaration emitted */, 2.0);" in hlsl
     )
     assert (
-        "float4 lodCall = textures[0].SampleLevel(samplers[0], float2(0) "
+        "float4 lodCall = textures[0].SampleLevel(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
         "function omitted */, 2.0);" in hlsl
     )
     assert (
-        "float4 gradDirect = textures[0].SampleGrad(samplers[0], float2(0) "
+        "float4 gradDirect = textures[0].SampleGrad(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access coordBlock: no target-side "
-        "fallback declaration emitted */, float2(0) /* unsupported HLSL GLSL "
+        "fallback declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL "
         "buffer block access coordBlock: no target-side fallback declaration "
-        "emitted */, float2(0) /* unsupported HLSL GLSL buffer block access "
+        "emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block access "
         "coordBlock: no target-side fallback declaration emitted */);" in hlsl
     )
     assert (
-        "float4 gradCall = textures[0].SampleGrad(samplers[0], float2(0) "
+        "float4 gradCall = textures[0].SampleGrad(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, float2(0) /* unsupported HLSL GLSL buffer block "
-        "function call readUv: target function omitted */, float2(0) "
+        "function omitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
+        "function call readUv: target function omitted */, float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access coordBlock: no target-side "
         "fallback declaration emitted */);" in hlsl
     )
     assert (
-        "float4 gatheredDirect = textures[0].Gather(samplers[0], float2(0) "
+        "float4 gatheredDirect = textures[0].Gather(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access coordBlock: no target-side "
         "fallback declaration emitted */);" in hlsl
     )
     assert (
-        "float4 gatheredCall = textures[0].Gather(samplers[0], float2(0) "
+        "float4 gatheredCall = textures[0].Gather(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
         "function omitted */);" in hlsl
     )
     assert (
-        "float4 fetchedDirect = textures[0].Load(int3(int2(0) /* unsupported "
+        "float4 fetchedDirect = textures[0].Load(int3(int2(0, 0) /* unsupported "
         "HLSL GLSL buffer block access coordBlock: no target-side fallback "
         "declaration emitted */, 0));" in hlsl
     )
     assert (
-        "float4 fetchedCall = textures[0].Load(int3(int2(0) /* unsupported "
+        "float4 fetchedCall = textures[0].Load(int3(int2(0, 0) /* unsupported "
         "HLSL GLSL buffer block function call readPixel: target function "
         "omitted */, 0));" in hlsl
     )
@@ -15327,61 +15331,61 @@ def test_codegen_mixed_ssbo_unsupported_sampling_offsets_are_typed_diagnostics()
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert (
-        "float4 lodDirect = textures[0].SampleLevel(samplers[0], float2(0) "
+        "float4 lodDirect = textures[0].SampleLevel(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, 2.0, int2(0) /* unsupported HLSL GLSL "
+        "fallback declaration emitted */, 2.0, int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block access offsetBlock: no target-side fallback declaration "
         "emitted */);" in hlsl
     )
     assert (
-        "float4 lodCall = textures[0].SampleLevel(samplers[0], float2(0) "
+        "float4 lodCall = textures[0].SampleLevel(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, 2.0, int2(0) /* unsupported HLSL GLSL buffer block "
+        "function omitted */, 2.0, int2(0, 0) /* unsupported HLSL GLSL buffer block "
         "function call readOffset: target function omitted */);" in hlsl
     )
     assert (
-        "float4 gradDirect = textures[0].SampleGrad(samplers[0], float2(0) "
+        "float4 gradDirect = textures[0].SampleGrad(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, float2(0) /* unsupported HLSL GLSL "
+        "fallback declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL "
         "buffer block access offsetBlock: no target-side fallback declaration "
-        "emitted */, float2(0) /* unsupported HLSL GLSL buffer block access "
-        "offsetBlock: no target-side fallback declaration emitted */, int2(0) "
+        "emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block access "
+        "offsetBlock: no target-side fallback declaration emitted */, int2(0, 0) "
         "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
         "fallback declaration emitted */);" in hlsl
     )
     assert (
-        "float4 gradCall = textures[0].SampleGrad(samplers[0], float2(0) "
+        "float4 gradCall = textures[0].SampleGrad(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, float2(0) /* unsupported HLSL GLSL buffer block "
-        "function call readUv: target function omitted */, float2(0) "
+        "function omitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
+        "function call readUv: target function omitted */, float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, int2(0) /* unsupported HLSL GLSL "
+        "fallback declaration emitted */, int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block function call readOffset: target function omitted */);" in hlsl
     )
     assert (
-        "float4 gatheredDirect = textures[0].Gather(samplers[0], float2(0) "
+        "float4 gatheredDirect = textures[0].Gather(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, int2(0) /* unsupported HLSL GLSL "
+        "fallback declaration emitted */, int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block access offsetBlock: no target-side fallback declaration "
         "emitted */);" in hlsl
     )
     assert (
-        "float4 gatheredCall = textures[0].Gather(samplers[0], float2(0) "
+        "float4 gatheredCall = textures[0].Gather(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, int2(0) /* unsupported HLSL GLSL buffer block "
+        "function omitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block "
         "function call readOffset: target function omitted */);" in hlsl
     )
     assert (
-        "float4 fetchedDirect = textures[0].Load(int3((int2(0) /* unsupported "
+        "float4 fetchedDirect = textures[0].Load(int3((int2(0, 0) /* unsupported "
         "HLSL GLSL buffer block access offsetBlock: no target-side fallback "
-        "declaration emitted */ + int2(0) /* unsupported HLSL GLSL buffer block "
+        "declaration emitted */ + int2(0, 0) /* unsupported HLSL GLSL buffer block "
         "access offsetBlock: no target-side fallback declaration emitted */), 0));"
         in hlsl
     )
     assert (
-        "float4 fetchedCall = textures[0].Load(int3((int2(0) /* unsupported "
+        "float4 fetchedCall = textures[0].Load(int3((int2(0, 0) /* unsupported "
         "HLSL GLSL buffer block function call readPixel: target function omitted */ "
-        "+ int2(0) /* unsupported HLSL GLSL buffer block function call readOffset: "
+        "+ int2(0, 0) /* unsupported HLSL GLSL buffer block function call readOffset: "
         "target function omitted */), 0));" in hlsl
     )
     assert "SampleLevel(samplers[0], 0 /* unsupported HLSL GLSL buffer" not in hlsl
@@ -15551,37 +15555,37 @@ def test_codegen_mixed_ssbo_unsupported_projected_compare_calls_infer_types():
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert (
-        "float4 projectedCall = colorMap.SampleGrad(linearSampler, (float3(0) "
+        "float4 projectedCall = colorMap.SampleGrad(linearSampler, (float3(0.0, 0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUvq: target "
-        "function omitted */).xy / (float3(0) /* unsupported HLSL GLSL buffer "
-        "block function call readUvq: target function omitted */).z, float2(0) "
+        "function omitted */).xy / (float3(0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer "
+        "block function call readUvq: target function omitted */).z, float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access shadowBlock: no target-side "
-        "fallback declaration emitted */, float2(0) /* unsupported HLSL GLSL "
+        "fallback declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL "
         "buffer block access shadowBlock: no target-side fallback declaration "
-        "emitted */, int2(0) /* unsupported HLSL GLSL buffer block function call "
+        "emitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block function call "
         "readOffset: target function omitted */);" in hlsl
     )
     assert (
-        "float compareCall = shadowMap.SampleCmpGrad(compareSampler, float2(0) "
+        "float compareCall = shadowMap.SampleCmpGrad(compareSampler, float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
         "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
-        "call readDepth: target function omitted */, float2(0) /* unsupported "
+        "call readDepth: target function omitted */, float2(0.0, 0.0) /* unsupported "
         "HLSL GLSL buffer block access shadowBlock: no target-side fallback "
-        "declaration emitted */, float2(0) /* unsupported HLSL GLSL buffer block "
+        "declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "access shadowBlock: no target-side fallback declaration emitted */, "
-        "int2(0) /* unsupported HLSL GLSL buffer block function call readOffset: "
+        "int2(0, 0) /* unsupported HLSL GLSL buffer block function call readOffset: "
         "target function omitted */);" in hlsl
     )
     assert (
         "float compareProjCall = shadowMap.SampleCmpGrad(compareSampler, "
-        "(float3(0) /* unsupported HLSL GLSL buffer block function call readUvq: "
-        "target function omitted */).xy / (float3(0) /* unsupported HLSL GLSL "
+        "(float3(0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block function call readUvq: "
+        "target function omitted */).xy / (float3(0.0, 0.0, 0.0) /* unsupported HLSL GLSL "
         "buffer block function call readUvq: target function omitted */).z, 0 "
         "/* unsupported HLSL GLSL buffer block function call readDepth: target "
-        "function omitted */, float2(0) /* unsupported HLSL GLSL buffer block "
+        "function omitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "access shadowBlock: no target-side fallback declaration emitted */, "
-        "float2(0) /* unsupported HLSL GLSL buffer block access shadowBlock: "
-        "no target-side fallback declaration emitted */, int2(0) /* unsupported "
+        "float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block access shadowBlock: "
+        "no target-side fallback declaration emitted */, int2(0, 0) /* unsupported "
         "HLSL GLSL buffer block function call readOffset: target function omitted */);"
         in hlsl
     )
@@ -15714,30 +15718,30 @@ def test_codegen_mixed_ssbo_unsupported_gather_compare_calls_infer_types():
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert (
-        "float4 planarCall = shadowMap.GatherCmp(compareSampler, float2(0) "
+        "float4 planarCall = shadowMap.GatherCmp(compareSampler, float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
         "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
         "call readDepth: target function omitted */);" in hlsl
     )
     assert (
-        "float4 planarOffsetCall = shadowMap.GatherCmp(compareSampler, float2(0) "
+        "float4 planarOffsetCall = shadowMap.GatherCmp(compareSampler, float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
         "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
-        "call readDepth: target function omitted */, int2(0) /* unsupported "
+        "call readDepth: target function omitted */, int2(0, 0) /* unsupported "
         "HLSL GLSL buffer block function call readOffset: target function omitted */);"
         in hlsl
     )
     assert (
-        "float4 arrayCall = shadowArray.GatherCmp(compareSampler, float3(0) "
+        "float4 arrayCall = shadowArray.GatherCmp(compareSampler, float3(0.0, 0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUvLayer: target "
         "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
         "call readDepth: target function omitted */);" in hlsl
     )
     assert (
-        "float4 arrayOffsetCall = shadowArray.GatherCmp(compareSampler, float3(0) "
+        "float4 arrayOffsetCall = shadowArray.GatherCmp(compareSampler, float3(0.0, 0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUvLayer: target "
         "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
-        "call readDepth: target function omitted */, int2(0) /* unsupported "
+        "call readDepth: target function omitted */, int2(0, 0) /* unsupported "
         "HLSL GLSL buffer block function call readOffset: target function omitted */);"
         in hlsl
     )
@@ -15895,7 +15899,7 @@ def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
         hlsl.count(
             "/* unsupported DirectX texture gather compare: "
             "textureGatherCompareOffset offsets require 2D or 2D-array textures */ "
-            "float4(0.0)"
+            "float4(0.0, 0.0, 0.0, 0.0)"
         )
         == 4
     )
@@ -16034,36 +16038,36 @@ def test_codegen_mixed_ssbo_unsupported_query_and_atomic_args_infer_types():
     )
     assert (
         "float2 lodDirect = float2(layerMap.CalculateLevelOfDetailUnclamped"
-        "(linearSampler, (float3(0) /* unsupported HLSL GLSL buffer block "
+        "(linearSampler, (float3(0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "access queryBlock: no target-side fallback declaration emitted */).xy), "
-        "layerMap.CalculateLevelOfDetail(linearSampler, (float3(0) "
+        "layerMap.CalculateLevelOfDetail(linearSampler, (float3(0.0, 0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access queryBlock: no target-side "
         "fallback declaration emitted */).xy));" in hlsl
     )
     assert (
         "float2 lodCall = float2(cubeArray.CalculateLevelOfDetailUnclamped"
-        "(linearSampler, (float4(0) /* unsupported HLSL GLSL buffer block "
+        "(linearSampler, (float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "function call readCubeLayer: target function omitted */).xyz), "
-        "cubeArray.CalculateLevelOfDetail(linearSampler, (float4(0) "
+        "cubeArray.CalculateLevelOfDetail(linearSampler, (float4(0.0, 0.0, 0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readCubeLayer: "
         "target function omitted */).xyz));" in hlsl
     )
     assert (
-        "uint atomicDirect = imageAtomicAdd_uimage2D(counters, int2(0) "
+        "uint atomicDirect = imageAtomicAdd_uimage2D(counters, int2(0, 0) "
         "/* unsupported HLSL GLSL buffer block access queryBlock: no target-side "
         "fallback declaration emitted */, 0u /* unsupported HLSL GLSL buffer "
         "block access queryBlock: no target-side fallback declaration emitted */);"
         in hlsl
     )
     assert (
-        "uint atomicCall = imageAtomicAdd_uimage2D(counters, int2(0) "
+        "uint atomicCall = imageAtomicAdd_uimage2D(counters, int2(0, 0) "
         "/* unsupported HLSL GLSL buffer block function call readPixel: target "
         "function omitted */, 0u /* unsupported HLSL GLSL buffer block function "
         "call readAmount: target function omitted */);" in hlsl
     )
     assert (
         "uint swapDirect = imageAtomicCompSwap_uimage2DArray(layerCounters, "
-        "int3(0) /* unsupported HLSL GLSL buffer block access queryBlock: "
+        "int3(0, 0, 0) /* unsupported HLSL GLSL buffer block access queryBlock: "
         "no target-side fallback declaration emitted */, 0u /* unsupported "
         "HLSL GLSL buffer block access queryBlock: no target-side fallback "
         "declaration emitted */, 0u /* unsupported HLSL GLSL buffer block "
@@ -16071,7 +16075,7 @@ def test_codegen_mixed_ssbo_unsupported_query_and_atomic_args_infer_types():
     )
     assert (
         "uint swapCall = imageAtomicCompSwap_uimage2DArray(layerCounters, "
-        "int3(0) /* unsupported HLSL GLSL buffer block function call "
+        "int3(0, 0, 0) /* unsupported HLSL GLSL buffer block function call "
         "readPixelLayer: target function omitted */, 0u /* unsupported HLSL "
         "GLSL buffer block access queryBlock: no target-side fallback "
         "declaration emitted */, 0u /* unsupported HLSL GLSL buffer block "
@@ -16260,45 +16264,45 @@ def test_codegen_mixed_ssbo_unsupported_image_format_args_infer_types():
     assert "RWTexture2D<uint> unsignedScalar : register(u2);" in hlsl
     assert "RWTexture2DArray<uint2> unsignedLayers : register(u3);" in hlsl
     assert (
-        "float scalarDirect = scalarFloat[int2(0) /* unsupported HLSL GLSL "
+        "float scalarDirect = scalarFloat[int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block access imageBlock: no target-side fallback declaration "
         "emitted */];" in hlsl
     )
     assert (
-        "float scalarCall = scalarFloat[int2(0) /* unsupported HLSL GLSL "
+        "float scalarCall = scalarFloat[int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block function call readPixel: target function omitted */];" in hlsl
     )
     assert (
-        "float2 rgDirect = rgFloat[int2(0) /* unsupported HLSL GLSL buffer "
+        "float2 rgDirect = rgFloat[int2(0, 0) /* unsupported HLSL GLSL buffer "
         "block access imageBlock: no target-side fallback declaration emitted */];"
         in hlsl
     )
     assert (
-        "uint2 unsignedRgCall = unsignedLayers[int3(0) /* unsupported HLSL "
+        "uint2 unsignedRgCall = unsignedLayers[int3(0, 0, 0) /* unsupported HLSL "
         "GLSL buffer block function call readPixelLayer: target function "
         "omitted */];" in hlsl
     )
     assert (
-        "rgFloat[int2(0) /* unsupported HLSL GLSL buffer block access imageBlock: "
+        "rgFloat[int2(0, 0) /* unsupported HLSL GLSL buffer block access imageBlock: "
         "no target-side fallback declaration emitted */] = float2(0 "
         "/* unsupported HLSL GLSL buffer block access imageBlock: no target-side "
         "fallback declaration emitted */, 0.0);" in hlsl
     )
     assert (
-        "rgFloat[int2(0) /* unsupported HLSL GLSL buffer block function call "
-        "readPixel: target function omitted */] = float2(0) /* unsupported "
+        "rgFloat[int2(0, 0) /* unsupported HLSL GLSL buffer block function call "
+        "readPixel: target function omitted */] = float2(0.0, 0.0) /* unsupported "
         "HLSL GLSL buffer block function call readRg: target function omitted */;"
         in hlsl
     )
     assert (
-        "unsignedLayers[int3(0) /* unsupported HLSL GLSL buffer block access "
+        "unsignedLayers[int3(0, 0, 0) /* unsupported HLSL GLSL buffer block access "
         "imageBlock: no target-side fallback declaration emitted */] = "
         "uint2(0u /* unsupported HLSL GLSL buffer block access imageBlock: "
         "no target-side fallback declaration emitted */, 0u);" in hlsl
     )
     assert (
-        "unsignedLayers[int3(0) /* unsupported HLSL GLSL buffer block function "
-        "call readPixelLayer: target function omitted */] = uint2(0) "
+        "unsignedLayers[int3(0, 0, 0) /* unsupported HLSL GLSL buffer block function "
+        "call readPixelLayer: target function omitted */] = uint2(0u, 0u) "
         "/* unsupported HLSL GLSL buffer block function call readUnsignedRg: "
         "target function omitted */;" in hlsl
     )

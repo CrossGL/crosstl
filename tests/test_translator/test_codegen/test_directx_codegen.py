@@ -11319,11 +11319,11 @@ def test_directx_cube_texture_gather_offsets_emit_diagnostics_without_samplers()
 
     offset_diagnostic = (
         "/* unsupported DirectX texture gather: textureGatherOffset "
-        "offsets require 2D or 2D-array textures */ float4(0.0)"
+        "offsets require 2D or 2D-array textures */ float4(0.0, 0.0, 0.0, 0.0)"
     )
     offsets_diagnostic = (
         "/* unsupported DirectX texture gather: textureGatherOffsets "
-        "offsets require 2D or 2D-array textures */ float4(0.0)"
+        "offsets require 2D or 2D-array textures */ float4(0.0, 0.0, 0.0, 0.0)"
     )
     assert "TextureCube cubeMap : register(t0);" in generated_code
     assert "TextureCubeArray cubeArray : register(t1);" in generated_code
@@ -11387,7 +11387,7 @@ def test_directx_unsupported_dimension_texture_gather_emits_diagnostics_without_
 
     diagnostic = (
         "/* unsupported DirectX texture gather: textureGather requires 2D, "
-        "2D-array, cube, or cube-array textures */ float4(0.0)"
+        "2D-array, cube, or cube-array textures */ float4(0.0, 0.0, 0.0, 0.0)"
     )
     assert "Texture1D lineMap : register(t0);" in generated_code
     assert "Texture3D volumeMap : register(t1);" in generated_code
@@ -11631,19 +11631,19 @@ def test_directx_cube_texture_sample_offsets_emit_diagnostics_without_samplers()
     assert "shadowArraySampler" not in generated_code
     assert (
         generated_code.count(
-            "/* unsupported DirectX texture offset: textureOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0)"
+            "/* unsupported DirectX texture offset: textureOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0, 0.0, 0.0, 0.0)"
         )
         == 4
     )
     assert (
         generated_code.count(
-            "/* unsupported DirectX texture offset: textureLodOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0)"
+            "/* unsupported DirectX texture offset: textureLodOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0, 0.0, 0.0, 0.0)"
         )
         == 4
     )
     assert (
         generated_code.count(
-            "/* unsupported DirectX texture offset: textureGradOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0)"
+            "/* unsupported DirectX texture offset: textureGradOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0, 0.0, 0.0, 0.0)"
         )
         == 4
     )
@@ -13461,11 +13461,11 @@ def test_directx_direct_projected_cube_texture_lowers_supported_color_forms():
         in generated_code
     )
     assert (
-        "/* unsupported DirectX projected texture: textureProjLodOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0)"
+        "/* unsupported DirectX projected texture: textureProjLodOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0, 0.0, 0.0, 0.0)"
         in generated_code
     )
     assert (
-        "/* unsupported DirectX projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0)"
+        "/* unsupported DirectX projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0, 0.0, 0.0, 0.0)"
         in generated_code
     )
     coordinate_diagnostic_counts = {
@@ -13477,7 +13477,7 @@ def test_directx_direct_projected_cube_texture_lowers_supported_color_forms():
     for func_name, count in coordinate_diagnostic_counts.items():
         assert (
             generated_code.count(
-                f"/* unsupported DirectX projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
+                f"/* unsupported DirectX projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates */ float4(0.0, 0.0, 0.0, 0.0)"
             )
             == count
         )
@@ -13575,7 +13575,7 @@ def test_directx_projected_cube_texture_parameters_forward_supported_implicit_sa
         in generated_code
     )
     assert (
-        "/* unsupported DirectX projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0)"
+        "/* unsupported DirectX projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, or 3D textures */ float4(0.0, 0.0, 0.0, 0.0)"
         in generated_code
     )
     coordinate_diagnostic_counts = {
@@ -13586,7 +13586,7 @@ def test_directx_projected_cube_texture_parameters_forward_supported_implicit_sa
     for func_name, count in coordinate_diagnostic_counts.items():
         assert (
             generated_code.count(
-                f"/* unsupported DirectX projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates */ float4(0.0)"
+                f"/* unsupported DirectX projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates */ float4(0.0, 0.0, 0.0, 0.0)"
             )
             == count
         )
@@ -13832,12 +13832,12 @@ def test_directx_unsupported_gather_diagnostics_do_not_create_sampler_role_confl
 
     gather_diagnostic = (
         "/* unsupported DirectX texture gather: textureGather requires 2D, "
-        "2D-array, cube, or cube-array textures */ float4(0.0)"
+        "2D-array, cube, or cube-array textures */ float4(0.0, 0.0, 0.0, 0.0)"
     )
     gather_compare_offset_diagnostic = (
         "/* unsupported DirectX texture gather compare: "
         "textureGatherCompareOffset offsets require 2D or 2D-array textures */ "
-        "float4(0.0)"
+        "float4(0.0, 0.0, 0.0, 0.0)"
     )
 
     assert "SamplerComparisonState sharedSampler : register(s0);" in regular_code
@@ -13919,7 +13919,7 @@ def test_directx_storage_image_texture_diagnostics_do_not_create_sampler_role_co
 
     storage_texture_diagnostic = (
         "/* unsupported DirectX storage image texture operation: "
-        "texture on RWTexture2D<float4> */ float4(0.0)"
+        "texture on RWTexture2D<float4> */ float4(0.0, 0.0, 0.0, 0.0)"
     )
     storage_compare_diagnostic = (
         "/* unsupported DirectX storage image texture comparison: "
@@ -14553,7 +14553,7 @@ def test_directx_unsupported_cube_shadow_gather_compare_offsets_skip_implicit_sa
     diagnostic = (
         "/* unsupported DirectX texture gather compare: "
         "textureGatherCompareOffset offsets require 2D or 2D-array textures */ "
-        "float4(0.0)"
+        "float4(0.0, 0.0, 0.0, 0.0)"
     )
     assert "TextureCube cubeMap : register(t0);" in generated_code
     assert "TextureCubeArray cubeArray : register(t1);" in generated_code
@@ -15489,13 +15489,13 @@ def test_directx_storage_image_levels_and_lod_queries_emit_diagnostics():
     )
     assert (
         generated_code.count(
-            "/* unsupported DirectX texture query: textureQueryLod on RWTexture2D<float4> */ float2(0.0)"
+            "/* unsupported DirectX texture query: textureQueryLod on RWTexture2D<float4> */ float2(0.0, 0.0)"
         )
         == 2
     )
     assert (
         generated_code.count(
-            "/* unsupported DirectX texture query: textureQueryLod on RWTexture3D<float4> */ float2(0.0)"
+            "/* unsupported DirectX texture query: textureQueryLod on RWTexture3D<float4> */ float2(0.0, 0.0)"
         )
         == 2
     )
@@ -16354,7 +16354,7 @@ def test_directx_multisample_diagnostics_do_not_create_sampler_role_conflicts():
 
     regular_diagnostic = (
         "/* unsupported DirectX multisample texture call: "
-        "textureGrad on Texture2DMS<float4> */ float4(0.0)"
+        "textureGrad on Texture2DMS<float4> */ float4(0.0, 0.0, 0.0, 0.0)"
     )
     compare_diagnostic = (
         "/* unsupported DirectX multisample texture comparison: "
@@ -16362,7 +16362,7 @@ def test_directx_multisample_diagnostics_do_not_create_sampler_role_conflicts():
     )
     sample_diagnostic = (
         "/* unsupported DirectX multisample texture call: "
-        "texture on Texture2DMS<float4> */ float4(0.0)"
+        "texture on Texture2DMS<float4> */ float4(0.0, 0.0, 0.0, 0.0)"
     )
 
     assert "SamplerComparisonState sharedSampler : register(s0);" in regular_code
@@ -16431,7 +16431,7 @@ def test_directx_multisample_texel_fetch_offsets_emit_diagnostics():
 
     diagnostic = (
         "/* unsupported DirectX texel fetch offset: "
-        "multisample textures do not support offsets */ float4(0.0)"
+        "multisample textures do not support offsets */ float4(0.0, 0.0, 0.0, 0.0)"
     )
     assert "Texture2DMS<float4> msTex : register(t0);" in generated_code
     assert "Texture2DMSArray<float4> msArray : register(t1);" in generated_code
@@ -16503,13 +16503,13 @@ def test_directx_cube_texel_fetches_emit_diagnostics():
     )
     assert (
         generated_code.count(
-            "unsupported DirectX texel fetch: texelFetch on TextureCube */ float4(0.0)"
+            "unsupported DirectX texel fetch: texelFetch on TextureCube */ float4(0.0, 0.0, 0.0, 0.0)"
         )
         == 2
     )
     assert (
         generated_code.count(
-            "unsupported DirectX texel fetch: texelFetchOffset on TextureCube */ float4(0.0)"
+            "unsupported DirectX texel fetch: texelFetchOffset on TextureCube */ float4(0.0, 0.0, 0.0, 0.0)"
         )
         == 2
     )

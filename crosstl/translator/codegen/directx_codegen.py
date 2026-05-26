@@ -9584,6 +9584,23 @@ class HLSLCodeGen:
             return "0u"
         if mapped_type in {"float", "double", "int"}:
             return "0"
+        component_count = self.value_component_count(mapped_type)
+        component_type = self.vector_component_type(mapped_type)
+        if component_count and component_count > 1 and component_type:
+            zero_value = "0"
+            if component_type in {
+                "float",
+                "double",
+                "half",
+                "min16float",
+                "min10float",
+            }:
+                zero_value = "0.0"
+            elif component_type in {"uint", "min16uint"}:
+                zero_value = "0u"
+            elif component_type == "bool":
+                zero_value = "false"
+            return f"{mapped_type}({', '.join([zero_value] * component_count)})"
         if (
             mapped_type
             and mapped_type[0].isalpha()
