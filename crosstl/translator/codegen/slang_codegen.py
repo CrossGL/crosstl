@@ -1079,10 +1079,15 @@ class SlangCodeGen:
     def semantic_from_node(self, node, skip_stage_attributes=False):
         semantic = getattr(node, "semantic", None)
         if semantic:
+            if skip_stage_attributes and self.slang_shader_stage_marker_name(semantic):
+                return None
             return semantic
 
         for attr in getattr(node, "attributes", []) or []:
-            if skip_stage_attributes and self.slang_stage_attribute_name(attr):
+            if skip_stage_attributes and (
+                self.slang_stage_attribute_name(attr)
+                or self.slang_shader_stage_marker_name(getattr(attr, "name", None))
+            ):
                 continue
             if (
                 self.is_resource_format_attribute(attr)
@@ -1092,6 +1097,56 @@ class SlangCodeGen:
                 continue
             if hasattr(attr, "name"):
                 return attr.name
+        return None
+
+    def slang_shader_stage_marker_name(self, name):
+        if name is None:
+            return None
+
+        normalized = str(name).lower()
+        if normalized.startswith("slang_"):
+            normalized = normalized[len("slang_") :]
+        elif normalized.startswith("hlsl_"):
+            normalized = normalized[len("hlsl_") :]
+
+        valid_names = {
+            "amplification",
+            "anyhit",
+            "callable",
+            "closesthit",
+            "compute",
+            "domain",
+            "fragment",
+            "geometry",
+            "hull",
+            "intersection",
+            "local_size",
+            "local_size_x",
+            "local_size_y",
+            "local_size_z",
+            "mesh",
+            "miss",
+            "numthreads",
+            "object",
+            "pixel",
+            "ray_any_hit",
+            "ray_callable",
+            "ray_closest_hit",
+            "ray_generation",
+            "ray_intersection",
+            "ray_miss",
+            "raygen",
+            "raygeneration",
+            "task",
+            "tesscontrol",
+            "tesseval",
+            "tessellation_control",
+            "tessellation_evaluation",
+            "vertex",
+            "workgroup_size",
+        }
+        if normalized in valid_names:
+            return normalized
         return None
 
     def is_resource_format_attribute(self, attr):
@@ -1416,6 +1471,40 @@ class SlangCodeGen:
     def format_declaration(self, type_name, name, node=None):
         mapped_type = self.map_resource_type_with_format(type_name, node)
         return format_c_style_array_declaration(mapped_type, name)
+
+    def slang_declaration_qualifier_prefix(self, node):
+        qualifiers = []
+        seen = set()
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            normalized = str(qualifier).lower()
+            if normalized in {"groupshared", "shared", "threadgroup", "workgroup"}:
+                mapped = "groupshared"
+            else:
+                mapped = None
+            if mapped and mapped not in seen:
+                seen.add(mapped)
+                qualifiers.append(mapped)
+
+        if not qualifiers:
+            return ""
+        return " ".join(qualifiers) + " "
+
+    def slang_parameter_qualifier_prefix(self, node):
+        qualifiers = []
+        seen = set()
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            normalized = str(qualifier).lower()
+            if normalized in {"const", "in", "out", "inout"}:
+                mapped = normalized
+            else:
+                mapped = None
+            if mapped and mapped not in seen:
+                seen.add(mapped)
+                qualifiers.append(mapped)
+
+        if not qualifiers:
+            return ""
+        return " ".join(qualifiers) + " "
 
     def get_variable_type(self, node):
         var_type = getattr(node, "var_type", None)
@@ -1930,14 +2019,16 @@ class SlangCodeGen:
             self.register_variable_type(node.name, node.element_type)
             element_type = self.convert_type(node.element_type)
             size = get_array_size_from_node(node)
+            prefix = self.slang_declaration_qualifier_prefix(node)
             if size is None:
-                return f"{element_type} {node.name}[];\n"
-            return f"{element_type} {node.name}[{size}];\n"
+                return f"{prefix}{element_type} {node.name}[];\n"
+            return f"{prefix}{element_type} {node.name}[{size}];\n"
 
         initial_value = getattr(node, "initial_value", getattr(node, "value", None))
         vtype = self.variable_declaration_type(node, initial_value)
         self.register_variable_type(node.name, vtype, node)
         declaration = self.format_declaration(vtype, node.name, node)
+        declaration = self.slang_declaration_qualifier_prefix(node) + declaration
         declaration = self.apply_slang_resource_binding_decorations(
             declaration, node, vtype, auto_assign=True
         )
@@ -2017,7 +2108,9 @@ class SlangCodeGen:
         param_list = self.slang_merge_function_parameters(
             param_list, extra_parameters, shader_type
         )
-        self.validate_slang_stage_return_semantic(shader_type, semantic, stage_role)
+        self.validate_slang_return_semantic(
+            shader_type, semantic, stage_role, ret_type_name
+        )
         hull_output_rewrite = None
         if stage_role != "patch_constant":
             hull_output_rewrite = self.slang_stage_hull_output_rewrite(
@@ -2087,6 +2180,9 @@ class SlangCodeGen:
                     if ray_declaration is not None:
                         params.append(ray_declaration)
                         continue
+                    declaration = (
+                        self.slang_parameter_qualifier_prefix(param) + declaration
+                    )
                     declaration = self.apply_slang_resource_binding_decorations(
                         declaration, param, param_type_name
                     )
@@ -2197,24 +2293,34 @@ class SlangCodeGen:
         x, y, z = compute_local_size(execution_config)
         return f"[numthreads({x}, {y}, {z})]\n"
 
-    def validate_slang_stage_return_semantic(self, shader_type, semantic, stage_role):
+    def validate_slang_return_semantic(
+        self, shader_type, semantic, stage_role, ret_type_name
+    ):
         if semantic is None:
             return
 
         shader_stage = self.slang_shader_stage_name(shader_type)
-        if shader_stage != "hull":
-            return
+        if shader_stage == "hull":
+            if stage_role == "patch_constant":
+                raise ValueError(
+                    "Slang patch constant function returns must put semantics on "
+                    "the returned struct members"
+                )
 
-        if stage_role == "patch_constant":
             raise ValueError(
-                "Slang patch constant function returns must put semantics on "
-                "the returned struct members"
+                "Slang tessellation_control stage returns must put semantics on "
+                "the output control-point struct members"
             )
 
-        raise ValueError(
-            "Slang tessellation_control stage returns must put semantics on "
-            "the output control-point struct members"
-        )
+        if self.convert_type(ret_type_name) == "void":
+            if shader_type:
+                raise ValueError(
+                    f"Slang {shader_type} stage void return cannot use return "
+                    f"semantic {semantic}"
+                )
+            raise ValueError(
+                f"Slang void function return cannot use return semantic {semantic}"
+            )
 
     def slang_stage_hull_output_rewrite(
         self, body_statements, shader_type, ret_type_name, semantic, param_list
@@ -3519,6 +3625,7 @@ class SlangCodeGen:
             var_type = self.variable_declaration_type(node, initial_value)
             self.register_variable_type(node.name, var_type, node)
             declaration = self.format_declaration(var_type, node.name, node)
+            declaration = self.slang_declaration_qualifier_prefix(node) + declaration
             if initial_value is not None:
                 initial_expr = self.generate_expression_with_expected(
                     initial_value,

@@ -30,7 +30,7 @@ implicitly supported.
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "280", "11", "ROCm HIP documentation"
    "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "274", "22", "Mojo manual"
    "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "485", "35", "Rust reference"
-   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "305", "71", "Slang user guide"
+   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "309", "71", "Slang user guide"
 
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
@@ -43,7 +43,7 @@ implicitly supported.
    "HIP", "10", "12", "0", "0", "3", "18"
    "Mojo", "10", "27", "0", "0", "5", "1"
    "Rust", "11", "6", "0", "0", "0", "26"
-   "Slang", "14", "18", "0", "0", "0", "11"
+   "Slang", "14", "19", "0", "0", "0", "10"
 
 Graphics Backend Focus
 ----------------------
@@ -113,7 +113,7 @@ Each category below uses the status codes from the legend.
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
    "Stage parameter semantics", "Y", "Y", "Y", "Y", "P", "P", "P", "P", "P"
-   "Direct function return semantics", "Y", "Y", "Y", "?", "?", "?", "P", "?", "?"
+   "Direct function return semantics", "Y", "Y", "Y", "?", "?", "?", "P", "?", "P"
    "Struct member semantics", "Y", "Y", "Y", "P", "P", "P", "P", "P", "P"
 
 .. csv-table:: resources
@@ -230,7 +230,7 @@ need an audit before implementation work can be scoped accurately.
    "HIP", "stage I/O", "Direct function return semantics", "unknown", ""
    "Mojo", "stage I/O", "Direct function return semantics", "partial", "Direct staged function return semantics are preserved as deterministic Mojo metadata comments, and builtin return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete."
    "Rust", "stage I/O", "Direct function return semantics", "unknown", ""
-   "Slang", "stage I/O", "Direct function return semantics", "unknown", ""
+   "Slang", "stage I/O", "Direct function return semantics", "partial", "Direct return semantics map to Slang system values, fragment color/depth returns can be rewritten through output structs, invalid void-return semantics are rejected, and stage/execution marker metadata is filtered so it does not become a return semantic. Full target ABI and slangc-backed return-semantics coverage remain incomplete."
    "Vulkan SPIR-V", "stage I/O", "Struct member semantics", "partial", ""
    "CUDA", "stage I/O", "Struct member semantics", "partial", ""
    "HIP", "stage I/O", "Struct member semantics", "partial", ""

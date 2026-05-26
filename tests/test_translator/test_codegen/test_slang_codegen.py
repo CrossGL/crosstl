@@ -4,7 +4,7 @@ import shutil
 import subprocess
 from typing import List
 from crosstl.translator.parser import Parser
-from crosstl.translator.ast import LiteralNode, PrimitiveType
+from crosstl.translator.ast import BlockNode, FunctionNode, LiteralNode, PrimitiveType
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
 
 
@@ -1995,6 +1995,36 @@ def test_lambda_call_preserves_unsupported_slang_lambda_shapes():
     assert "=>" not in generated_code
 
 
+def test_function_parameter_modifiers_are_preserved_for_slang():
+    code = """
+    shader ParameterQualifiers {
+        float adjust(
+            const float bias,
+            in float source,
+            out float result,
+            inout float accumulated
+        ) {
+            result = source + bias;
+            accumulated = accumulated + result;
+            return result;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float adjust(const float bias, in float source, out float result, "
+        "inout float accumulated)" in generated_code
+    )
+    assert (
+        "float adjust(float bias, float source, float result, float accumulated)"
+        not in (generated_code)
+    )
+
+
 def test_user_defined_texture_function_shadows_resource_lowering():
     code = """
     shader TextureShadow {
@@ -2198,6 +2228,34 @@ def test_user_defined_workgroup_barrier_is_not_lowered_to_group_sync():
     assert "void workgroupBarrier()" in generated_code
     assert "workgroupBarrier();" in generated_code
     assert "GroupMemoryBarrierWithGroupSync();" not in generated_code
+
+
+def test_threadgroup_memory_qualifiers_emit_slang_groupshared():
+    code = """
+    shader SharedMemoryQualifiers {
+        compute {
+            void main() {
+                groupshared float scratch[64];
+                shared uint bins[4];
+                threadgroup vec4 cachedColor[2];
+                workgroup int flags[8];
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "groupshared float scratch[64];" in generated_code
+    assert "groupshared uint bins[4];" in generated_code
+    assert "groupshared float4 cachedColor[2];" in generated_code
+    assert "groupshared int flags[8];" in generated_code
+    assert "\n    float scratch[64];" not in generated_code
+    assert "\n    uint bins[4];" not in generated_code
+    assert "\n    float4 cachedColor[2];" not in generated_code
+    assert "\n    int flags[8];" not in generated_code
 
 
 def test_wave_intrinsics_lower_to_native_slang_calls():
@@ -2777,6 +2835,50 @@ def test_semantics_map_to_slang_system_values():
     assert ": gl_Position" not in generated_code
     assert ": gl_FragColor" not in generated_code
     assert ": gl_GlobalInvocationID" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader_type", "semantic", "message"),
+    [
+        (
+            "fragment",
+            "gl_FragColor",
+            "fragment stage void return cannot use return semantic gl_FragColor",
+        ),
+        (
+            None,
+            "COLOR",
+            "void function return cannot use return semantic COLOR",
+        ),
+    ],
+)
+def test_void_return_semantics_raise_for_slang(shader_type, semantic, message):
+    function = FunctionNode(
+        name="main",
+        return_type=PrimitiveType("void"),
+        parameters=[],
+        body=BlockNode([]),
+    )
+    function.semantic = semantic
+
+    with pytest.raises(ValueError, match=message):
+        SlangCodeGen().generate_function(function, shader_type=shader_type)
+
+
+@pytest.mark.parametrize("metadata", ["compute", "workgroup_size"])
+def test_stage_marker_metadata_is_not_treated_as_slang_return_semantic(metadata):
+    function = FunctionNode(
+        name="kernel",
+        return_type=PrimitiveType("void"),
+        parameters=[],
+        body=BlockNode([]),
+    )
+    function.semantic = metadata
+
+    generated_code = SlangCodeGen().generate_function(function)
+
+    assert "void kernel()" in generated_code
+    assert f" : {metadata}" not in generated_code
 
 
 def test_ray_stage_builtins_lower_to_slang_intrinsics():

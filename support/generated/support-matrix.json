@@ -975,7 +975,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 305
+        "test_count": 309
       },
       "translator_codegen": {
         "exists": true,
@@ -1494,8 +1494,8 @@
       "category": "stage I/O",
       "feature": "Direct function return semantics",
       "feature_id": "io.return_semantics",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Direct return semantics map to Slang system values, fragment color/depth returns can be rewritten through output structs, invalid void-return semantics are rejected, and stage/execution marker metadata is filtered so it does not become a return semantic. Full target ABI and slangc-backed return-semantics coverage remain incomplete.",
+      "status": "partial"
     },
     {
       "backend": "Vulkan SPIR-V",
@@ -3699,9 +3699,15 @@
           "status": "unknown"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_semantics_map_to_slang_system_values",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_void_return_semantics_raise_for_slang",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_marker_metadata_is_not_treated_as_slang_return_semantic",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_fragment_color_and_depth_outputs_rewrite_to_slang_output_struct",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_control_return_semantics_are_rejected"
+          ],
+          "notes": "Direct return semantics map to Slang system values, fragment color/depth returns can be rewritten through output structs, invalid void-return semantics are rejected, and stage/execution marker metadata is filtered so it does not become a return semantic. Full target ABI and slangc-backed return-semantics coverage remain incomplete.",
+          "status": "partial"
         },
         "vulkan": {
           "evidence": [],
@@ -5903,9 +5909,9 @@
       },
       "slang": {
         "diagnostic": 0,
-        "partial": 18,
+        "partial": 19,
         "supported": 14,
-        "unknown": 11,
+        "unknown": 10,
         "unsupported": 0,
         "validated_rejection": 0
       },
