@@ -67,6 +67,7 @@ from .stage_utils import (
     collect_stage_entry_reserved_function_names,
     collect_stage_local_structs,
     collect_stage_local_variables,
+    compute_local_size,
     deduplicate_named_declarations,
     normalize_stage_name,
     order_functions_by_dependencies,
@@ -1338,6 +1339,7 @@ class MetalCodeGen:
                     functions_code += self.generate_function(
                         stage.entry_point,
                         shader_type=stage_name,
+                        execution_config=getattr(stage, "execution_config", None),
                         entry_name=stage_entry_names.get(id(stage.entry_point)),
                     )
 
@@ -1466,7 +1468,14 @@ class MetalCodeGen:
 
         return code
 
-    def generate_function(self, func, indent=0, shader_type=None, entry_name=None):
+    def generate_function(
+        self,
+        func,
+        indent=0,
+        shader_type=None,
+        execution_config=None,
+        entry_name=None,
+    ):
         """Render a function or stage entry point with Metal attributes."""
         code = ""
         code += "  " * indent
@@ -1717,7 +1726,12 @@ class MetalCodeGen:
         elif shader_type in ["mesh", "object", "task", "amplification"]:
             stage_keyword = "mesh" if shader_type == "mesh" else "object"
             function_name = entry_name or f"{stage_keyword}_{func.name}"
-            code += f"{stage_keyword} {return_type} {function_name}({params_str}) {{\n"
+            stage_attribute = self.metal_mesh_stage_attribute(
+                shader_type, func, execution_config
+            )
+            code += (
+                f"{stage_attribute} {return_type} {function_name}({params_str}) {{\n"
+            )
         elif shader_type in [
             "ray_intersection",
             "ray_any_hit",
@@ -4359,6 +4373,51 @@ class MetalCodeGen:
         )
         return assign_stage_entry_names(entries, used_names, self.stage_entry_base_name)
 
+    def metal_mesh_stage_attribute(self, shader_type, func, execution_config=None):
+        stage_keyword = "mesh" if shader_type == "mesh" else "object"
+        attributes = [stage_keyword]
+        threadgroup_limit = self.metal_stage_threadgroup_limit(
+            func, shader_type, execution_config
+        )
+        if threadgroup_limit:
+            attributes.append(f"max_total_threads_per_threadgroup({threadgroup_limit})")
+        return f"[[{', '.join(attributes)}]]"
+
+    def metal_stage_threadgroup_limit(self, func, shader_type, execution_config=None):
+        if shader_type not in {"mesh", "object", "task", "amplification"}:
+            return None
+
+        arguments = self.metal_stage_attribute_arguments(
+            func, "max_total_threads_per_threadgroup"
+        )
+        if arguments:
+            if len(arguments) != 1:
+                raise ValueError(
+                    f"Metal {shader_type} stage max_total_threads_per_threadgroup "
+                    "requires exactly one argument"
+                )
+            return self.attribute_value_to_string(arguments[0])
+
+        if execution_config:
+            return self.metal_local_size_threadgroup_total(execution_config)
+        return None
+
+    def metal_stage_attribute_arguments(self, func, attribute_name):
+        for attr in getattr(func, "attributes", []) or []:
+            if self.metal_stage_control_attribute_name(attr) == attribute_name:
+                return getattr(attr, "arguments", []) or []
+        return []
+
+    def metal_local_size_threadgroup_total(self, execution_config):
+        values = [str(value).strip() for value in compute_local_size(execution_config)]
+        literal_product = 1
+        for value in values:
+            try:
+                literal_product *= int(value, 0)
+            except ValueError:
+                return " * ".join(f"({item})" for item in values)
+        return str(literal_product)
+
     def all_functions(self, ast):
         functions = list(getattr(ast, "functions", []) or [])
         for stage in getattr(ast, "stages", {}).values():
@@ -5001,8 +5060,9 @@ class MetalCodeGen:
             return None
         if isinstance(value, str):
             return value
-        if hasattr(value, "name"):
-            return str(value.name)
+        name = getattr(value, "name", None)
+        if name is not None:
+            return str(name)
         if hasattr(value, "value"):
             return str(value.value).strip('"')
         return str(value)

@@ -2766,8 +2766,36 @@ def test_mesh_object_stage_codegen():
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
     generated = generate_code(ast)
-    assert "object void object_main" in generated
-    assert "mesh void mesh_main" in generated
+    assert "[[object]] void object_main" in generated
+    assert "[[mesh]] void mesh_main" in generated
+    assert "object void object_main" not in generated
+    assert "mesh void mesh_main" not in generated
+
+
+def test_metal_mesh_object_stage_attributes_and_threadgroup_limits():
+    code = """
+    shader meshpipe {
+        object {
+            layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;
+            void main() { }
+        }
+
+        mesh {
+            void main() @max_total_threads_per_threadgroup(96) { }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+    generated = generate_code(ast)
+    mesh_code = MetalCodeGen().generate_stage(ast, "mesh")
+
+    assert (
+        "[[object, max_total_threads_per_threadgroup(64)]] void object_main"
+        in generated
+    )
+    assert "[[mesh, max_total_threads_per_threadgroup(96)]] void mesh_main" in generated
+    assert "[[mesh, max_total_threads_per_threadgroup(96)]] void mesh_main" in mesh_code
+    assert "[[object, max_total_threads_per_threadgroup(64)]]" not in mesh_code
 
 
 def test_metal_rejects_unsupported_geometry_and_tessellation_stages():

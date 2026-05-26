@@ -303,102 +303,102 @@
         "unsupported_marker_count": 413,
         "unsupported_marker_samples": [
           {
-            "line": 263,
+            "line": 264,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_image_atomic_expression,"
           },
           {
-            "line": 264,
+            "line": 265,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_cube_texel_fetch_expression,"
           },
           {
-            "line": 265,
+            "line": 266,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_image_atomic_expression,"
           },
           {
-            "line": 266,
+            "line": 267,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_image_store_expression,"
           },
           {
-            "line": 267,
+            "line": 268,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_call_vector_expression,"
           },
           {
-            "line": 268,
+            "line": 269,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_compare_scalar_expression,"
           },
           {
-            "line": 269,
+            "line": 270,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_gather_compare_vector_expression,"
           },
           {
-            "line": 270,
+            "line": 271,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_query_lod_expression,"
           },
           {
-            "line": 271,
+            "line": 272,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texel_fetch_offset_expression,"
           },
           {
-            "line": 272,
+            "line": 273,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_projected_texture_call_expression,"
           },
           {
-            "line": 273,
+            "line": 274,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_storage_image_texture_comparison_scalar_expression,"
           },
           {
-            "line": 274,
+            "line": 275,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_storage_image_texture_operation_vector_expression,"
           },
           {
-            "line": 275,
+            "line": 276,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_gather_compare_call_expression,"
           },
           {
-            "line": 276,
+            "line": 277,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_gather_call_expression,"
           },
           {
-            "line": 277,
+            "line": 278,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_compare_scalar_expression,"
           },
           {
-            "line": 278,
+            "line": 279,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_compare_operation_error,"
           },
           {
-            "line": 279,
+            "line": 280,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_offset_call_expression,"
           },
           {
-            "line": 280,
+            "line": 281,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_offset_operation_error,"
           },
           {
-            "line": 281,
+            "line": 282,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_projected_texture_operation_error,"
           },
           {
-            "line": 282,
+            "line": 283,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_query_levels_expression,"
           }
@@ -410,7 +410,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 423
+        "test_count": 424
       },
       "translator_codegen": {
         "exists": true,
@@ -1419,7 +1419,7 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "Entry points lower to Metal object/mesh functions, but full mesh payload, topology, and threadgroup layout semantics are not complete.",
+      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names and max_total_threads_per_threadgroup from local-size layouts or explicit attributes. Full mesh payload, topology, and output signature semantics are not complete.",
       "status": "partial"
     },
     {
@@ -3580,9 +3580,10 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_mesh_object_stage_codegen"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_mesh_object_stage_codegen",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_object_stage_attributes_and_threadgroup_limits"
           ],
-          "notes": "Entry points lower to Metal object/mesh functions, but full mesh payload, topology, and threadgroup layout semantics are not complete.",
+          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names and max_total_threads_per_threadgroup from local-size layouts or explicit attributes. Full mesh payload, topology, and output signature semantics are not complete.",
           "status": "partial"
         },
         "mojo": {

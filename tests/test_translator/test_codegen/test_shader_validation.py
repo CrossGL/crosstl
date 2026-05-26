@@ -986,6 +986,20 @@ shader MetalComputeBuiltinsValidation {
 """
 
 
+METAL_MESH_OBJECT_SHADER = """
+shader MetalMeshObjectValidation {
+    object {
+        layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;
+        void main() { }
+    }
+
+    mesh {
+        void main() @max_total_threads_per_threadgroup(96) { }
+    }
+}
+"""
+
+
 METAL_TEXTURE_3D_PROJECTED_OFFSET_FRAGMENT_SHADER = """
 shader MetalTexture3DProjectedOffsetValidation {
     sampler3D volumeMap;
@@ -1849,6 +1863,42 @@ def run_validator(command):
     )
 
 
+def metal_supports_mesh_object_stage_attributes(xcrun, tmp_path):
+    source = tmp_path / "metal_mesh_object_probe.metal"
+    output = tmp_path / "metal_mesh_object_probe.air"
+    source.write_text(
+        """
+#include <metal_stdlib>
+using namespace metal;
+
+[[object]]
+void object_main() { }
+
+[[mesh]]
+void mesh_main() { }
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0, "\n".join(
+        part for part in (result.stdout, result.stderr) if part.strip()
+    )
+
+
 def test_generated_spirv_complex_resource_compute_validates_with_spirv_tools(
     tmp_path,
 ):
@@ -2434,6 +2484,40 @@ def test_generated_metal_combined_stages_compile_separately_with_metal(tmp_path)
         run_validator(
             [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
         )
+
+
+def test_generated_metal_mesh_object_stages_compile_with_metal3(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "mesh_object.metal"
+    output = tmp_path / "mesh_object.air"
+    code = MetalCodeGen().generate(crosstl.translator.parse(METAL_MESH_OBJECT_SHADER))
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
 
 
 def test_generated_metal_compute_stage_with_builtins_compiles_with_metal(tmp_path):

@@ -42,7 +42,7 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "Entry points lower to Metal object/mesh functions, but full mesh payload, topology, and threadgroup layout semantics are not complete.",
+      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names and max_total_threads_per_threadgroup from local-size layouts or explicit attributes. Full mesh payload, topology, and output signature semantics are not complete.",
       "status": "partial"
     },
     {
@@ -402,9 +402,10 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_mesh_object_stage_codegen"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_mesh_object_stage_codegen",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_object_stage_attributes_and_threadgroup_limits"
           ],
-          "notes": "Entry points lower to Metal object/mesh functions, but full mesh payload, topology, and threadgroup layout semantics are not complete.",
+          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names and max_total_threads_per_threadgroup from local-size layouts or explicit attributes. Full mesh payload, topology, and output signature semantics are not complete.",
           "status": "partial"
         },
         "opengl": {
