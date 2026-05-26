@@ -786,6 +786,194 @@ def test_mesh_and_task_stages_emit_execution_layout_numthreads():
     assert '[numthreads(64, 1, 1)]\n[shader("mesh")]' in generated_code
 
 
+def test_stage_numthreads_attribute_overrides_default_numthreads():
+    code = """
+    shader StageNumthreads {
+        compute {
+            void main() @numthreads(8, 4, 2) {
+            }
+        }
+        task {
+            void main() @numthreads(32, 1, 1) {
+            }
+        }
+        mesh {
+            void main() @numthreads(64, 2, 1) {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[numthreads(8, 4, 2)]\n[shader("compute")]' in generated_code
+    assert '[numthreads(32, 1, 1)]\n[shader("amplification")]' in generated_code
+    assert '[numthreads(64, 2, 1)]\n[shader("mesh")]' in generated_code
+    assert "[numthreads(1, 1, 1)]" not in generated_code
+    assert " : numthreads" not in generated_code
+
+
+def test_stage_numthreads_attribute_accepts_default_dimensions():
+    code = """
+    shader StageNumthreadsDefaults {
+        compute {
+            void main() @numthreads(8) {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[numthreads(8, 1, 1)]\n[shader("compute")]' in generated_code
+
+
+def test_stage_attributes_lower_to_slang_attributes_not_return_semantics():
+    code = """
+    shader StageAttributes {
+        geometry {
+            void main() @maxvertexcount(3) {
+            }
+        }
+        tessellation_control {
+            void main()
+                @domain(triangle)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+            }
+        }
+        tessellation_evaluation {
+            void main() @domain(triangle) {
+            }
+        }
+        mesh {
+            void main() @outputtopology(triangle) {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "[maxvertexcount(3)]" in generated_code
+    assert '[domain("tri")]' in generated_code
+    assert '[partitioning("fractional_odd")]' in generated_code
+    assert '[outputtopology("triangle_cw")]' in generated_code
+    assert "[outputcontrolpoints(3)]" in generated_code
+    assert '[patchconstantfunc("HSConst")]' in generated_code
+    assert '[outputtopology("triangle")]' in generated_code
+    assert '[domain("triangle")]' not in generated_code
+    assert " : maxvertexcount" not in generated_code
+    assert " : domain" not in generated_code
+    assert " : outputtopology" not in generated_code
+
+
+def test_semantics_map_to_slang_system_values():
+    code = """
+    shader SemanticShader {
+        struct VSOut {
+            vec4 position @ gl_Position;
+            vec4 color @ TEXCOORD0;
+        };
+
+        vertex {
+            VSOut main(uint vertexId @ gl_VertexID) {
+                VSOut out;
+                return out;
+            }
+        }
+
+        fragment {
+            vec4 main(VSOut input) @ gl_FragColor {
+                return input.color;
+            }
+        }
+
+        compute {
+            void main(uvec3 tid @ gl_GlobalInvocationID) {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 position : SV_Position;" in generated_code
+    assert "float4 color : TEXCOORD0;" in generated_code
+    assert "VSOut VSMain(uint vertexId : SV_VertexID)" in generated_code
+    assert "float4 PSMain(VSOut input) : SV_Target" in generated_code
+    assert "void CSMain(uint3 tid : SV_DispatchThreadID)" in generated_code
+    assert ": gl_Position" not in generated_code
+    assert ": gl_FragColor" not in generated_code
+    assert ": gl_GlobalInvocationID" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            "geometry { void main() @maxvertexcount(0) { } }",
+            "maxvertexcount.*positive",
+        ),
+        (
+            "tessellation_control { void main() @domain(patch) { } }",
+            "domain 'patch'.*tri",
+        ),
+        (
+            (
+                "tessellation_control { void main() "
+                "@outputtopology(triangles_cw) { } }"
+            ),
+            "outputtopology 'triangles_cw'",
+        ),
+        (
+            "tessellation_control { void main() @partitioning(fractional) { } }",
+            "partitioning 'fractional'",
+        ),
+        (
+            (
+                "tessellation_control { void main() "
+                "@domain(tri) @outputtopology(line) { } }"
+            ),
+            "domain 'tri' requires outputtopology triangle_cw",
+        ),
+        (
+            (
+                "tessellation_control { void main() "
+                "@domain(isoline) @outputtopology(triangle_cw) { } }"
+            ),
+            "domain 'isoline' requires outputtopology line",
+        ),
+        (
+            "tessellation_control { void main() @outputcontrolpoints(0) { } }",
+            "outputcontrolpoints.*positive",
+        ),
+        (
+            "mesh { void main() @outputtopology(triangle_cw) { } }",
+            "mesh stage outputtopology 'triangle_cw'",
+        ),
+        (
+            "compute { void main() @maxvertexcount(3) { } }",
+            "compute stage does not support maxvertexcount",
+        ),
+        (
+            "compute { void main() @numthreads(8, 4, 2, 1) { } }",
+            "numthreads requires at most three arguments",
+        ),
+        (
+            "compute { void main() @numthreads(0, 1, 1) { } }",
+            "numthreads values must be positive",
+        ),
+    ],
+)
+def test_invalid_slang_stage_attributes_raise(stage_source, message):
+    code = f"""
+    shader InvalidStageAttributes {{
+        {stage_source}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_if_else_control_flow_emits_slang_blocks():
     code = """
     shader main {

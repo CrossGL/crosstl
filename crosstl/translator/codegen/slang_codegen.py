@@ -81,6 +81,31 @@ class SlangCodeGen:
         self.user_function_return_types = {}
         self.stage_entry_name_overrides = {}
         self._generating = False
+        self.semantic_map = {
+            "gl_Position": "SV_Position",
+            "gl_PointSize": "PSIZE",
+            "gl_ClipDistance": "SV_ClipDistance",
+            "gl_CullDistance": "SV_CullDistance",
+            "gl_VertexID": "SV_VertexID",
+            "gl_InstanceID": "SV_InstanceID",
+            "gl_PrimitiveID": "SV_PrimitiveID",
+            "gl_FragCoord": "SV_Position",
+            "gl_FrontFacing": "SV_IsFrontFace",
+            "gl_FragDepth": "SV_Depth",
+            "gl_FragColor": "SV_Target",
+            "gl_FragColor0": "SV_Target0",
+            "gl_FragColor1": "SV_Target1",
+            "gl_FragColor2": "SV_Target2",
+            "gl_FragColor3": "SV_Target3",
+            "gl_FragColor4": "SV_Target4",
+            "gl_FragColor5": "SV_Target5",
+            "gl_FragColor6": "SV_Target6",
+            "gl_FragColor7": "SV_Target7",
+            "gl_WorkGroupID": "SV_GroupID",
+            "gl_LocalInvocationID": "SV_GroupThreadID",
+            "gl_GlobalInvocationID": "SV_DispatchThreadID",
+            "gl_LocalInvocationIndex": "SV_GroupIndex",
+        }
         self.function_map = {
             "mix": "lerp",
             "mod": "fmod",
@@ -406,6 +431,363 @@ class SlangCodeGen:
         shader_stage = self.slang_shader_stage_name(stage_name)
         return shader_stage in {"compute", "mesh", "amplification"}
 
+    def slang_stage_attribute_name(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return None
+
+        normalized = str(attr_name).lower()
+        if normalized.startswith("slang_"):
+            normalized = normalized[len("slang_") :]
+        elif normalized.startswith("hlsl_"):
+            normalized = normalized[len("hlsl_") :]
+
+        valid_names = {
+            "domain",
+            "maxvertexcount",
+            "maxtessfactor",
+            "numthreads",
+            "outputcontrolpoints",
+            "outputtopology",
+            "partitioning",
+            "patchconstantfunc",
+        }
+        if normalized in valid_names:
+            return normalized
+        return None
+
+    def slang_stage_attribute_arguments(self, func, expected_name):
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = self.slang_stage_attribute_name(attr)
+            if attr_name == expected_name:
+                return getattr(attr, "arguments", []) or []
+        return []
+
+    def slang_stage_attribute_names(self, func):
+        names = set()
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = self.slang_stage_attribute_name(attr)
+            if attr_name:
+                names.add(attr_name)
+        return names
+
+    def slang_stage_attribute_value_to_string(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if hasattr(value, "value"):
+            return str(value.value).strip('"')
+        if hasattr(value, "name"):
+            return str(value.name)
+        return str(value)
+
+    def canonical_slang_tessellation_domain(self, domain):
+        if domain is None:
+            return None
+        normalized = str(domain).strip('"').lower()
+        if normalized == "triangle":
+            return "tri"
+        return normalized
+
+    def normalized_slang_stage_attribute_argument(self, func, expected_name):
+        arguments = self.slang_stage_attribute_arguments(func, expected_name)
+        if not arguments:
+            return None
+        value = self.slang_stage_attribute_value_to_string(arguments[0])
+        if value is None:
+            return None
+        return str(value).strip('"').lower()
+
+    def slang_int_literal_value(self, value):
+        if value is None:
+            return None
+        if hasattr(value, "value"):
+            value = value.value
+        elif hasattr(value, "name"):
+            value = value.name
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+
+        text = str(value).strip().strip('"').replace("_", "")
+        if not text:
+            return None
+        while text and text[-1] in {"u", "U", "l", "L"}:
+            text = text[:-1]
+        try:
+            return int(text, 0)
+        except ValueError:
+            return None
+
+    def slang_stage_attribute_int_argument(self, func, expected_name):
+        arguments = self.slang_stage_attribute_arguments(func, expected_name)
+        if not arguments:
+            return None
+        return self.slang_int_literal_value(arguments[0])
+
+    def validate_positive_slang_stage_attribute(self, func, stage_name, attr_name):
+        value = self.slang_stage_attribute_int_argument(func, attr_name)
+        if value is None:
+            return
+        if value <= 0:
+            raise ValueError(
+                f"Slang {stage_name} stage {attr_name} ({value}) must be positive"
+            )
+
+    def validate_slang_stage_attribute_applicability(self, func, stage_name):
+        shader_stage = self.slang_shader_stage_name(stage_name)
+        allowed_by_stage = {
+            "compute": {"numthreads"},
+            "geometry": {"maxvertexcount"},
+            "hull": {
+                "domain",
+                "maxtessfactor",
+                "outputcontrolpoints",
+                "outputtopology",
+                "partitioning",
+                "patchconstantfunc",
+            },
+            "domain": {"domain"},
+            "mesh": {"numthreads", "outputtopology"},
+            "amplification": {"numthreads"},
+        }
+        allowed_attributes = allowed_by_stage.get(shader_stage, set())
+        for attr_name in self.slang_stage_attribute_names(func):
+            if attr_name not in allowed_attributes:
+                raise ValueError(
+                    f"Slang {stage_name} stage does not support "
+                    f"{attr_name} attribute"
+                )
+
+    def validate_slang_tessellation_domain(self, func, stage_name):
+        shader_stage = self.slang_shader_stage_name(stage_name)
+        if shader_stage not in {"hull", "domain"}:
+            return
+
+        domain = self.normalized_slang_stage_attribute_argument(func, "domain")
+        if not domain:
+            return
+
+        canonical_domain = self.canonical_slang_tessellation_domain(domain)
+        valid_domains = {"tri", "quad", "isoline"}
+        if canonical_domain not in valid_domains:
+            valid_values = ", ".join(sorted(valid_domains))
+            raise ValueError(
+                f"Slang {stage_name} stage domain '{domain}' must be one of: "
+                f"{valid_values}"
+            )
+
+    def validate_slang_tessellation_output_topology(self, func, stage_name):
+        if self.slang_shader_stage_name(stage_name) != "hull":
+            return
+
+        topology = self.normalized_slang_stage_attribute_argument(
+            func, "outputtopology"
+        )
+        if not topology:
+            return
+
+        valid_topologies = {
+            "point",
+            "line",
+            "triangle_cw",
+            "triangle_ccw",
+        }
+        if topology not in valid_topologies:
+            valid_values = ", ".join(sorted(valid_topologies))
+            raise ValueError(
+                "Slang tessellation_control stage outputtopology "
+                f"'{topology}' must be one of: {valid_values}"
+            )
+
+    def validate_slang_tessellation_domain_topology(self, func, stage_name):
+        if self.slang_shader_stage_name(stage_name) != "hull":
+            return
+
+        domain = self.normalized_slang_stage_attribute_argument(func, "domain")
+        topology = self.normalized_slang_stage_attribute_argument(
+            func, "outputtopology"
+        )
+        if not domain or not topology:
+            return
+
+        domain = self.canonical_slang_tessellation_domain(domain)
+        if domain in {"tri", "quad"} and topology == "line":
+            raise ValueError(
+                "Slang tessellation_control stage domain "
+                f"'{domain}' requires outputtopology triangle_cw or triangle_ccw"
+            )
+        if domain == "isoline" and topology in {"triangle_cw", "triangle_ccw"}:
+            raise ValueError(
+                "Slang tessellation_control stage domain 'isoline' requires "
+                "outputtopology line"
+            )
+
+    def validate_slang_mesh_output_topology(self, func, stage_name):
+        if self.slang_shader_stage_name(stage_name) != "mesh":
+            return
+
+        topology = self.normalized_slang_stage_attribute_argument(
+            func, "outputtopology"
+        )
+        if not topology:
+            return
+
+        valid_topologies = {"point", "line", "triangle"}
+        if topology not in valid_topologies:
+            valid_values = ", ".join(sorted(valid_topologies))
+            raise ValueError(
+                f"Slang mesh stage outputtopology '{topology}' must be one of: "
+                f"{valid_values}"
+            )
+
+    def validate_slang_tessellation_partitioning(self, func, stage_name):
+        if self.slang_shader_stage_name(stage_name) != "hull":
+            return
+
+        partitioning = self.normalized_slang_stage_attribute_argument(
+            func, "partitioning"
+        )
+        if not partitioning:
+            return
+
+        valid_partitioning = {
+            "integer",
+            "fractional_even",
+            "fractional_odd",
+            "pow2",
+        }
+        if partitioning not in valid_partitioning:
+            valid_values = ", ".join(sorted(valid_partitioning))
+            raise ValueError(
+                "Slang tessellation_control stage partitioning "
+                f"'{partitioning}' must be one of: {valid_values}"
+            )
+
+    def validate_slang_numthreads(self, func, stage_name):
+        if not self.slang_stage_uses_numthreads(stage_name):
+            return
+
+        arguments = self.slang_stage_attribute_arguments(func, "numthreads")
+        if not arguments:
+            return
+        if len(arguments) > 3:
+            raise ValueError(
+                f"Slang {stage_name} stage numthreads requires at most "
+                "three arguments"
+            )
+
+        for argument in arguments:
+            value = self.slang_int_literal_value(argument)
+            if value is not None and value <= 0:
+                raise ValueError(
+                    f"Slang {stage_name} stage numthreads values must be positive"
+                )
+
+    def validate_slang_stage_attributes(self, func, stage_name):
+        if stage_name is None:
+            return
+
+        self.validate_slang_stage_attribute_applicability(func, stage_name)
+        self.validate_positive_slang_stage_attribute(func, stage_name, "maxvertexcount")
+        self.validate_positive_slang_stage_attribute(
+            func, stage_name, "outputcontrolpoints"
+        )
+        self.validate_slang_tessellation_domain(func, stage_name)
+        self.validate_slang_tessellation_output_topology(func, stage_name)
+        self.validate_slang_tessellation_domain_topology(func, stage_name)
+        self.validate_slang_tessellation_partitioning(func, stage_name)
+        self.validate_slang_mesh_output_topology(func, stage_name)
+        self.validate_slang_numthreads(func, stage_name)
+
+    def generate_slang_stage_numthreads(self, func, stage_name, execution_config=None):
+        if not self.slang_stage_uses_numthreads(stage_name):
+            return ""
+
+        arguments = self.slang_stage_attribute_arguments(func, "numthreads")
+        if arguments:
+            values = [
+                self.slang_stage_attribute_value_to_string(argument)
+                for argument in arguments
+            ]
+            values.extend(["1"] * (3 - len(values)))
+            return f"[numthreads({', '.join(values[:3])})]\n"
+
+        return self.generate_compute_numthreads(execution_config)
+
+    def generate_slang_stage_attributes(self, func, stage_name):
+        if stage_name not in {
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
+            "mesh",
+        }:
+            return ""
+
+        quoted_argument_attributes = {
+            "domain",
+            "outputtopology",
+            "partitioning",
+            "patchconstantfunc",
+        }
+        result = ""
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = self.slang_stage_attribute_name(attr)
+            if attr_name is None or attr_name == "numthreads":
+                continue
+
+            arguments = getattr(attr, "arguments", []) or []
+            if not arguments:
+                continue
+
+            values = [
+                self.slang_stage_attribute_value_to_string(argument)
+                for argument in arguments
+            ]
+            if attr_name == "domain":
+                values = [
+                    self.canonical_slang_tessellation_domain(value) or value
+                    for value in values
+                ]
+            if attr_name in quoted_argument_attributes:
+                values = [f'"{value}"' for value in values]
+            result += f"[{attr_name}({', '.join(values)})]\n"
+
+        return result
+
+    def function_return_semantic(self, node):
+        return self.semantic_from_node(node, skip_stage_attributes=True)
+
+    def semantic_from_node(self, node, skip_stage_attributes=False):
+        semantic = getattr(node, "semantic", None)
+        if semantic:
+            return semantic
+
+        for attr in getattr(node, "attributes", []) or []:
+            if skip_stage_attributes and self.slang_stage_attribute_name(attr):
+                continue
+            if self.is_resource_format_attribute(attr):
+                continue
+            if hasattr(attr, "name"):
+                return attr.name
+        return None
+
+    def is_resource_format_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return False
+        attr_name = str(attr_name).lower()
+        return attr_name == "format" or attr_name in self.supported_image_formats()
+
+    def map_semantic(self, semantic):
+        if semantic is None:
+            return None
+        return self.semantic_map.get(str(semantic), str(semantic))
+
+    def semantic_suffix(self, semantic):
+        mapped_semantic = self.map_semantic(semantic)
+        return f" : {mapped_semantic}" if mapped_semantic else ""
+
     def generate_stage(self, stage_type, stage):
         """Render one staged entry point and its local functions."""
         stage_name = self.get_stage_name(stage_type)
@@ -548,21 +930,7 @@ class SlangCodeGen:
             else:
                 member_type = "float"
 
-            semantic = None
-            if hasattr(member, "semantic"):
-                semantic = member.semantic
-            elif hasattr(member, "attributes"):
-                for attr in member.attributes:
-                    if hasattr(attr, "name") and attr.name in [
-                        "position",
-                        "color",
-                        "texcoord",
-                        "normal",
-                    ]:
-                        semantic = attr.name
-                        break
-
-            semantic_str = f" : {semantic}" if semantic else ""
+            semantic_str = self.semantic_suffix(self.semantic_from_node(member))
             declaration = self.format_declaration(member_type, member.name)
             result += f"{self.indent()}{declaration}{semantic_str};\n"
 
@@ -599,16 +967,7 @@ class SlangCodeGen:
             ret_type = "void"
         self.current_function_return_type = ret_type_name
 
-        semantic = None
-        if hasattr(node, "semantic"):
-            semantic = node.semantic
-        elif hasattr(node, "attributes"):
-            for attr in node.attributes:
-                if hasattr(attr, "name"):
-                    semantic = attr.name
-                    break
-
-        semantic_str = f" : {semantic}" if semantic else ""
+        semantic_str = self.semantic_suffix(self.function_return_semantic(node))
 
         param_list = getattr(node, "parameters", getattr(node, "params", []))
         params_str = ""
@@ -631,8 +990,12 @@ class SlangCodeGen:
                         )
                     else:
                         param_type = "float"
+                    declaration = format_c_style_array_declaration(
+                        param_type, param.name
+                    )
                     params.append(
-                        format_c_style_array_declaration(param_type, param.name)
+                        declaration
+                        + self.semantic_suffix(self.semantic_from_node(param))
                     )
                 params_str = ", ".join(params)
             else:
@@ -646,9 +1009,13 @@ class SlangCodeGen:
                 )
 
         result = ""
-        if self.slang_stage_uses_numthreads(shader_type):
-            result += self.generate_compute_numthreads(execution_config)
         if shader_type:
+            self.validate_slang_stage_attributes(node, shader_type)
+        result += self.generate_slang_stage_numthreads(
+            node, shader_type, execution_config
+        )
+        if shader_type:
+            result += self.generate_slang_stage_attributes(node, shader_type)
             shader_stage = self.slang_shader_stage_name(shader_type)
             result += f'[shader("{shader_stage}")]\n'
         function_name = entry_name or node.name
