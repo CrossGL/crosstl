@@ -5468,6 +5468,22 @@ class HLSLCodeGen:
                 f"'{topology}' must be one of: {valid_values}"
             )
 
+    def validate_hlsl_mesh_output_topology(self, func, shader_type):
+        if shader_type != "mesh":
+            return
+
+        topology = self.normalized_hlsl_stage_attribute_argument(func, "outputtopology")
+        if not topology:
+            return
+
+        valid_topologies = {"point", "line", "triangle"}
+        if topology not in valid_topologies:
+            valid_values = ", ".join(sorted(valid_topologies))
+            raise ValueError(
+                "DirectX mesh stage outputtopology "
+                f"'{topology}' must be one of: {valid_values}"
+            )
+
     def validate_hlsl_tessellation_partitioning(self, func, shader_type):
         if shader_type != "tessellation_control":
             return
@@ -5492,6 +5508,8 @@ class HLSLCodeGen:
             )
 
     def validate_hlsl_stage_requirements(self, func, shader_type):
+        self.validate_hlsl_mesh_output_topology(func, shader_type)
+
         required_attributes = {
             "geometry": {"maxvertexcount"},
             "tessellation_control": {

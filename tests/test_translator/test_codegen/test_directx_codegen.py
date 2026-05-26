@@ -3045,6 +3045,30 @@ def test_directx_mesh_task_stages_emit_numthreads_layouts():
     ) in generated
 
 
+def test_directx_mesh_stage_validates_outputtopology_values():
+    invalid_code = """
+    shader BadMeshTopology {
+        mesh {
+            void main() @outputtopology(triangle_cw) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="mesh stage outputtopology.*triangle_cw"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(invalid_code), "mesh")
+
+    valid_code = """
+    shader ValidMeshTopology {
+        mesh {
+            void main() @outputtopology(line) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "mesh"
+    )
+    assert '[outputtopology("line")]' in generated
+
+
 def test_directx_advanced_stage_entries_use_stage_specific_names():
     code = """
     shader advanced {
