@@ -150,6 +150,7 @@ def std140_matrix_type_info(columns, rows):
 
 def std430_scalar_vector_type_entries():
     entries = {
+        "bool": std430_scalar_type_info("bool"),
         "float": std430_scalar_type_info("float"),
         "int": std430_scalar_type_info("int"),
         "uint": std430_scalar_type_info("uint"),

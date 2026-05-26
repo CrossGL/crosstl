@@ -1291,6 +1291,90 @@ def test_codegen_mixed_ssbo_directx_metal_readonly_mat2_snapshot():
     )
 
 
+def test_codegen_mixed_ssbo_bool_members_lower_as_uint_slots():
+    crossgl = """
+    shader main {
+        struct BoolBlock {
+            bool enabled;
+            bool flags[2];
+            float values[];
+        };
+
+        BoolBlock boolBlock @glsl_buffer_block(std430) @binding(53);
+
+        bool readFlag(BoolBlock localBlock @glsl_buffer_block(std430), uint i) {
+            return localBlock.flags[i];
+        }
+
+        compute {
+            void main() {
+                bool enabled = boolBlock.enabled;
+                bool first = boolBlock.flags[0];
+                bool dynamic = readFlag(boolBlock, 1u);
+                if (enabled && dynamic) {
+                    boolBlock.flags[0] = false;
+                }
+                boolBlock.flags[1] = first;
+                float tail = boolBlock.values[0];
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer boolBlock : register(u53);" in hlsl
+    assert "bool readFlag(RWByteAddressBuffer localBlock, uint i)" in hlsl
+    assert "return (localBlock.Load((4 + i * 4)) != 0u);" in hlsl
+    assert "bool enabled = (boolBlock.Load(0) != 0u);" in hlsl
+    assert "bool first = (boolBlock.Load(4) != 0u);" in hlsl
+    assert "bool dynamic = readFlag(boolBlock, 1u);" in hlsl
+    assert "boolBlock.Store(4, ((false) ? 1u : 0u));" in hlsl
+    assert "boolBlock.Store(8, ((first) ? 1u : 0u));" in hlsl
+    assert "float tail = asfloat(boolBlock.Load(12));" in hlsl
+    assert "unsupported HLSL GLSL buffer block" not in hlsl
+
+    assert "kernel void kernel_main(device uchar* boolBlock [[buffer(53)]])" in metal
+    assert "bool readFlag(device uchar* localBlock, uint i)" in metal
+    assert (
+        "return ((*reinterpret_cast<const device uint*>"
+        "(localBlock + (4 + i * 4))) != 0u);" in metal
+    )
+    assert (
+        "bool enabled = ((*reinterpret_cast<const device uint*>"
+        "(boolBlock + 0)) != 0u);" in metal
+    )
+    assert (
+        "bool first = ((*reinterpret_cast<const device uint*>"
+        "(boolBlock + 4)) != 0u);" in metal
+    )
+    assert "bool dynamic = readFlag(boolBlock, 1u);" in metal
+    assert (
+        "(*reinterpret_cast<device uint*>(boolBlock + 4)) = "
+        "((false) ? 1u : 0u);" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>(boolBlock + 8)) = "
+        "((first) ? 1u : 0u);" in metal
+    )
+    assert (
+        "float tail = (*reinterpret_cast<const device float*>"
+        "(boolBlock + 12));" in metal
+    )
+    assert "unsupported Metal GLSL buffer block" not in metal
+
+    assert "layout(std430, binding = 53) buffer BoolBlock" in glsl
+    assert "bool enabled;" in glsl
+    assert "bool flags[2];" in glsl
+    assert "float values[];" in glsl
+    assert "bool dynamic = readFlag(boolBlock, 1u);" in glsl
+
+
 def test_codegen_mixed_ssbo_block_arrays_lower_to_byte_address_arrays():
     code = """
     #version 450 core
@@ -2317,7 +2401,7 @@ def test_codegen_mixed_ssbo_unsupported_explicit_parameters_are_diagnostic():
     crossgl = """
     shader main {
         struct UnsupportedParamBlock {
-            bool flag;
+            double flag;
             float values[];
         };
 
@@ -2459,12 +2543,12 @@ def test_codegen_mixed_ssbo_unsupported_nested_fallback_keeps_expression_type():
     crossgl = """
     shader main {
         struct UnsupportedVectorBlock {
-            bool flag;
+            double flag;
             vec4 values[];
         };
 
         struct UnsupportedScalarBlock {
-            bool flag;
+            double flag;
             float values[];
         };
 
@@ -2634,7 +2718,7 @@ def test_codegen_mixed_ssbo_unsupported_bool_conditions_are_boolean_diagnostics(
     crossgl = """
     shader main {
         struct UnsupportedBoolBlock {
-            bool flag;
+            double flag;
             bool flags[];
         };
 
@@ -2724,13 +2808,13 @@ def test_codegen_mixed_ssbo_unsupported_integer_bounds_are_typed_diagnostics():
     crossgl = """
     shader main {
         struct UnsupportedIndexBlock {
-            bool flag;
+            double flag;
             uint count;
             uint indices[];
         };
 
         struct UnsupportedSignedIndexBlock {
-            bool flag;
+            double flag;
             int limit;
             int offsets[];
         };
@@ -2882,7 +2966,7 @@ def test_codegen_mixed_ssbo_unsupported_resource_indices_are_typed_diagnostics()
         };
 
         struct UnsupportedResourceIndexBlock {
-            bool flag;
+            double flag;
             int layer;
             uint uLayer;
             int x;
@@ -3027,7 +3111,7 @@ def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types():
         };
 
         struct UnsupportedArrayArgBlock {
-            bool flag;
+            double flag;
             int layer;
             vec2 uv;
             ivec2 pixel;
@@ -3227,7 +3311,7 @@ def test_codegen_mixed_ssbo_shadow_resource_array_helpers_infer_fallback_arg_typ
         };
 
         struct UnsupportedShadowArrayBlock {
-            bool flag;
+            double flag;
             int layer;
             vec2 uv;
             vec4 cubeLayer;
@@ -3441,7 +3525,7 @@ def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types
         };
 
         struct UnsupportedMultisampleBlock {
-            bool flag;
+            double flag;
             int layer;
             ivec2 pixel;
             ivec3 pixelLayer;
@@ -3644,7 +3728,7 @@ def test_codegen_mixed_ssbo_multisample_diagnostics_preserve_fallback_arg_types(
         };
 
         struct UnsupportedMultisampleDiagnosticBlock {
-            bool flag;
+            double flag;
             vec2 uv;
             vec3 uvLayer;
             vec2 ddx;
@@ -3954,7 +4038,7 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
         };
 
         struct UnsupportedMsImageBlock {
-            bool flag;
+            double flag;
             ivec2 pixel;
             ivec3 pixelLayer;
             int sampleIndex;
@@ -12632,7 +12716,7 @@ def test_codegen_mixed_ssbo_multisample_integer_image_values_pack_fallbacks():
         };
 
         struct UnsupportedMsIntBlock {
-            bool flag;
+            double flag;
             ivec2 pixel;
             ivec3 pixelLayer;
             int sampleIndex;
@@ -12863,7 +12947,7 @@ def test_codegen_mixed_ssbo_multisample_image_atomics_use_sample_fallbacks():
         };
 
         struct UnsupportedMsAtomicBlock {
-            bool flag;
+            double flag;
             ivec2 pixel;
             ivec3 pixelLayer;
             int sampleIndex;
@@ -14056,7 +14140,7 @@ def test_codegen_mixed_ssbo_unsupported_sampling_vectors_are_typed_diagnostics()
         };
 
         struct UnsupportedSamplerCoordBlock {
-            bool flag;
+            double flag;
             vec2 uv;
             vec2 dx;
             vec2 dy;
@@ -14231,7 +14315,7 @@ def test_codegen_mixed_ssbo_unsupported_sampling_offsets_are_typed_diagnostics()
         };
 
         struct UnsupportedSamplerOffsetBlock {
-            bool flag;
+            double flag;
             vec2 uv;
             vec2 dx;
             vec2 dy;
@@ -14452,7 +14536,7 @@ def test_codegen_mixed_ssbo_unsupported_projected_compare_calls_infer_types():
         };
 
         struct UnsupportedProjectedShadowBlock {
-            bool flag;
+            double flag;
             vec2 uv;
             vec3 uvq;
             float depth;
@@ -14615,7 +14699,7 @@ def test_codegen_mixed_ssbo_unsupported_gather_compare_calls_infer_types():
         };
 
         struct UnsupportedGatherCompareBlock {
-            bool flag;
+            double flag;
             vec2 uv;
             vec3 uvLayer;
             float depth;
@@ -14914,7 +14998,7 @@ def test_codegen_mixed_ssbo_unsupported_query_and_atomic_args_infer_types():
         };
 
         struct UnsupportedQueryAtomicBlock {
-            bool flag;
+            double flag;
             vec2 uv;
             vec3 uvLayer;
             vec4 cubeLayer;
@@ -15141,7 +15225,7 @@ def test_codegen_mixed_ssbo_unsupported_image_format_args_infer_types():
         };
 
         struct UnsupportedImageFormatBlock {
-            bool flag;
+            double flag;
             ivec2 pixel;
             ivec3 pixelLayer;
             float scalarValue;

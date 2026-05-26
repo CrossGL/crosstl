@@ -199,6 +199,26 @@ void main() {
 """
 
 
+MIXED_GLSL_SSBO_BOOL_COMPUTE_SHADER = """
+#version 450 core
+layout(std430, binding = 26) buffer BoolBlock {
+    bool enabled;
+    bool flags[2];
+    float values[];
+} boolBlock;
+
+void main() {
+    uint i = boolBlock.enabled ? 1u : 0u;
+    bool first = boolBlock.flags[0];
+    bool dynamicFlag = boolBlock.flags[i];
+    if (first || dynamicFlag) {
+        boolBlock.flags[1] = false;
+    }
+    boolBlock.values[i] = boolBlock.values[i] + 1.0;
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
 
@@ -407,6 +427,37 @@ def test_mixed_glsl_ssbo_std140_hlsl_output_compiles_with_dxc(tmp_path):
     assert output_path.exists()
 
 
+def test_mixed_glsl_ssbo_bool_hlsl_output_compiles_with_dxc(tmp_path):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / "mixed_glsl_ssbo_bool.hlsl"
+    output_path = tmp_path / "mixed_glsl_ssbo_bool.dxil"
+
+    code = HLSLCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_SSBO_BOOL_COMPUTE_SHADER, "compute")
+    )
+    assert "RWByteAddressBuffer boolBlock : register(u26);" in code
+    assert "boolBlock.Load(0) != 0u" in code
+    assert "boolBlock.Load((4 + i * 4)) != 0u" in code
+    assert "boolBlock.Store(8, ((false) ? 1u : 0u));" in code
+    assert "boolBlock.Store((12 + i * 4), asuint" in code
+    assert "unsupported HLSL GLSL buffer block" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
 def test_generated_glsl_fragment_validates_with_glslangvalidator(tmp_path):
     glslang = _require_tool("glslangValidator")
     shader_path = tmp_path / "validator_smoke.frag"
@@ -554,6 +605,40 @@ def test_mixed_glsl_ssbo_std140_metal_output_compiles_with_xcrun_metal(tmp_path)
     assert "std140Block + 32" in code
     assert "std140Block + 80" in code
     assert "std140Block + (96 + i * 16)" in code
+    assert "unsupported Metal GLSL buffer block" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_ssbo_bool_metal_output_compiles_with_xcrun_metal(tmp_path):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "mixed_glsl_ssbo_bool.metal"
+    output_path = tmp_path / "mixed_glsl_ssbo_bool.air"
+
+    code = MetalCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_SSBO_BOOL_COMPUTE_SHADER, "compute")
+    )
+    assert "device uchar* boolBlock [[buffer(26)]]" in code
+    assert "reinterpret_cast<const device uint*>(boolBlock + 0)" in code
+    assert "reinterpret_cast<const device uint*>(boolBlock + (4 + i * 4))" in code
+    assert (
+        "(*reinterpret_cast<device uint*>(boolBlock + 8)) = "
+        "((false) ? 1u : 0u);" in code
+    )
+    assert "reinterpret_cast<device float*>(boolBlock + (12 + i * 4))" in code
     assert "unsupported Metal GLSL buffer block" not in code
     shader_path.write_text(code, encoding="utf-8")
 

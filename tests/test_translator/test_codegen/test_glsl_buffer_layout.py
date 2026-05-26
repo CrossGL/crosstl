@@ -84,6 +84,13 @@ def collect_for(struct, var=None, *, literal_int_value=None):
 
 
 def test_std430_type_info_covers_vec3_and_non_square_matrix_strides():
+    bool_info = std430_value_type_info("bool")
+    assert bool_info["size"] == 4
+    assert bool_info["align"] == 4
+    assert bool_info["components"] == 1
+    assert bool_info["component_type"] == "bool"
+    assert std430_array_stride(bool_info) == 4
+
     vec3 = std430_value_type_info("vec3")
     assert vec3["size"] == 12
     assert vec3["align"] == 16
@@ -248,6 +255,39 @@ def test_collect_lowered_glsl_buffer_blocks_accepts_fixed_width_alias_members():
     assert offsets["target_type"] == "mapped_size_t"
 
 
+def test_collect_lowered_glsl_buffer_blocks_lays_out_bool_members():
+    struct = block_struct(
+        member("enabled", primitive("bool")),
+        member("flags", ArrayType(primitive("bool"), size=2)),
+        member("data", ArrayType(primitive("bool"), size=None)),
+    )
+
+    blocks, var_failures, struct_failures = collect_for(struct)
+
+    assert not var_failures
+    assert not struct_failures
+    block = blocks["block"]
+    assert block["runtime_array"] == "data"
+
+    enabled = block["members"]["enabled"]
+    assert enabled["offset"] == 0
+    assert enabled["size"] == 4
+    assert enabled["align"] == 4
+    assert enabled["component_type"] == "bool"
+    assert enabled["target_type"] == "mapped_bool"
+
+    flags = block["members"]["flags"]
+    assert flags["offset"] == 4
+    assert flags["stride"] == 4
+    assert flags["array_count"] == 2
+    assert flags["target_type"] == "mapped_bool"
+
+    data = block["members"]["data"]
+    assert data["offset"] == 12
+    assert data["stride"] == 4
+    assert data["runtime_array"] is True
+
+
 def test_collect_lowered_glsl_buffer_blocks_tracks_readonly_qualifier():
     struct = block_struct(
         member("count", primitive("uint")),
@@ -262,7 +302,7 @@ def test_collect_lowered_glsl_buffer_blocks_tracks_readonly_qualifier():
 
 def test_collect_lowered_glsl_buffer_blocks_records_unsupported_type_failure():
     struct = block_struct(
-        member("flag", primitive("bool")),
+        member("flag", primitive("double")),
         member("data", ArrayType(primitive("float"), size=None)),
     )
 

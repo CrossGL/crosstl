@@ -8875,6 +8875,8 @@ class HLSLCodeGen:
             f"{buffer_name}."
             f"{self.hlsl_byteaddress_load_method(access['components'])}({offset})"
         )
+        if access["component_type"] == "bool":
+            return f"({load} != 0u)"
         if access["component_type"] == "float":
             return f"asfloat({load})"
         if access["component_type"] == "int":
@@ -8882,6 +8884,8 @@ class HLSLCodeGen:
         return load
 
     def hlsl_byteaddress_store_value(self, value, access):
+        if access["component_type"] == "bool":
+            return f"(({value}) ? 1u : 0u)"
         if access.get("layout_type") != access.get("type"):
             if access["component_type"] == "int":
                 return f"asuint(int({value}))"

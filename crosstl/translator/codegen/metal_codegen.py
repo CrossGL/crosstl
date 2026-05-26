@@ -4924,12 +4924,22 @@ class MetalCodeGen:
         return {**member, "offset_expr": offset}
 
     def metal_scalar_load(self, component_type, buffer_name, offset):
+        if component_type == "bool":
+            return (
+                f"((*reinterpret_cast<const device uint*>"
+                f"({buffer_name} + {offset})) != 0u)"
+            )
         return (
             f"(*reinterpret_cast<const device {component_type}*>"
             f"({buffer_name} + {offset}))"
         )
 
     def metal_scalar_store(self, component_type, buffer_name, offset, value):
+        if component_type == "bool":
+            return (
+                f"(*reinterpret_cast<device uint*>"
+                f"({buffer_name} + {offset})) = (({value}) ? 1u : 0u)"
+            )
         return (
             f"(*reinterpret_cast<device {component_type}*>"
             f"({buffer_name} + {offset})) = {value}"
