@@ -15553,6 +15553,148 @@ def test_codegen_mixed_ssbo_fixed_only_scalar_vector_matrix_blocks_lower_to_offs
     assert "fixedPlain.transform = transform;" in glsl
 
 
+def test_codegen_mixed_ssbo_uint_atomics_lower_to_byteaddress_and_device_atomics():
+    code = """
+    #version 450 core
+    layout(std430, binding = 17) buffer AtomicBlock {
+        uint counter;
+        uint bins[4];
+    } atomicBlock;
+
+    void main() {
+        uint oldCounter = atomicAdd(atomicBlock.counter, 1u);
+        uint oldBin = atomicExchange(atomicBlock.bins[2], oldCounter);
+        uint minBin = atomicMin(atomicBlock.bins[0], 2u);
+        uint maxBin = atomicMax(atomicBlock.bins[0], minBin);
+        uint andBin = atomicAnd(atomicBlock.bins[1], 15u);
+        uint orBin = atomicOr(atomicBlock.bins[1], andBin);
+        uint xorBin = atomicXor(atomicBlock.bins[2], orBin);
+        uint casBin = atomicCompSwap(atomicBlock.bins[3], xorBin, 7u);
+        atomicAdd(atomicBlock.bins[1], casBin);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    assert "AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(17);" in crossgl
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer atomicBlock : register(u17);" in hlsl
+    assert (
+        "uint __crossgl_byteaddress_atomic_add_uint(RWByteAddressBuffer buffer, "
+        "uint offset, uint value)" in hlsl
+    )
+    assert "buffer.InterlockedAdd(offset, value, original);" in hlsl
+    assert (
+        "uint __crossgl_byteaddress_atomic_exchange_uint("
+        "RWByteAddressBuffer buffer, uint offset, uint value)" in hlsl
+    )
+    assert "buffer.InterlockedExchange(offset, value, original);" in hlsl
+    assert (
+        "uint oldCounter = __crossgl_byteaddress_atomic_add_uint("
+        "atomicBlock, 0, 1u);" in hlsl
+    )
+    assert (
+        "uint oldBin = __crossgl_byteaddress_atomic_exchange_uint("
+        "atomicBlock, 12, oldCounter);" in hlsl
+    )
+    assert (
+        "uint minBin = __crossgl_byteaddress_atomic_min_uint("
+        "atomicBlock, 4, 2u);" in hlsl
+    )
+    assert (
+        "uint maxBin = __crossgl_byteaddress_atomic_max_uint("
+        "atomicBlock, 4, minBin);" in hlsl
+    )
+    assert (
+        "uint andBin = __crossgl_byteaddress_atomic_and_uint("
+        "atomicBlock, 8, 15u);" in hlsl
+    )
+    assert (
+        "uint orBin = __crossgl_byteaddress_atomic_or_uint("
+        "atomicBlock, 8, andBin);" in hlsl
+    )
+    assert (
+        "uint xorBin = __crossgl_byteaddress_atomic_xor_uint("
+        "atomicBlock, 12, orBin);" in hlsl
+    )
+    assert (
+        "uint casBin = __crossgl_byteaddress_atomic_compare_exchange_uint("
+        "atomicBlock, 16, xorBin, 7u);" in hlsl
+    )
+    assert "__crossgl_byteaddress_atomic_add_uint(atomicBlock, 8, casBin);" in hlsl
+    assert "atomicAdd(atomicBlock.Load" not in hlsl
+    assert "atomicExchange(atomicBlock.Load" not in hlsl
+
+    assert "device uchar* atomicBlock [[buffer(17)]]" in metal
+    assert (
+        "uint oldCounter = atomic_fetch_add_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 0), "
+        "1u, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint oldBin = atomic_exchange_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 12), "
+        "oldCounter, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint minBin = atomic_fetch_min_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 4), "
+        "2u, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint maxBin = atomic_fetch_max_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 4), "
+        "minBin, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint andBin = atomic_fetch_and_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 8), "
+        "15u, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint orBin = atomic_fetch_or_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 8), "
+        "andBin, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint xorBin = atomic_fetch_xor_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 12), "
+        "orBin, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint casBin = __crossgl_buffer_atomic_compare_exchange_uint("
+        "atomicBlock, 16, xorBin, 7u);" in metal
+    )
+    assert (
+        "while (!atomic_compare_exchange_weak_explicit("
+        "target, &original, value, memory_order_relaxed, memory_order_relaxed) "
+        "&& original == compareValue);" in metal
+    )
+    assert (
+        "atomic_fetch_add_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 8), "
+        "casBin, memory_order_relaxed);" in metal
+    )
+    assert "atomicAdd((*reinterpret_cast" not in metal
+    assert "atomicExchange((*reinterpret_cast" not in metal
+
+    assert "layout(std430, binding = 17) buffer AtomicBlock" in glsl
+    assert "uint oldCounter = atomicAdd(atomicBlock.counter, 1u);" in glsl
+    assert "uint oldBin = atomicExchange(atomicBlock.bins[2], oldCounter);" in glsl
+    assert "uint minBin = atomicMin(atomicBlock.bins[0], 2u);" in glsl
+    assert "uint maxBin = atomicMax(atomicBlock.bins[0], minBin);" in glsl
+    assert "uint andBin = atomicAnd(atomicBlock.bins[1], 15u);" in glsl
+    assert "uint orBin = atomicOr(atomicBlock.bins[1], andBin);" in glsl
+    assert "uint xorBin = atomicXor(atomicBlock.bins[2], orBin);" in glsl
+    assert "uint casBin = atomicCompSwap(atomicBlock.bins[3], xorBin, 7u);" in glsl
+    assert "atomicAdd(atomicBlock.bins[1], casBin);" in glsl
+
+
 def test_codegen_mixed_ssbo_fixed_only_blocks_lower_to_explicit_offsets():
     code = """
     #version 450 core

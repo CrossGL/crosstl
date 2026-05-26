@@ -309,6 +309,7 @@ class HLSLCodeGen:
         self.global_implicit_texture_query_lod_samplers = {}
         self.required_texture_query_helpers = set()
         self.required_image_atomic_helpers = set()
+        self.required_byteaddress_atomic_helpers = set()
         self.comparison_sampler_parameters = {}
         self.regular_sampler_parameters = {}
         self.implicit_texture_sampler_parameters = {}
@@ -580,6 +581,7 @@ class HLSLCodeGen:
         self.global_implicit_texture_query_lod_samplers = {}
         self.required_texture_query_helpers = set()
         self.required_image_atomic_helpers = set()
+        self.required_byteaddress_atomic_helpers = set()
         self.comparison_sampler_parameters = {}
         self.regular_sampler_parameters = {}
         self.implicit_texture_sampler_parameters = {}
@@ -1477,6 +1479,7 @@ class HLSLCodeGen:
 
         code += self.generate_texture_query_helpers()
         code += self.generate_image_atomic_helpers()
+        code += self.generate_byteaddress_atomic_helpers()
         code += functions_code
 
         return code
@@ -2903,6 +2906,12 @@ class HLSLCodeGen:
             texture_call = self.generate_texture_call(func_name, args)
             if texture_call is not None:
                 return texture_call
+
+            glsl_block_atomic_call = self.generate_glsl_buffer_block_atomic_call(
+                func_name, args
+            )
+            if glsl_block_atomic_call is not None:
+                return glsl_block_atomic_call
 
             buffer_call = self.generate_buffer_call(func_name, args)
             if buffer_call is not None:
@@ -8012,6 +8021,49 @@ class HLSLCodeGen:
 
         return "".join(helpers)
 
+    def byteaddress_atomic_operations(self):
+        return {
+            "atomicAdd": ("add", "InterlockedAdd", 2),
+            "atomicMin": ("min", "InterlockedMin", 2),
+            "atomicMax": ("max", "InterlockedMax", 2),
+            "atomicAnd": ("and", "InterlockedAnd", 2),
+            "atomicOr": ("or", "InterlockedOr", 2),
+            "atomicXor": ("xor", "InterlockedXor", 2),
+            "atomicExchange": ("exchange", "InterlockedExchange", 2),
+            "atomicCompSwap": ("compare_exchange", "InterlockedCompareExchange", 3),
+        }
+
+    def byteaddress_atomic_helper_name(self, operation, component_type):
+        return f"__crossgl_byteaddress_atomic_{operation}_{component_type}"
+
+    def generate_byteaddress_atomic_helpers(self):
+        if not self.required_byteaddress_atomic_helpers:
+            return ""
+
+        helpers = []
+        for operation, intrinsic, component_type in sorted(
+            self.required_byteaddress_atomic_helpers
+        ):
+            helper_name = self.byteaddress_atomic_helper_name(operation, component_type)
+            value_type = self.map_type(component_type)
+            if operation == "compare_exchange":
+                helpers.append(
+                    f"{value_type} {helper_name}(RWByteAddressBuffer buffer, uint offset, {value_type} compareValue, {value_type} value) {{\n"
+                    f"    {value_type} original;\n"
+                    f"    buffer.{intrinsic}(offset, compareValue, value, original);\n"
+                    "    return original;\n"
+                    "}\n\n"
+                )
+                continue
+            helpers.append(
+                f"{value_type} {helper_name}(RWByteAddressBuffer buffer, uint offset, {value_type} value) {{\n"
+                f"    {value_type} original;\n"
+                f"    buffer.{intrinsic}(offset, value, original);\n"
+                "    return original;\n"
+                "}\n\n"
+            )
+        return "".join(helpers)
+
     def generate_texture_size_helper(self, texture_type):
         descriptor = self.texture_size_helper_descriptor(texture_type)
         if descriptor is None:
@@ -8904,6 +8956,71 @@ class HLSLCodeGen:
         store_value = self.hlsl_byteaddress_store_value(rhs, access)
         store_method = self.hlsl_byteaddress_store_method(access["components"])
         return f"{access['buffer']}.{store_method}({offset}, {store_value})"
+
+    def glsl_buffer_block_atomic_access(self, target):
+        access = self.glsl_buffer_block_array_access(target)
+        if access is not None:
+            return access, access["offset_expr"]
+        access = self.glsl_buffer_block_member_access(target)
+        if access is None or access.get("runtime_array"):
+            return None, None
+        return access, access["offset"]
+
+    def unsupported_glsl_buffer_block_atomic_call(self, target, operation, reason):
+        result_type = self.expression_result_type(target) or "uint"
+        zero_value = "0u" if self.type_name_string(result_type) == "uint" else "0"
+        return (
+            "/* unsupported HLSL GLSL buffer block atomic: "
+            f"{operation} {reason} */ {zero_value}"
+        )
+
+    def generate_glsl_buffer_block_atomic_call(self, func_name, args):
+        operations = self.byteaddress_atomic_operations()
+        operation_info = operations.get(func_name)
+        if operation_info is None or not args:
+            return None
+
+        operation, intrinsic, expected_args = operation_info
+        if len(args) < expected_args:
+            return None
+
+        target = args[0]
+        access, offset = self.glsl_buffer_block_atomic_access(target)
+        if access is None:
+            return None
+        if access.get("readonly"):
+            return self.unsupported_glsl_buffer_block_atomic_call(
+                target, func_name, "cannot write readonly ByteAddressBuffer"
+            )
+        if access.get("components") != 1 or access.get("matrix_columns"):
+            return self.unsupported_glsl_buffer_block_atomic_call(
+                target, func_name, "requires a scalar uint buffer member"
+            )
+        if access.get("component_type") != "uint":
+            return self.unsupported_glsl_buffer_block_atomic_call(
+                target, func_name, "currently supports only uint buffer members"
+            )
+
+        component_type = access["component_type"]
+        helper_name = self.byteaddress_atomic_helper_name(operation, component_type)
+        self.required_byteaddress_atomic_helpers.add(
+            (operation, intrinsic, component_type)
+        )
+
+        if operation == "compare_exchange":
+            compare_value = self.generate_expression_with_expected(
+                args[1], access["type"]
+            )
+            replacement = self.generate_expression_with_expected(
+                args[2], access["type"]
+            )
+            return (
+                f"{helper_name}({access['buffer']}, {offset}, "
+                f"{compare_value}, {replacement})"
+            )
+
+        value = self.generate_expression_with_expected(args[1], access["type"])
+        return f"{helper_name}({access['buffer']}, {offset}, {value})"
 
     def glsl_buffer_block_diagnostic(
         self, target, type_name, var_name=None, node=None, declaration_kind=None

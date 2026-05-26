@@ -359,6 +359,7 @@ class MetalCodeGen:
         self.struct_constructor_uses_braces = True
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
+        self.required_buffer_atomic_compare_helpers = set()
         self.unsupported_glsl_buffer_block_variables = set()
         self.unsupported_glsl_buffer_block_variable_types = {}
         self.current_glsl_buffer_block_parameters = {}
@@ -809,6 +810,7 @@ class MetalCodeGen:
         self.current_function_return_type = None
         self.current_function_return_wrapper = None
         self.current_expression_expected_type = None
+        self.required_buffer_atomic_compare_helpers = set()
         self.local_variable_types = {}
         (
             self.lowered_glsl_buffer_blocks,
@@ -1265,6 +1267,7 @@ class MetalCodeGen:
                     )
 
         code += self.generate_image_atomic_compare_helpers()
+        code += self.generate_buffer_atomic_compare_helpers()
         code += functions_code
         return code
 
@@ -3063,6 +3066,12 @@ class MetalCodeGen:
             )
             if enum_constructor is not None:
                 return enum_constructor
+
+            glsl_block_atomic_call = self.generate_glsl_buffer_block_atomic_call(
+                func_name, expr.args
+            )
+            if glsl_block_atomic_call is not None:
+                return glsl_block_atomic_call
 
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:
@@ -5049,6 +5058,84 @@ class MetalCodeGen:
             rhs = f"({current} {binary_op} {rhs})"
 
         return self.metal_buffer_store(access["buffer"], offset, rhs, access)
+
+    def buffer_atomic_operations(self):
+        return {
+            "atomicAdd": ("fetch_add", 2),
+            "atomicMin": ("fetch_min", 2),
+            "atomicMax": ("fetch_max", 2),
+            "atomicAnd": ("fetch_and", 2),
+            "atomicOr": ("fetch_or", 2),
+            "atomicXor": ("fetch_xor", 2),
+            "atomicExchange": ("exchange", 2),
+            "atomicCompSwap": ("compare_exchange", 3),
+        }
+
+    def glsl_buffer_block_atomic_access(self, target):
+        access = self.glsl_buffer_block_array_access(target)
+        if access is not None:
+            return access, access["offset_expr"]
+        access = self.glsl_buffer_block_member_access(target)
+        if access is None or access.get("is_array"):
+            return None, None
+        return access, access["offset"]
+
+    def unsupported_glsl_buffer_block_atomic_call(self, target, operation, reason):
+        result_type = self.expression_result_type(target) or "uint"
+        zero_value = "0u" if self.type_name_string(result_type) == "uint" else "0"
+        return (
+            "/* unsupported Metal GLSL buffer block atomic: "
+            f"{operation} {reason} */ {zero_value}"
+        )
+
+    def generate_glsl_buffer_block_atomic_call(self, func_name, args):
+        operations = self.buffer_atomic_operations()
+        operation_info = operations.get(func_name)
+        if operation_info is None or not args:
+            return None
+
+        operation, expected_args = operation_info
+        if len(args) < expected_args:
+            return None
+
+        target = args[0]
+        access, offset = self.glsl_buffer_block_atomic_access(target)
+        if access is None:
+            return None
+        if access.get("readonly"):
+            return self.unsupported_glsl_buffer_block_atomic_call(
+                target, func_name, "cannot write readonly device buffer"
+            )
+        if access.get("components") != 1 or access.get("matrix_columns"):
+            return self.unsupported_glsl_buffer_block_atomic_call(
+                target, func_name, "requires a scalar uint buffer member"
+            )
+        if access.get("component_type") != "uint":
+            return self.unsupported_glsl_buffer_block_atomic_call(
+                target, func_name, "currently supports only uint buffer members"
+            )
+
+        if operation == "compare_exchange":
+            self.required_buffer_atomic_compare_helpers.add(access["component_type"])
+            helper_name = self.buffer_atomic_compare_helper_name(
+                access["component_type"]
+            )
+            compare_value = self.generate_expression_with_expected(
+                args[1], access["type"]
+            )
+            replacement = self.generate_expression_with_expected(
+                args[2], access["type"]
+            )
+            return (
+                f"{helper_name}({access['buffer']}, {offset}, "
+                f"{compare_value}, {replacement})"
+            )
+
+        atomic_target = (
+            "reinterpret_cast<device atomic_uint*>(" f"{access['buffer']} + {offset})"
+        )
+        value = self.generate_expression_with_expected(args[1], access["type"])
+        return f"atomic_{operation}_explicit({atomic_target}, {value}, memory_order_relaxed)"
 
     def glsl_buffer_block_diagnostic(
         self, target, type_name, var_name=None, node=None, declaration_kind=None
@@ -7558,6 +7645,30 @@ class MetalCodeGen:
                 "        original.x = compareValue;\n"
                 f"    }} while (!{exchange_expr} && original.x == compareValue);\n"
                 "    return original.x;\n"
+                "}\n\n"
+            )
+        return "".join(helpers)
+
+    def buffer_atomic_compare_helper_name(self, component_type):
+        return f"__crossgl_buffer_atomic_compare_exchange_{component_type}"
+
+    def generate_buffer_atomic_compare_helpers(self):
+        if not self.required_buffer_atomic_compare_helpers:
+            return ""
+
+        helpers = []
+        for component_type in sorted(self.required_buffer_atomic_compare_helpers):
+            value_type = self.map_type(component_type)
+            atomic_type = f"atomic_{component_type}"
+            helper_name = self.buffer_atomic_compare_helper_name(component_type)
+            helpers.append(
+                f"{value_type} {helper_name}(device uchar* buffer, uint offset, {value_type} compareValue, {value_type} value) {{\n"
+                f"    device {atomic_type}* target = reinterpret_cast<device {atomic_type}*>(buffer + offset);\n"
+                f"    {value_type} original;\n"
+                "    do {\n"
+                "        original = compareValue;\n"
+                "    } while (!atomic_compare_exchange_weak_explicit(target, &original, value, memory_order_relaxed, memory_order_relaxed) && original == compareValue);\n"
+                "    return original;\n"
                 "}\n\n"
             )
         return "".join(helpers)
