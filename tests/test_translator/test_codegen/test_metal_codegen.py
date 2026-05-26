@@ -18916,6 +18916,58 @@ def test_metal_implicit_sampler_for_texture_parameter():
     assert "sampleColor(colorMap, input.uv)" in generated_code
 
 
+def test_metal_implicit_sampler_array_indexes_match_texture_array_elements():
+    shader = """
+    shader ImplicitSamplerArrayElements {
+        sampler2D textures[4];
+        sampler texturesSampler[4];
+
+        struct VSOutput {
+            vec2 uv;
+        };
+
+        vec4 sampleGlobal(int index, vec2 uv) {
+            return texture(textures[index], uv);
+        }
+
+        vec4 sampleParam(sampler2D textures[4], sampler texturesSampler[4], int index, vec2 uv) {
+            return texture(textures[index], uv);
+        }
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return sampleGlobal(2, input.uv) + sampleParam(textures, texturesSampler, 1, input.uv);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert "array<texture2d<float>, 4> textures [[texture(0)]]" in generated_code
+    assert "array<sampler, 4> texturesSampler [[sampler(0)]]" in generated_code
+    assert (
+        "float4 sampleGlobal(int index, float2 uv, array<texture2d<float>, 4> textures, array<sampler, 4> texturesSampler)"
+        in generated_code
+    )
+    assert (
+        "float4 sampleParam(array<texture2d<float>, 4> textures, array<sampler, 4> texturesSampler, int index, float2 uv)"
+        in generated_code
+    )
+    assert (
+        generated_code.count(
+            "return textures[index].sample(texturesSampler[index], uv);"
+        )
+        == 2
+    )
+    assert "textures[index].sample(texturesSampler, uv)" not in generated_code
+    assert (
+        "sampleGlobal(2, input.uv, textures, texturesSampler) + sampleParam(textures, texturesSampler, 1, input.uv)"
+        in generated_code
+    )
+
+
 def test_metal_shadow_texture_compare():
     shader = """
     shader ShadowTexture {

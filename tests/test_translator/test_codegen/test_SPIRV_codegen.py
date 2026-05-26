@@ -3335,6 +3335,89 @@ class TestVulkanSPIRVCodeGen:
         assert "OpRayQueryGetIntersectionBarycentricsKHR" not in spv_code
         assert "OpRayQueryGetIntersectionFrontFaceKHR" not in spv_code
 
+    def test_ray_query_ray_state_and_instance_record_getters_emit_khr_instructions(
+        self, tmp_path
+    ):
+        source_code = """
+        shader RayQueryRayStateAndInstanceRecord {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    float rayTMin = rq.RayTMin();
+                    uint rayFlags = rq.RayFlags();
+                    uint candidateCustomIndex = rq.CandidateInstanceCustomIndex();
+                    uint committedCustomIndex = rq.CommittedInstanceCustomIndex();
+                    uint candidateSbt =
+                        rq.CandidateInstanceShaderBindingTableRecordOffset();
+                    uint committedSbt =
+                        rq.CommittedInstanceShaderBindingTableRecordOffset();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert spv_code.count("OpRayQueryGetRayTMinKHR") == 1
+        assert spv_code.count("OpRayQueryGetRayFlagsKHR") == 1
+        assert spv_code.count("OpRayQueryGetIntersectionInstanceCustomIndexKHR") == 2
+        assert (
+            spv_code.count(
+                "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR"
+            )
+            == 2
+        )
+        assert "RayTMin yet; using a default" not in spv_code
+        assert "RayFlags yet; using a default" not in spv_code
+        assert "CandidateInstanceCustomIndex yet; using a default" not in spv_code
+        assert (
+            "CommittedInstanceShaderBindingTableRecordOffset yet; using a default"
+            not in spv_code
+        )
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_ray_query_ray_state_and_instance_record_getters_reject_arguments(self):
+        source_code = """
+        shader RayQueryRayStateAndInstanceRecordBadArgs {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    float rayTMin = rq.RayTMin(1);
+                    uint rayFlags = rq.RayFlags(1);
+                    uint candidateCustomIndex = rq.CandidateInstanceCustomIndex(1);
+                    uint committedSbt =
+                        rq.CommittedInstanceShaderBindingTableRecordOffset(1);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "WARNING: SPIR-V RayQuery.RayTMin requires 0 arguments" in spv_code
+        assert "WARNING: SPIR-V RayQuery.RayFlags requires 0 arguments" in spv_code
+        assert (
+            "WARNING: SPIR-V RayQuery.CandidateInstanceCustomIndex requires 0 "
+            "arguments"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V "
+            "RayQuery.CommittedInstanceShaderBindingTableRecordOffset requires 0 "
+            "arguments"
+        ) in spv_code
+        assert "OpRayQueryGetRayTMinKHR" not in spv_code
+        assert "OpRayQueryGetRayFlagsKHR" not in spv_code
+        assert "OpRayQueryGetIntersectionInstanceCustomIndexKHR" not in spv_code
+        assert (
+            "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR"
+            not in spv_code
+        )
+
     def test_ray_query_supported_operations_reject_unexpected_arguments(self):
         source_code = """
         shader RayQueryBadArgs {

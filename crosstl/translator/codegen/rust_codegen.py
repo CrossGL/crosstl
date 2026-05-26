@@ -3684,10 +3684,63 @@ class RustCodeGen:
         return self.normalize_typed_expression_value(arg, arg_expr, target_type)
 
     def return_move_place_counts(self, args):
-        counts = {}
-        for arg in args:
+        records = []
+        for index, arg in enumerate(args):
             move_key = self.return_move_place_key(arg)
             if move_key is None:
+                continue
+
+            kind = move_key[0]
+            root_name = (
+                move_key[1]
+                if kind == "identifier"
+                else self.return_place_root_name(arg)
+            )
+            records.append(
+                {
+                    "index": index,
+                    "key": move_key,
+                    "kind": kind,
+                    "root": root_name,
+                }
+            )
+
+        if not records:
+            return {}
+
+        eligible_keys = set()
+        roots = {record["root"] for record in records}
+        for root in roots:
+            root_records = [record for record in records if record["root"] == root]
+            direct_records = [
+                record for record in root_records if record["kind"] == "identifier"
+            ]
+            member_records = [
+                record for record in root_records if record["kind"] == "member"
+            ]
+
+            if direct_records and member_records:
+                last_direct_index = max(record["index"] for record in direct_records)
+                last_member_index = max(record["index"] for record in member_records)
+                if last_direct_index > last_member_index:
+                    eligible_keys.update(record["key"] for record in direct_records)
+                else:
+                    member_keys = {record["key"] for record in member_records}
+                    for member_key in member_keys:
+                        last_key_index = max(
+                            record["index"]
+                            for record in member_records
+                            if record["key"] == member_key
+                        )
+                        if last_key_index > last_direct_index:
+                            eligible_keys.add(member_key)
+            else:
+                eligible_keys.update(record["key"] for record in root_records)
+
+        counts = {}
+        for record in records:
+            move_key = record["key"]
+            if move_key not in eligible_keys:
                 continue
             counts[move_key] = counts.get(move_key, 0) + 1
         return counts

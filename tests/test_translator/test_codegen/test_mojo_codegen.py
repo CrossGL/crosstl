@@ -7297,6 +7297,191 @@ fn main():
     assert "[1.0, 2.0, 3.0, 0.0]" in result.stdout
 
 
+def test_min_precision_truncating_vector_constructors_use_helpers():
+    code = """
+    half4 makeHalf4() {
+        return half4(1.0, 2.0, 3.0, 4.0);
+    }
+
+    min16float4 makeMinFloat4() {
+        return min16float4(1.5, 2.5, 3.5, 4.5);
+    }
+
+    short4 makeShort4() {
+        return short4(5, 6, 7, 8);
+    }
+
+    min16int4 makeMinInt4() {
+        return min16int4(9, 10, 11, 12);
+    }
+
+    ushort4 makeUShort4() {
+        return ushort4(13, 14, 15, 16);
+    }
+
+    min16uint4 makeMinUInt4() {
+        return min16uint4(17, 18, 19, 20);
+    }
+
+    half2 narrowHalf() {
+        return half2(makeHalf4());
+    }
+
+    min16float3 narrowMinFloat() {
+        return min16float3(makeMinFloat4());
+    }
+
+    short2 narrowShort() {
+        return short2(makeShort4());
+    }
+
+    min16int3 narrowMinInt() {
+        return min16int3(makeMinInt4());
+    }
+
+    ushort2 narrowUShort() {
+        return ushort2(makeUShort4());
+    }
+
+    min16uint3 narrowMinUInt() {
+        return min16uint3(makeMinUInt4());
+    }
+
+    half3 overfullHalf(half2 lo, half2 hi) {
+        return half3(lo, hi);
+    }
+
+    half3 overfullHalfDuplicate() {
+        return half3(half2(1.0, 2.0), half2(3.0, 4.0));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fn _crossgl_construct_f16_2_vf164_01" in generated_code
+    assert "fn _crossgl_construct_f16_4_vf164_012" in generated_code
+    assert "fn _crossgl_construct_i16_2_vi164_01" in generated_code
+    assert "fn _crossgl_construct_i16_4_vi164_012" in generated_code
+    assert "fn _crossgl_construct_u16_2_vu164_01" in generated_code
+    assert "fn _crossgl_construct_u16_4_vu164_012" in generated_code
+    assert "fn _crossgl_construct_f16_4_vf162_01_vf162_0" in generated_code
+    assert "return _crossgl_construct_f16_2_vf164_01(makeHalf4())" in generated_code
+    assert (
+        "return _crossgl_construct_f16_4_vf164_012(makeMinFloat4())" in generated_code
+    )
+    assert "return _crossgl_construct_i16_2_vi164_01(makeShort4())" in generated_code
+    assert "return _crossgl_construct_i16_4_vi164_012(makeMinInt4())" in generated_code
+    assert "return _crossgl_construct_u16_2_vu164_01(makeUShort4())" in generated_code
+    assert "return _crossgl_construct_u16_4_vu164_012(makeMinUInt4())" in generated_code
+    assert "return SIMD[DType.float16, 4](lo[0], lo[1], hi[0], 0.0)" in generated_code
+    assert (
+        "return _crossgl_construct_f16_4_vf162_01_vf162_0("
+        "SIMD[DType.float16, 2](1.0, 2.0), "
+        "SIMD[DType.float16, 2](3.0, 4.0))"
+    ) in generated_code
+    assert "makeHalf4()[0]" not in generated_code
+    assert "makeMinFloat4()[0]" not in generated_code
+    assert "makeShort4()[0]" not in generated_code
+    assert "makeMinInt4()[0]" not in generated_code
+    assert "makeUShort4()[0]" not in generated_code
+    assert "makeMinUInt4()[0]" not in generated_code
+    assert "hi[1]" not in generated_code
+
+
+def test_min_precision_truncating_vector_constructors_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    half4 makeHalf4() {
+        return half4(1.0, 2.0, 3.0, 4.0);
+    }
+
+    min16float4 makeMinFloat4() {
+        return min16float4(1.5, 2.5, 3.5, 4.5);
+    }
+
+    short4 makeShort4() {
+        return short4(5, 6, 7, 8);
+    }
+
+    min16int4 makeMinInt4() {
+        return min16int4(9, 10, 11, 12);
+    }
+
+    ushort4 makeUShort4() {
+        return ushort4(13, 14, 15, 16);
+    }
+
+    min16uint4 makeMinUInt4() {
+        return min16uint4(17, 18, 19, 20);
+    }
+
+    half2 narrowHalf() {
+        return half2(makeHalf4());
+    }
+
+    min16float3 narrowMinFloat() {
+        return min16float3(makeMinFloat4());
+    }
+
+    short2 narrowShort() {
+        return short2(makeShort4());
+    }
+
+    min16int3 narrowMinInt() {
+        return min16int3(makeMinInt4());
+    }
+
+    ushort2 narrowUShort() {
+        return ushort2(makeUShort4());
+    }
+
+    min16uint3 narrowMinUInt() {
+        return min16uint3(makeMinUInt4());
+    }
+
+    half3 overfullHalf(half2 lo, half2 hi) {
+        return half3(lo, hi);
+    }
+
+    half3 overfullHalfDuplicate() {
+        return half3(half2(1.0, 2.0), half2(3.0, 4.0));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    print(narrowHalf())
+    print(narrowMinFloat())
+    print(narrowShort())
+    print(narrowMinInt())
+    print(narrowUShort())
+    print(narrowMinUInt())
+    print(overfullHalf(SIMD[DType.float16, 2](21.0, 22.0), SIMD[DType.float16, 2](23.0, 24.0)))
+    print(overfullHalfDuplicate())
+"""
+
+    source_path = tmp_path / "min_precision_truncating_vector_constructors.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[5, 6]" in result.stdout
+    assert "[9, 10, 11, 0]" in result.stdout
+    assert "[13, 14]" in result.stdout
+    assert "[17, 18, 19, 0]" in result.stdout
+
+
 def test_vec3_arithmetic_helpers_preserve_hidden_lane():
     code = """
     vec3 addScalar(vec3 color, float bloom) {

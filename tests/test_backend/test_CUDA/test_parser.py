@@ -1439,6 +1439,32 @@ class TestCudaParser:
         assert unmasked_sync.sync_type == "__syncwarp"
         assert unmasked_sync.args == []
 
+    def test_cooperative_groups_thread_block_parsing(self):
+        """Test parsing CUDA cooperative-groups thread-block handles."""
+        code = """
+        __global__ void kernel() {
+            cooperative_groups::thread_block block =
+                cooperative_groups::this_thread_block();
+            block.sync();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        declaration = ast.kernels[0].body[0]
+        sync_call = ast.kernels[0].body[1]
+
+        assert isinstance(declaration, VariableNode)
+        assert declaration.vtype == "cooperative_groups::thread_block"
+        assert isinstance(declaration.value, FunctionCallNode)
+        assert declaration.value.name == "cooperative_groups::this_thread_block"
+        assert isinstance(sync_call, FunctionCallNode)
+        assert isinstance(sync_call.name, MemberAccessNode)
+        assert sync_call.name.object == "block"
+        assert sync_call.name.member == "sync"
+
     def test_fixed_arrays_and_initializer_lists_parsing(self):
         """Test fixed arrays and brace initializer lists"""
         code = """

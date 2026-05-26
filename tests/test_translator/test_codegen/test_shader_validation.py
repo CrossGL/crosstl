@@ -948,6 +948,32 @@ shader SampledTextureArrayValidation {
 """
 
 
+IMPLICIT_SAMPLER_ARRAY_FRAGMENT_SHADER = """
+shader ImplicitSamplerArrayValidation {
+    sampler2D textures[4];
+    sampler texturesSampler[4];
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+    };
+
+    vec4 sampleGlobal(int index, vec2 uv) {
+        return texture(textures[index], uv);
+    }
+
+    vec4 sampleParam(sampler2D textures[4], sampler texturesSampler[4], int index, vec2 uv) {
+        return texture(textures[index], uv);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return sampleGlobal(2, input.uv) + sampleParam(textures, texturesSampler, 1, input.uv);
+        }
+    }
+}
+"""
+
+
 SAMPLED_TEXTURE_ARRAY_CONST_INDEX_FRAGMENT_SHADER = """
 shader SampledTextureArrayConstIndexValidation {
     const int COUNT = 4;
@@ -3659,6 +3685,26 @@ def test_generated_metal_fragment_sampled_texture_array_compiles_with_metal(tmp_
         crosstl.translator.parse(SAMPLED_TEXTURE_ARRAY_FRAGMENT_SHADER),
         "fragment",
     )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_implicit_sampler_array_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_implicit_sampler_array.metal"
+    output = tmp_path / "fragment_implicit_sampler_array.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(IMPLICIT_SAMPLER_ARRAY_FRAGMENT_SHADER),
+        "fragment",
+    )
+    assert "textures[index].sample(texturesSampler[index], uv)" in code
+    assert "textures[index].sample(texturesSampler, uv)" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

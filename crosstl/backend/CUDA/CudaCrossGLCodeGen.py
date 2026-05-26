@@ -133,6 +133,7 @@ class CudaToCrossGLConverter:
         self.global_resource_object_type_hints = {}
         self.struct_resource_member_hints = {}
         self.resource_object_hint_scopes = []
+        self.cooperative_group_scopes = [{}]
 
     def generate(self, ast_node):
         """Generate complete CrossGL source from a parsed CUDA AST."""
@@ -149,6 +150,7 @@ class CudaToCrossGLConverter:
             ast_node
         )
         self.resource_object_hint_scopes = []
+        self.cooperative_group_scopes = [{}]
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -799,12 +801,14 @@ class CudaToCrossGLConverter:
             self.push_packed_argument_scope()
             self.push_type_alias_scope()
             self.push_unique_ptr_scope()
+            self.push_cooperative_group_scope()
             for param in node.params:
                 self.register_unique_ptr_name(param.name, param.vtype)
             try:
                 for stmt in node.body:
                     self.emit_statement(stmt)
             finally:
+                self.pop_cooperative_group_scope()
                 self.pop_unique_ptr_scope()
                 self.pop_type_alias_scope()
                 self.pop_packed_argument_scope()
@@ -859,12 +863,14 @@ class CudaToCrossGLConverter:
             self.push_packed_argument_scope()
             self.push_type_alias_scope()
             self.push_unique_ptr_scope()
+            self.push_cooperative_group_scope()
             for param in kernel.params:
                 self.register_unique_ptr_name(param.name, param.vtype)
             try:
                 for stmt in kernel.body:
                     self.emit_statement(stmt)
             finally:
+                self.pop_cooperative_group_scope()
                 self.pop_unique_ptr_scope()
                 self.pop_type_alias_scope()
                 self.pop_packed_argument_scope()
@@ -889,6 +895,19 @@ class CudaToCrossGLConverter:
             self.emit(f"// Arguments: {args_str}")
 
     def visit_VariableNode(self, node):
+        cooperative_group = self.cooperative_group_declaration_kind(node)
+        if cooperative_group is not None:
+            self.register_cooperative_group_name(node.name, cooperative_group)
+            if cooperative_group == "thread_block":
+                self.emit(
+                    f"// cooperative_groups thread_block {node.name} maps to the current workgroup"
+                )
+            else:
+                self.emit(
+                    f"// cooperative_groups {cooperative_group} for {node.name} not directly supported in CrossGL"
+                )
+            return
+
         var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
 
         self.register_packed_argument_list(node)
@@ -920,6 +939,23 @@ class CudaToCrossGLConverter:
     def pop_unique_ptr_scope(self):
         if len(self.unique_ptr_scopes) > 1:
             self.unique_ptr_scopes.pop()
+
+    def push_cooperative_group_scope(self):
+        self.cooperative_group_scopes.append({})
+
+    def pop_cooperative_group_scope(self):
+        if len(self.cooperative_group_scopes) > 1:
+            self.cooperative_group_scopes.pop()
+
+    def register_cooperative_group_name(self, name, group_kind):
+        if name:
+            self.cooperative_group_scopes[-1][name] = group_kind
+
+    def lookup_cooperative_group_name(self, name):
+        for scope in reversed(self.cooperative_group_scopes):
+            if name in scope:
+                return scope[name]
+        return None
 
     def push_type_alias_scope(self):
         self.type_alias_scopes.append({})
@@ -1065,6 +1101,10 @@ class CudaToCrossGLConverter:
         if self.is_get_method_call(node):
             return self.visit(node.name.object)
 
+        cooperative_call = self.format_cooperative_group_call(node)
+        if cooperative_call is not None:
+            return cooperative_call
+
         raw_name = node.name if isinstance(node.name, str) else self.visit(node.name)
         if raw_name == "lambda":
             return self.format_lambda_call(node.args)
@@ -1088,6 +1128,76 @@ class CudaToCrossGLConverter:
 
         func_name = self.convert_cuda_builtin_function(raw_name)
         return f"{func_name}({args_str})"
+
+    def format_cooperative_group_call(self, node):
+        if isinstance(node.name, MemberAccessNode):
+            member = node.name.member
+            group_kind = self.resolve_cooperative_group_expression(node.name.object)
+            if group_kind is None:
+                return None
+            if group_kind == "thread_block" and member == "sync" and not node.args:
+                return "workgroupBarrier()"
+            return (
+                f"// cooperative_groups {group_kind}.{member} "
+                "not directly supported in CrossGL"
+            )
+
+        raw_name = node.name if isinstance(node.name, str) else self.visit(node.name)
+        base_name = self.cooperative_group_base_name(raw_name)
+        if base_name == "sync" and len(node.args) == 1:
+            group_name = self.simple_identifier(node.args[0])
+            if self.lookup_cooperative_group_name(group_name) == "thread_block":
+                return "workgroupBarrier()"
+        return None
+
+    def cooperative_group_declaration_kind(self, node):
+        declared_kind = self.cooperative_group_kind_from_type(node.vtype)
+        factory_kind = self.cooperative_group_factory_kind(node.value)
+        return factory_kind or declared_kind
+
+    def cooperative_group_kind_from_type(self, type_name):
+        base_name = self.cooperative_group_base_name(type_name)
+        if base_name in {
+            "thread_block",
+            "grid_group",
+            "multi_grid_group",
+            "coalesced_group",
+        }:
+            return base_name
+        if base_name and base_name.startswith("thread_block_tile"):
+            return "thread_block_tile"
+        return None
+
+    def cooperative_group_factory_kind(self, value):
+        if not isinstance(value, FunctionCallNode):
+            return None
+        raw_name = value.name if isinstance(value.name, str) else self.visit(value.name)
+        base_name = self.cooperative_group_base_name(raw_name)
+        factory_mapping = {
+            "this_thread_block": "thread_block",
+            "this_grid": "grid_group",
+            "this_multi_grid": "multi_grid_group",
+            "coalesced_threads": "coalesced_group",
+            "tiled_partition": "thread_block_tile",
+        }
+        return factory_mapping.get(base_name)
+
+    def resolve_cooperative_group_expression(self, expression):
+        name = self.simple_identifier(expression)
+        group_kind = self.lookup_cooperative_group_name(name)
+        if group_kind is not None:
+            return group_kind
+        return self.cooperative_group_factory_kind(expression)
+
+    def simple_identifier(self, expression):
+        if isinstance(expression, str):
+            return expression
+        return None
+
+    def cooperative_group_base_name(self, name):
+        if not isinstance(name, str):
+            return None
+        return name.rsplit("::", 1)[-1].split("<", 1)[0]
 
     def format_cuda_resource_call(self, function_name, args):
         base_name, template_args = self.parse_cpp_template(function_name)

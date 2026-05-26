@@ -4220,6 +4220,317 @@ def test_non_copy_return_call_and_constructor_member_args_move_when_safe_compile
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_non_copy_nested_return_member_args_respect_root_conflicts_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    wrapper_type = NamedType("Wrapper")
+    outer_type = NamedType("Outer")
+    pair_type = NamedType("Pair")
+    outer_payload_type = NamedType("OuterPayload")
+    payload_outer_type = NamedType("PayloadOuter")
+    payload_outer_payload_type = NamedType("PayloadOuterPayload")
+
+    def nested_payload(root_name):
+        return MemberAccessNode(
+            MemberAccessNode(IdentifierNode(root_name), "inner"),
+            "payload",
+        )
+
+    def indexed_nested_payload(array_name):
+        return MemberAccessNode(
+            MemberAccessNode(
+                ArrayAccessNode(
+                    IdentifierNode(array_name),
+                    LiteralNode(0, PrimitiveType("int")),
+                ),
+                "inner",
+            ),
+            "payload",
+        )
+
+    ast = ShaderNode(
+        "NonCopyNestedReturnMemberArguments",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode("Wrapper", [StructMemberNode("payload", payload_type)]),
+            StructNode("Outer", [StructMemberNode("inner", wrapper_type)]),
+            StructNode(
+                "Pair",
+                [
+                    StructMemberNode("payload", payload_type),
+                    StructMemberNode("backup", payload_type),
+                ],
+            ),
+            StructNode(
+                "OuterPayload",
+                [
+                    StructMemberNode("outer", outer_type),
+                    StructMemberNode("payload", payload_type),
+                ],
+            ),
+            StructNode(
+                "PayloadOuter",
+                [
+                    StructMemberNode("payload", payload_type),
+                    StructMemberNode("outer", outer_type),
+                ],
+            ),
+            StructNode(
+                "PayloadOuterPayload",
+                [
+                    StructMemberNode("first", payload_type),
+                    StructMemberNode("outer", outer_type),
+                    StructMemberNode("second", payload_type),
+                ],
+            ),
+        ],
+        global_variables=[
+            VariableNode("globalOuter", outer_type),
+            ArrayNode("Outer", "globalOuters", 2),
+        ],
+        functions=[
+            FunctionNode(
+                "make_pair",
+                pair_type,
+                [
+                    ParameterNode("payload", payload_type),
+                    ParameterNode("backup", payload_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            pair_type,
+                            [IdentifierNode("payload"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "make_outer_payload",
+                outer_payload_type,
+                [
+                    ParameterNode("outer", outer_type),
+                    ParameterNode("payload", payload_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            outer_payload_type,
+                            [IdentifierNode("outer"), IdentifierNode("payload")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "make_payload_outer",
+                payload_outer_type,
+                [
+                    ParameterNode("payload", payload_type),
+                    ParameterNode("outer", outer_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            payload_outer_type,
+                            [IdentifierNode("payload"), IdentifierNode("outer")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "make_payload_outer_payload",
+                payload_outer_payload_type,
+                [
+                    ParameterNode("first", payload_type),
+                    ParameterNode("outer", outer_type),
+                    ParameterNode("second", payload_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            payload_outer_payload_type,
+                            [
+                                IdentifierNode("first"),
+                                IdentifierNode("outer"),
+                                IdentifierNode("second"),
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_nested_member_call",
+                pair_type,
+                [
+                    ParameterNode("left", outer_type),
+                    ParameterNode("right", outer_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_pair"),
+                            [nested_payload("left"), nested_payload("right")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_duplicate_nested_member_call",
+                pair_type,
+                [ParameterNode("outer", outer_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_pair"),
+                            [nested_payload("outer"), nested_payload("outer")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_nested_member_named_constructor",
+                pair_type,
+                [
+                    ParameterNode("left", outer_type),
+                    ParameterNode("right", outer_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            pair_type,
+                            [],
+                            named_arguments={
+                                "payload": nested_payload("left"),
+                                "backup": nested_payload("right"),
+                            },
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_root_then_nested_member_call",
+                outer_payload_type,
+                [ParameterNode("outer", outer_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_outer_payload"),
+                            [IdentifierNode("outer"), nested_payload("outer")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_nested_member_then_root_call",
+                payload_outer_type,
+                [ParameterNode("outer", outer_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_payload_outer"),
+                            [nested_payload("outer"), IdentifierNode("outer")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_nested_member_around_root_call",
+                payload_outer_payload_type,
+                [ParameterNode("outer", outer_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_payload_outer_payload"),
+                            [
+                                nested_payload("outer"),
+                                IdentifierNode("outer"),
+                                nested_payload("outer"),
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_static_and_indexed_nested_call",
+                pair_type,
+                [ParameterNode("values", ArrayType(outer_type, 2))],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_pair"),
+                            [
+                                nested_payload("globalOuter"),
+                                indexed_nested_payload("values"),
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_static_indexed_nested_constructor",
+                pair_type,
+                [],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            pair_type,
+                            [
+                                indexed_nested_payload("globalOuters"),
+                                nested_payload("globalOuter"),
+                            ],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "return make_pair(left.inner.payload, right.inner.payload);" in (
+        generated_code
+    )
+    assert (
+        "return make_pair(outer.inner.payload.clone(), outer.inner.payload);"
+    ) in generated_code
+    assert (
+        "return Pair { payload: left.inner.payload, backup: right.inner.payload };"
+    ) in generated_code
+    assert "return make_outer_payload(outer.clone(), outer.inner.payload);" in (
+        generated_code
+    )
+    assert "return make_payload_outer(outer.inner.payload.clone(), outer);" in (
+        generated_code
+    )
+    assert (
+        "return make_payload_outer_payload(outer.inner.payload.clone(), "
+        "outer.clone(), outer.inner.payload);"
+    ) in generated_code
+    assert (
+        "return make_pair((*GLOBAL_OUTER).inner.payload.clone(), "
+        "values[0].inner.payload.clone());"
+    ) in generated_code
+    assert (
+        "return Pair::new(((*GLOBAL_OUTERS)[0]).inner.payload.clone(), "
+        "(*GLOBAL_OUTER).inner.payload.clone());"
+    ) in generated_code
+    assert "return make_outer_payload(outer, outer.inner.payload);" not in (
+        generated_code
+    )
+    assert "return make_payload_outer(outer.inner.payload, outer);" not in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_struct_constructor_args_normalize_field_types_and_clone_non_copy_compile(
     tmp_path,
 ):

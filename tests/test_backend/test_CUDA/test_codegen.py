@@ -464,6 +464,73 @@ class TestCudaCodeGen:
         assert "// __syncwarp() not directly supported in CrossGL" in result
         assert "None" not in result
 
+    def test_cooperative_groups_thread_block_sync_converts(self):
+        """Test CUDA cooperative-groups thread-block sync converts to CrossGL."""
+        code = """
+        #include <cooperative_groups.h>
+        namespace cg = cooperative_groups;
+
+        __global__ void sync(float* out) {
+            cg::thread_block block = cg::this_thread_block();
+            block.sync();
+            auto direct = cooperative_groups::this_thread_block();
+            direct.sync();
+            cooperative_groups::this_thread_block().sync();
+            cg::sync(block);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert result.count("workgroupBarrier();") == 4
+        assert (
+            "// cooperative_groups thread_block block maps to the current workgroup"
+            in result
+        )
+        assert (
+            "// cooperative_groups thread_block direct maps to the current workgroup"
+            in result
+        )
+        assert "cg::this_thread_block" not in result
+        assert "cooperative_groups::this_thread_block" not in result
+
+    def test_unsupported_cooperative_groups_emit_diagnostics(self):
+        """Test unsupported CUDA cooperative-groups collectives are explicit."""
+        code = """
+        __global__ void sync_grid(float* out) {
+            auto grid = cooperative_groups::this_grid();
+            grid.sync();
+            cooperative_groups::coalesced_threads().sync();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// cooperative_groups grid_group for grid not directly supported in CrossGL"
+            in result
+        )
+        assert (
+            "// cooperative_groups grid_group.sync not directly supported in CrossGL"
+            in result
+        )
+        assert (
+            "// cooperative_groups coalesced_group.sync not directly supported in CrossGL"
+            in result
+        )
+        assert "cooperative_groups::this_grid" not in result
+        assert "cooperative_groups::coalesced_threads" not in result
+
     def test_inverse_trig_builtins_convert_to_crossgl(self):
         """Test CUDA inverse trig functions convert back to CrossGL names."""
         code = """

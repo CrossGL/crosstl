@@ -118,6 +118,40 @@ def test_line_directive_is_consumed():
     assert "float value" in output
 
 
+def test_builtin_line_and_file_macros_respect_line_directive(tmp_path):
+    source_path = tmp_path / "shader.hlsl"
+    code = (
+        "int firstLine = __LINE__;\n"
+        '#line 200 "virtual/path.hlsl"\n'
+        "int remappedLine = __LINE__;\n"
+        "const char* remappedFile = __FILE__;\n"
+    )
+
+    output = HLSLPreprocessor().preprocess(code, file_path=str(source_path))
+
+    assert "int firstLine = 1;" in output
+    assert "int remappedLine = 200;" in output
+    assert 'const char* remappedFile = "virtual/path.hlsl";' in output
+
+
+def test_builtin_file_macro_uses_nested_include_path(tmp_path):
+    include_path = tmp_path / "include.hlsl"
+    include_path.write_text(
+        "const char* includedFile = __FILE__;\n" "int includedLine = __LINE__;\n",
+        encoding="utf-8",
+    )
+    main_path = tmp_path / "main.hlsl"
+    main_path.write_text('#include "include.hlsl"\n', encoding="utf-8")
+
+    output = HLSLPreprocessor().preprocess(
+        main_path.read_text(encoding="utf-8"),
+        file_path=str(main_path),
+    )
+
+    assert f'const char* includedFile = "{include_path}";' in output
+    assert "int includedLine = 2;" in output
+
+
 def test_error_and_warning_directives():
     error_code = "#error fail"
     with pytest.raises(SyntaxError):

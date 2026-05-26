@@ -350,6 +350,7 @@ class MetalCodeGen:
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.current_sampler_parameters = set()
+        self.current_sampler_parameter_array_sizes = {}
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
         self.image_variable_formats = {}
@@ -777,6 +778,7 @@ class MetalCodeGen:
         if not self.cbuffer_variables:
             self.ambiguous_cbuffer_members = set()
         self.current_sampler_parameters = set()
+        self.current_sampler_parameter_array_sizes = {}
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
         self.image_variable_formats = {}
@@ -1640,6 +1642,7 @@ class MetalCodeGen:
             if getattr(parameter, "name", None)
         }
         sampler_parameters = set()
+        sampler_parameter_array_sizes = {}
         texture_parameters = {}
         image_format_parameters = {}
         previous_function_name = self.current_function_name
@@ -1770,6 +1773,10 @@ class MetalCodeGen:
 
             if self.is_sampler_type(raw_param_type):
                 sampler_parameters.add(p.name)
+                resource_array = self.resource_array_parameter(raw_param_type, p)
+                if resource_array is not None:
+                    _, array_size = resource_array
+                    sampler_parameter_array_sizes[p.name] = array_size
             elif self.is_texture_or_image_resource_type(raw_param_type):
                 texture_parameters[p.name] = self.map_resource_type_with_format(
                     self.resource_base_type(raw_param_type), p
@@ -2057,9 +2064,13 @@ class MetalCodeGen:
             code += f"{return_type} {function_name}({params_str}) {self.map_semantic(semantic)} {{\n"
 
         previous_sampler_parameters = self.current_sampler_parameters
+        previous_sampler_parameter_array_sizes = (
+            self.current_sampler_parameter_array_sizes
+        )
         previous_texture_parameters = self.current_texture_parameters
         previous_image_format_parameters = self.current_image_format_parameters
         self.current_sampler_parameters = sampler_parameters
+        self.current_sampler_parameter_array_sizes = sampler_parameter_array_sizes
         self.current_texture_parameters = texture_parameters
         self.current_image_format_parameters = image_format_parameters
         if shader_type == "mesh" and self.current_metal_mesh_output_config is not None:
@@ -2079,6 +2090,9 @@ class MetalCodeGen:
             for stmt in body:
                 code += self.generate_statement(stmt, 1)
         self.current_sampler_parameters = previous_sampler_parameters
+        self.current_sampler_parameter_array_sizes = (
+            previous_sampler_parameter_array_sizes
+        )
         self.current_texture_parameters = previous_texture_parameters
         self.current_image_format_parameters = previous_image_format_parameters
         self.current_structured_buffer_length_parameters = (
@@ -9172,13 +9186,30 @@ class MetalCodeGen:
             return self.expression_name(array_expr)
         return None
 
-    def texture_sampler_expression(self, texture_name):
-        sampler_arg = ""
-        for sampler_variable, _, _ in self.sampler_variables:
-            if sampler_variable.name == texture_name + "Sampler":
-                sampler_arg = sampler_variable.name
-                break
-        return sampler_arg or self.default_sampler_expression()
+    def texture_sampler_expression(self, texture_name, texture_arg=None):
+        sampler_name = f"{texture_name}Sampler"
+        if sampler_name in self.sampler_variable_names():
+            index = self.array_access_index_expression(texture_arg)
+            if index is not None and self.sampler_array_size(sampler_name) is not None:
+                return f"{sampler_name}[{index}]"
+            return sampler_name
+        return self.default_sampler_expression()
+
+    def array_access_index_expression(self, expr):
+        if not isinstance(expr, ArrayAccessNode):
+            return None
+        index_expr = getattr(expr, "index", getattr(expr, "index_expr", None))
+        if index_expr is None:
+            return None
+        return self.generate_expression(index_expr)
+
+    def sampler_array_size(self, sampler_name):
+        if sampler_name in self.current_sampler_parameter_array_sizes:
+            return self.current_sampler_parameter_array_sizes[sampler_name]
+        for sampler_variable, _, array_size in self.sampler_variables:
+            if getattr(sampler_variable, "name", None) == sampler_name:
+                return array_size
+        return None
 
     def is_explicit_sampler_argument(self, args):
         if len(args) < 3:
@@ -9207,7 +9238,7 @@ class MetalCodeGen:
         sampler_arg = (
             self.generate_expression(args[1])
             if explicit_sampler
-            else self.texture_sampler_expression(texture_base_name)
+            else self.texture_sampler_expression(texture_base_name, args[0])
         )
         coord = self.generate_expression(args[coord_index])
         extra_args = args[coord_index + 1 :]

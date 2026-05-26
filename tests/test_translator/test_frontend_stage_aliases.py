@@ -15,11 +15,22 @@ def parse_code(code):
 @pytest.mark.parametrize(
     ("source_stage", "expected_stage", "expected_entry_name"),
     [
+        ("vs VertexMain", ShaderStage.VERTEX, "VertexMain"),
         ("pixel", ShaderStage.FRAGMENT, "main"),
         ("pixel PixelMain", ShaderStage.FRAGMENT, "PixelMain"),
         ("pixel_shader PixelMain", ShaderStage.FRAGMENT, "PixelMain"),
+        ("ps PixelMain", ShaderStage.FRAGMENT, "PixelMain"),
+        ("cs ComputeMain", ShaderStage.COMPUTE, "ComputeMain"),
+        ("kernel KernelMain", ShaderStage.COMPUTE, "KernelMain"),
+        ("gs GeometryMain", ShaderStage.GEOMETRY, "GeometryMain"),
+        ("hs HullMain", ShaderStage.TESSELLATION_CONTROL, "HullMain"),
+        ("ds DomainMain", ShaderStage.TESSELLATION_EVALUATION, "DomainMain"),
+        ("as AmplificationMain", ShaderStage.AMPLIFICATION, "AmplificationMain"),
+        ("ms MeshMain", ShaderStage.MESH, "MeshMain"),
         ("raygeneration RayGenMain", ShaderStage.RAY_GENERATION, "RayGenMain"),
         ("raygen", ShaderStage.RAY_GENERATION, "main"),
+        ("rgen RayGenMain", ShaderStage.RAY_GENERATION, "RayGenMain"),
+        ("rchit ClosestHitMain", ShaderStage.RAY_CLOSEST_HIT, "ClosestHitMain"),
     ],
 )
 def test_backend_stage_alias_blocks_parse_to_canonical_stages(
@@ -34,18 +45,50 @@ def test_backend_stage_alias_blocks_parse_to_canonical_stages(
         """)
 
     assert expected_stage in ast.stages
-    assert ShaderStage.VERTEX not in ast.stages
+    if expected_stage is not ShaderStage.VERTEX:
+        assert ShaderStage.VERTEX not in ast.stages
     assert ast.stages[expected_stage].entry_point.name == expected_entry_name
 
 
 @pytest.mark.parametrize(
     ("alias", "expected_stage"),
     [
+        ("vs", ShaderStage.VERTEX),
+        ("vertex-shader", ShaderStage.VERTEX),
         ("pixel", ShaderStage.FRAGMENT),
+        ("ps", ShaderStage.FRAGMENT),
+        ("frag", ShaderStage.FRAGMENT),
+        ("fragment-shader", ShaderStage.FRAGMENT),
         ("pixel-shader", ShaderStage.FRAGMENT),
+        ("cs", ShaderStage.COMPUTE),
+        ("compute-shader", ShaderStage.COMPUTE),
+        ("kernel", ShaderStage.COMPUTE),
+        ("gs", ShaderStage.GEOMETRY),
+        ("geometry-shader", ShaderStage.GEOMETRY),
+        ("hs", ShaderStage.TESSELLATION_CONTROL),
+        ("hull-shader", ShaderStage.TESSELLATION_CONTROL),
+        ("ds", ShaderStage.TESSELLATION_EVALUATION),
+        ("domain-shader", ShaderStage.TESSELLATION_EVALUATION),
+        ("as", ShaderStage.AMPLIFICATION),
+        ("amplification-shader", ShaderStage.AMPLIFICATION),
+        ("ms", ShaderStage.MESH),
+        ("mesh-shader", ShaderStage.MESH),
         ("raygeneration", ShaderStage.RAY_GENERATION),
         ("raygen", ShaderStage.RAY_GENERATION),
+        ("rgen", ShaderStage.RAY_GENERATION),
+        ("raygeneration-shader", ShaderStage.RAY_GENERATION),
+        ("ray-generation-shader", ShaderStage.RAY_GENERATION),
         ("closesthit", ShaderStage.RAY_CLOSEST_HIT),
+        ("closest-hit", ShaderStage.RAY_CLOSEST_HIT),
+        ("rchit", ShaderStage.RAY_CLOSEST_HIT),
+        ("any-hit", ShaderStage.RAY_ANY_HIT),
+        ("rahit", ShaderStage.RAY_ANY_HIT),
+        ("intersection-shader", ShaderStage.RAY_INTERSECTION),
+        ("rint", ShaderStage.RAY_INTERSECTION),
+        ("miss-shader", ShaderStage.RAY_MISS),
+        ("rmiss", ShaderStage.RAY_MISS),
+        ("callable-shader", ShaderStage.RAY_CALLABLE),
+        ("rcall", ShaderStage.RAY_CALLABLE),
         ("tesscontrol", ShaderStage.TESSELLATION_CONTROL),
         ("tesseval", ShaderStage.TESSELLATION_EVALUATION),
     ],
