@@ -19513,11 +19513,12 @@ def test_directx_multisample_storage_image_arrays_emit_srv_reads_and_diagnostics
     assert (
         "float4 touchLayer(Texture2DMSArray<float4> image, "
         "Texture2DMSArray<uint> counterImage, int3 pixelLayer, "
-        "int sampleIndex, float4 value, uint count)"
-        in generated_code
+        "int sampleIndex, float4 value, uint count)" in generated_code
     )
     assert "float4 oldColor = image.Load(pixelLayer, sampleIndex);" in generated_code
-    assert "uint oldCount = counterImage.Load(pixelLayer, sampleIndex);" in generated_code
+    assert (
+        "uint oldCount = counterImage.Load(pixelLayer, sampleIndex);" in generated_code
+    )
     diagnostic_prefix = "un" + "supported DirectX multisample image"
     assert (
         f"{diagnostic_prefix} store: imageStore on RWTexture2DMSArray<float4>"
