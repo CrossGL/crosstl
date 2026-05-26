@@ -2376,7 +2376,7 @@ class TestHipCodeGen:
         hip_code = codegen.generate(ast)
 
         assert "#include <hip/hip_runtime.h>" in hip_code
-        assert "texture<float4, 2> tex;" in hip_code
+        assert "hipTextureObject_t tex;" in hip_code
         assert "float2 uv = make_float2(0.5, 0.5);" in hip_code
         assert "float4 color = tex2D(tex, uv);" in hip_code
         assert "float4 lodColor = tex2DLod(tex, uv, 1.0);" in hip_code
@@ -2425,7 +2425,7 @@ class TestHipCodeGen:
         hip_code = codegen.generate(ast)
 
         assert "hipTextureObject_t layers;" in hip_code
-        assert "texture<float4, 3> volumeMap;" in hip_code
+        assert "hipTextureObject_t volumeMap;" in hip_code
         assert (
             "float4 layerColor = tex2DLayered<float4>"
             "(paramLayers, uvLayer.x, uvLayer.y, uvLayer.z);" in hip_code
@@ -2458,20 +2458,32 @@ class TestHipCodeGen:
         source_code = """
         shader Resources {
             sampler1d ramp;
+            sampler1darray rampArray;
             samplercube envMap;
 
             void sampleResources(
                 sampler1d paramRamp,
+                sampler1darray paramRampArray,
                 samplercube paramEnv,
                 float u,
+                vec2 uLayer,
                 vec3 dir,
                 float du,
+                float duLayer,
                 vec4 ddxCube,
                 vec4 ddyCube
             ) {
                 vec4 rampColor = texture(paramRamp, u);
                 vec4 rampMip = textureLod(paramRamp, u, 2.0);
                 vec4 rampGrad = textureGrad(paramRamp, u, du, du);
+                vec4 rampArrayColor = texture(paramRampArray, uLayer);
+                vec4 rampArrayMip = textureLod(paramRampArray, uLayer, 3.0);
+                vec4 rampArrayGrad = textureGrad(
+                    paramRampArray,
+                    uLayer,
+                    duLayer,
+                    duLayer
+                );
                 vec4 envColor = texture(paramEnv, dir);
                 vec4 envMip = textureLod(paramEnv, dir, 1.0);
                 vec4 envGrad = textureGrad(paramEnv, dir, ddxCube, ddyCube);
@@ -2490,11 +2502,24 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        assert "texture<float4, 1> ramp;" in hip_code
-        assert "textureCube<float4> envMap;" in hip_code
+        assert "hipTextureObject_t ramp;" in hip_code
+        assert "hipTextureObject_t rampArray;" in hip_code
+        assert "hipTextureObject_t envMap;" in hip_code
         assert "float4 rampColor = tex1D(paramRamp, u);" in hip_code
         assert "float4 rampMip = tex1DLod(paramRamp, u, 2.0);" in hip_code
         assert "float4 rampGrad = tex1DGrad(paramRamp, u, du, du);" in hip_code
+        assert (
+            "float4 rampArrayColor = tex1DLayered<float4>"
+            "(paramRampArray, uLayer.x, uLayer.y);" in hip_code
+        )
+        assert (
+            "float4 rampArrayMip = tex1DLayeredLod<float4>"
+            "(paramRampArray, uLayer.x, uLayer.y, 3.0);" in hip_code
+        )
+        assert (
+            "float4 rampArrayGrad = tex1DLayeredGrad<float4>"
+            "(paramRampArray, uLayer.x, uLayer.y, duLayer, duLayer);" in hip_code
+        )
         assert (
             "float4 envColor = texCubemap(paramEnv, dir.x, dir.y, dir.z);" in hip_code
         )
@@ -2768,6 +2793,7 @@ class TestHipCodeGen:
         shader Resources {
             sampler linearState;
             sampler1d ramp;
+            sampler1darray rampLayers;
             sampler2d colorMap;
             sampler3d volumeMap;
             samplercube environmentMap;
@@ -2813,10 +2839,11 @@ class TestHipCodeGen:
         }
 
         assert "hipTextureObject_t linearState;" in declarations
-        assert "texture<float4, 1> ramp;" in declarations
-        assert "texture<float4, 2> colorMap;" in declarations
-        assert "texture<float4, 3> volumeMap;" in declarations
-        assert "textureCube<float4> environmentMap;" in declarations
+        assert "hipTextureObject_t ramp;" in declarations
+        assert "hipTextureObject_t rampLayers;" in declarations
+        assert "hipTextureObject_t colorMap;" in declarations
+        assert "hipTextureObject_t volumeMap;" in declarations
+        assert "hipTextureObject_t environmentMap;" in declarations
         assert "hipTextureObject_t layers;" in declarations
         assert "hipTextureObject_t shadowMap;" in declarations
         assert "hipTextureObject_t cascades;" in declarations
@@ -2845,6 +2872,7 @@ class TestHipCodeGen:
         raw_resource_types = [
             "sampler",
             "sampler1D",
+            "sampler1DArray",
             "sampler2D",
             "sampler3D",
             "samplerCube",
@@ -3029,14 +3057,14 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        assert "texture<float4, 2> textureGrid[2][3];" in hip_code
+        assert "hipTextureObject_t textureGrid[2][3];" in hip_code
         assert "hipTextureObject_t layerGrid[2][2];" in hip_code
         assert "hipTextureObject_t msGrid[2][2];" in hip_code
         assert "hipSurfaceObject_t imageGrid[2][4];" in hip_code
         assert "hipSurfaceObject_t counterGrid[2][2];" in hip_code
         assert (
             "__device__ void processNested("
-            "texture<float4, 2> paramTextures[2][3], "
+            "hipTextureObject_t paramTextures[2][3], "
             "hipSurfaceObject_t paramImages[2][4], int layer, int slot, "
             "float2 uv, float3 uvLayer, int2 pixel, int3 pixelLayer, "
             "int sampleIndex)" in hip_code
@@ -3170,14 +3198,14 @@ class TestHipCodeGen:
         hip_code = codegen.generate(ast)
 
         assert (
-            "__device__ void useDynamic(texture<float4, 2>* dynTextures, "
+            "__device__ void useDynamic(hipTextureObject_t* dynTextures, "
             "hipTextureObject_t* dynLayers, hipSurfaceObject_t* dynImages, "
             "hipSurfaceObject_t* dynCounters, int i, float2 uv, "
             "float3 uvLayer, int2 pixel)" in hip_code
         )
         assert (
             "__device__ void useDynamicGrid("
-            "texture<float4, 2> (*dynGrid)[3], "
+            "hipTextureObject_t (*dynGrid)[3], "
             "hipSurfaceObject_t (*dynGridImages)[3], int layer, int slot, "
             "float2 uv, int2 pixel)" in hip_code
         )
@@ -3213,7 +3241,7 @@ class TestHipCodeGen:
             "surf2Dwrite(color, dynGridImages[layer][slot], "
             "pixel.x * sizeof(float4), pixel.y);" in hip_code
         )
-        assert "texture<float4, 2>* dynGrid[3]" not in hip_code
+        assert "hipTextureObject_t* dynGrid[3]" not in hip_code
         assert "hipSurfaceObject_t* dynGridImages[3]" not in hip_code
         assert "texture(" not in hip_code
         assert "texelFetch(" not in hip_code
@@ -3321,12 +3349,12 @@ class TestHipCodeGen:
         assert "counterGrid_metadata" not in hip_code
         assert (
             "__device__ float4 leafSample("
-            "texture<float4, 2> (*dynGrid)[3], int layer, int slot, float2 uv)"
+            "hipTextureObject_t (*dynGrid)[3], int layer, int slot, float2 uv)"
             in hip_code
         )
         assert (
             "__device__ float4 forwardSample("
-            "texture<float4, 2> (*dynGrid)[3], int layer, int slot, float2 uv)"
+            "hipTextureObject_t (*dynGrid)[3], int layer, int slot, float2 uv)"
             in hip_code
         )
         assert "return leafSample(dynGrid, layer, slot, uv);" in hip_code
@@ -3342,7 +3370,7 @@ class TestHipCodeGen:
         )
         assert "return leafCounter(dynCounters, layer, slot, pixel);" in hip_code
         assert (
-            "__device__ void leafQuery(texture<float4, 2> (*dynGrid)[3], "
+            "__device__ void leafQuery(hipTextureObject_t (*dynGrid)[3], "
             "CglResourceQueryInfo (*dynGrid_metadata)[3], "
             "hipSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot)"
@@ -3462,9 +3490,9 @@ class TestHipCodeGen:
         assert "CglResourceQueryInfo textureGrid_metadata[2][3] = {};" in hip_code
         assert "CglResourceQueryInfo imageGrid_metadata[2][3] = {};" in hip_code
         assert (
-            "__device__ void leafMixed(texture<float4, 2> (*dynamicGrid)[3], "
+            "__device__ void leafMixed(hipTextureObject_t (*dynamicGrid)[3], "
             "CglResourceQueryInfo (*dynamicGrid_metadata)[3], "
-            "texture<float4, 2> fixedRow[3], "
+            "hipTextureObject_t fixedRow[3], "
             "CglResourceQueryInfo fixedRow_metadata[3], "
             "hipSurfaceObject_t (*dynamicImages)[3], "
             "CglResourceQueryInfo (*dynamicImages_metadata)[3], "
@@ -3621,22 +3649,22 @@ class TestHipCodeGen:
         assert "CglResourceQueryInfo textureGrid_metadata[2][3] = {};" in hip_code
         assert "CglResourceQueryInfo imageGrid_metadata[2][3] = {};" in hip_code
         assert (
-            "__device__ void leafShuffle(texture<float4, 2> (*dynA)[3], "
+            "__device__ void leafShuffle(hipTextureObject_t (*dynA)[3], "
             "CglResourceQueryInfo (*dynA_metadata)[3], "
             "hipSurfaceObject_t fixedImageRow[3], "
             "CglResourceQueryInfo fixedImageRow_metadata[3], "
-            "texture<float4, 2> fixedTexRow[3], "
+            "hipTextureObject_t fixedTexRow[3], "
             "CglResourceQueryInfo fixedTexRow_metadata[3], "
             "hipSurfaceObject_t (*dynImageGrid)[3], "
             "CglResourceQueryInfo (*dynImageGrid_metadata)[3], "
-            "texture<float4, 2> (*dynAlias)[3], "
+            "hipTextureObject_t (*dynAlias)[3], "
             "CglResourceQueryInfo (*dynAlias_metadata)[3], "
             "int layer, int slot, float2 uv, int2 pixel)" in hip_code
         )
         assert (
-            "__device__ void midForward(texture<float4, 2> (*firstDyn)[3], "
+            "__device__ void midForward(hipTextureObject_t (*firstDyn)[3], "
             "CglResourceQueryInfo (*firstDyn_metadata)[3], "
-            "texture<float4, 2> firstFixed[3], "
+            "hipTextureObject_t firstFixed[3], "
             "CglResourceQueryInfo firstFixed_metadata[3], "
             "hipSurfaceObject_t (*firstDynImages)[3], "
             "CglResourceQueryInfo (*firstDynImages_metadata)[3], "
@@ -3645,11 +3673,11 @@ class TestHipCodeGen:
             "int layer, int slot, float2 uv, int2 pixel)" in hip_code
         )
         assert (
-            "__device__ void topForward(texture<float4, 2> topFixedTex[3], "
+            "__device__ void topForward(hipTextureObject_t topFixedTex[3], "
             "CglResourceQueryInfo topFixedTex_metadata[3], "
             "hipSurfaceObject_t (*topDynImages)[3], "
             "CglResourceQueryInfo (*topDynImages_metadata)[3], "
-            "texture<float4, 2> (*topDynTex)[3], "
+            "hipTextureObject_t (*topDynTex)[3], "
             "CglResourceQueryInfo (*topDynTex_metadata)[3], "
             "hipSurfaceObject_t topFixedImages[3], "
             "CglResourceQueryInfo topFixedImages_metadata[3], "
@@ -3847,9 +3875,9 @@ class TestHipCodeGen:
         hip_code = codegen.generate(ast)
 
         assert (
-            "__device__ float4 chooseBranch(texture<float4, 2> (*dynTex)[3], "
+            "__device__ float4 chooseBranch(hipTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
-            "texture<float4, 2> fixedTex[3], "
+            "hipTextureObject_t fixedTex[3], "
             "CglResourceQueryInfo fixedTex_metadata[3], "
             "hipSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], "
@@ -3977,9 +4005,9 @@ class TestHipCodeGen:
         hip_code = codegen.generate(ast)
 
         assert (
-            "__device__ float4 sampleLoop(texture<float4, 2> (*dynTex)[3], "
+            "__device__ float4 sampleLoop(hipTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
-            "texture<float4, 2> fixedTex[3], "
+            "hipTextureObject_t fixedTex[3], "
             "CglResourceQueryInfo fixedTex_metadata[3], "
             "hipSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], "
@@ -4085,7 +4113,7 @@ class TestHipCodeGen:
 
         assert (
             "__device__ float4 sampleNestedLoops("
-            "texture<float4, 2> (*dynTex)[3], "
+            "hipTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "hipSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], float2 uv, int2 pixel)"
@@ -4209,22 +4237,22 @@ class TestHipCodeGen:
 
         assert "struct SampleParams" in hip_code
         assert (
-            "__device__ float4 samplePacked(texture<float4, 2> (*dynTex)[3], "
+            "__device__ float4 samplePacked(hipTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], SampleParams params, "
             "hipSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], float weight, "
-            "texture<float4, 2> fixedTex[3], "
+            "hipTextureObject_t fixedTex[3], "
             "CglResourceQueryInfo fixedTex_metadata[3], "
             "hipSurfaceObject_t fixedImages[3], "
             "CglResourceQueryInfo fixedImages_metadata[3])" in hip_code
         )
         assert (
             "__device__ float4 passPacked(SampleParams params, "
-            "texture<float4, 2> (*firstDyn)[3], "
+            "hipTextureObject_t (*firstDyn)[3], "
             "CglResourceQueryInfo (*firstDyn_metadata)[3], float weight, "
             "hipSurfaceObject_t (*firstImages)[3], "
             "CglResourceQueryInfo (*firstImages_metadata)[3], "
-            "texture<float4, 2> fixedTex[3], "
+            "hipTextureObject_t fixedTex[3], "
             "CglResourceQueryInfo fixedTex_metadata[3], "
             "hipSurfaceObject_t fixedImages[3], "
             "CglResourceQueryInfo fixedImages_metadata[3])" in hip_code
@@ -4371,7 +4399,7 @@ class TestHipCodeGen:
         assert "struct SampleResult" in hip_code
         assert (
             "__device__ SampleResult buildAssigned("
-            "texture<float4, 2> (*dynTex)[3], "
+            "hipTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "hipSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
@@ -4379,14 +4407,14 @@ class TestHipCodeGen:
         )
         assert (
             "__device__ SampleResult buildConstructed("
-            "texture<float4, 2> (*dynTex)[3], "
+            "hipTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "hipSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
             "float2 uv, int2 pixel)" in hip_code
         )
         assert (
-            "__device__ float4 consumeResults(texture<float4, 2> (*dynTex)[3], "
+            "__device__ float4 consumeResults(hipTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "hipSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
@@ -4505,7 +4533,7 @@ class TestHipCodeGen:
         assert "struct SampleEnvelope" in hip_code
         assert (
             "__device__ SampleEnvelope buildNestedAssigned("
-            "texture<float4, 2> (*dynTex)[3], "
+            "hipTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "hipSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
@@ -4631,7 +4659,7 @@ class TestHipCodeGen:
         assert "SampleResult results[3];" in hip_code
         assert (
             "__device__ SampleEnvelope buildArrayEnvelope("
-            "texture<float4, 2> (*dynTex)[3], "
+            "hipTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "hipSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
@@ -4771,7 +4799,7 @@ class TestHipCodeGen:
 
         assert (
             "__device__ SampleEnvelope fillControlled("
-            "texture<float4, 2> (*dynTex)[3], "
+            "hipTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "hipSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
@@ -4897,7 +4925,7 @@ class TestHipCodeGen:
 
         assert (
             "__device__ SampleResult buildResourceResult("
-            "texture<float4, 2> (*dynTex)[3], "
+            "hipTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "hipSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
@@ -4908,7 +4936,7 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "__device__ float4 consumeAdjusted(texture<float4, 2> (*dynTex)[3], "
+            "__device__ float4 consumeAdjusted(hipTextureObject_t (*dynTex)[3], "
             "CglResourceQueryInfo (*dynTex_metadata)[3], "
             "hipSurfaceObject_t (*dynImages)[3], "
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
@@ -5612,7 +5640,7 @@ class TestHipCodeGen:
         assert "struct CglResourceQueryInfo" in hip_code
         assert "__device__ inline int cgl_lod_extent" in hip_code
         assert (
-            "__device__ void queryParam(texture<float4, 2> paramTex, "
+            "__device__ void queryParam(hipTextureObject_t paramTex, "
             "CglResourceQueryInfo paramTex_metadata)" in hip_code
         )
         assert "CglResourceQueryInfo colorMap_metadata = {};" in hip_code
@@ -5799,7 +5827,7 @@ class TestHipCodeGen:
         assert "CglResourceQueryInfo msTextures_metadata[2] = {};" in hip_code
         assert "CglResourceQueryInfo images_metadata[3] = {};" in hip_code
         assert (
-            "__device__ void queryArrays(texture<float4, 2> paramTextures[3], "
+            "__device__ void queryArrays(hipTextureObject_t paramTextures[3], "
             "CglResourceQueryInfo paramTextures_metadata[3], int i)" in hip_code
         )
         assert (
@@ -5867,13 +5895,13 @@ class TestHipCodeGen:
         assert "CglResourceQueryInfo textureGrid_metadata[2][3] = {};" in hip_code
         assert "CglResourceQueryInfo imageGrid_metadata[2][4] = {};" in hip_code
         assert (
-            "__device__ void queryArrays(texture<float4, 2>* dynamicTextures, "
+            "__device__ void queryArrays(hipTextureObject_t* dynamicTextures, "
             "CglResourceQueryInfo* dynamicTextures_metadata, "
-            "texture<float4, 2> fixedTextures[3], "
+            "hipTextureObject_t fixedTextures[3], "
             "CglResourceQueryInfo fixedTextures_metadata[3], "
             "hipTextureObject_t* dynamicMsTextures, "
             "CglResourceQueryInfo* dynamicMsTextures_metadata, "
-            "texture<float4, 2> (*dynamicGrid)[3], "
+            "hipTextureObject_t (*dynamicGrid)[3], "
             "CglResourceQueryInfo (*dynamicGrid_metadata)[3], "
             "hipSurfaceObject_t (*dynamicImageGrid)[4], "
             "CglResourceQueryInfo (*dynamicImageGrid_metadata)[4], "

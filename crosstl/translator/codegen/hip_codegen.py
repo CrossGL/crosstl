@@ -125,10 +125,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "dmat4x4": "double4x4",
             # Texture/resource types
             "sampler": "hipTextureObject_t",
-            "sampler1D": "texture<float4, 1>",
-            "sampler2D": "texture<float4, 2>",
-            "sampler3D": "texture<float4, 3>",
-            "samplerCube": "textureCube<float4>",
+            "sampler1D": "hipTextureObject_t",
+            "sampler1DArray": "hipTextureObject_t",
+            "sampler2D": "hipTextureObject_t",
+            "sampler3D": "hipTextureObject_t",
+            "samplerCube": "hipTextureObject_t",
             "sampler2DArray": "hipTextureObject_t",
             "sampler2DShadow": "hipTextureObject_t",
             "sampler2DArrayShadow": "hipTextureObject_t",
@@ -1691,6 +1692,22 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     return f"tex1DLod({texture_name}, {coord}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
                     return f"tex1DGrad({texture_name}, {coord}, {args[2]}, {args[3]})"
+
+            if texture_type == "sampler1DArray":
+                coord_args = (
+                    f"{texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')}"
+                )
+                if func_name == "texture":
+                    return f"tex1DLayered<float4>({coord_args})"
+                if func_name == "textureLod" and len(args) >= 3:
+                    return f"tex1DLayeredLod<float4>({coord_args}, {args[2]})"
+                if func_name == "textureGrad" and len(args) >= 4:
+                    return (
+                        f"tex1DLayeredGrad<float4>"
+                        f"({coord_args}, {args[2]}, {args[3]})"
+                    )
 
             if texture_type == "sampler2DArray":
                 coord_args = (
