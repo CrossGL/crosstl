@@ -138,6 +138,7 @@ class HLSLToCrossGLConverter:
             "SamplerState": "sampler",
             "SamplerComparisonState": "sampler",
         }
+        self.type_map.update(self.minimum_precision_type_map())
         self.shadow_texture_type_map = {
             "Texture2D": "sampler2DShadow",
             "Texture2DArray": "sampler2DArrayShadow",
@@ -299,6 +300,28 @@ class HLSLToCrossGLConverter:
         self.current_variable_types = {}
         self.current_resource_array_dims = {}
         self.suppress_storage_image_index_lowering = False
+
+    @staticmethod
+    def minimum_precision_type_map():
+        type_map = {}
+        vector_aliases = {
+            "min16float": "f16vec",
+            "min10float": "f16vec",
+            "min16int": "i16vec",
+            "min12int": "i16vec",
+            "min16uint": "u16vec",
+        }
+        for hlsl_prefix, crossgl_prefix in vector_aliases.items():
+            for width in range(2, 5):
+                type_map[f"{hlsl_prefix}{width}"] = f"{crossgl_prefix}{width}"
+
+        for hlsl_prefix in ("min16float", "min10float"):
+            for columns in range(2, 5):
+                for rows in range(2, 5):
+                    suffix = str(columns) if columns == rows else f"{columns}x{rows}"
+                    type_map[f"{hlsl_prefix}{columns}x{rows}"] = f"f16mat{suffix}"
+
+        return type_map
 
     def texture_method_descriptor(self, member, arg_count=None):
         if member in {"Load", "GetDimensions"}:

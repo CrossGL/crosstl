@@ -268,8 +268,7 @@ class ShaderNode(ASTNode):
         self.functions = functions or []
         self.global_variables = global_variables or []
         self.constants = constants or []
-        if cbuffers is not None:
-            self.cbuffers = cbuffers
+        self.cbuffers = cbuffers or []
         self.imports = imports or []
         self.preprocessors = preprocessors or []
 
@@ -1423,13 +1422,14 @@ VectorConstructorNode = ConstructorNode
 
 def create_legacy_shader_node(structs, functions, global_variables, cbuffers):
     """Create a root shader node for legacy tests and backend adapters."""
+    cbuffer_nodes = cbuffers or []
     return ShaderNode(
         name="LegacyShader",
         execution_model=ExecutionModel.GRAPHICS_PIPELINE,
         structs=structs or [],
         functions=functions or [],
         global_variables=global_variables or [],
-        constants=cbuffers or [],
+        cbuffers=cbuffer_nodes,
     )
 
 

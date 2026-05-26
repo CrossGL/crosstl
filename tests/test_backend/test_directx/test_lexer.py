@@ -251,6 +251,28 @@ def test_min_precision_types_tokenization():
     assert_values_present(values, expected, case_insensitive=True)
 
 
+def test_min_precision_vector_and_matrix_types_tokenization():
+    code = """
+    min16float3 hdr;
+    min10float2 uv;
+    min16int4 signedIndex;
+    min12int2 smallSigned;
+    min16uint4 mask;
+    min16float2x3 colorMatrix;
+    min10float4x4 transform;
+    """
+    tokens = tokenize_code(code)
+
+    assert ("FVECTOR", "min16float3") in tokens
+    assert ("FVECTOR", "min10float2") in tokens
+    assert ("IVECTOR", "min16int4") in tokens
+    assert ("IVECTOR", "min12int2") in tokens
+    assert ("UVECTOR", "min16uint4") in tokens
+    assert ("MATRIX", "min16float2x3") in tokens
+    assert ("MATRIX", "min10float4x4") in tokens
+    assert ("IDENTIFIER", "min16float3") not in tokens
+
+
 def test_swizzle_and_member_access_tokenization():
     code = """
     struct V {

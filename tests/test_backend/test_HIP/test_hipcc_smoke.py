@@ -651,6 +651,118 @@ def test_native_hip_graph_memcpy_nodes_parse_and_compile_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_graph_child_kernel_attributes_parse_and_compile_if_available(
+    tmp_path,
+):
+    """Smoke native HIP graph child, kernel attribute, and enabled-state APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void graph_child_kernel_attributes(float* out) {
+        hipGraph_t graph;
+        hipGraph_t child_graph;
+        hipGraph_t fetched_child_graph;
+        hipGraphExec_t exec;
+        hipGraphNode_t child_node;
+        hipGraphNode_t source_kernel_node;
+        hipGraphNode_t kernel_node;
+        hipGraphNode_t error_node;
+        hipKernelNodeParams source_kernel_params;
+        hipKernelNodeParams kernel_params;
+        hipKernelNodeAttrValue attr_value;
+        unsigned int enabled = 0;
+        char log[128];
+
+        hipGraphCreate(&graph, 0);
+        hipGraphCreate(&child_graph, 0);
+        hipGraphAddChildGraphNode(&child_node, graph, NULL, 0, child_graph);
+        hipGraphChildGraphNodeGetGraph(child_node, &fetched_child_graph);
+        hipGraphAddKernelNode(
+            &source_kernel_node, graph, NULL, 0, &source_kernel_params
+        );
+        hipGraphAddKernelNode(&kernel_node, graph, NULL, 0, &kernel_params);
+        hipGraphKernelNodeCopyAttributes(kernel_node, source_kernel_node);
+        hipGraphKernelNodeSetAttribute(
+            kernel_node, hipKernelNodeAttributeCooperative, &attr_value
+        );
+        hipGraphKernelNodeGetAttribute(
+            kernel_node, hipKernelNodeAttributeCooperative, &attr_value
+        );
+        hipGraphInstantiate(&exec, graph, &error_node, log, 128);
+        hipGraphNodeSetEnabled(exec, kernel_node, 1);
+        hipGraphNodeGetEnabled(exec, kernel_node, &enabled);
+        hipGraphExecDestroy(exec);
+        hipGraphDestroy(child_graph);
+        hipGraphDestroy(graph);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: graph_child_kernel_attributes" in crossgl
+    assert "void graph_child_kernel_attributes(ptr<f32> out)" in crossgl
+    assert "var graph: hipGraph_t;" in crossgl
+    assert "var child_graph: hipGraph_t;" in crossgl
+    assert "var fetched_child_graph: hipGraph_t;" in crossgl
+    assert "var exec: hipGraphExec_t;" in crossgl
+    assert "var child_node: hipGraphNode_t;" in crossgl
+    assert "var source_kernel_node: hipGraphNode_t;" in crossgl
+    assert "var kernel_node: hipGraphNode_t;" in crossgl
+    assert "var error_node: hipGraphNode_t;" in crossgl
+    assert "var source_kernel_params: hipKernelNodeParams;" in crossgl
+    assert "var kernel_params: hipKernelNodeParams;" in crossgl
+    assert "var attr_value: hipKernelNodeAttrValue;" in crossgl
+    assert "var enabled: u32 = 0;" in crossgl
+    assert "var log: array<i8, 128>;" in crossgl
+    assert crossgl.count("// HIP graph create: output:") == 2
+    assert (
+        "// HIP graph add child graph node: output: child_node, "
+        "graph: graph, dependencies: NULL, count: 0, child graph: child_graph"
+    ) in crossgl
+    assert (
+        "// HIP graph child node get graph: node: child_node, "
+        "output: fetched_child_graph"
+    ) in crossgl
+    assert (
+        "// HIP graph add kernel node: output: source_kernel_node, "
+        "graph: graph, dependencies: NULL, count: 0, "
+        "params: (&source_kernel_params)"
+    ) in crossgl
+    assert (
+        "// HIP graph add kernel node: output: kernel_node, graph: graph, "
+        "dependencies: NULL, count: 0, params: (&kernel_params)"
+    ) in crossgl
+    assert (
+        "// HIP graph kernel node copy attributes: source: kernel_node, "
+        "destination: source_kernel_node"
+    ) in crossgl
+    assert (
+        "// HIP graph kernel node set attribute: node: kernel_node, "
+        "attribute: hipKernelNodeAttributeCooperative, value: attr_value"
+    ) in crossgl
+    assert (
+        "// HIP graph kernel node get attribute: node: kernel_node, "
+        "attribute: hipKernelNodeAttributeCooperative, output: attr_value"
+    ) in crossgl
+    assert (
+        "// HIP graph instantiate: output: exec, graph: graph, "
+        "error node output: error_node, log buffer: log, log bytes: 128"
+    ) in crossgl
+    assert (
+        "// HIP graph node set enabled: exec: exec, node: kernel_node, value: 1"
+        in crossgl
+    )
+    assert (
+        "// HIP graph node get enabled: exec: exec, node: kernel_node, "
+        "output: enabled"
+    ) in crossgl
+    assert "// HIP graph exec destroy: exec" in crossgl
+    assert "// HIP graph destroy: child_graph" in crossgl
+    assert "// HIP graph destroy: graph" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_device_error_runtime_parses_and_compiles_if_available(
     tmp_path,
 ):

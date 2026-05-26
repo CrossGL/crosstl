@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 535
+        "test_count": 538
       },
       "translator_codegen": {
         "exists": true,
@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 729
+        "test_count": 730
       },
       "translator_codegen": {
         "exists": true,
@@ -629,7 +629,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 295
+        "test_count": 296
       },
       "translator_codegen": {
         "exists": true,
@@ -881,7 +881,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 92,
+        "unsupported_marker_count": 94,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -971,7 +971,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 314
+        "test_count": 315
       },
       "translator_codegen": {
         "exists": true,
@@ -2498,7 +2498,7 @@
       "category": "images",
       "feature": "Image atomics",
       "feature_id": "image.atomics",
-      "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, image arrays, deterministic readonly/writeonly access diagnostics, and diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete.",
+      "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, direct AtomicOpNode lowering, image arrays, deterministic readonly/writeonly access diagnostics, and diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete.",
       "status": "partial"
     },
     {
@@ -5178,9 +5178,10 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_integer_image_atomics_emit_slang_interlocked_helpers",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_integer_image_array_atomics_preserve_expression_indices",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_unsupported_image_atomics_emit_slang_diagnostic_stubs"
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_unsupported_image_atomics_emit_slang_diagnostic_stubs",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_direct_atomic_op_nodes_emit_slang_image_atomic_helpers"
           ],
-          "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, image arrays, deterministic readonly/writeonly access diagnostics, and diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete.",
+          "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, direct AtomicOpNode lowering, image arrays, deterministic readonly/writeonly access diagnostics, and diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete.",
           "status": "partial"
         },
         "vulkan": {

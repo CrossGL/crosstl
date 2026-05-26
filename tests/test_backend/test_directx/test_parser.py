@@ -276,6 +276,47 @@ def test_parse_resource_arrays_and_register_space():
     assert_parses(code)
 
 
+def test_parse_min_precision_vector_and_matrix_types():
+    code = """
+    struct MinPrecisionData {
+        min16float3 hdr : COLOR0;
+        min10float2 uv : TEXCOORD0;
+        min16float2x3 colorMatrix;
+    };
+
+    min16float3 Shade(
+        min16float3 color,
+        min12int2 offset,
+        min16uint4 mask
+    ) {
+        min10float2 localUv = min10float2(0.0, 1.0);
+        return min16float3(color.x, localUv.x, localUv.y);
+    }
+    """
+
+    ast = parse_code(code)
+    struct = ast.structs[0]
+    func = ast.functions[0]
+
+    assert [member.vtype for member in struct.members] == [
+        "min16float3",
+        "min10float2",
+        "min16float2x3",
+    ]
+    assert func.return_type == "min16float3"
+    assert [param.vtype for param in func.params] == [
+        "min16float3",
+        "min12int2",
+        "min16uint4",
+    ]
+    local_uv = next(
+        node
+        for node in iter_ast_nodes(func)
+        if getattr(node, "name", None) == "localUv"
+    )
+    assert local_uv.vtype == "min10float2"
+
+
 def test_parse_cbuffer_preserves_buffer_and_member_bindings():
     code = """
     cbuffer FrameData : register(b0, space1) {

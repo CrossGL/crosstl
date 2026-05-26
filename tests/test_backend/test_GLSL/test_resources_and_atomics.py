@@ -157,6 +157,34 @@ def test_parse_image_atomics_and_counters():
     assert ast is not None
 
 
+def test_codegen_preserves_compute_shared_workgroup_memory_qualifier():
+    code = """
+    #version 450 core
+    layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+    shared uint scratch[4];
+    shared vec4 tile[2];
+
+    void main() {
+        uint lane = gl_LocalInvocationIndex;
+        scratch[lane] = lane;
+        tile[0] = vec4(float(scratch[lane]));
+        barrier();
+    }
+    """
+
+    output = generate_crossgl(code, "compute")
+
+    assert "shared uint scratch[4];" in output
+    assert "shared vec4 tile[2];" in output
+    assert "\n    uint scratch[4];" not in output
+    assert "\n    vec4 tile[2];" not in output
+    assert "scratch[lane] = lane;" in output
+    assert "barrier();" in output
+
+    shader_ast = parse_crossgl(output)
+    assert shader_ast is not None
+
+
 def test_codegen_resources_roundtrip():
     output = generate_crossgl(RESOURCE_GLSL, "fragment")
     assert "imageLoad" in output

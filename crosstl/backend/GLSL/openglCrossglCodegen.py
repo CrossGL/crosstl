@@ -1765,6 +1765,8 @@ class GLSLToCrossGLConverter:
         var_name = node.name
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", None) or []}
         prefix_parts = []
+        if "shared" in qualifiers:
+            prefix_parts.append("shared")
         if getattr(node, "is_const", False) or "const" in qualifiers:
             prefix_parts.append("const")
         interface_prefix = self.interface_qualifier_prefix(node)

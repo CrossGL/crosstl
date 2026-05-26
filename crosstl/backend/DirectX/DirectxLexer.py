@@ -78,11 +78,15 @@ TOKENS = tuple(
         ("LINESTREAM", r"\bLineStream\b"),
         ("TRIANGLESTREAM", r"\bTriangleStream\b"),
         # Matrix types (must come before vector and scalar types)
-        ("MATRIX", r"\b(float|half|double|int|uint|bool)[2-4]x[2-4]\b"),
+        (
+            "MATRIX",
+            r"\b(float|half|double|int|uint|bool|min16float|min10float|"
+            r"min16int|min12int|min16uint)[2-4]x[2-4]\b",
+        ),
         # Vector types (must come before scalar types)
-        ("FVECTOR", r"\b(float|half|double)[2-4]\b"),
-        ("IVECTOR", r"\bint[2-4]\b"),
-        ("UVECTOR", r"\buint[2-4]\b"),
+        ("FVECTOR", r"\b(float|half|double|min16float|min10float)[2-4]\b"),
+        ("IVECTOR", r"\b(int|min16int|min12int)[2-4]\b"),
+        ("UVECTOR", r"\b(uint|min16uint)[2-4]\b"),
         ("BVECTOR", r"\bbool[2-4]\b"),
         # Scalar types
         ("FLOAT", r"\bfloat\b"),

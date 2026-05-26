@@ -1,6 +1,7 @@
 """CrossGL-to-Slang code generator."""
 
 from ..ast import (
+    AtomicOpNode,
     ArrayNode,
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -3941,6 +3942,12 @@ class SlangCodeGen:
             return None
         if isinstance(expr, RayQueryOpNode):
             return self.slang_ray_query_method_return_type(expr.operation)
+        if isinstance(expr, AtomicOpNode):
+            operation = self.image_atomic_operation_from_atomic_op(expr.operation)
+            if operation is None:
+                return None
+            image_type = self.resource_base_type(self.image_resource_type(expr.target))
+            return self.image_atomic_return_type(image_type)
         if isinstance(expr, FunctionCallNode):
             ray_query_call = self.slang_ray_query_call_parts(expr)
             if ray_query_call is not None:
@@ -4116,6 +4123,8 @@ class SlangCodeGen:
             return self.generate_slang_wave_op_expression(node)
         elif isinstance(node, MeshOpNode):
             return self.generate_slang_mesh_op_expression(node)
+        elif isinstance(node, AtomicOpNode):
+            return self.generate_slang_atomic_op_expression(node)
         elif isinstance(node, RayQueryOpNode):
             query = self.generate_expression(node.query_expr)
             args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
@@ -5454,6 +5463,52 @@ class SlangCodeGen:
             "imageAtomicExchange": "InterlockedExchange",
             "imageAtomicCompSwap": "InterlockedCompareExchange",
         }.get(operation)
+
+    def image_atomic_operation_from_atomic_op(self, operation):
+        return {
+            "imageAtomicAdd": "imageAtomicAdd",
+            "imageAtomicMin": "imageAtomicMin",
+            "imageAtomicMax": "imageAtomicMax",
+            "imageAtomicAnd": "imageAtomicAnd",
+            "imageAtomicOr": "imageAtomicOr",
+            "imageAtomicXor": "imageAtomicXor",
+            "imageAtomicExchange": "imageAtomicExchange",
+            "imageAtomicCompSwap": "imageAtomicCompSwap",
+            "imageAtomicCompareExchange": "imageAtomicCompSwap",
+            "atomicAdd": "imageAtomicAdd",
+            "atomicMin": "imageAtomicMin",
+            "atomicMax": "imageAtomicMax",
+            "atomicAnd": "imageAtomicAnd",
+            "atomicOr": "imageAtomicOr",
+            "atomicXor": "imageAtomicXor",
+            "atomicExchange": "imageAtomicExchange",
+            "atomicCompSwap": "imageAtomicCompSwap",
+            "atomicCompareExchange": "imageAtomicCompSwap",
+            "Add": "imageAtomicAdd",
+            "Min": "imageAtomicMin",
+            "Max": "imageAtomicMax",
+            "And": "imageAtomicAnd",
+            "Or": "imageAtomicOr",
+            "Xor": "imageAtomicXor",
+            "Exchange": "imageAtomicExchange",
+            "CompSwap": "imageAtomicCompSwap",
+            "CompareExchange": "imageAtomicCompSwap",
+        }.get(operation)
+
+    def generate_slang_atomic_op_expression(self, node):
+        operation = self.image_atomic_operation_from_atomic_op(node.operation)
+        if operation is None:
+            return self.unsupported_image_atomic_call(
+                node.operation, "is not recognized by the Slang backend"
+            )
+
+        result = self.image_atomic_expression(operation, [node.target, *node.arguments])
+        if result is not None:
+            return result
+
+        return self.unsupported_image_atomic_call(
+            node.operation, "requires image resource target"
+        )
 
     def image_atomic_helper_suffix(self, image_type):
         return {

@@ -13,6 +13,7 @@ from crosstl.translator.ast import (
     StructMemberNode,
     StructNode,
     VectorType,
+    create_legacy_shader_node,
 )
 
 
@@ -87,3 +88,29 @@ def test_ast_walk_tolerates_existing_parent_links_and_cycles():
     assert output_struct in walked
     assert member in walked
     assert len({id(node) for node in walked}) == len(walked)
+
+
+def test_shader_node_exposes_independent_empty_cbuffer_collection():
+    first = ShaderNode("First", ExecutionModel.GRAPHICS_PIPELINE)
+    second = ShaderNode("Second", ExecutionModel.GRAPHICS_PIPELINE)
+    globals_block = StructNode("Globals", [])
+
+    first.cbuffers.append(globals_block)
+
+    assert first.cbuffers == [globals_block]
+    assert second.cbuffers == []
+
+
+def test_legacy_shader_node_preserves_cbuffers_on_canonical_field():
+    globals_block = StructNode("Globals", [])
+
+    shader = create_legacy_shader_node(
+        structs=[],
+        functions=[],
+        global_variables=[],
+        cbuffers=[globals_block],
+    )
+
+    assert shader.cbuffers == [globals_block]
+    assert shader.constants == []
+    assert globals_block in list(shader.walk())

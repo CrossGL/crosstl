@@ -457,6 +457,43 @@ def test_codegen_preserves_constants_and_names():
     assert ShaderStage.FRAGMENT in shader_ast.stages
 
 
+def test_codegen_min_precision_vector_and_matrix_types():
+    code = textwrap.dedent("""
+        struct MinPrecisionData {
+            min16float3 hdr : COLOR0;
+            min10float2 uv : TEXCOORD0;
+            min16float2x3 colorMatrix;
+        };
+
+        min16float3 Shade(
+            min16float3 color : COLOR0,
+            min12int2 offset : TEXCOORD1,
+            min16uint4 mask : TEXCOORD2
+        ) : SV_Target0 {
+            min10float2 localUv = min10float2(0.0, 1.0);
+            min16float3 tint = min16float3(color.x, localUv.x, localUv.y);
+            return tint;
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    assert "f16vec3 hdr @ Color0;" in output
+    assert "f16vec2 uv @ TexCoord0;" in output
+    assert "f16mat2x3 colorMatrix;" in output
+    assert "f16vec3 Shade(" in output
+    assert "f16vec3 color @ Color0" in output
+    assert "i16vec2 offset @ TexCoord1" in output
+    assert "u16vec4 mask @ TexCoord2" in output
+    assert "f16vec2 localUv = f16vec2(0.0, 1.0);" in output
+    assert "f16vec3 tint = f16vec3(color.x, localUv.x, localUv.y);" in output
+    assert "min16float" not in output
+    assert "min10float" not in output
+
+    shader_ast = parse_crossgl(output)
+    assert ShaderStage.FRAGMENT in shader_ast.stages
+
+
 def test_codegen_compute_roundtrip():
     output = generate_crossgl(COMPUTE_HLSL)
     lowered = output.lower()

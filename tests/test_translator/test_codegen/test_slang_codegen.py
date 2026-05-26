@@ -4,7 +4,14 @@ import shutil
 import subprocess
 from typing import List
 from crosstl.translator.parser import Parser
-from crosstl.translator.ast import BlockNode, FunctionNode, LiteralNode, PrimitiveType
+from crosstl.translator.ast import (
+    AtomicOpNode,
+    BlockNode,
+    FunctionNode,
+    IdentifierNode,
+    LiteralNode,
+    PrimitiveType,
+)
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
 
 
@@ -8798,6 +8805,58 @@ def test_explicit_image_formats_emit_slang_storage_element_types():
     assert "image[pixel, sampleIndex] = oldValue + value;" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
+
+
+def test_direct_atomic_op_nodes_emit_slang_image_atomic_helpers():
+    codegen = SlangCodeGen()
+    codegen.image_resource_types["counters"] = "RWTexture2D<uint>"
+    codegen.image_resource_types["signedCounters"] = "RWTexture2D<int>"
+
+    pixel = IdentifierNode("pixel")
+    add_node = AtomicOpNode(
+        "atomicAdd",
+        IdentifierNode("counters"),
+        [pixel, LiteralNode(1, PrimitiveType("uint"))],
+    )
+    compare_node = AtomicOpNode(
+        "atomicCompareExchange",
+        IdentifierNode("counters"),
+        [
+            pixel,
+            LiteralNode(2, PrimitiveType("uint")),
+            LiteralNode(3, PrimitiveType("uint")),
+        ],
+    )
+    signed_node = AtomicOpNode(
+        "Add",
+        IdentifierNode("signedCounters"),
+        [pixel, LiteralNode(-1, PrimitiveType("int"))],
+    )
+
+    add_call = codegen.generate_expression(add_node)
+    compare_call = codegen.generate_expression(compare_node)
+    signed_call = codegen.generate_expression(signed_node)
+    helper_code = codegen.emit_helper_functions()
+
+    assert add_call == "cgl_imageAtomicAdd_uimage2D(counters, pixel, 1u)"
+    assert compare_call == "cgl_imageAtomicCompSwap_uimage2D(counters, pixel, 2u, 3u)"
+    assert signed_call == "cgl_imageAtomicAdd_iimage2D(signedCounters, pixel, -1)"
+    assert codegen.expression_result_type(add_node) == "uint"
+    assert codegen.expression_result_type(signed_node) == "int"
+    assert (
+        "uint cgl_imageAtomicAdd_uimage2D(RWTexture2D<uint> image, "
+        "int2 coord, uint value)" in helper_code
+    )
+    assert (
+        "uint cgl_imageAtomicCompSwap_uimage2D(RWTexture2D<uint> image, "
+        "int2 coord, uint compareValue, uint value)" in helper_code
+    )
+    assert (
+        "int cgl_imageAtomicAdd_iimage2D(RWTexture2D<int> image, "
+        "int2 coord, int value)" in helper_code
+    )
+    assert "AtomicOpNode(" not in add_call
+    assert "atomicCompareExchange" not in compare_call
 
 
 def test_integer_image_atomics_emit_slang_interlocked_helpers():

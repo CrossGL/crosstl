@@ -1190,11 +1190,17 @@ def validate_node_metadata(node, context):
 
     values_by_name = {}
     for attr in getattr(node, "attributes", []) or []:
-        attr_name = str(getattr(attr, "name", "")).lower()
+        attr_name = _normalized_metadata_name(getattr(attr, "name", None))
         metadata_name = SINGLE_VALUE_METADATA_ALIASES.get(attr_name, attr_name)
         if metadata_name not in SINGLE_VALUE_METADATA_NAMES:
             continue
-        attr_value = _attribute_metadata_value(attr)
+        attr_values = _attribute_metadata_values(attr)
+        if len(attr_values) > 1:
+            raise ValueError(
+                f"Metadata '@{attr_name}' on {context} accepts at most one value: "
+                f"{_metadata_value_phrase(attr_values)}"
+            )
+        attr_value = attr_values[0] if attr_values else None
         if attr_value is None:
             continue
         previous_value = values_by_name.setdefault(metadata_name, attr_value)

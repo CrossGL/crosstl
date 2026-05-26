@@ -4109,6 +4109,34 @@ def test_conflicting_resource_layout_metadata_values_fail_validation(
         parse_code(tokenize_code(code))
 
 
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "image2D color @binding(0, 1);",
+            "Metadata '@binding'.*accepts at most one value",
+        ),
+        (
+            "image2D color @group(0, 1);",
+            "Metadata '@group'.*accepts at most one value",
+        ),
+        (
+            "image2D color @format(r32f, rgba32f);",
+            "Metadata '@format'.*accepts at most one value",
+        ),
+    ],
+)
+def test_single_value_resource_metadata_rejects_extra_values(declaration, message):
+    code = f"""
+    shader SingleValueResourceMetadata {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
 def test_duplicate_matching_resource_layout_metadata_values_are_allowed():
     code = """
     shader MatchingResourceLayoutMetadata {
