@@ -342,9 +342,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             qualifiers = []
             if hasattr(node, "qualifiers"):
                 for qualifier in node.qualifiers:
-                    if "workgroup" in str(qualifier) or "shared" in str(qualifier):
+                    qualifier = str(qualifier).lower()
+                    if qualifier == "const":
+                        qualifiers.append("const")
+                    elif qualifier == "static":
+                        qualifiers.append("static")
+                    elif "workgroup" in qualifier or "shared" in qualifier:
                         qualifiers.append("__shared__")
-                    elif "uniform" in str(qualifier):
+                    elif "uniform" in qualifier:
                         qualifiers.append("__constant__")
 
             qualifier_str = " ".join(qualifiers)

@@ -5,6 +5,7 @@ from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from crosstl.translator.ast import (
     AssignmentNode,
+    ArrayType,
     BlockNode,
     ExecutionModel,
     FunctionCallNode,
@@ -617,8 +618,10 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    float shared_data;
-                    float constants;
+                    shared float sharedData[16];
+                    uniform float constants;
+                    const int limit = 4;
+                    static float cached = 1.0;
                 }
             }
         }
@@ -631,9 +634,44 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        # For now, just check that basic variables are generated
-        assert "float shared_data;" in cuda_code
-        assert "float constants;" in cuda_code
+        assert "__shared__ float sharedData[16];" in cuda_code
+        assert "__constant__ float constants;" in cuda_code
+        assert "const int limit = 4;" in cuda_code
+        assert "static float cached = 1.0;" in cuda_code
+        lines = set(cuda_code.splitlines())
+        assert "    float sharedData[16];" not in lines
+        assert "    float constants;" not in lines
+        assert "    int limit = 4;" not in lines
+        assert "    float cached = 1.0;" not in lines
+
+        # Legacy/direct ASTs may still use the old workgroup spelling.
+        ast = ShaderNode(
+            name="DirectAst",
+            execution_model=ExecutionModel.GENERAL_PURPOSE,
+            functions=[
+                FunctionNode(
+                    "main",
+                    PrimitiveType("void"),
+                    [],
+                    BlockNode(
+                        [
+                            VariableNode(
+                                "tile",
+                                ArrayType(
+                                    PrimitiveType("float"),
+                                    LiteralNode(32, PrimitiveType("int")),
+                                ),
+                                qualifiers=["workgroup"],
+                            )
+                        ]
+                    ),
+                )
+            ],
+        )
+
+        direct_ast_cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__shared__ float tile[32];" in direct_ast_cuda_code
 
     def test_for_in_statement_lowers_to_counted_cuda_loops(self):
         """Test CUDA lowers CrossGL for-in loops to counted integer loops."""
