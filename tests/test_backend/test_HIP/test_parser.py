@@ -787,6 +787,44 @@ class TestHipParser:
         ]
         assert [var.name for var in body] == ["p", "cp", "a", "b"]
 
+    def test_multiline_parameter_lists_parsing(self):
+        """Test parameter lists accept newlines before the closing parenthesis."""
+        code = """
+        void resource_lifecycle(
+            hipResourceDesc* resourceDesc,
+            hipTextureDesc* textureDesc
+        ) {
+            sink(resourceDesc, textureDesc);
+        }
+
+        __global__ void kernel(
+            const float* input,
+            float* output,
+            int n
+        ) {
+            output[threadIdx.x] = input[threadIdx.x] + n;
+        }
+        """
+
+        ast = self.parse_code(code)
+
+        host = ast.statements[0]
+        assert isinstance(host, FunctionNode)
+        assert host.name == "resource_lifecycle"
+        assert host.params == [
+            {"type": "hipResourceDesc *", "name": "resourceDesc"},
+            {"type": "hipTextureDesc *", "name": "textureDesc"},
+        ]
+
+        kernel = ast.statements[1]
+        assert isinstance(kernel, KernelNode)
+        assert kernel.name == "kernel"
+        assert kernel.params == [
+            {"type": "const float *", "name": "input"},
+            {"type": "float *", "name": "output"},
+            {"type": "int", "name": "n"},
+        ]
+
     def test_rvalue_reference_declarations_parsing(self):
         """Test rvalue references in parameters, locals, and range loops"""
         code = """

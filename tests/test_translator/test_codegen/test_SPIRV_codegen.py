@@ -1,4 +1,6 @@
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -11,6 +13,7 @@ from crosstl.translator.codegen.SPIRV_codegen import (
 )
 from crosstl.translator.ast import (
     ShaderNode,
+    StageNode,
     StructNode,
     VariableNode,
     FunctionNode,
@@ -20,6 +23,10 @@ from crosstl.translator.ast import (
     ExecutionModel,
     PrimitiveType,
     BlockNode,
+    ExpressionStatementNode,
+    MeshOpNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
     ShaderStage,
 )
 
@@ -179,6 +186,33 @@ def assert_spirv_function_variables_are_first_block_declarations(spv_code):
                     assert first_label < variable_index < first_non_variable
 
             function_start = None
+
+
+def assert_spirv_module_validates(spv_code, tmp_path):
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if not spirv_as or not spirv_val:
+        pytest.skip("spirv-as and spirv-val are not installed")
+
+    asm_path = tmp_path / "shader.spvasm"
+    spv_path = tmp_path / "shader.spv"
+    asm_path.write_text(spv_code)
+
+    assemble = subprocess.run(
+        [spirv_as, str(asm_path), "-o", str(spv_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert assemble.returncode == 0, assemble.stderr
+
+    validate = subprocess.run(
+        [spirv_val, str(spv_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert validate.returncode == 0, validate.stderr
 
 
 class TestSpirvType:
@@ -2737,14 +2771,16 @@ class TestVulkanSPIRVCodeGen:
         assert "WaveReadLane" not in spv_code
         assert "WARNING" not in spv_code
 
-    def test_compute_unsupported_wave_intrinsics_emit_diagnostics(self):
+    def test_compute_quad_wave_intrinsics_emit_group_non_uniform_quad_operations(self):
         source_code = """
-        shader ComputeWaveDiagnostics {
+        shader ComputeQuadWaveIntrinsics {
             compute {
                 void main() {
                     uint lane = WaveGetLaneIndex();
-                    uvec4 matched = WaveMatch(lane);
-                    uint quad = QuadReadAcrossX(lane);
+                    uint quadX = QuadReadAcrossX(lane);
+                    uint quadY = QuadReadAcrossY(quadX);
+                    uint quadDiagonal = QuadReadAcrossDiagonal(quadY);
+                    uint quadLane = QuadReadLaneAt(quadDiagonal, 2u);
                 }
             }
         }
@@ -2753,14 +2789,230 @@ class TestVulkanSPIRVCodeGen:
         ast = Parser(Lexer(source_code).tokens).parse()
         spv_code = VulkanSPIRVCodeGen().generate(ast)
 
-        assert "WARNING: WaveMatch is not supported by the SPIR-V backend yet" in (
-            spv_code
+        assert "OpCapability GroupNonUniform" in spv_code
+        assert "OpCapability GroupNonUniformQuad" in spv_code
+        assert spv_code.count("OpGroupNonUniformQuadSwap") == 3
+        assert spv_code.count("OpGroupNonUniformQuadBroadcast") == 1
+        assert "QuadRead" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_compute_quad_read_lane_requires_literal_lane_index(self):
+        source_code = """
+        shader ComputeQuadWaveDiagnostics {
+            compute {
+                void main() {
+                    uint lane = WaveGetLaneIndex();
+                    uint quad = QuadReadLaneAt(lane, lane);
+                    uint outOfRange = QuadReadLaneAt(lane, 4u);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            spv_code.count(
+                "WARNING: QuadReadLaneAt requires a literal lane index between 0 and 3"
+            )
+            == 2
+        )
+        assert "OpGroupNonUniformQuadBroadcast" not in spv_code
+        assert "Unknown expression type WaveOpNode" not in spv_code
+
+    def test_compute_wave_match_and_multi_prefix_emit_partitioned_operations(self):
+        source_code = """
+        shader ComputePartitionedWaveIntrinsics {
+            compute {
+                void main() {
+                    uint lane = WaveGetLaneIndex();
+                    uvec4 matched = WaveMatch(lane);
+                    uint multiSum = WaveMultiPrefixSum(lane, matched);
+                    uint multiProduct = WaveMultiPrefixProduct(lane + 1u, matched);
+                    uint multiAnd = WaveMultiPrefixBitAnd(multiProduct, matched);
+                    uint multiOr = WaveMultiPrefixBitOr(multiAnd, matched);
+                    uint multiXor = WaveMultiPrefixBitXor(multiOr, matched);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert 'OpExtension "SPV_NV_shader_subgroup_partitioned"' in spv_code
+        assert "OpCapability GroupNonUniformPartitionedNV" in spv_code
+        assert "OpGroupNonUniformPartitionNV" in spv_code
+        assert spv_code.count("PartitionedExclusiveScanNV") == 5
+        for operation in (
+            "OpGroupNonUniformIAdd",
+            "OpGroupNonUniformIMul",
+            "OpGroupNonUniformBitwiseAnd",
+            "OpGroupNonUniformBitwiseOr",
+            "OpGroupNonUniformBitwiseXor",
+        ):
+            assert operation in spv_code
+        assert "WaveMatch" not in spv_code
+        assert "WaveMultiPrefix" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_compute_multi_prefix_requires_uvec4_ballot(self):
+        source_code = """
+        shader ComputePartitionedWaveDiagnostics {
+            compute {
+                void main() {
+                    uint lane = WaveGetLaneIndex();
+                    uint missing = WaveMultiPrefixSum(lane);
+                    uint invalid = WaveMultiPrefixBitOr(lane, lane);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: WaveMultiPrefixSum requires value and ballot arguments"
+            in spv_code
         )
         assert (
-            "WARNING: QuadReadAcrossX is not supported by the SPIR-V backend yet"
-            in (spv_code)
+            "WARNING: WaveMultiPrefixBitOr requires a uvec4 ballot argument" in spv_code
         )
+        assert "OpGroupNonUniformPartitionNV" not in spv_code
+        assert "PartitionedExclusiveScanNV" not in spv_code
+
+    def test_compute_unsupported_wave_intrinsics_emit_diagnostics(self):
+        source_code = """
+        shader ComputeWaveDiagnostics {
+            compute {
+                void main() {
+                    uint lane = WaveGetLaneIndex();
+                    uvec4 matched = WaveMatch(lane, lane);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "WARNING: WaveMatch requires exactly one argument" in spv_code
+        assert "OpGroupNonUniformPartitionNV" not in spv_code
         assert "Unknown expression type WaveOpNode" not in spv_code
+
+    def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics(
+        self,
+    ):
+        gen = VulkanSPIRVCodeGen()
+
+        trace_result = gen.process_expression(
+            RayTracingOpNode("TraceRay", [1, 2, 3, 4, 5, 6, 7, 8])
+        )
+        report_result = gen.process_expression(RayTracingOpNode("ReportHit", [1.0, 0]))
+        proceed_result = gen.process_expression(RayQueryOpNode("Proceed", "rq", []))
+        ray_t_result = gen.process_expression(RayQueryOpNode("CommittedRayT", "rq", []))
+        origin_result = gen.process_expression(
+            RayQueryOpNode("CandidateObjectRayOrigin", "rq", [])
+        )
+        mesh_result = gen.process_expression(MeshOpNode("SetMeshOutputCounts", [3, 1]))
+
+        spv_code = "\n".join(gen.code_lines)
+
+        assert trace_result.type.base_type == "uint"
+        assert report_result.type.base_type == "bool"
+        assert proceed_result.type.base_type == "bool"
+        assert ray_t_result.type.base_type == "float"
+        assert gen.vector_component_type_and_count(origin_result.type.base_type) == (
+            "float",
+            3,
+        )
+        assert mesh_result.type.base_type == "uint"
+        assert (
+            "WARNING: SPIR-V backend does not lower ray tracing operation "
+            "TraceRay yet; using a default uint value"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V backend does not lower ray tracing operation "
+            "ReportHit yet; using a default bool value"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V backend does not lower ray query operation "
+            "CandidateObjectRayOrigin yet; using a default vec3 value"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V backend does not lower mesh shader operation "
+            "SetMeshOutputCounts yet; using a default uint value"
+        ) in spv_code
+        assert "Unknown expression type RayTracingOpNode" not in spv_code
+        assert "Unknown expression type RayQueryOpNode" not in spv_code
+        assert "Unknown expression type MeshOpNode" not in spv_code
+
+    def test_unsupported_ray_mesh_ir_fallback_module_validates(self, tmp_path):
+        bool_type = PrimitiveType("bool")
+        float_type = PrimitiveType("float")
+        vec3_type = PrimitiveType("vec3")
+        void_type = PrimitiveType("void")
+
+        entry_point = FunctionNode(
+            name="main",
+            return_type=void_type,
+            parameters=[],
+            body=BlockNode(
+                [
+                    VariableNode(
+                        "accepted",
+                        bool_type,
+                        RayTracingOpNode("ReportHit", [1.0, 0]),
+                    ),
+                    VariableNode(
+                        "advanced",
+                        bool_type,
+                        RayQueryOpNode("Proceed", "rq", []),
+                    ),
+                    VariableNode(
+                        "hitDistance",
+                        float_type,
+                        RayQueryOpNode("CandidateRayT", "rq", []),
+                    ),
+                    VariableNode(
+                        "origin",
+                        vec3_type,
+                        RayQueryOpNode("CandidateObjectRayOrigin", "rq", []),
+                    ),
+                    ExpressionStatementNode(MeshOpNode("SetMeshOutputCounts", [3, 1])),
+                    ExpressionStatementNode(
+                        RayTracingOpNode("TraceRay", [1, 2, 3, 4, 5, 6, 7, 8])
+                    ),
+                ]
+            ),
+        )
+        shader_node = ShaderNode(
+            name="UnsupportedRayMeshFallbacks",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            stages={
+                ShaderStage.COMPUTE: StageNode(
+                    ShaderStage.COMPUTE,
+                    entry_point,
+                    execution_config={"local_size": (1, 1, 1)},
+                )
+            },
+        )
+
+        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
+
+        assert "OpEntryPoint GLCompute" in spv_code
+        assert "OpExecutionMode" in spv_code
+        assert "ReportHit yet; using a default bool value" in spv_code
+        assert "Proceed yet; using a default bool value" in spv_code
+        assert "CandidateRayT yet; using a default float value" in spv_code
+        assert "CandidateObjectRayOrigin yet; using a default vec3 value" in spv_code
+        assert "SetMeshOutputCounts yet; using a default uint value" in spv_code
+        assert "TraceRay yet; using a default uint value" in spv_code
+        assert "Unknown expression type" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_integer_image_atomics_emit_spirv_atomic_operations(self):
         source_code = """

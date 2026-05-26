@@ -111,6 +111,7 @@ class SlangCodeGen:
         self.indent_str = "    "
         self.variable_types = {}
         self.image_resource_types = {}
+        self.image_resource_accesses = {}
         self.helper_functions = {}
         self.helper_name_aliases = {}
         self.user_symbol_names = set()
@@ -180,6 +181,7 @@ class SlangCodeGen:
             self._generating = True
             self.variable_types = {}
             self.image_resource_types = {}
+            self.image_resource_accesses = {}
             self.helper_functions = {}
             self.helper_name_aliases = {}
             self.user_symbol_names = self.collect_user_symbol_names(ast)
@@ -1538,6 +1540,9 @@ class SlangCodeGen:
             self.image_resource_types[name] = self.map_resource_type_with_format(
                 type_name, node
             )
+            access = self.explicit_resource_access(node)
+            if access is not None:
+                self.image_resource_accesses[name] = access
 
     def binding_index_value(self, value, prefixes=()):
         if hasattr(value, "value") and value.value is not None:
@@ -2090,6 +2095,7 @@ class SlangCodeGen:
         """Render one CrossGL function or shader entry point as Slang code."""
         saved_variable_types = self.variable_types.copy()
         saved_image_resource_types = self.image_resource_types.copy()
+        saved_image_resource_accesses = self.image_resource_accesses.copy()
         saved_function_return_type = self.current_function_return_type
         saved_shader_type = self.current_shader_type
         saved_identifier_aliases = self.identifier_aliases.copy()
@@ -2283,6 +2289,7 @@ class SlangCodeGen:
         result += "}"
         self.variable_types = saved_variable_types
         self.image_resource_types = saved_image_resource_types
+        self.image_resource_accesses = saved_image_resource_accesses
         self.current_function_return_type = saved_function_return_type
         self.current_shader_type = saved_shader_type
         self.identifier_aliases = saved_identifier_aliases
@@ -4762,6 +4769,42 @@ class SlangCodeGen:
                     return format_name
         return None
 
+    def explicit_resource_access(self, node):
+        if node is None:
+            return None
+
+        access_names = {
+            "read": "readonly",
+            "readonly": "readonly",
+            "write": "writeonly",
+            "writeonly": "writeonly",
+            "read_write": "readwrite",
+            "readwrite": "readwrite",
+            "access::read": "readonly",
+            "access::write": "writeonly",
+            "access::read_write": "readwrite",
+        }
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            access = access_names.get(str(qualifier).lower())
+            if access is not None:
+                return access
+
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name == "access":
+                arguments = getattr(attr, "arguments", []) or []
+                if not arguments:
+                    continue
+                raw_access = self.attribute_value_to_string(arguments[0])
+                if raw_access is None:
+                    continue
+                access = access_names.get(str(raw_access).lower())
+            else:
+                access = access_names.get(attr_name)
+            if access is not None:
+                return access
+        return None
+
     def map_resource_type_with_format(self, type_name, node=None):
         type_name = self.type_name_string(type_name)
         if type_name is None:
@@ -4839,6 +4882,12 @@ class SlangCodeGen:
             return None
         return self.image_resource_types.get(image_name)
 
+    def image_resource_access(self, image_arg):
+        image_name = self.get_expression_name(image_arg)
+        if not image_name:
+            return None
+        return self.image_resource_accesses.get(image_name)
+
     def image_resource_element_type(self, image_type):
         image_type = self.resource_base_type(image_type)
         if not image_type or "<" not in image_type or not image_type.endswith(">"):
@@ -4858,17 +4907,30 @@ class SlangCodeGen:
             return "0"
         return "0.0"
 
+    def unsupported_image_access_call(self, operation, reason, result_type=None):
+        comment = f"/* unsupported Slang image access: {operation} {reason} */"
+        if result_type is None:
+            return comment
+        return f"{comment} {self.zero_value_for_type(result_type)}"
+
     def image_load_expression(self, args):
         image_name = self.generate_expression(args[0])
         coord = self.generate_expression(args[1])
+        image_type = self.image_resource_type(args[0])
+        element_type = self.image_resource_element_type(image_type)
+        if self.image_resource_access(args[0]) == "writeonly":
+            return self.unsupported_image_access_call(
+                "imageLoad",
+                "requires readable image resource",
+                element_type or self.current_expression_expected_type or "uint",
+            )
+
         if len(args) >= 3:
             sample = self.generate_expression(args[2])
             load_expr = f"{image_name}[{coord}, {sample}]"
         else:
             load_expr = f"{image_name}[{coord}]"
 
-        image_type = self.image_resource_type(args[0])
-        element_type = self.image_resource_element_type(image_type)
         if self.vector_size(element_type) and self.is_scalar_value_type(
             self.current_expression_expected_type
         ):
@@ -4891,6 +4953,11 @@ class SlangCodeGen:
     def image_store_expression(self, args):
         image_name = self.generate_expression(args[0])
         coord = self.generate_expression(args[1])
+        if self.image_resource_access(args[0]) == "readonly":
+            return self.unsupported_image_access_call(
+                "imageStore", "requires writable image resource"
+            )
+
         if len(args) >= 4:
             sample = self.generate_expression(args[2])
             value = self.image_store_value_expression(args[0], args[3])
@@ -5246,6 +5313,13 @@ class SlangCodeGen:
 
         image_type = self.resource_base_type(self.image_resource_type(args[0]))
         base_helper_name = self.image_atomic_helper_name(operation, image_type)
+        if self.image_resource_access(args[0]) in {"readonly", "writeonly"}:
+            return self.unsupported_image_atomic_call(
+                operation,
+                "requires readwrite image resource",
+                image_type,
+            )
+
         if not base_helper_name:
             reason = (
                 "requires scalar int or uint "

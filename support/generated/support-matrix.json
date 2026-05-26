@@ -260,7 +260,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 362,
+        "unsupported_marker_count": 366,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 488
+        "test_count": 491
       },
       "translator_codegen": {
         "exists": true,
@@ -379,7 +379,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 13,
+        "unsupported_marker_count": 12,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -392,10 +392,6 @@
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "self.emit(f\"; WARNING: {operation} is not supported by the SPIR-V backend yet\")"
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "f\"; WARNING: {operation} does not support {result_type.type.base_type}\""
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -441,7 +437,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 371
+        "test_count": 377
       },
       "translator_codegen": {
         "exists": true,
@@ -555,7 +551,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 257
+        "test_count": 263
       },
       "translator_codegen": {
         "exists": true,
@@ -633,7 +629,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 280
+        "test_count": 290
       },
       "translator_codegen": {
         "exists": true,
@@ -657,7 +653,7 @@
         "path": "crosstl/backend/Mojo"
       },
       "signals": {
-        "unsupported_marker_count": 22,
+        "unsupported_marker_count": 31,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
@@ -717,27 +713,27 @@
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "\"Unsupported buffer_append for Mojo codegen; \""
+            "text": "raise ValueError(f\"Unsupported Mojo swizzle '{member}'\")"
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "\"Unsupported buffer_consume for Mojo codegen; \""
+            "text": "raise ValueError(f\"Unsupported Mojo texture operation {operation}\")"
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "\"Unsupported Append for Mojo codegen; \""
+            "text": "\"Unsupported Mojo synchronization operation \""
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "\"Unsupported Consume for Mojo codegen; \""
+            "text": "f\"{sync_type}; arguments are not supported\""
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "f\"Unsupported {helper_base} for Mojo codegen; \""
+            "text": "raise ValueError(f\"Unsupported Mojo synchronization operation {sync_type}\")"
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "f\"Unsupported {helper_base} for Mojo codegen; \""
+            "text": "\"Unsupported Mojo wave intrinsic \""
           }
         ]
       },
@@ -747,7 +743,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 274
+        "test_count": 290
       },
       "translator_codegen": {
         "exists": true,
@@ -861,7 +857,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 485
+        "test_count": 491
       },
       "translator_codegen": {
         "exists": true,
@@ -885,7 +881,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 71,
+        "unsupported_marker_count": 76,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -937,6 +933,22 @@
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "def unsupported_image_access_call(self, operation, reason, result_type=None):"
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "comment = f\"/* unsupported Slang image access: {operation} {reason} */\""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "return self.unsupported_image_access_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "return self.unsupported_image_access_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "def unsupported_structured_buffer_call(self, operation, reason, result_type=None):"
           },
           {
@@ -950,22 +962,6 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "def unsupported_byte_address_buffer_call(self, operation, reason, result_type=None):"
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return f\"/* unsupported Slang byte-address buffer: {operation} {reason} */\""
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "f\"/* unsupported Slang byte-address buffer: {operation} {reason} */ \""
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_structured_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_structured_buffer_call("
           }
         ]
       },
@@ -975,7 +971,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 309
+        "test_count": 310
       },
       "translator_codegen": {
         "exists": true,
@@ -990,8 +986,8 @@
       "category": "source",
       "feature": "Native preprocessor handling",
       "feature_id": "source.preprocessing",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Mesh/task IR operation nodes emit deterministic unsupported diagnostics with type-correct fallback values. Real SPIR-V mesh/task stage entry-point and payload lowering is not implemented yet.",
+      "status": "diagnostic"
     },
     {
       "backend": "CUDA",
@@ -1035,8 +1031,8 @@
       "category": "source",
       "feature": "Native preprocessor handling",
       "feature_id": "source.preprocessing",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Storage-image readonly/writeonly access metadata is tracked for Slang RWTexture resources; invalid reads, writes, and image atomics emit deterministic diagnostics. Structured-buffer and byte-address-buffer access qualifiers are not audited yet.",
+      "status": "partial"
     },
     {
       "backend": "CUDA",
@@ -1296,7 +1292,7 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "Mojo codegen rejects mesh/task/object stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
+      "notes": "Mojo codegen rejects mesh/task/object stages and mesh IR intrinsics explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
       "status": "unsupported"
     },
     {
@@ -1350,8 +1346,8 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Ray tracing and ray query IR operation nodes emit deterministic unsupported diagnostics with type-correct fallback values. Real SPIR-V ray tracing stage and RayQuery lowering is not implemented yet.",
+      "status": "diagnostic"
     },
     {
       "backend": "CUDA",
@@ -1377,7 +1373,7 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "Mojo codegen rejects ray tracing stages explicitly; no Mojo ray pipeline ABI is implemented in this repo.",
+      "notes": "Mojo codegen rejects ray tracing stages, ray tracing intrinsics, and ray query methods explicitly; no Mojo ray pipeline ABI is implemented in this repo.",
       "status": "unsupported"
     },
     {
@@ -2457,7 +2453,7 @@
       "category": "images",
       "feature": "Storage image load/store",
       "feature_id": "image.storage",
-      "notes": "Covers RWTexture load/store for scalar, vector, explicit-format, array, formatted-image, and multisample storage images using Slang subscript access, plus typed helper generation for formatted image queries. Access-qualifier enforcement and compiler-backed coverage remain incomplete.",
+      "notes": "Covers RWTexture load/store for scalar, vector, explicit-format, array, formatted-image, and multisample storage images using Slang subscript access, plus typed helper generation and deterministic readonly/writeonly access diagnostics. Compiler-backed coverage remains incomplete.",
       "status": "partial"
     },
     {
@@ -2502,7 +2498,7 @@
       "category": "images",
       "feature": "Image atomics",
       "feature_id": "image.atomics",
-      "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, image arrays, and deterministic diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete.",
+      "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, image arrays, deterministic readonly/writeonly access diagnostics, and diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete.",
       "status": "partial"
     },
     {
@@ -2655,7 +2651,7 @@
       "category": "language",
       "feature": "Wave/subgroup intrinsics",
       "feature_id": "language.wave_intrinsics",
-      "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, and WaveReadLaneFirst to SPIR-V GroupNonUniform operations with Vulkan 1.1 spirv-as/spirv-val coverage. Quad, WaveMatch, and WaveMultiPrefix forms still emit deterministic diagnostics.",
+      "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, QuadRead*, WaveMatch, and WaveMultiPrefix* to SPIR-V GroupNonUniform operations with spirv-as/spirv-val coverage where tools are available. Dynamic or out-of-range quad lanes and invalid multi-prefix masks emit deterministic diagnostics.",
       "status": "partial"
     },
     {
@@ -2682,8 +2678,8 @@
       "category": "language",
       "feature": "Wave/subgroup intrinsics",
       "feature_id": "language.wave_intrinsics",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Mojo has no target-native subgroup ABI in this backend; WaveOpNode forms are rejected deterministically instead of stringifying unsupported IR.",
+      "status": "validated_rejection"
     },
     {
       "backend": "Rust",
@@ -3091,14 +3087,19 @@
           "status": "unknown"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics"
+          ],
+          "notes": "Storage-image readonly/writeonly access metadata is tracked for Slang RWTexture resources; invalid reads, writes, and image atomics emit deterministic diagnostics. Structured-buffer and byte-address-buffer access qualifiers are not audited yet.",
+          "status": "partial"
         },
         "vulkan": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
+          ],
+          "notes": "Mesh/task IR operation nodes emit deterministic unsupported diagnostics with type-correct fallback values. Real SPIR-V mesh/task stage entry-point and payload lowering is not implemented yet.",
+          "status": "diagnostic"
         }
       }
     },
@@ -3449,9 +3450,10 @@
         },
         "mojo": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen"
           ],
-          "notes": "Mojo codegen rejects mesh/task/object stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
+          "notes": "Mojo codegen rejects mesh/task/object stages and mesh IR intrinsics explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
           "status": "unsupported"
         },
         "opengl": {
@@ -3558,9 +3560,11 @@
         },
         "mojo": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_are_rejected_for_mojo_codegen"
           ],
-          "notes": "Mojo codegen rejects ray tracing stages explicitly; no Mojo ray pipeline ABI is implemented in this repo.",
+          "notes": "Mojo codegen rejects ray tracing stages, ray tracing intrinsics, and ray query methods explicitly; no Mojo ray pipeline ABI is implemented in this repo.",
           "status": "unsupported"
         },
         "opengl": {
@@ -3588,9 +3592,12 @@
           "status": "partial"
         },
         "vulkan": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
+          ],
+          "notes": "Ray tracing and ray query IR operation nodes emit deterministic unsupported diagnostics with type-correct fallback values. Real SPIR-V ray tracing stage and RayQuery lowering is not implemented yet.",
+          "status": "diagnostic"
         }
       }
     },
@@ -5077,11 +5084,12 @@
         "slang": {
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_load_store_emit_slang_subscript_access",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_explicit_image_formats_emit_slang_storage_element_types",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_arrays_preserve_expression_sizes",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_queries_emit_typed_slang_helpers"
           ],
-          "notes": "Covers RWTexture load/store for scalar, vector, explicit-format, array, formatted-image, and multisample storage images using Slang subscript access, plus typed helper generation for formatted image queries. Access-qualifier enforcement and compiler-backed coverage remain incomplete.",
+          "notes": "Covers RWTexture load/store for scalar, vector, explicit-format, array, formatted-image, and multisample storage images using Slang subscript access, plus typed helper generation and deterministic readonly/writeonly access diagnostics. Compiler-backed coverage remains incomplete.",
           "status": "partial"
         },
         "vulkan": {
@@ -5155,10 +5163,11 @@
         "slang": {
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_integer_image_atomics_emit_slang_interlocked_helpers",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_integer_image_array_atomics_preserve_expression_indices",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_unsupported_image_atomics_emit_slang_diagnostic_stubs"
           ],
-          "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, image arrays, and deterministic diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete.",
+          "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, image arrays, deterministic readonly/writeonly access diagnostics, and diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete.",
           "status": "partial"
         },
         "vulkan": {
@@ -5554,9 +5563,11 @@
           "status": "unsupported"
         },
         "mojo": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_wave_intrinsics_are_rejected_for_mojo_codegen"
+          ],
+          "notes": "Mojo has no target-native subgroup ABI in this backend; WaveOpNode forms are rejected deterministically instead of stringifying unsupported IR.",
+          "status": "validated_rejection"
         },
         "opengl": {
           "evidence": [
@@ -5583,10 +5594,14 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_lane_intrinsics_emit_subgroup_builtins",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_intrinsics_emit_group_non_uniform_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_quad_wave_intrinsics_emit_group_non_uniform_quad_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_quad_read_lane_requires_literal_lane_index",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_match_and_multi_prefix_emit_partitioned_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_multi_prefix_requires_uvec4_ballot",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_unsupported_wave_intrinsics_emit_diagnostics",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_wave_intrinsics_compute_validates_with_spirv_tools"
           ],
-          "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, and WaveReadLaneFirst to SPIR-V GroupNonUniform operations with Vulkan 1.1 spirv-as/spirv-val coverage. Quad, WaveMatch, and WaveMultiPrefix forms still emit deterministic diagnostics.",
+          "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, QuadRead*, WaveMatch, and WaveMultiPrefix* to SPIR-V GroupNonUniform operations with spirv-as/spirv-val coverage where tools are available. Dynamic or out-of-range quad lanes and invalid multi-prefix masks emit deterministic diagnostics.",
           "status": "partial"
         }
       }
@@ -5887,9 +5902,9 @@
         "diagnostic": 0,
         "partial": 27,
         "supported": 10,
-        "unknown": 1,
+        "unknown": 0,
         "unsupported": 5,
-        "validated_rejection": 0
+        "validated_rejection": 1
       },
       "opengl": {
         "diagnostic": 0,
@@ -5909,17 +5924,17 @@
       },
       "slang": {
         "diagnostic": 0,
-        "partial": 19,
+        "partial": 20,
         "supported": 14,
-        "unknown": 10,
+        "unknown": 9,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "vulkan": {
-        "diagnostic": 0,
+        "diagnostic": 2,
         "partial": 16,
         "supported": 17,
-        "unknown": 10,
+        "unknown": 8,
         "unsupported": 0,
         "validated_rejection": 0
       }

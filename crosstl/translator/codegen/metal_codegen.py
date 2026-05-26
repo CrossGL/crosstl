@@ -397,6 +397,7 @@ class MetalCodeGen:
         self.current_metal_mesh_payload_type = None
         self.current_metal_mesh_output_accumulators = {}
         self.current_metal_non_thread_payload_parameters = set()
+        self.current_readonly_metal_mesh_payload_parameters = set()
         self.current_readonly_raw_buffer_parameters = set()
         self.metal_program_mesh_payload_type = None
         self.lowered_glsl_buffer_block_struct_names = set()
@@ -1691,6 +1692,9 @@ class MetalCodeGen:
         previous_metal_non_thread_payload_parameters = (
             self.current_metal_non_thread_payload_parameters
         )
+        previous_readonly_metal_mesh_payload_parameters = (
+            self.current_readonly_metal_mesh_payload_parameters
+        )
         previous_readonly_raw_buffer_parameters = (
             self.current_readonly_raw_buffer_parameters
         )
@@ -1723,6 +1727,7 @@ class MetalCodeGen:
         self.current_metal_mesh_payload_type = None
         self.current_metal_mesh_output_accumulators = {}
         self.current_metal_non_thread_payload_parameters = set()
+        self.current_readonly_metal_mesh_payload_parameters = set()
         self.current_readonly_raw_buffer_parameters = set()
         self.local_variable_types = {}
         self.current_address_space_variables = {}
@@ -1781,6 +1786,9 @@ class MetalCodeGen:
             if self.is_metal_mesh_payload_parameter(shader_type, p):
                 self.current_metal_mesh_payload_parameter = p.name
                 self.current_metal_mesh_payload_type = self.map_type(raw_param_type)
+                self.current_address_space_variables[p.name] = "object_data"
+                if shader_type == "mesh":
+                    self.current_readonly_metal_mesh_payload_parameters.add(p.name)
             if (
                 self.metal_ray_payload_parameter_declaration(
                     param_type, p.name, p, shader_type
@@ -1924,6 +1932,9 @@ class MetalCodeGen:
             self.current_metal_non_thread_payload_parameters = (
                 previous_metal_non_thread_payload_parameters
             )
+            self.current_readonly_metal_mesh_payload_parameters = (
+                previous_readonly_metal_mesh_payload_parameters
+            )
             self.current_readonly_raw_buffer_parameters = (
                 previous_readonly_raw_buffer_parameters
             )
@@ -1980,6 +1991,7 @@ class MetalCodeGen:
                 )
                 self.current_metal_mesh_payload_parameter = payload_name
                 self.current_metal_mesh_payload_type = payload_type
+                self.current_address_space_variables[payload_name] = "object_data"
             mesh_grid_properties_parameter = self.metal_mesh_grid_properties_parameter(
                 shader_type, func, reserved_parameter_names
             )
@@ -2089,6 +2101,9 @@ class MetalCodeGen:
         )
         self.current_metal_non_thread_payload_parameters = (
             previous_metal_non_thread_payload_parameters
+        )
+        self.current_readonly_metal_mesh_payload_parameters = (
+            previous_readonly_metal_mesh_payload_parameters
         )
         self.current_readonly_raw_buffer_parameters = (
             previous_readonly_raw_buffer_parameters
@@ -3355,6 +3370,11 @@ class MetalCodeGen:
         )
         if unsupported_store is not None:
             return unsupported_store
+        readonly_mesh_payload_store = (
+            self.readonly_metal_mesh_payload_assignment_diagnostic(target)
+        )
+        if readonly_mesh_payload_store is not None:
+            return readonly_mesh_payload_store
         readonly_raw_buffer_store = self.readonly_raw_buffer_assignment_diagnostic(
             target
         )
@@ -3975,6 +3995,11 @@ class MetalCodeGen:
             )
             if readonly_raw_buffer_call is not None:
                 return readonly_raw_buffer_call
+            address_space_call = self.address_space_call_diagnostic(
+                argument_func_name, expr.args
+            )
+            if address_space_call is not None:
+                return address_space_call
             self.validate_function_image_access_arguments(func_name, expr.args)
             args = self.generate_function_call_arguments(argument_func_name, expr.args)
             if func_name in self.user_function_names:
@@ -4702,7 +4727,6 @@ class MetalCodeGen:
                 "parameter */"
             )
 
-        payload_value = self.generate_expression(payload_expr)
         payload_type = self.expression_result_type(payload_expr)
         if payload_type is not None:
             mapped_payload_type = self.map_type(payload_type)
@@ -4716,7 +4740,33 @@ class MetalCodeGen:
                     f"{self.current_metal_mesh_payload_type} */"
                 )
 
+        payload_source_diagnostic = self.metal_dispatch_mesh_payload_source_diagnostic(
+            payload_expr
+        )
+        if payload_source_diagnostic is not None:
+            return payload_source_diagnostic
+
+        payload_value = self.generate_expression(payload_expr)
         return f"{self.current_metal_mesh_payload_parameter} = {payload_value}"
+
+    def metal_dispatch_mesh_payload_source_diagnostic(self, payload_expr):
+        payload_name = self.assignment_target_root_name(payload_expr)
+        if not payload_name:
+            return (
+                "/* unsupported Metal mesh payload dispatch: "
+                "payload argument must be a threadgroup lvalue */"
+            )
+
+        address_space = self.argument_address_space(payload_expr)
+        if address_space == "threadgroup":
+            return None
+
+        source_address_space = address_space or "unknown"
+        return (
+            "/* unsupported Metal mesh payload dispatch: payload argument "
+            f"'{payload_name}' uses {source_address_space} address space; "
+            "DispatchMesh payload requires a threadgroup lvalue */"
+        )
 
     def generate_buffer_call(self, func_name, args):
         if func_name == "buffer_load" and len(args) >= 2:
@@ -5700,6 +5750,46 @@ class MetalCodeGen:
             )
         return None
 
+    def argument_address_space(self, arg):
+        arg_name = self.assignment_target_root_name(arg)
+        if arg_name in self.current_address_space_variables:
+            return self.current_address_space_variables[arg_name]
+        if arg_name in self.local_variable_types:
+            return "thread"
+        return None
+
+    def address_space_call_diagnostic(self, func_name, call_args):
+        if func_name not in self.user_function_names:
+            return None
+        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        for index, arg in enumerate(call_args):
+            if index >= len(parameter_nodes):
+                continue
+            parameter = parameter_nodes[index]
+            raw_param_type = getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            expected_address_space = self.parameter_variable_address_space(
+                raw_param_type, parameter
+            )
+            if expected_address_space is None:
+                continue
+            actual_address_space = self.argument_address_space(arg)
+            if (
+                actual_address_space is None
+                or actual_address_space == expected_address_space
+            ):
+                continue
+            arg_name = self.assignment_target_root_name(arg)
+            parameter_name = getattr(parameter, "name", f"arg{index}")
+            return (
+                "/* unsupported Metal address-space call: argument "
+                f"'{arg_name}' uses {actual_address_space} address space but "
+                f"parameter '{parameter_name}' of '{func_name}' requires "
+                f"{expected_address_space} */"
+            )
+        return None
+
     def pointer_pointee_type_name(self, vtype):
         if isinstance(vtype, PointerType):
             return self.type_name_string(vtype.pointee_type)
@@ -5734,6 +5824,15 @@ class MetalCodeGen:
         return (
             "/* unsupported Metal raw buffer store: readonly buffer "
             f"'{root_name}' cannot be written */"
+        )
+
+    def readonly_metal_mesh_payload_assignment_diagnostic(self, target):
+        root_name = self.assignment_target_root_name(target)
+        if root_name not in self.current_readonly_metal_mesh_payload_parameters:
+            return None
+        return (
+            "/* unsupported Metal mesh payload store: mesh payload "
+            f"'{root_name}' is const object_data in mesh stages */"
         )
 
     def metal_mesh_payload_parameter_declaration(

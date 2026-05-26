@@ -940,6 +940,7 @@ class HipParser:
             param_type += self.parse_array_suffix()
             params.append({"type": param_type, "name": param_name})
 
+            self.skip_newlines()
             if self.match("COMMA"):
                 self.advance()
                 self.skip_newlines()

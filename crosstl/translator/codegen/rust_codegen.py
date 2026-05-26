@@ -1704,8 +1704,9 @@ class RustCodeGen:
 
         if size is None:
             rust_type = f"Vec<{element_type}>"
+            source_type = f"{element_type_name}[]"
             if isinstance(initial_value, ArrayLiteralNode):
-                target_type = f"{element_type_name}[]"
+                target_type = source_type
                 initializer = self.generate_expression_with_type(
                     initial_value, target_type, static_context=True
                 )
@@ -1717,8 +1718,9 @@ class RustCodeGen:
                 lazy_lock = False
         else:
             rust_type = f"[{element_type}; {size}]"
+            source_type = f"{element_type_name}[{size}]"
             if isinstance(initial_value, ArrayLiteralNode):
-                target_type = f"{element_type_name}[{size}]"
+                target_type = source_type
                 initializer = self.generate_expression_with_type(
                     initial_value, target_type, static_context=True
                 )
@@ -1729,6 +1731,7 @@ class RustCodeGen:
                 initializer = self.rust_static_default_initializer(rust_type)
                 lazy_lock = False
 
+        self.register_variable_type(node.name, source_type, scope="static")
         return self.generate_static_declaration(
             node.name, rust_type, initializer, lazy_lock=lazy_lock
         )
@@ -2590,7 +2593,7 @@ class RustCodeGen:
                     return f"{indent_str}return ({values});\n"
                 else:
                     # Single return value
-                    return_expr = self.generate_expression_with_type(
+                    return_expr = self.generate_return_expression_with_type(
                         stmt.value, self.current_return_type
                     )
                     return_expr = self.normalize_assignment_rhs(
@@ -2713,7 +2716,13 @@ class RustCodeGen:
         code += f"{indent_str}}}\n"
         return code
 
-    def generate_match(self, node, indent):
+    def generate_match(
+        self,
+        node,
+        indent,
+        expression_target_type=None,
+        return_context=False,
+    ):
         indent_str = "    " * indent
         arm_indent = "    " * (indent + 1)
         subject_expr = getattr(node, "expression", "")
@@ -2754,7 +2763,12 @@ class RustCodeGen:
                     arm_pattern = f"{arm_pattern} if {self.generate_expression(guard)}"
 
                 code += f"{arm_indent}{arm_pattern} => {{\n"
-                code += self.generate_match_arm_body(body, indent + 2)
+                code += self.generate_match_arm_body(
+                    body,
+                    indent + 2,
+                    expression_target_type=expression_target_type,
+                    return_context=return_context,
+                )
                 code += f"{arm_indent}}},\n"
             finally:
                 self.variable_types = saved_variable_types
@@ -2768,9 +2782,20 @@ class RustCodeGen:
         code += f"{indent_str}}}\n"
         return code
 
-    def generate_match_expression(self, node, indent=0):
+    def generate_match_expression(
+        self,
+        node,
+        indent=0,
+        target_type=None,
+        return_context=False,
+    ):
         """Render a match node where Rust expects an expression value."""
-        code = self.generate_match(node, indent).rstrip("\n")
+        code = self.generate_match(
+            node,
+            indent,
+            expression_target_type=target_type,
+            return_context=return_context,
+        ).rstrip("\n")
         indent_str = "    " * indent
         if indent_str and code.startswith(indent_str):
             code = code[len(indent_str) :]
@@ -3321,9 +3346,60 @@ class RustCodeGen:
             code += self.generate_statement(stmt, indent)
         return code
 
-    def generate_match_arm_body(self, body, indent):
+    def generate_match_arm_body(
+        self,
+        body,
+        indent,
+        expression_target_type=None,
+        return_context=False,
+    ):
         statements = self.statement_list(body)
-        return "".join(self.generate_statement(stmt, indent) for stmt in statements)
+        if not return_context or not statements:
+            return "".join(self.generate_statement(stmt, indent) for stmt in statements)
+
+        code = "".join(
+            self.generate_statement(stmt, indent) for stmt in statements[:-1]
+        )
+        tail = statements[-1]
+        tail_expression = None
+        if isinstance(tail, ExpressionStatementNode) and getattr(
+            tail,
+            "is_tail_expression",
+            False,
+        ):
+            tail_expression = tail.expression
+        elif isinstance(
+            tail,
+            (
+                ArrayAccessNode,
+                ArrayLiteralNode,
+                BinaryOpNode,
+                ConstructorNode,
+                FunctionCallNode,
+                IdentifierNode,
+                LiteralNode,
+                MatchNode,
+                MemberAccessNode,
+                TernaryOpNode,
+                UnaryOpNode,
+            ),
+        ) or isinstance(tail, str):
+            tail_expression = tail
+
+        if tail_expression is None:
+            return code + self.generate_statement(tail, indent)
+
+        tail_value = self.generate_return_branch_expression_with_type(
+            tail_expression,
+            expression_target_type,
+        )
+        tail_value = self.normalize_assignment_rhs(
+            expression_target_type,
+            tail_expression,
+            tail_value,
+            "=",
+        )
+        return code + f"{'    ' * indent}{tail_value}\n"
 
     def statement_list(self, body):
         if hasattr(body, "statements"):
@@ -3389,13 +3465,23 @@ class RustCodeGen:
 
     def generate_array_declaration(self, node, indent=0):
         indent_str = "    " * indent
-        element_type = self.map_type(node.element_type)
+        element_type_name = self.convert_type_node_to_string(node.element_type)
+        element_type = self.map_type(element_type_name)
         size = get_array_size_from_node(node)
 
         if size is None:
-            return f"{indent_str}let {node.name}: Vec<{element_type}> = Vec::new();\n"
+            rust_type = f"Vec<{element_type}>"
+            source_type = f"{element_type_name}[]"
         else:
-            return f"{indent_str}let {node.name}: [{element_type}; {size}] = [Default::default(); {size}];\n"
+            rust_type = f"[{element_type}; {size}]"
+            source_type = f"{element_type_name}[{size}]"
+
+        self.register_variable_type(node.name, source_type, scope="local")
+        initializer = self.local_array_default_initializer(rust_type)
+        return (
+            f"{indent_str}{self.local_let_keyword(node)} {node.name}: "
+            f"{rust_type} = {initializer};\n"
+        )
 
     def generate_expression_with_type(self, expr, target_type, static_context=False):
         if isinstance(expr, MatchNode):
@@ -3413,6 +3499,290 @@ class RustCodeGen:
             if function_call is not None:
                 return function_call
         return self.generate_expression(expr)
+
+    def generate_return_expression_with_type(self, expr, target_type):
+        direct_move = self.generate_direct_return_move_expression(expr)
+        if direct_move is not None:
+            return direct_move
+        member_move = self.generate_return_member_access_expression(expr)
+        if member_move is not None:
+            return member_move
+        if isinstance(expr, TernaryOpNode):
+            return self.generate_return_ternary_expression(expr, target_type)
+        if isinstance(expr, MatchNode):
+            return self.generate_match_expression(
+                expr,
+                target_type=target_type,
+                return_context=True,
+            )
+        if isinstance(expr, ConstructorNode):
+            return self.generate_return_constructor_expression(expr)
+        if isinstance(expr, FunctionCallNode):
+            function_call = self.generate_return_function_call_expression(
+                expr,
+                target_type,
+            )
+            if function_call is not None:
+                return function_call
+        return self.generate_expression_with_type(expr, target_type)
+
+    def generate_return_branch_expression_with_type(self, expr, target_type):
+        direct_move = self.generate_direct_return_move_expression(expr)
+        if direct_move is not None:
+            return direct_move
+        member_move = self.generate_return_member_access_expression(expr)
+        if member_move is not None:
+            return member_move
+        if isinstance(expr, TernaryOpNode):
+            return self.generate_return_ternary_expression(expr, target_type)
+        if isinstance(expr, MatchNode):
+            return self.generate_match_expression(
+                expr,
+                target_type=target_type,
+                return_context=True,
+            )
+        if isinstance(expr, ConstructorNode):
+            return self.generate_return_constructor_expression(expr)
+        if isinstance(expr, FunctionCallNode):
+            function_call = self.generate_return_function_call_expression(
+                expr,
+                target_type,
+            )
+            if function_call is not None:
+                return function_call
+        return self.generate_expression_with_type(expr, target_type)
+
+    def generate_return_ternary_expression(self, expr, target_type):
+        condition_expr = getattr(expr, "condition", "")
+        true_expr = getattr(expr, "true_expr", "")
+        false_expr = getattr(expr, "false_expr", "")
+
+        bool_vector_ternary = self.generate_bool_vector_ternary_expression(
+            condition_expr,
+            true_expr,
+            false_expr,
+            target_type,
+        )
+        if bool_vector_ternary is not None:
+            return bool_vector_ternary
+
+        condition = self.generate_condition_expression(condition_expr)
+        branch_type = target_type or self.expression_result_type(expr)
+        true_value = self.generate_return_branch_expression_with_type(
+            true_expr,
+            branch_type,
+        )
+        false_value = self.generate_return_branch_expression_with_type(
+            false_expr,
+            branch_type,
+        )
+        true_value = self.normalize_typed_expression_value(
+            true_expr,
+            true_value,
+            branch_type,
+        )
+        false_value = self.normalize_typed_expression_value(
+            false_expr,
+            false_value,
+            branch_type,
+        )
+        return f"(if {condition} {{ {true_value} }} else {{ {false_value} }})"
+
+    def generate_return_function_call_expression(self, expr, target_type=None):
+        func_expr = getattr(expr, "function", getattr(expr, "name", "unknown"))
+        func_name = self.function_call_name(func_expr)
+        if not isinstance(func_name, str):
+            return None
+
+        args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+        callee = func_name
+
+        if self.is_user_defined_function(func_name):
+            param_types = self.user_function_param_types.get(func_name, [])
+            generated_args = self.generate_return_call_args_with_types(
+                args,
+                param_types,
+            )
+            return f"{callee}({', '.join(generated_args)})"
+
+        struct_constructor = self.generate_return_struct_new_call_with_typed_args(
+            func_name,
+            args,
+        )
+        if struct_constructor is not None:
+            return struct_constructor
+
+        return None
+
+    def generate_return_constructor_expression(self, expr):
+        type_name = self.convert_type_node_to_string(expr.constructor_type)
+        rust_type = self.map_type(type_name)
+
+        named_arguments = getattr(expr, "named_arguments", {}) or {}
+        if named_arguments:
+            argument_values = list(named_arguments.values())
+            move_counts = self.return_direct_move_identifier_counts(argument_values)
+            fields = []
+            for name, value in named_arguments.items():
+                member_type = self.resolve_struct_member_type(type_name, name)
+                field_value = self.generate_return_argument_with_type(
+                    value,
+                    member_type,
+                    move_counts,
+                )
+                fields.append(f"{name}: {field_value}")
+            return f"{rust_type} {{ {', '.join(fields)} }}"
+
+        arguments = getattr(expr, "arguments", []) or []
+        member_types = self.resolve_struct_positional_member_types(type_name)
+        args = self.generate_return_call_args_with_types(arguments, member_types)
+        return f"{self.rust_constructor_path(rust_type)}::new({', '.join(args)})"
+
+    def generate_return_struct_new_call_with_typed_args(self, func_name, args):
+        if not func_name.endswith("::new"):
+            return None
+
+        struct_name = func_name[: -len("::new")]
+        member_types = list((self.struct_member_types.get(struct_name) or {}).values())
+        if not member_types:
+            return None
+
+        generated_args = self.generate_return_call_args_with_types(args, member_types)
+        return f"{func_name}({', '.join(generated_args)})"
+
+    def generate_return_call_args_with_types(self, args, target_types):
+        move_counts = self.return_direct_move_identifier_counts(args)
+        generated_args = []
+        for index, arg in enumerate(args):
+            target_type = target_types[index] if index < len(target_types) else None
+            generated_args.append(
+                self.generate_return_argument_with_type(
+                    arg,
+                    target_type,
+                    move_counts,
+                )
+            )
+        return generated_args
+
+    def generate_return_argument_with_type(self, arg, target_type, move_counts):
+        name = self.simple_identifier_expression_name(arg)
+        if name is not None and self.should_move_direct_return_identifier(name):
+            move_counts[name] -= 1
+            if move_counts[name] == 0:
+                return self.lazy_static_identifier_expression(name)
+
+        arg_expr = self.generate_expression_with_type(arg, target_type)
+        return self.normalize_typed_expression_value(arg, arg_expr, target_type)
+
+    def return_direct_move_identifier_counts(self, args):
+        counts = {}
+        for arg in args:
+            name = self.simple_identifier_expression_name(arg)
+            if name is None or not self.should_move_direct_return_identifier(name):
+                continue
+            counts[name] = counts.get(name, 0) + 1
+        return counts
+
+    def generate_constructor_call_args_with_types(self, args, target_types):
+        generated_args = []
+        for index, arg in enumerate(args):
+            target_type = target_types[index] if index < len(target_types) else None
+            generated_args.append(
+                self.generate_constructor_argument_with_type(arg, target_type)
+            )
+        return generated_args
+
+    def generate_constructor_argument_with_type(self, arg, target_type):
+        arg_expr = self.generate_expression_with_type(arg, target_type)
+        return self.normalize_typed_expression_value(arg, arg_expr, target_type)
+
+    def generate_return_member_access_expression(self, expr):
+        if not self.should_move_member_return_place(expr):
+            return None
+
+        swizzle_components = self.member_swizzle_components(expr)
+        if swizzle_components is not None:
+            return None
+
+        obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))
+        member = getattr(expr, "member", "")
+        self.member_object_depth += 1
+        try:
+            obj = self.generate_expression(obj_expr)
+        finally:
+            self.member_object_depth -= 1
+        obj = self.lazy_static_object_expression(obj_expr, obj)
+        return f"{obj}.{member}"
+
+    def should_move_member_return_place(self, expr):
+        if not isinstance(expr, MemberAccessNode):
+            return False
+
+        member_type = self.expression_result_type(expr)
+        if member_type is None or self.type_is_copy_derivable(
+            member_type,
+            self.current_generic_param_names,
+        ):
+            return False
+
+        object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
+        if self.return_place_contains_index_access(object_expr):
+            return False
+
+        root_name = self.return_place_root_name(object_expr)
+        if root_name is None or self.is_static_reference(root_name):
+            return False
+
+        return root_name in self.variable_types
+
+    def return_place_contains_index_access(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return True
+        if isinstance(expr, MemberAccessNode):
+            object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
+            return self.return_place_contains_index_access(object_expr)
+        return False
+
+    def return_place_root_name(self, expr):
+        if isinstance(expr, IdentifierNode):
+            return expr.name
+        if isinstance(expr, VariableNode):
+            return expr.name
+        if isinstance(expr, str):
+            return expr if expr.isidentifier() else None
+        if isinstance(expr, MemberAccessNode):
+            object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
+            return self.return_place_root_name(object_expr)
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+            return self.return_place_root_name(array_expr)
+        return None
+
+    def generate_direct_return_move_expression(self, expr):
+        name = self.simple_identifier_expression_name(expr)
+        if name is None or not self.should_move_direct_return_identifier(name):
+            return None
+        return self.lazy_static_identifier_expression(name)
+
+    def should_move_direct_return_identifier(self, name):
+        if self.is_static_reference(name):
+            return False
+        value_type = self.variable_types.get(name)
+        if value_type is None or self.type_is_copy_derivable(
+            value_type,
+            self.current_generic_param_names,
+        ):
+            return False
+        return True
+
+    def simple_identifier_expression_name(self, expr):
+        if isinstance(expr, IdentifierNode):
+            return expr.name
+        if isinstance(expr, VariableNode):
+            return expr.name
+        if isinstance(expr, str) and expr.isidentifier():
+            return expr
+        return None
 
     def generate_binary_expression(self, expr, target_type=None):
         left_expr = getattr(expr, "left", "")
@@ -3760,15 +4130,20 @@ class RustCodeGen:
 
         named_arguments = getattr(expr, "named_arguments", {}) or {}
         if named_arguments:
-            fields = ", ".join(
-                f"{name}: {self.generate_expression(value)}"
-                for name, value in named_arguments.items()
-            )
-            return f"{rust_type} {{ {fields} }}"
+            fields = []
+            for name, value in named_arguments.items():
+                member_type = self.resolve_struct_member_type(type_name, name)
+                field_value = self.generate_constructor_argument_with_type(
+                    value,
+                    member_type,
+                )
+                fields.append(f"{name}: {field_value}")
+            return f"{rust_type} {{ {', '.join(fields)} }}"
 
         arguments = getattr(expr, "arguments", []) or []
-        args = ", ".join(self.generate_expression(arg) for arg in arguments)
-        return f"{self.rust_constructor_path(rust_type)}::new({args})"
+        member_types = self.resolve_struct_positional_member_types(type_name)
+        args = self.generate_constructor_call_args_with_types(arguments, member_types)
+        return f"{self.rust_constructor_path(rust_type)}::new({', '.join(args)})"
 
     def rust_array_padding_expression(self, base_type, static_context=False):
         if static_context:
@@ -6251,6 +6626,30 @@ class RustCodeGen:
         generic_params = self.struct_generic_params.get(base_type, [])
         substitutions = dict(zip(generic_params, generic_args))
         return self.substitute_type_parameters(member_type, substitutions)
+
+    def resolve_struct_positional_member_types(self, object_type):
+        if object_type is None:
+            return []
+        if hasattr(object_type, "name") or hasattr(object_type, "element_type"):
+            object_type = self.convert_type_node_to_string(object_type)
+        else:
+            object_type = str(object_type)
+
+        exact_members = self.struct_member_types.get(object_type)
+        if exact_members is not None:
+            return list(exact_members.values())
+
+        base_type, generic_args = self.generic_type_parts(object_type)
+        member_types = self.struct_member_types.get(base_type)
+        if not member_types:
+            return []
+
+        generic_params = self.struct_generic_params.get(base_type, [])
+        substitutions = dict(zip(generic_params, generic_args))
+        return [
+            self.substitute_type_parameters(member_type, substitutions)
+            for member_type in member_types.values()
+        ]
 
     def generic_type_parts(self, type_name):
         if hasattr(type_name, "name") or hasattr(type_name, "element_type"):

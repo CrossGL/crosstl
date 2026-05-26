@@ -1,0 +1,397 @@
+"""Optional hipcc-backed smoke tests for native HIP frontend samples."""
+
+import shutil
+import subprocess
+
+import pytest
+
+from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
+from crosstl.backend.HIP.HipLexer import HipLexer
+from crosstl.backend.HIP.HipParser import HipParser
+
+
+def compile_hip_if_hipcc_available(hip_code, tmp_path):
+    """Compile native HIP source when hipcc is available."""
+    hipcc = shutil.which("hipcc")
+    if hipcc is None:
+        pytest.skip("hipcc is not installed")
+
+    source_path = tmp_path / "native_smoke.hip"
+    object_path = tmp_path / "native_smoke.o"
+    source_path.write_text(hip_code, encoding="utf-8")
+
+    result = subprocess.run(
+        [hipcc, "-std=c++17", "-c", str(source_path), "-o", str(object_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr + "\n\n" + hip_code
+
+
+def convert_native_hip_to_crossgl(hip_code):
+    tokens = HipLexer(hip_code).tokenize()
+    ast = HipParser(tokens).parse()
+    return HipToCrossGLConverter().generate(ast)
+
+
+def test_native_hip_atomic_barrier_smoke_parses_and_compiles_if_available(tmp_path):
+    """Smoke native HIP atomics, shared memory, barriers, and fences."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    __global__ void native_smoke(int* out, int* counter) {
+        __shared__ int scratch[32];
+        int lane = threadIdx.x;
+        scratch[lane] = lane;
+        __syncthreads();
+        int old = atomicAdd(counter, 1);
+        __threadfence();
+        out[lane] = old + scratch[lane];
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Kernel: native_smoke" in crossgl
+    assert "var<workgroup> scratch: array<i32, 32>;" in crossgl
+    assert "var lane: i32 = gl_LocalInvocationID.x;" in crossgl
+    assert "scratch[lane] = lane;" in crossgl
+    assert "workgroupBarrier();" in crossgl
+    assert "var old: i32 = atomicAdd(counter, 1);" in crossgl
+    assert "memoryBarrier();" in crossgl
+    assert "out[lane] = (old + scratch[lane]);" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
+def test_native_hip_vector_constructor_smoke_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP vector constructors and vector member reads."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    __global__ void vector_smoke(float* out) {
+        float2 uv = make_float2(1.0f, 2.0f);
+        float4 color = make_float4(uv.x, uv.y, 3.0f, 4.0f);
+        out[threadIdx.x] = color.w;
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Kernel: vector_smoke" in crossgl
+    assert "var uv: vec2<f32> = vec2<f32>(1.0f, 2.0f);" in crossgl
+    assert "var color: vec4<f32> = vec4<f32>(uv.x, uv.y, 3.0f, 4.0f);" in crossgl
+    assert "out[gl_LocalInvocationID.x] = color.w;" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
+def test_native_hip_texture_surface_smoke_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP texture and surface object access."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    __global__ void resource_smoke(hipTextureObject_t tex, hipSurfaceObject_t surf, float4* out) {
+        float2 uv = make_float2(0.25f, 0.75f);
+        int2 pixel = make_int2(threadIdx.x, 0);
+        float4 sampled = tex2D<float4>(tex, uv.x, uv.y);
+        float4 loaded = surf2Dread<float4>(
+            surf,
+            pixel.x * sizeof(float4),
+            pixel.y
+        );
+        surf2Dwrite(sampled, surf, pixel.x * sizeof(float4), pixel.y);
+        out[threadIdx.x] = loaded;
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Kernel: resource_smoke" in crossgl
+    assert "sampler2D tex" in crossgl
+    assert "image2D surf" in crossgl
+    assert (
+        "@group(0) @binding(2) var<storage, read_write> out: array<vec4<f32>>"
+        in crossgl
+    )
+    assert "var uv: vec2<f32> = vec2<f32>(0.25f, 0.75f);" in crossgl
+    assert "var pixel: vec2<i32> = vec2<i32>(gl_LocalInvocationID.x, 0);" in crossgl
+    assert "var sampled: vec4<f32> = texture(tex, vec2<f32>(uv.x, uv.y));" in crossgl
+    assert (
+        "var loaded: vec4<f32> = imageLoad(surf, vec2<i32>(pixel.x, pixel.y));"
+        in crossgl
+    )
+    assert "imageStore(surf, vec2<i32>(pixel.x, pixel.y), sampled);" in crossgl
+    assert "out[gl_LocalInvocationID.x] = loaded;" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
+def test_native_hip_texture_surface_lifecycle_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP texture and surface object lifecycle APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void resource_lifecycle(
+        hipResourceDesc* resourceDesc,
+        hipTextureDesc* textureDesc
+    ) {
+        hipTextureObject_t tex = 0;
+        hipSurfaceObject_t surf = 0;
+        hipCreateTextureObject(&tex, resourceDesc, textureDesc, NULL);
+        hipCreateSurfaceObject(&surf, resourceDesc);
+        hipDestroyTextureObject(tex);
+        hipDestroySurfaceObject(surf);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: resource_lifecycle" in crossgl
+    assert (
+        "void resource_lifecycle("
+        "ptr<hipResourceDesc> resourceDesc, ptr<hipTextureDesc> textureDesc)" in crossgl
+    )
+    assert "var tex: sampler = 0;" in crossgl
+    assert "var surf: image2D = 0;" in crossgl
+    assert (
+        "// HIP texture object create: tex, resource: resourceDesc, "
+        "texture desc: textureDesc, resource view: NULL"
+    ) in crossgl
+    assert "// HIP surface object create: surf, resource: resourceDesc" in crossgl
+    assert "// HIP texture object destroy: tex" in crossgl
+    assert "// HIP surface object destroy: surf" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
+def test_native_hip_memory_lifecycle_parses_and_compiles_if_available(tmp_path):
+    """Smoke native HIP allocation, memset, copy, and free APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void memory_lifecycle(float* host, size_t n) {
+        float* device = NULL;
+        hipMalloc((void**)&device, n * sizeof(float));
+        hipMemset(device, 0, n * sizeof(float));
+        hipMemcpy(device, host, n * sizeof(float), hipMemcpyHostToDevice);
+        hipMemcpy(host, device, n * sizeof(float), hipMemcpyDeviceToHost);
+        hipFree(device);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: memory_lifecycle" in crossgl
+    assert "void memory_lifecycle(ptr<f32> host, u32 n)" in crossgl
+    assert "var device: ptr<f32> = NULL;" in crossgl
+    assert "// HIP memory allocate: device, bytes: (n * sizeof(float))" in crossgl
+    assert "// HIP memory set: device, value: 0, bytes: (n * sizeof(float))" in crossgl
+    assert (
+        "// HIP memory copy: host -> device, bytes: (n * sizeof(float)), "
+        "kind: hipMemcpyHostToDevice"
+    ) in crossgl
+    assert (
+        "// HIP memory copy: device -> host, bytes: (n * sizeof(float)), "
+        "kind: hipMemcpyDeviceToHost"
+    ) in crossgl
+    assert "// HIP memory free: device" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
+def test_native_hip_stream_event_lifecycle_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP stream and event lifecycle APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void stream_event_lifecycle(float* elapsed_ms) {
+        hipStream_t stream;
+        hipEvent_t start;
+        hipEvent_t stop;
+        hipStreamCreateWithFlags(&stream, hipStreamNonBlocking);
+        hipEventCreate(&start);
+        hipEventCreate(&stop);
+        hipEventRecord(start, stream);
+        hipStreamWaitEvent(stream, start, 0);
+        hipEventRecord(stop, stream);
+        hipStreamSynchronize(stream);
+        hipEventSynchronize(stop);
+        hipEventElapsedTime(elapsed_ms, start, stop);
+        hipEventDestroy(start);
+        hipEventDestroy(stop);
+        hipStreamDestroy(stream);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: stream_event_lifecycle" in crossgl
+    assert "void stream_event_lifecycle(ptr<f32> elapsed_ms)" in crossgl
+    assert "var stream: hipStream_t;" in crossgl
+    assert "var start: hipEvent_t;" in crossgl
+    assert "var stop: hipEvent_t;" in crossgl
+    assert "// HIP stream create: stream, flags: hipStreamNonBlocking" in crossgl
+    assert "// HIP event create: start" in crossgl
+    assert "// HIP event create: stop" in crossgl
+    assert "// HIP event record: start, stream: stream" in crossgl
+    assert "// HIP stream wait event: stream waits for start, flags: 0" in crossgl
+    assert "// HIP event record: stop, stream: stream" in crossgl
+    assert "// HIP synchronize: stream" in crossgl
+    assert "// HIP event synchronize: stop" in crossgl
+    assert "// HIP event elapsed time: start -> stop, output: elapsed_ms" in crossgl
+    assert "// HIP event destroy: start" in crossgl
+    assert "// HIP event destroy: stop" in crossgl
+    assert "// HIP stream destroy: stream" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
+def test_native_hip_device_error_runtime_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP device selection and error query APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void device_error_smoke(int* count_out) {
+        int device = 0;
+        int count = 0;
+        hipDeviceProp_t props;
+        hipGetDevice(&device);
+        hipGetDeviceCount(&count);
+        hipSetDevice(device);
+        hipGetDeviceProperties(&props, device);
+        hipDeviceSynchronize();
+        hipError_t last = hipGetLastError();
+        hipError_t peek = hipPeekAtLastError();
+        const char* name = hipGetErrorName(last);
+        const char* message = hipGetErrorString(peek);
+        count_out[0] = count;
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: device_error_smoke" in crossgl
+    assert "void device_error_smoke(ptr<i32> count_out)" in crossgl
+    assert "var device: i32 = 0;" in crossgl
+    assert "var count: i32 = 0;" in crossgl
+    assert "var props: hipDeviceProp_t;" in crossgl
+    assert "// HIP get current device: output: device" in crossgl
+    assert "// HIP get device count: output: count" in crossgl
+    assert "// HIP set device: device" in crossgl
+    assert "// HIP get device properties: props, device: device" in crossgl
+    assert "// HIP device synchronize" in crossgl
+    assert "// HIP get last error" in crossgl
+    assert "var last: hipError_t = hipSuccess;" in crossgl
+    assert "// HIP peek at last error" in crossgl
+    assert "var peek: hipError_t = hipSuccess;" in crossgl
+    assert 'var name: ptr<i8> = /* HIP error name: last */ "";' in crossgl
+    assert 'var message: ptr<i8> = /* HIP error string: peek */ "";' in crossgl
+    assert "count_out[0] = count;" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
+def test_native_hip_host_pinned_memory_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP host-pinned allocation and registration APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void host_pinned_memory(float* registered, size_t n) {
+        float* host = NULL;
+        float* device = NULL;
+        unsigned int flags = 0;
+        hipHostMalloc((void**)&host, n * sizeof(float), hipHostMallocMapped);
+        hipHostGetDevicePointer((void**)&device, host, 0);
+        hipHostGetFlags(&flags, host);
+        hipHostRegister(registered, n * sizeof(float), hipHostRegisterMapped);
+        hipHostUnregister(registered);
+        hipHostFree(host);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: host_pinned_memory" in crossgl
+    assert "void host_pinned_memory(ptr<f32> registered, u32 n)" in crossgl
+    assert "var host: ptr<f32> = NULL;" in crossgl
+    assert "var device: ptr<f32> = NULL;" in crossgl
+    assert "var flags: u32 = 0;" in crossgl
+    assert (
+        "// HIP host memory allocate: host, bytes: (n * sizeof(float)), "
+        "flags: hipHostMallocMapped"
+    ) in crossgl
+    assert "// HIP host device pointer: output: device, host: host, flags: 0" in crossgl
+    assert "// HIP host memory flags: output: flags, host: host" in crossgl
+    assert (
+        "// HIP host memory register: registered, bytes: (n * sizeof(float)), "
+        "flags: hipHostRegisterMapped"
+    ) in crossgl
+    assert "// HIP host memory unregister: registered" in crossgl
+    assert "// HIP memory free: host" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
+def test_native_hip_ipc_handle_lifecycle_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP IPC memory and event handle APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void ipc_handle_lifecycle(float* device_ptr) {
+        hipIpcMemHandle_t mem_handle;
+        hipIpcEventHandle_t event_handle;
+        void* opened = NULL;
+        hipEvent_t event;
+        hipEvent_t opened_event;
+        hipIpcGetMemHandle(&mem_handle, device_ptr);
+        hipIpcOpenMemHandle(&opened, mem_handle, hipIpcMemLazyEnablePeerAccess);
+        hipIpcCloseMemHandle(opened);
+        hipEventCreateWithFlags(&event, hipEventInterprocess);
+        hipIpcGetEventHandle(&event_handle, event);
+        hipIpcOpenEventHandle(&opened_event, event_handle);
+        hipEventDestroy(event);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: ipc_handle_lifecycle" in crossgl
+    assert "void ipc_handle_lifecycle(ptr<f32> device_ptr)" in crossgl
+    assert "var mem_handle: hipIpcMemHandle_t;" in crossgl
+    assert "var event_handle: hipIpcEventHandle_t;" in crossgl
+    assert "var opened: ptr<void> = NULL;" in crossgl
+    assert "var event: hipEvent_t;" in crossgl
+    assert "var opened_event: hipEvent_t;" in crossgl
+    assert (
+        "// HIP IPC get memory handle: output: mem_handle, pointer: device_ptr"
+        in crossgl
+    )
+    assert (
+        "// HIP IPC open memory handle: output: opened, handle: mem_handle, "
+        "flags: hipIpcMemLazyEnablePeerAccess"
+    ) in crossgl
+    assert "// HIP IPC close memory handle: pointer: opened" in crossgl
+    assert "// HIP event create: event, flags: hipEventInterprocess" in crossgl
+    assert "// HIP IPC get event handle: output: event_handle, event: event" in crossgl
+    assert (
+        "// HIP IPC open event handle: output: opened_event, handle: event_handle"
+        in crossgl
+    )
+    assert "// HIP event destroy: event" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)

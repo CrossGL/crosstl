@@ -9,9 +9,12 @@ from ..ast import (
     AssignmentNode,
     BinaryOpNode,
     BreakNode,
+    BuiltinVariableNode,
     CaseNode,
+    CastNode,
     CbufferNode,
     ContinueNode,
+    ConstructorNode,
     DoWhileNode,
     EnumNode,
     ForInNode,
@@ -23,14 +26,22 @@ from ..ast import (
     LoopNode,
     MatchNode,
     MemberAccessNode,
+    MeshOpNode,
     ReturnNode,
     RangeNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
     ShaderNode,
     StructNode,
+    SwizzleNode,
     SwitchNode,
+    SyncNode,
     TernaryOpNode,
+    TextureNode,
+    TextureOpNode,
     UnaryOpNode,
     VariableNode,
+    WaveOpNode,
     WhileNode,
     WildcardPatternNode,
 )
@@ -2270,6 +2281,8 @@ class MojoCodeGen:
                 update = context["update"]
                 return f"{indent_str}{update}\n{indent_str}continue\n"
             return f"{indent_str}continue\n"
+        elif isinstance(stmt, SyncNode):
+            return self.generate_sync_node(stmt, indent)
         elif isinstance(stmt, ArrayAccessNode):
             # ArrayAccessNode should not appear as a statement by itself - it's likely a misclassified array declaration
             # Try to handle it gracefully
@@ -2875,6 +2888,18 @@ class MojoCodeGen:
             return self.generate_assignment(expr)
         elif isinstance(expr, ArrayLiteralNode):
             return self.generate_array_literal_expression(expr)
+        elif isinstance(expr, ConstructorNode):
+            return self.generate_constructor_node(expr)
+        elif isinstance(expr, CastNode):
+            return self.generate_cast_node(expr)
+        elif isinstance(expr, SwizzleNode):
+            return self.generate_swizzle_node(expr)
+        elif isinstance(expr, BuiltinVariableNode):
+            return self.generate_builtin_variable_node(expr)
+        elif isinstance(expr, TextureNode):
+            return self.generate_texture_node(expr)
+        elif isinstance(expr, TextureOpNode):
+            return self.generate_texture_op_node(expr)
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand)
             op = self.map_operator(expr.op)
@@ -2891,6 +2916,14 @@ class MojoCodeGen:
             else:
                 # Fallback for malformed ArrayAccessNode
                 return str(expr)
+        elif isinstance(expr, WaveOpNode):
+            return self.generate_wave_op(expr)
+        elif isinstance(expr, RayTracingOpNode):
+            return self.generate_ray_tracing_op(expr)
+        elif isinstance(expr, RayQueryOpNode):
+            return self.generate_ray_query_op(expr)
+        elif isinstance(expr, MeshOpNode):
+            return self.generate_mesh_op(expr)
         elif isinstance(expr, FunctionCallNode):
             # Extract function name properly (might be IdentifierNode)
             func_expr = getattr(expr, "function", None)
@@ -3005,9 +3038,14 @@ class MojoCodeGen:
             enum_variant = self.map_enum_variant_reference(f"{obj}.{expr.member}")
             if enum_variant != f"{obj}.{expr.member}":
                 return enum_variant
+            obj_type = self.expression_result_type(expr.object)
+            if (
+                obj_type in self.struct_types
+                and expr.member in self.struct_types[obj_type]
+            ):
+                return f"{obj}.{expr.member}"
             swizzle_indices = self.get_swizzle_indices(expr.member)
             if swizzle_indices is not None:
-                obj_type = self.expression_result_type(expr.object)
                 return self.generate_swizzle(
                     expr.object, obj, obj_type, expr.member, swizzle_indices
                 )
@@ -3059,6 +3097,264 @@ class MojoCodeGen:
                     array_match.group(2)
                     return f"{array_name}"  # Just return the array name for now
             return expr_str
+
+    def generate_constructor_node(self, expr):
+        type_name = self.convert_type_node_to_string(expr.constructor_type)
+        mapped_type = self.map_type(type_name)
+        positional_args = [
+            self.generate_expression(argument) for argument in expr.arguments
+        ]
+        named_args = [
+            f"{name}={self.generate_expression(value)}"
+            for name, value in expr.named_arguments.items()
+        ]
+        return f"{mapped_type}({', '.join([*positional_args, *named_args])})"
+
+    def generate_cast_node(self, expr):
+        target_type = self.convert_type_node_to_string(expr.target_type)
+        target_vector = self.vector_type_info(target_type)
+        value = self.generate_expression(expr.expression)
+        if target_vector is not None:
+            source_vector = self.vector_type_info(
+                self.expression_result_type(expr.expression)
+            )
+            target_dtype, target_width, target_storage_width, _ = target_vector
+            if source_vector is not None:
+                _, source_width, source_storage_width, _ = source_vector
+                if (
+                    source_width == target_width
+                    and source_storage_width == target_storage_width
+                ):
+                    return f"{value}.cast[{target_dtype}]()"
+            target_name = self.normalize_generic_vector_type_name(target_type)
+            if target_name in self.vector_constructor_info:
+                return self.generate_vector_constructor(target_name, [expr.expression])
+
+        return f"{self.map_type(target_type)}({value})"
+
+    def generate_swizzle_node(self, expr):
+        member = expr.components
+        swizzle_indices = self.get_swizzle_indices(member)
+        if swizzle_indices is None:
+            raise ValueError(f"Unsupported Mojo swizzle '{member}'")
+        obj = self.generate_expression(expr.vector_expr)
+        obj_type = self.expression_result_type(expr.vector_expr)
+        return self.generate_swizzle(
+            expr.vector_expr, obj, obj_type, member, swizzle_indices
+        )
+
+    def generate_builtin_variable_node(self, expr):
+        name = self.map_semantic(expr.builtin_name)
+        component = getattr(expr, "component", None)
+        if not component:
+            return name
+
+        swizzle_indices = self.get_swizzle_indices(component)
+        if swizzle_indices is None:
+            return f"{name}.{component}"
+        obj_type = self.variable_types.get(name, "vec4")
+        return self.generate_swizzle(expr, name, obj_type, component, swizzle_indices)
+
+    def generate_texture_node(self, expr):
+        args = [expr.texture_expr]
+        if expr.sampler_expr is not None:
+            args.append(expr.sampler_expr)
+        args.append(expr.coordinates)
+
+        if expr.level is not None and expr.offset is not None:
+            return self.generate_resource_builtin_call(
+                [*args, expr.level, expr.offset], "sample_lod_offset", "vec4"
+            )
+        if expr.level is not None:
+            return self.generate_texture_call([*args, expr.level], "sample_lod")
+        if expr.offset is not None:
+            return self.generate_resource_builtin_call(
+                [*args, expr.offset], "sample_offset", "vec4"
+            )
+        return self.generate_texture_call(args, "sample")
+
+    def texture_op_args(self, expr, include_sampler=True):
+        args = [expr.texture_expr]
+        if include_sampler and expr.sampler_expr is not None:
+            args.append(expr.sampler_expr)
+        args.extend(expr.arguments)
+        return args
+
+    def generate_texture_op_node(self, expr):
+        operation = getattr(expr, "operation", "")
+        args = self.texture_op_args(expr)
+
+        if operation in {"Sample", "sample", "texture"}:
+            if len(expr.arguments) >= 2:
+                return self.generate_resource_builtin_call(
+                    args, "sample_offset", "vec4"
+                )
+            return self.generate_texture_call(args, "sample")
+        if operation in {"SampleLevel", "SampleLOD", "sample_lod", "textureLod"}:
+            if len(expr.arguments) >= 3:
+                return self.generate_resource_builtin_call(
+                    args, "sample_lod_offset", "vec4"
+                )
+            return self.generate_texture_call(args, "sample_lod")
+        if operation in {"SampleGrad", "sample_grad", "textureGrad"}:
+            if len(expr.arguments) >= 4:
+                return self.generate_resource_builtin_call(
+                    args, "sample_grad_offset", "vec4"
+                )
+            return self.generate_texture_call(args, "sample_grad")
+
+        resource_builtin = {
+            "SampleCmp": (
+                (
+                    "texture_compare_offset"
+                    if len(expr.arguments) >= 3
+                    else "texture_compare"
+                ),
+                "float",
+            ),
+            "SampleCmpLevelZero": (
+                (
+                    "texture_compare_offset"
+                    if len(expr.arguments) >= 3
+                    else "texture_compare"
+                ),
+                "float",
+            ),
+            "Gather": (
+                (
+                    "texture_gather_offset"
+                    if len(expr.arguments) >= 2
+                    else "texture_gather"
+                ),
+                "vec4",
+            ),
+            "GatherRed": (
+                (
+                    "texture_gather_offset"
+                    if len(expr.arguments) >= 2
+                    else "texture_gather"
+                ),
+                "vec4",
+            ),
+            "GatherGreen": (
+                (
+                    "texture_gather_offset"
+                    if len(expr.arguments) >= 2
+                    else "texture_gather"
+                ),
+                "vec4",
+            ),
+            "GatherBlue": (
+                (
+                    "texture_gather_offset"
+                    if len(expr.arguments) >= 2
+                    else "texture_gather"
+                ),
+                "vec4",
+            ),
+            "GatherAlpha": (
+                (
+                    "texture_gather_offset"
+                    if len(expr.arguments) >= 2
+                    else "texture_gather"
+                ),
+                "vec4",
+            ),
+            "GatherCmp": (
+                (
+                    "texture_gather_compare_offset"
+                    if len(expr.arguments) >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
+        }.get(operation)
+        if resource_builtin is not None:
+            helper_base, return_kind = resource_builtin
+            return self.generate_resource_builtin_call(args, helper_base, return_kind)
+
+        if operation in MOJO_GENERIC_TEXTURE_BUILTINS:
+            helper_base, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[operation]
+            return self.generate_resource_builtin_call(args, helper_base, return_kind)
+        if operation in {"Load", "texelFetch"}:
+            fetch_args = self.texture_op_args(expr, include_sampler=False)
+            if len(fetch_args) == 2:
+                fetch_args.append(0)
+            return self.generate_texel_fetch_call(fetch_args)
+        if operation in {"GetDimensions", "textureSize"}:
+            return self.generate_resource_size_call(
+                self.texture_op_args(expr, include_sampler=False),
+                "texture_size",
+            )
+        if operation == "textureQueryLevels":
+            return self.generate_resource_query_levels_call(
+                self.texture_op_args(expr, include_sampler=False)
+            )
+
+        raise ValueError(f"Unsupported Mojo texture operation {operation}")
+
+    def generate_sync_node(self, stmt, indent):
+        sync_type = getattr(stmt, "sync_type", "")
+        if getattr(stmt, "arguments", None):
+            raise ValueError(
+                "Unsupported Mojo synchronization operation "
+                f"{sync_type}; arguments are not supported"
+            )
+
+        helper_name = MOJO_SYNC_BUILTINS.get(sync_type)
+        if helper_name is None:
+            raise ValueError(f"Unsupported Mojo synchronization operation {sync_type}")
+        self.required_sync_helpers.add(helper_name)
+        indent_str = "    " * indent
+        return f"{indent_str}{helper_name}()\n"
+
+    def builtin_variable_result_type(self, name):
+        if name in {
+            "SV_DispatchThreadID",
+            "SV_GroupID",
+            "SV_GroupThreadID",
+            "gl_GlobalInvocationID",
+            "gl_LocalInvocationID",
+            "gl_WorkGroupID",
+        }:
+            return "uvec3"
+        if name in {"SV_GroupIndex", "SV_InstanceID", "SV_VertexID"}:
+            return "uint"
+        if name in {"gl_InstanceID", "gl_VertexID"}:
+            return "int"
+        if name in {"SV_IsFrontFace", "gl_FrontFacing"}:
+            return "bool"
+        if name in {"SV_Depth", "gl_FragDepth"}:
+            return "float"
+        return self.variable_types.get(self.map_semantic(name), "vec4")
+
+    def generate_wave_op(self, expr):
+        operation = getattr(expr, "operation", "wave intrinsic")
+        raise ValueError(
+            "Unsupported Mojo wave intrinsic "
+            f"{operation}; Mojo backend does not model subgroup execution"
+        )
+
+    def generate_ray_tracing_op(self, expr):
+        operation = getattr(expr, "operation", "ray tracing intrinsic")
+        raise ValueError(
+            "Unsupported Mojo ray tracing intrinsic "
+            f"{operation}; Mojo backend does not model ray tracing pipelines"
+        )
+
+    def generate_ray_query_op(self, expr):
+        operation = getattr(expr, "operation", "ray query method")
+        raise ValueError(
+            "Unsupported Mojo ray query method "
+            f"{operation}; Mojo backend does not model ray queries"
+        )
+
+    def generate_mesh_op(self, expr):
+        operation = getattr(expr, "operation", "mesh intrinsic")
+        raise ValueError(
+            "Unsupported Mojo mesh intrinsic "
+            f"{operation}; Mojo backend does not model mesh/task pipelines"
+        )
 
     def generate_vector_constructor(self, func_name, args):
         helper_call = self.generate_constructor_helper_call(func_name, args)
@@ -4867,15 +5163,77 @@ class MojoCodeGen:
                     return "uint"
                 return "int"
             return self.function_return_types.get(func_name)
+        if isinstance(expr, ConstructorNode):
+            return self.convert_type_node_to_string(expr.constructor_type)
+        if isinstance(expr, CastNode):
+            return self.convert_type_node_to_string(expr.target_type)
+        if isinstance(expr, SwizzleNode):
+            return self.swizzle_result_type(
+                self.expression_result_type(expr.vector_expr),
+                len(expr.components),
+            )
+        if isinstance(expr, BuiltinVariableNode):
+            if expr.component:
+                base_type = self.builtin_variable_result_type(expr.builtin_name)
+                vector_info = self.vector_type_info(base_type)
+                if vector_info is not None:
+                    return MOJO_DTYPE_INFO[vector_info[0]][0]
+                return base_type
+            return self.builtin_variable_result_type(expr.builtin_name)
+        if isinstance(expr, TextureNode):
+            resource_type = self.map_type(
+                self.expression_result_type(expr.texture_expr)
+            )
+            if self.is_shadow_resource_type(resource_type):
+                return "float"
+            return "vec4"
+        if isinstance(expr, TextureOpNode):
+            operation = getattr(expr, "operation", "")
+            if operation in {
+                "SampleCmp",
+                "SampleCmpLevelZero",
+                "textureCompare",
+                "textureCompareOffset",
+                "textureCompareLod",
+                "textureCompareLodOffset",
+                "textureCompareGrad",
+                "textureCompareGradOffset",
+                "textureCompareProj",
+                "textureCompareProjOffset",
+                "textureCompareProjLod",
+                "textureCompareProjLodOffset",
+                "textureCompareProjGrad",
+                "textureCompareProjGradOffset",
+            }:
+                return "float"
+            if operation == "textureQueryLod":
+                return "vec2"
+            if operation == "textureQueryLevels":
+                return "int"
+            if operation in {"GetDimensions", "textureSize"}:
+                resource_type = self.map_type(
+                    self.expression_result_type(expr.texture_expr)
+                )
+                size_type = MOJO_RESOURCE_SIZE_RETURNS.get(resource_type)
+                if size_type == "Int32":
+                    return "int"
+                if size_type == "SIMD[DType.int32, 2]":
+                    return "ivec2"
+                if size_type == "SIMD[DType.int32, 4]":
+                    return "ivec3"
+            return "vec4"
         if isinstance(expr, MemberAccessNode):
+            obj_type = self.expression_result_type(expr.object)
+            if (
+                obj_type in self.struct_types
+                and expr.member in self.struct_types[obj_type]
+            ):
+                return self.struct_types[obj_type].get(expr.member)
+            if obj_type in self.struct_types:
+                return None
             swizzle_indices = self.get_swizzle_indices(expr.member)
             if swizzle_indices is not None:
-                obj_type = self.expression_result_type(expr.object)
                 return self.swizzle_result_type(obj_type, len(swizzle_indices))
-
-            obj_type = self.expression_result_type(expr.object)
-            if obj_type in self.struct_types:
-                return self.struct_types[obj_type].get(expr.member)
         if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             return self.variable_types.get(getattr(expr, "name", ""))
         if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):

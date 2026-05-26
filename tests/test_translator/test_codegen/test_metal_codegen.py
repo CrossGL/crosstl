@@ -399,6 +399,52 @@ def test_metal_readonly_raw_buffer_calls_to_mutable_helpers_emit_diagnostic():
     assert "mutate(payload, values);" not in generated_code
 
 
+def test_metal_incompatible_helper_address_spaces_emit_diagnostics():
+    shader = """
+    shader MetalAddressSpaceMismatchCalls {
+        struct Payload {
+            float value;
+        };
+
+        void useThreadgroup(threadgroup Payload& scratch) {
+            scratch.value = 1.0;
+        }
+
+        void useDevice(device Payload& payload) {
+            payload.value = 2.0;
+        }
+
+        compute {
+            void main(device Payload* payload @buffer(0)) {
+                threadgroup Payload scratch;
+                useThreadgroup(payload[0]);
+                useDevice(scratch);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "void useThreadgroup(threadgroup Payload& scratch)" in generated_code
+    assert "void useDevice(device Payload& payload)" in generated_code
+    assert "threadgroup Payload scratch;" in generated_code
+    assert (
+        "/* unsupported Metal address-space call: argument 'payload' uses device "
+        "address space but parameter 'scratch' of 'useThreadgroup' requires "
+        "threadgroup */"
+    ) in generated_code
+    assert (
+        "/* unsupported Metal address-space call: argument 'scratch' uses "
+        "threadgroup address space but parameter 'payload' of 'useDevice' "
+        "requires device */"
+    ) in generated_code
+    assert "useThreadgroup(payload[0]);" not in generated_code
+    assert "useDevice(scratch);" not in generated_code
+
+
 def test_metal_parameter_address_space_qualifiers_reject_conflicts():
     shader = """
     shader MetalConflictingAddressSpaceParameters {
@@ -4015,6 +4061,60 @@ def test_metal_mesh_object_payload_parameters_use_object_data_address_space():
     assert "Payload payload [[payload]]" not in generated
 
 
+def test_metal_mesh_object_payload_helper_address_space_and_const_writes():
+    code = """
+    shader meshpipe {
+        struct Payload {
+            vec4 color;
+        };
+
+        void mutate(thread Payload& localPayload) {
+            localPayload.color = vec4(0.5, 0.5, 0.5, 1.0);
+        }
+
+        object {
+            void main(Payload payload @payload)
+                @max_total_threads_per_threadgroup(32)
+            {
+                mutate(payload);
+                payload.color = vec4(1.0, 0.0, 0.0, 1.0);
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            void main(Payload payload @payload)
+                @max_total_threads_per_threadgroup(32)
+            {
+                mutate(payload);
+                payload.color = vec4(0.0, 1.0, 0.0, 1.0);
+                vec4 color = payload.color;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "object_data Payload& payload [[payload]]" in generated
+    assert "const object_data Payload& payload [[payload]]" in generated
+    assert (
+        generated.count(
+            "/* unsupported Metal address-space call: argument 'payload' uses "
+            "object_data address space but parameter 'localPayload' of 'mutate' "
+            "requires thread */"
+        )
+        == 2
+    )
+    assert "payload.color = float4(1.0, 0.0, 0.0, 1.0);" in generated
+    assert (
+        "/* unsupported Metal mesh payload store: mesh payload 'payload' is const "
+        "object_data in mesh stages */"
+    ) in generated
+    assert "payload.color = float4(0.0, 1.0, 0.0, 1.0);" not in generated
+    assert "mutate(payload);" not in generated
+    assert "float4 color = payload.color;" in generated
+
+
 def test_metal_mesh_payload_dispatch_argument_generates_object_data_payload():
     code = """
     shader meshpipe {
@@ -4131,6 +4231,57 @@ def test_metal_mesh_payload_dispatch_type_mismatch_is_rejected():
 
     with pytest.raises(ValueError, match="DispatchMesh payload type.*MeshPayload"):
         generate_code(parse_code(tokenize_code(code)))
+
+
+def test_metal_mesh_payload_dispatch_rejects_invalid_sources():
+    code = """
+    shader meshpipe {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        MeshPayload makePayload() {
+            MeshPayload payload;
+            payload.meshlet = 1u;
+            return payload;
+        }
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                MeshPayload threadPayload;
+                DispatchMesh(1, 1, 1, makePayload());
+                DispatchMesh(1, 1, 1, threadPayload);
+            }
+        }
+
+        mesh {
+            void main(MeshPayload payload @mesh_payload)
+                @numthreads(1, 1, 1)
+                @max_vertices(1)
+                @max_primitives(1)
+                @outputtopology(point)
+            {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "object_data MeshPayload& _crossglMeshPayload [[payload]]" in generated
+    assert (
+        "/* unsupported Metal mesh payload dispatch: payload argument must be a "
+        "threadgroup lvalue */"
+    ) in generated
+    assert (
+        "/* unsupported Metal mesh payload dispatch: payload argument "
+        "'threadPayload' uses thread address space; DispatchMesh payload requires "
+        "a threadgroup lvalue */"
+    ) in generated
+    assert "_crossglMeshPayload = makePayload();" not in generated
+    assert "_crossglMeshPayload = threadPayload;" not in generated
+    assert generated.count("_crossglMeshGrid.set_threadgroups_per_grid(") == 2
+    assert "DispatchMesh(" not in generated
 
 
 def test_metal_mesh_object_stage_attributes_and_threadgroup_limits():

@@ -770,6 +770,98 @@ class TestCudaParser:
         assert body[4].value.name == "surf2Dread<float4>"
         assert body[4].value.args[0] == "legacySurface"
 
+    def test_qualified_resource_object_pointer_array_parsing(self):
+        """Test global CUDA resource object pointer arrays with qualifiers parse."""
+        code = """
+        const cudaTextureObject_t globalConstTextures[2];
+        cudaSurfaceObject_t *__restrict__ globalSurfaceRows[2];
+
+        void qualifiedResourceHandles(
+            const cudaTextureObject_t* __restrict__ textureObjects,
+            cudaSurfaceObject_t *__restrict__ surfaceObjects,
+            const cudaTextureObject_t textureArray[2],
+            cudaSurfaceObject_t *__restrict__ surfaceRows[2],
+            int row,
+            int slot,
+            int2 pixel,
+            float2 uv
+        ) {
+            float4 pointerSample = tex2D<float4>(
+                textureObjects[slot],
+                uv.x,
+                uv.y
+            );
+            float4 arraySample = tex2D<float4>(textureArray[slot], uv);
+            float4 globalSample = tex2D<float4>(globalConstTextures[slot], uv);
+            float4 pointerRead = surf2Dread<float4>(
+                surfaceObjects[slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                pointerRead,
+                surfaceObjects[slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 rowRead = surf2Dread<float4>(
+                surfaceRows[row][slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                rowRead,
+                surfaceRows[row][slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 globalRowRead = surf2Dread<float4>(
+                globalSurfaceRows[row][slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [(var.vtype, var.name) for var in ast.global_variables] == [
+            ("const cudaTextureObject_t[2]", "globalConstTextures"),
+            ("cudaSurfaceObject_t * __restrict__[2]", "globalSurfaceRows"),
+        ]
+
+        params = ast.functions[0].params
+        assert [param.vtype for param in params[:4]] == [
+            "const cudaTextureObject_t * __restrict__",
+            "cudaSurfaceObject_t * __restrict__",
+            "const cudaTextureObject_t[2]",
+            "cudaSurfaceObject_t * __restrict__[2]",
+        ]
+        assert [param.name for param in params[:4]] == [
+            "textureObjects",
+            "surfaceObjects",
+            "textureArray",
+            "surfaceRows",
+        ]
+
+        body = ast.functions[0].body
+        assert isinstance(body[0].value.args[0], ArrayAccessNode)
+        assert body[0].value.args[0].array == "textureObjects"
+        assert isinstance(body[1].value.args[0], ArrayAccessNode)
+        assert body[1].value.args[0].array == "textureArray"
+        assert isinstance(body[2].value.args[0], ArrayAccessNode)
+        assert body[2].value.args[0].array == "globalConstTextures"
+        assert isinstance(body[3].value.args[0], ArrayAccessNode)
+        assert body[3].value.args[0].array == "surfaceObjects"
+        assert isinstance(body[5].value.args[0], ArrayAccessNode)
+        assert isinstance(body[5].value.args[0].array, ArrayAccessNode)
+        assert body[5].value.args[0].array.array == "surfaceRows"
+        assert isinstance(body[7].value.args[0], ArrayAccessNode)
+        assert isinstance(body[7].value.args[0].array, ArrayAccessNode)
+        assert body[7].value.args[0].array.array == "globalSurfaceRows"
+
     def test_nested_template_argument_parsing(self):
         """Test nested template arguments that close with >>"""
         code = """
@@ -1395,6 +1487,58 @@ class TestCudaParser:
         assert pointer_write.object == "p"
         assert pointer_write.member == "value"
         assert pointer_write.is_pointer is True
+
+    def test_resource_member_access_through_cast_and_dereference_parsing(self):
+        """Test casted and dereferenced struct resource member access parsing."""
+        code = """
+        struct ResourcePair {
+            cudaTextureObject_t tex;
+            cudaSurfaceObject_t surf;
+        };
+
+        void usePair(void* raw, ResourcePair* pairPtr, int2 pixel, float2 uv) {
+            float4 sampled = tex2D<float4>(((ResourcePair*)raw)->tex, uv);
+            float4 loaded = surf2Dread<float4>(
+                (*pairPtr).surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                loaded,
+                ((ResourcePair*)raw)->surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        sampled_target = body[0].value.args[0]
+        loaded_target = body[1].value.args[0]
+        write_target = body[2].args[1]
+
+        assert isinstance(sampled_target, MemberAccessNode)
+        assert sampled_target.member == "tex"
+        assert sampled_target.is_pointer is True
+        assert isinstance(sampled_target.object, CastNode)
+        assert sampled_target.object.target_type == "ResourcePair *"
+        assert sampled_target.object.expression == "raw"
+        assert isinstance(loaded_target, MemberAccessNode)
+        assert loaded_target.member == "surf"
+        assert loaded_target.is_pointer is False
+        assert isinstance(loaded_target.object, UnaryOpNode)
+        assert loaded_target.object.op == "*"
+        assert loaded_target.object.operand == "pairPtr"
+        assert isinstance(write_target, MemberAccessNode)
+        assert write_target.member == "surf"
+        assert write_target.is_pointer is True
+        assert isinstance(write_target.object, CastNode)
+        assert write_target.object.target_type == "ResourcePair *"
+        assert write_target.object.expression == "raw"
 
     def test_bitwise_logical_and_shift_expression_parsing(self):
         """Test bitwise, shift, logical, and compound shift expressions"""

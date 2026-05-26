@@ -10,12 +10,28 @@ from crosstl.translator.ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
     ArrayNode,
+    ArrayType,
+    AssignmentNode,
+    BinaryOpNode,
+    ConstructorNode,
     ExecutionModel,
+    ExpressionStatementNode,
+    FunctionCallNode,
     FunctionNode,
     IdentifierNode,
+    LiteralPatternNode,
     LiteralNode,
+    MatchArmNode,
+    MatchNode,
+    MemberAccessNode,
+    NamedType,
+    ParameterNode,
     PrimitiveType,
+    ReturnNode,
     ShaderNode,
+    StructMemberNode,
+    StructNode,
+    TernaryOpNode,
     VariableNode,
 )
 from crosstl.translator.codegen.rust_codegen import RustCodeGen
@@ -3573,23 +3589,71 @@ def test_non_copy_identifier_reads_clone_in_value_contexts_and_compile(tmp_path)
 
 
 def test_non_copy_array_access_clones_in_value_contexts_and_compile(tmp_path):
-    code = """
-    shader NonCopyArrayAccess {
-        struct Payload {
-            float weights[];
-            int count;
-        };
+    payload_type = NamedType("Payload")
+    payloads_ref = IdentifierNode("payloads")
+    first_count = MemberAccessNode(IdentifierNode("first"), "count")
+    second_count = MemberAccessNode(IdentifierNode("second"), "count")
+    current_count = MemberAccessNode(
+        ArrayAccessNode(payloads_ref, LiteralNode(0, PrimitiveType("int"))),
+        "count",
+    )
+    ast = ShaderNode(
+        "NonCopyArrayAccess",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "sum",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("payloads", ArrayType(payload_type, 2)),
+                    ParameterNode("replacement", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "first",
+                        PrimitiveType("auto"),
+                        ArrayAccessNode(
+                            IdentifierNode("payloads"),
+                            LiteralNode(0, PrimitiveType("int")),
+                        ),
+                    ),
+                    VariableNode(
+                        "second",
+                        PrimitiveType("auto"),
+                        ArrayAccessNode(
+                            IdentifierNode("payloads"),
+                            LiteralNode(1, PrimitiveType("int")),
+                        ),
+                    ),
+                    AssignmentNode(
+                        ArrayAccessNode(
+                            IdentifierNode("payloads"),
+                            LiteralNode(0, PrimitiveType("int")),
+                        ),
+                        IdentifierNode("replacement"),
+                    ),
+                    ReturnNode(
+                        BinaryOpNode(
+                            BinaryOpNode(first_count, "+", second_count),
+                            "+",
+                            current_count,
+                        )
+                    ),
+                ],
+            )
+        ],
+    )
 
-        fn sum(Payload payloads[2], Payload replacement) -> int {
-            let first = payloads[0];
-            let second = payloads[1];
-            payloads[0] = replacement;
-            first.count + second.count + payloads[0].count
-        }
-    }
-    """
-
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(ast)
 
     assert "pub fn sum(mut payloads: [Payload; 2], replacement: Payload)" in (
         generated_code
@@ -3600,6 +3664,505 @@ def test_non_copy_array_access_clones_in_value_contexts_and_compile(tmp_path):
     assert "payloads[0].clone() =" not in generated_code
     assert "payloads.clone()[0]" not in generated_code
     assert "payloads[0].count" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_legacy_non_copy_array_nodes_default_with_from_fn_and_compile(tmp_path):
+    ast = ShaderNode(
+        "LegacyNonCopyArray",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[StructNode("Payload", [ArrayNode("float", "weights")])],
+        functions=[
+            FunctionNode(
+                "probe",
+                PrimitiveType("void"),
+                [],
+                [ArrayNode("Payload", "values", 2)],
+            )
+        ],
+    )
+
+    generated_code = generate_code(ast)
+    helper_code = RustCodeGen().generate_array_declaration(
+        ArrayNode("Payload", "values", 2), indent=1
+    )
+
+    expected = (
+        "let values: [Payload; 2] = " "std::array::from_fn(|_| Default::default());"
+    )
+    assert expected in generated_code
+    assert f"    {expected}\n" == helper_code
+    assert "[Default::default(); 2]" not in generated_code
+    assert "[Default::default(); 2]" not in helper_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_non_copy_identifier_returns_move_without_unneeded_clone_and_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    ast = ShaderNode(
+        "NonCopyReturns",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "take",
+                payload_type,
+                [ParameterNode("payload", payload_type)],
+                [ReturnNode(IdentifierNode("payload"))],
+            ),
+            FunctionNode(
+                "reuse_before_return",
+                payload_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    VariableNode(
+                        "snapshot",
+                        PrimitiveType("auto"),
+                        IdentifierNode("payload"),
+                    ),
+                    ReturnNode(IdentifierNode("payload")),
+                ],
+            ),
+            FunctionNode(
+                "return_array",
+                ArrayType(payload_type, 2),
+                [ParameterNode("values", ArrayType(payload_type, 2))],
+                [
+                    VariableNode(
+                        "first",
+                        PrimitiveType("auto"),
+                        ArrayAccessNode(
+                            IdentifierNode("values"),
+                            LiteralNode(0, PrimitiveType("int")),
+                        ),
+                    ),
+                    ReturnNode(IdentifierNode("values")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "pub fn take(payload: Payload) -> Payload" in generated_code
+    assert "pub fn reuse_before_return(payload: Payload) -> Payload" in generated_code
+    assert "pub fn return_array(values: [Payload; 2]) -> [Payload; 2]" in (
+        generated_code
+    )
+    assert "let snapshot: Payload = payload.clone();" in generated_code
+    assert "let first: Payload = values[0].clone();" in generated_code
+    assert generated_code.count("return payload;") == 2
+    assert "return values;" in generated_code
+    assert "return payload.clone();" not in generated_code
+    assert "return values.clone();" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_non_copy_ternary_and_match_returns_move_selected_branch_and_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    ast = ShaderNode(
+        "NonCopyBranchReturns",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "choose_ternary",
+                payload_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "snapshot",
+                        PrimitiveType("auto"),
+                        IdentifierNode("left"),
+                    ),
+                    ReturnNode(
+                        TernaryOpNode(
+                            IdentifierNode("flag"),
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        )
+                    ),
+                ],
+            ),
+            FunctionNode(
+                "choose_match",
+                payload_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    ReturnNode(
+                        MatchNode(
+                            IdentifierNode("flag"),
+                            [
+                                MatchArmNode(
+                                    LiteralPatternNode(
+                                        LiteralNode(True, PrimitiveType("bool"))
+                                    ),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            IdentifierNode("left"),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                                MatchArmNode(
+                                    LiteralPatternNode(
+                                        LiteralNode(False, PrimitiveType("bool"))
+                                    ),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            IdentifierNode("right"),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                            ],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "let snapshot: Payload = left.clone();" in generated_code
+    assert "return (if flag { left } else { right });" in generated_code
+    assert "true => {\n        left\n    }" in generated_code
+    assert "false => {\n        right\n    }" in generated_code
+    assert (
+        "left.clone()"
+        not in generated_code.split(
+            "pub fn choose_match",
+            maxsplit=1,
+        )[1]
+    )
+    assert "return (if flag { left.clone() } else { right.clone() });" not in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_non_copy_return_call_and_constructor_args_move_when_unique_and_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    wrapper_type = NamedType("Wrapper")
+    ast = ShaderNode(
+        "NonCopyReturnArguments",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "Wrapper",
+                [
+                    StructMemberNode("payload", payload_type),
+                    StructMemberNode("backup", payload_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "identity",
+                payload_type,
+                [ParameterNode("value", payload_type)],
+                [ReturnNode(IdentifierNode("value"))],
+            ),
+            FunctionNode(
+                "make_wrapper",
+                wrapper_type,
+                [
+                    ParameterNode("payload", payload_type),
+                    ParameterNode("backup", payload_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            wrapper_type,
+                            [IdentifierNode("payload"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_call",
+                payload_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("identity"),
+                            [IdentifierNode("payload")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_duplicate_call",
+                wrapper_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_wrapper"),
+                            [IdentifierNode("payload"), IdentifierNode("payload")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_constructor",
+                wrapper_type,
+                [
+                    ParameterNode("payload", payload_type),
+                    ParameterNode("backup", payload_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            wrapper_type,
+                            [IdentifierNode("payload"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_named_constructor",
+                wrapper_type,
+                [
+                    ParameterNode("payload", payload_type),
+                    ParameterNode("backup", payload_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            wrapper_type,
+                            [],
+                            named_arguments={
+                                "payload": IdentifierNode("payload"),
+                                "backup": IdentifierNode("backup"),
+                            },
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "return value;" in generated_code
+    assert "return Wrapper::new(payload, backup);" in generated_code
+    assert "return identity(payload);" in generated_code
+    assert "return make_wrapper(payload.clone(), payload);" in generated_code
+    assert "return Wrapper { payload: payload, backup: backup };" in generated_code
+    assert "identity(payload.clone())" not in generated_code
+    assert "Wrapper::new(payload.clone(), backup.clone())" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_struct_constructor_args_normalize_field_types_and_clone_non_copy_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    bundle_type = NamedType("Bundle")
+    bundle_members = [
+        StructMemberNode("weight", PrimitiveType("float")),
+        StructMemberNode("id", PrimitiveType("uint")),
+        StructMemberNode("ready", PrimitiveType("bool")),
+        StructMemberNode("payload", payload_type),
+    ]
+    ast = ShaderNode(
+        "TypedStructConstructors",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode("Bundle", bundle_members),
+        ],
+        functions=[
+            FunctionNode(
+                "build_named",
+                bundle_type,
+                [
+                    ParameterNode("index", PrimitiveType("int")),
+                    ParameterNode("payload", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "named",
+                        bundle_type,
+                        ConstructorNode(
+                            bundle_type,
+                            [],
+                            named_arguments={
+                                "weight": IdentifierNode("index"),
+                                "id": IdentifierNode("index"),
+                                "ready": IdentifierNode("index"),
+                                "payload": IdentifierNode("payload"),
+                            },
+                        ),
+                    ),
+                    ReturnNode(IdentifierNode("named")),
+                ],
+            ),
+            FunctionNode(
+                "build_positional",
+                bundle_type,
+                [
+                    ParameterNode("index", PrimitiveType("int")),
+                    ParameterNode("payload", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "built",
+                        bundle_type,
+                        ConstructorNode(
+                            bundle_type,
+                            [
+                                IdentifierNode("index"),
+                                IdentifierNode("index"),
+                                IdentifierNode("index"),
+                                IdentifierNode("payload"),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(IdentifierNode("built")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "let named: Bundle = Bundle { weight: (index as f32), "
+        "id: (index as u32), ready: (index != 0), "
+        "payload: payload.clone() };"
+    ) in generated_code
+    assert (
+        "let built: Bundle = Bundle::new((index as f32), "
+        "(index as u32), (index != 0), payload.clone());"
+    ) in generated_code
+    assert "weight: index" not in generated_code
+    assert "Bundle::new(index, index, index, payload)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_non_copy_member_and_indexed_return_places_clone_only_when_required_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    wrapper_type = NamedType("Wrapper")
+    ast = ShaderNode(
+        "NonCopyReturnPlaces",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode("Wrapper", [StructMemberNode("payload", payload_type)]),
+        ],
+        global_variables=[
+            VariableNode("globalWrapper", wrapper_type),
+            ArrayNode("Payload", "globalValues", 2),
+        ],
+        functions=[
+            FunctionNode(
+                "return_owned_member",
+                payload_type,
+                [ParameterNode("wrapper", wrapper_type)],
+                [ReturnNode(MemberAccessNode(IdentifierNode("wrapper"), "payload"))],
+            ),
+            FunctionNode(
+                "return_static_member",
+                payload_type,
+                [],
+                [
+                    ReturnNode(
+                        MemberAccessNode(IdentifierNode("globalWrapper"), "payload")
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_indexed_local",
+                payload_type,
+                [ParameterNode("values", ArrayType(payload_type, 2))],
+                [
+                    ReturnNode(
+                        ArrayAccessNode(
+                            IdentifierNode("values"),
+                            LiteralNode(0, PrimitiveType("int")),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_indexed_static",
+                payload_type,
+                [],
+                [
+                    ReturnNode(
+                        ArrayAccessNode(
+                            IdentifierNode("globalValues"),
+                            LiteralNode(0, PrimitiveType("int")),
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "return wrapper.payload;" in generated_code
+    assert "return wrapper.payload.clone();" not in generated_code
+    assert "return (*GLOBAL_WRAPPER).payload.clone();" in generated_code
+    assert "return values[0].clone();" in generated_code
+    assert "return (*GLOBAL_VALUES)[0].clone();" in generated_code
+    assert "return (*GLOBAL_VALUES)[0];" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

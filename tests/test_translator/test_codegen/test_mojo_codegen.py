@@ -6,7 +6,18 @@ import pytest
 import crosstl.translator
 from crosstl.translator.parser import Parser
 from crosstl.translator.lexer import Lexer
-from crosstl.translator.ast import LiteralNode, PrimitiveType
+from crosstl.translator.ast import (
+    BuiltinVariableNode,
+    CastNode,
+    LiteralNode,
+    PrimitiveType,
+    SwizzleNode,
+    SyncNode,
+    TextureNode,
+    TextureOpNode,
+    VariableNode,
+    VectorType,
+)
 from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
 
 
@@ -201,6 +212,73 @@ fn main():
     assert result.returncode == 0, result.stderr
     assert "[1.0, 1.0, 1.0, 1.0]" in result.stdout
     assert "2.0" in result.stdout
+
+
+def test_braced_struct_constructors_emit_mojo_initializers():
+    code = """
+    struct Particle {
+        vec4 position;
+        float mass;
+    };
+
+    Particle makeNamed(vec4 position, float mass) {
+        return Particle { position: position, mass: mass };
+    }
+
+    Particle makeShorthand(vec4 position, float mass) {
+        return Particle { position, mass };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "return Particle(position=position, mass=mass)" in generated_code
+    assert "ConstructorNode(" not in generated_code
+
+
+def test_braced_struct_constructors_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct Pair {
+        float x;
+        float y;
+    };
+
+    Pair makePair(float x, float y) {
+        return Pair { x: x, y: y };
+    }
+
+    Pair makePositionalPair(float x, float y) {
+        return Pair { x + 0.0, y + 0.0 };
+    }
+
+    float sumPair() {
+        Pair pair = Pair { x: 1.0, y: 2.0 };
+        return pair.x + pair.y;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += """
+fn main():
+    print(makePair(4.0, 5.0).y)
+    print(makePositionalPair(6.0, 7.0).x)
+    print(sumPair())
+"""
+
+    source_path = tmp_path / "braced_struct_constructors.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "5.0" in result.stdout
+    assert "6.0" in result.stdout
+    assert "3.0" in result.stdout
 
 
 def test_unit_enums_lower_to_mojo_aliases():
@@ -842,6 +920,33 @@ def test_user_defined_synchronization_names_are_not_lowered():
     assert "fn memoryBarrier() -> None:" in generated_code
     assert "_crossgl_workgroup_barrier" not in generated_code
     assert "_crossgl_memory_barrier" not in generated_code
+
+
+def test_direct_sync_nodes_emit_mojo_helpers_without_ast_repr():
+    codegen = MojoCodeGen()
+
+    workgroup_stmt = codegen.generate_statement(SyncNode("barrier"), indent=1)
+    memory_stmt = codegen.generate_statement(SyncNode("memoryBarrier"))
+
+    assert workgroup_stmt == "    _crossgl_workgroup_barrier()\n"
+    assert memory_stmt == "_crossgl_memory_barrier()\n"
+    assert "SyncNode(" not in workgroup_stmt
+    assert "_crossgl_workgroup_barrier" in codegen.required_sync_helpers
+    assert "_crossgl_memory_barrier" in codegen.required_sync_helpers
+
+
+def test_direct_sync_nodes_reject_unknown_or_argument_forms():
+    codegen = MojoCodeGen()
+
+    with pytest.raises(
+        ValueError, match="Unsupported Mojo synchronization operation deviceBarrier"
+    ):
+        codegen.generate_statement(SyncNode("deviceBarrier"))
+
+    with pytest.raises(ValueError, match="arguments are not supported"):
+        codegen.generate_statement(
+            SyncNode("barrier", [LiteralNode(1, PrimitiveType("int"))])
+        )
 
 
 def test_if_statement():
@@ -1947,6 +2052,60 @@ def test_invalid_buffer_operations_are_rejected_for_mojo_codegen():
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_wave_intrinsics_are_rejected_for_mojo_codegen():
+    code = """
+    shader ComputeWaveDiagnostics {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint sumValue = WaveActiveSum(lane);
+                bool anyLane = WaveActiveAnyTrue(sumValue > 0u);
+                uvec4 ballot = WaveActiveBallot(anyLane);
+                uint broadcast = WaveReadLaneAt(sumValue, 0u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Unsupported Mojo wave intrinsic Wave"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        ("TraceRay(1, 2, 3, 4, 5, 6, 7, 8);", "ray tracing intrinsic TraceRay"),
+        ("ReportHit(1.0, 0);", "ray tracing intrinsic ReportHit"),
+        ("SetMeshOutputCounts(1, 1);", "mesh intrinsic SetMeshOutputCounts"),
+        ("DispatchMesh(1, 1, 1);", "mesh intrinsic DispatchMesh"),
+    ],
+)
+def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen(statement, message):
+    code = f"""
+    shader UnsupportedPipelineIntrinsic {{
+        compute {{
+            void main() {{
+                {statement}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=f"Unsupported Mojo {message}"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_ray_query_methods_are_rejected_for_mojo_codegen():
+    code = """
+    void queryRay(RayQuery query) {
+        bool active = query.Proceed();
+    }
+    """
+
+    with pytest.raises(ValueError, match="Unsupported Mojo ray query method Proceed"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen():
     invalid_member_load = """
     AppendStructuredBuffer<int> values;
@@ -2641,6 +2800,241 @@ def test_direct_literal_nodes_emit_mojo_escaping():
         codegen.generate_expression(LiteralNode('debug"name', PrimitiveType("string")))
         == '"debug\\"name"'
     )
+
+
+def test_direct_cast_nodes_emit_mojo_casts_without_ast_repr():
+    codegen = MojoCodeGen()
+    scalar_expr = CastNode(
+        VariableNode("index", PrimitiveType("int")),
+        PrimitiveType("float"),
+    )
+
+    codegen.register_variable_type("index", "int")
+
+    assert codegen.generate_expression(scalar_expr) == "Float32(index)"
+    assert codegen.expression_result_type(scalar_expr) == "float"
+
+
+def test_direct_vector_cast_nodes_emit_mojo_simd_casts():
+    codegen = MojoCodeGen()
+    vector_expr = CastNode(
+        VariableNode("mask", VectorType(PrimitiveType("uint"), 4)),
+        VectorType(PrimitiveType("float"), 4),
+    )
+
+    codegen.register_variable_type("mask", "uvec4")
+
+    assert codegen.generate_expression(vector_expr) == "mask.cast[DType.float32]()"
+    assert codegen.expression_result_type(vector_expr) == "vec4"
+
+
+def test_direct_swizzle_nodes_emit_mojo_components_without_ast_repr():
+    codegen = MojoCodeGen()
+    swizzle_expr = SwizzleNode(
+        VariableNode("color", VectorType(PrimitiveType("float"), 4)),
+        "zyx",
+    )
+
+    codegen.register_variable_type("color", "vec4")
+
+    assert (
+        codegen.generate_expression(swizzle_expr)
+        == "SIMD[DType.float32, 4](color[2], color[1], color[0], 0.0)"
+    )
+    assert codegen.expression_result_type(swizzle_expr) == "vec3"
+
+
+def test_direct_builtin_variable_nodes_emit_mojo_names_without_ast_repr():
+    codegen = MojoCodeGen()
+
+    position = BuiltinVariableNode("gl_Position")
+    dispatch_x = BuiltinVariableNode("SV_DispatchThreadID", "x")
+
+    assert codegen.generate_expression(position) == "position"
+    assert codegen.expression_result_type(position) == "vec4"
+    assert codegen.generate_expression(dispatch_x) == "global_invocation_id[0]"
+    assert codegen.expression_result_type(dispatch_x) == "uint"
+
+
+def test_direct_texture_nodes_emit_mojo_sample_helpers_without_ast_repr():
+    codegen = MojoCodeGen()
+    tex = VariableNode("tex", PrimitiveType("sampler2D"))
+    shadow = VariableNode("shadow", PrimitiveType("sampler2DShadow"))
+    state = VariableNode("state", PrimitiveType("sampler"))
+    uv = VariableNode("uv", VectorType(PrimitiveType("float"), 2))
+    lod = VariableNode("lod", PrimitiveType("float"))
+
+    codegen.register_variable_type("tex", "sampler2D")
+    codegen.register_variable_type("shadow", "sampler2DShadow")
+    codegen.register_variable_type("state", "sampler")
+    codegen.register_variable_type("uv", "vec2")
+    codegen.register_variable_type("lod", "float")
+
+    sample_expr = TextureNode(tex, state, uv)
+    no_sampler_expr = TextureNode(tex, None, uv)
+    lod_expr = TextureNode(tex, state, uv, level=lod)
+    shadow_expr = TextureNode(shadow, state, uv)
+
+    assert codegen.generate_expression(sample_expr) == "sample(tex, uv)"
+    assert codegen.generate_expression(no_sampler_expr) == "sample(tex, uv)"
+    assert codegen.generate_expression(lod_expr) == "sample_lod(tex, uv, lod)"
+    assert "TextureNode(" not in codegen.generate_expression(sample_expr)
+    assert codegen.expression_result_type(sample_expr) == "vec4"
+    assert codegen.expression_result_type(shadow_expr) == "float"
+    assert "Texture2D" in codegen.required_resource_sample_types
+    assert "Texture2D" in codegen.required_resource_lod_types
+
+
+def test_direct_texture_nodes_emit_mojo_offset_helpers_without_ast_repr():
+    codegen = MojoCodeGen()
+    tex = VariableNode("tex", PrimitiveType("sampler2D"))
+    state = VariableNode("state", PrimitiveType("sampler"))
+    uv = VariableNode("uv", VectorType(PrimitiveType("float"), 2))
+    lod = VariableNode("lod", PrimitiveType("float"))
+    offset = VariableNode("offset", VectorType(PrimitiveType("int"), 2))
+
+    codegen.register_variable_type("tex", "sampler2D")
+    codegen.register_variable_type("state", "sampler")
+    codegen.register_variable_type("uv", "vec2")
+    codegen.register_variable_type("lod", "float")
+    codegen.register_variable_type("offset", "ivec2")
+
+    offset_call = codegen.generate_expression(
+        TextureNode(tex, state, uv, offset=offset)
+    )
+    lod_offset_call = codegen.generate_expression(
+        TextureNode(tex, state, uv, level=lod, offset=offset)
+    )
+
+    assert offset_call.startswith("_crossgl_sample_offset_Texture2D")
+    assert offset_call.endswith("(tex, uv, offset)")
+    assert lod_offset_call.startswith("_crossgl_sample_lod_offset_Texture2D")
+    assert lod_offset_call.endswith("(tex, uv, lod, offset)")
+    assert "TextureNode(" not in offset_call
+    assert "state" not in offset_call
+    assert (
+        codegen.expression_result_type(TextureNode(tex, state, uv, offset=offset))
+        == "vec4"
+    )
+    helper_names = {
+        helper["name"] for helper in codegen.required_resource_builtin_helpers.values()
+    }
+    assert any(
+        name.startswith("_crossgl_sample_offset_Texture2D") for name in helper_names
+    )
+    assert any(
+        name.startswith("_crossgl_sample_lod_offset_Texture2D") for name in helper_names
+    )
+
+
+def test_direct_texture_op_nodes_emit_mojo_sample_helpers_without_ast_repr():
+    codegen = MojoCodeGen()
+    tex = VariableNode("tex", PrimitiveType("sampler2D"))
+    state = VariableNode("state", PrimitiveType("sampler"))
+    uv = VariableNode("uv", VectorType(PrimitiveType("float"), 2))
+    lod = VariableNode("lod", PrimitiveType("float"))
+    ddx = VariableNode("ddx", VectorType(PrimitiveType("float"), 2))
+    ddy = VariableNode("ddy", VectorType(PrimitiveType("float"), 2))
+
+    codegen.register_variable_type("tex", "sampler2D")
+    codegen.register_variable_type("state", "sampler")
+    codegen.register_variable_type("uv", "vec2")
+    codegen.register_variable_type("lod", "float")
+    codegen.register_variable_type("ddx", "vec2")
+    codegen.register_variable_type("ddy", "vec2")
+
+    sample_call = codegen.generate_expression(
+        TextureOpNode("Sample", tex, [uv], sampler_expr=state)
+    )
+    lod_call = codegen.generate_expression(
+        TextureOpNode("SampleLevel", tex, [uv, lod], sampler_expr=state)
+    )
+    grad_call = codegen.generate_expression(
+        TextureOpNode("SampleGrad", tex, [uv, ddx, ddy], sampler_expr=state)
+    )
+
+    assert sample_call == "sample(tex, uv)"
+    assert lod_call == "sample_lod(tex, uv, lod)"
+    assert grad_call == "sample_grad(tex, uv, ddx, ddy)"
+    assert "TextureOpNode(" not in sample_call
+    assert (
+        codegen.expression_result_type(
+            TextureOpNode("Sample", tex, [uv], sampler_expr=state)
+        )
+        == "vec4"
+    )
+    assert "Texture2D" in codegen.required_resource_sample_types
+    assert "Texture2D" in codegen.required_resource_lod_types
+    assert "Texture2D" in codegen.required_resource_grad_types
+
+
+def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
+    codegen = MojoCodeGen()
+    tex = VariableNode("tex", PrimitiveType("sampler2D"))
+    shadow = VariableNode("shadow", PrimitiveType("sampler2DShadow"))
+    state = VariableNode("state", PrimitiveType("sampler"))
+    uv = VariableNode("uv", VectorType(PrimitiveType("float"), 2))
+    coord = VariableNode("coord", VectorType(PrimitiveType("int"), 2))
+    depth = VariableNode("depth", PrimitiveType("float"))
+
+    codegen.register_variable_type("tex", "sampler2D")
+    codegen.register_variable_type("shadow", "sampler2DShadow")
+    codegen.register_variable_type("state", "sampler")
+    codegen.register_variable_type("uv", "vec2")
+    codegen.register_variable_type("coord", "ivec2")
+    codegen.register_variable_type("depth", "float")
+
+    load_call = codegen.generate_expression(TextureOpNode("Load", tex, [coord]))
+    size_call = codegen.generate_expression(TextureOpNode("GetDimensions", tex, []))
+    gather_call = codegen.generate_expression(
+        TextureOpNode("Gather", tex, [uv], sampler_expr=state)
+    )
+    compare_call = codegen.generate_expression(
+        TextureOpNode("SampleCmp", shadow, [uv, depth], sampler_expr=state)
+    )
+
+    assert load_call == "texel_fetch(tex, coord, 0)"
+    assert size_call == "texture_size(tex)"
+    assert gather_call.startswith("_crossgl_texture_gather_Texture2D")
+    assert gather_call.endswith("(tex, uv)")
+    assert compare_call.startswith("_crossgl_texture_compare_Texture2DShadow")
+    assert compare_call.endswith("(shadow, uv, depth)")
+    assert "TextureOpNode(" not in gather_call
+    assert codegen.expression_result_type(TextureOpNode("Load", tex, [coord])) == "vec4"
+    assert (
+        codegen.expression_result_type(TextureOpNode("GetDimensions", tex, []))
+        == "ivec2"
+    )
+    assert (
+        codegen.expression_result_type(
+            TextureOpNode("SampleCmp", shadow, [uv, depth], sampler_expr=state)
+        )
+        == "float"
+    )
+    helper_names = {
+        helper["name"] for helper in codegen.required_resource_builtin_helpers.values()
+    }
+    assert any(
+        name.startswith("_crossgl_texture_gather_Texture2D") for name in helper_names
+    )
+    assert any(
+        name.startswith("_crossgl_texture_compare_Texture2DShadow")
+        for name in helper_names
+    )
+
+
+def test_direct_texture_op_nodes_reject_unknown_operations():
+    codegen = MojoCodeGen()
+    tex = VariableNode("tex", PrimitiveType("sampler2D"))
+    uv = VariableNode("uv", VectorType(PrimitiveType("float"), 2))
+
+    codegen.register_variable_type("tex", "sampler2D")
+    codegen.register_variable_type("uv", "vec2")
+
+    with pytest.raises(
+        ValueError, match="Unsupported Mojo texture operation SampleBias"
+    ):
+        codegen.generate_expression(TextureOpNode("SampleBias", tex, [uv]))
 
 
 def test_else_if_statement():

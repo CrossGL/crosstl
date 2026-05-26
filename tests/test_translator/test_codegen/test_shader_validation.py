@@ -1788,6 +1788,31 @@ shader MetalReadonlyRawBufferMutableHelperCallValidation {
 """
 
 
+METAL_ADDRESS_SPACE_MISMATCH_CALL_SHADER = """
+shader MetalAddressSpaceMismatchCallValidation {
+    struct Payload {
+        float value;
+    };
+
+    void useThreadgroup(threadgroup Payload& scratch) {
+        scratch.value = 1.0;
+    }
+
+    void useDevice(device Payload& payload) {
+        payload.value = 2.0;
+    }
+
+    compute {
+        void main(device Payload* payload @buffer(0)) {
+            threadgroup Payload scratch;
+            useThreadgroup(payload[0]);
+            useDevice(scratch);
+        }
+    }
+}
+"""
+
+
 METAL_MESH_OBJECT_SHADER = """
 shader MetalMeshObjectValidation {
     object {
@@ -1864,6 +1889,73 @@ shader MetalMeshPayloadDispatchValidation {
             SetMeshOutputCounts(1, 1);
             verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
             points[0] = 0u;
+        }
+    }
+}
+"""
+
+
+METAL_MESH_PAYLOAD_ADDRESS_SPACE_SHADER = """
+shader MetalMeshPayloadAddressSpaceValidation {
+    struct Payload {
+        vec4 color;
+    };
+
+    void mutate(thread Payload& localPayload) {
+        localPayload.color = vec4(0.5, 0.5, 0.5, 1.0);
+    }
+
+    object {
+        void main(Payload payload @payload)
+            @max_total_threads_per_threadgroup(32)
+        {
+            mutate(payload);
+            payload.color = vec4(1.0, 0.0, 0.0, 1.0);
+            DispatchMesh(1, 1, 1);
+        }
+    }
+
+    mesh {
+        void main(Payload payload @payload)
+            @max_total_threads_per_threadgroup(32)
+        {
+            mutate(payload);
+            payload.color = vec4(0.0, 1.0, 0.0, 1.0);
+            vec4 color = payload.color;
+        }
+    }
+}
+"""
+
+
+METAL_MESH_PAYLOAD_INVALID_SOURCE_SHADER = """
+shader MetalMeshPayloadInvalidSourceValidation {
+    struct MeshPayload {
+        uint meshlet;
+    };
+
+    MeshPayload makePayload() {
+        MeshPayload payload;
+        payload.meshlet = 1u;
+        return payload;
+    }
+
+    task {
+        void main() @numthreads(1, 1, 1) {
+            MeshPayload threadPayload;
+            DispatchMesh(1, 1, 1, makePayload());
+            DispatchMesh(1, 1, 1, threadPayload);
+        }
+    }
+
+    mesh {
+        void main(MeshPayload payload @mesh_payload)
+            @numthreads(1, 1, 1)
+            @max_vertices(1)
+            @max_primitives(1)
+            @outputtopology(point)
+        {
+            SetMeshOutputCounts(1, 1);
         }
     }
 }
@@ -3940,6 +4032,91 @@ def test_generated_metal_mesh_payload_dispatch_compiles_with_metal3(tmp_path):
     )
 
 
+def test_generated_metal_mesh_payload_address_space_diagnostics_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "mesh_payload_address_space.metal"
+    output = tmp_path / "mesh_payload_address_space.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_MESH_PAYLOAD_ADDRESS_SPACE_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "object_data Payload& payload [[payload]]" in code
+    assert "const object_data Payload& payload [[payload]]" in code
+    assert "unsupported Metal address-space call" in code
+    assert "unsupported Metal mesh payload store" in code
+    assert "mutate(payload)" not in code
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_mesh_payload_invalid_sources_compile_with_metal3(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "mesh_payload_invalid_sources.metal"
+    output = tmp_path / "mesh_payload_invalid_sources.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_MESH_PAYLOAD_INVALID_SOURCE_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "unsupported Metal mesh payload dispatch" in code
+    assert "_crossglMeshPayload = makePayload();" not in code
+    assert "_crossglMeshPayload = threadPayload;" not in code
+    assert code.count("_crossglMeshGrid.set_threadgroups_per_grid(") == 2
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
 def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3(
     tmp_path,
 ):
@@ -4376,6 +4553,24 @@ def test_generated_metal_readonly_raw_buffer_mutable_helper_call_compiles_with_m
     output = tmp_path / "readonly_raw_buffer_mutable_helper_call.air"
     code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(METAL_READONLY_RAW_BUFFER_MUTABLE_HELPER_CALL_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_address_space_mismatch_calls_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "address_space_mismatch_calls.metal"
+    output = tmp_path / "address_space_mismatch_calls.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_ADDRESS_SPACE_MISMATCH_CALL_SHADER),
         "compute",
     )
     source.write_text(code, encoding="utf-8")

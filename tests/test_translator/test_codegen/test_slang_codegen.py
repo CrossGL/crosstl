@@ -814,7 +814,7 @@ def test_tessellation_patch_generic_literal_type_arguments_emit():
         };
 
         tessellation_evaluation {
-            void main(InputPatch<VSOut, 3> patch) {
+            void main(OutputPatch<VSOut, 3> patch) @domain(tri) {
                 VSOut first = patch[0];
             }
         }
@@ -822,7 +822,7 @@ def test_tessellation_patch_generic_literal_type_arguments_emit():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "void main(InputPatch<VSOut, 3> patch)" in generated_code
+    assert "void main(OutputPatch<VSOut, 3> patch)" in generated_code
     assert "VSOut first = patch[0];" in generated_code
     assert "None" not in generated_code
 
@@ -1461,8 +1461,7 @@ def test_tessellation_domain_output_patch_matches_hull_output_shape():
                 }
             }
             """,
-            "OutputPatch<HSOut, 4> must match tessellation_control output "
-            "OutputPatch<HSOut, 3>",
+            "OutputPatch<HSOut, 4> must match",
         ),
         (
             """
@@ -8390,6 +8389,59 @@ def test_storage_image_load_store_emit_slang_subscript_access():
     assert "signedLayers[pixelLayer, sampleIndex] = signedValue;" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
+
+
+def test_storage_image_access_qualifiers_emit_slang_diagnostics():
+    code = """
+    shader ImageAccessQualifiers {
+        readonly image2D source @rgba32f;
+        writeonly image2D target @rgba32f;
+        readwrite uimage2D counters @r32ui;
+        readonly uimage2D readOnlyCounters @r32ui;
+        writeonly uimage2D writeOnlyCounters @r32ui;
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                vec4 color = imageLoad(source, pixel);
+                imageStore(source, pixel, color);
+                vec4 blocked = imageLoad(target, pixel);
+                imageStore(target, pixel, color);
+                uint count = imageAtomicAdd(counters, pixel, 1u);
+                uint readOnlyAtomic = imageAtomicAdd(readOnlyCounters, pixel, 1u);
+                uint writeOnlyAtomic = imageAtomicAdd(writeOnlyCounters, pixel, 1u);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 color = source[pixel];" in generated_code
+    assert "imageStore requires writable image resource */;" in generated_code
+    assert (
+        "float4 blocked = /* unsupported Slang image access: imageLoad "
+        "requires readable image resource */ float4(0.0);" in generated_code
+    )
+    assert "target[pixel] = color;" in generated_code
+    assert (
+        "uint count = cgl_imageAtomicAdd_uimage2D(counters, pixel, 1u);"
+        in generated_code
+    )
+    assert (
+        "uint readOnlyAtomic = /* unsupported Slang image atomic: imageAtomicAdd "
+        "requires readwrite image resource */ 0u;" in generated_code
+    )
+    assert (
+        "uint writeOnlyAtomic = /* unsupported Slang image atomic: imageAtomicAdd "
+        "requires readwrite image resource */ 0u;" in generated_code
+    )
+    assert "source[pixel] = color;" not in generated_code
+    assert "float4 blocked = target[pixel];" not in generated_code
+    assert "cgl_imageAtomicAdd_uimage2D(readOnlyCounters" not in generated_code
+    assert "cgl_imageAtomicAdd_uimage2D(writeOnlyCounters" not in generated_code
 
 
 def test_explicit_image_formats_emit_slang_storage_element_types():

@@ -30,7 +30,10 @@ from ..ast import (
     LoopNode,
     MatchNode,
     MemberAccessNode,
+    MeshOpNode,
     RangeNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
     ReturnNode,
     ShaderNode,
     StructNode,
@@ -3063,6 +3066,55 @@ class VulkanSPIRVCodeGen:
             result_type = self.register_primitive_type("float")
         return self.default_value_for_type(result_type)
 
+    def represented_ir_diagnostic_default_value(
+        self, category: str, operation: str
+    ) -> SpirvId:
+        result_type = self.represented_ir_diagnostic_result_type(category, operation)
+        result_type_label = self.diagnostic_type_label(result_type)
+        self.emit(
+            f"; WARNING: SPIR-V backend does not lower {category} operation "
+            f"{operation} yet; using a default {result_type_label} value"
+        )
+        return self.default_value_for_type(result_type)
+
+    def diagnostic_type_label(self, type_id: SpirvId) -> str:
+        vector_info = self.vector_component_type_and_count(type_id.type.base_type)
+        if vector_info is not None:
+            component_type, count = vector_info
+            vector_prefixes = {
+                "float": "vec",
+                "double": "dvec",
+                "int": "ivec",
+                "uint": "uvec",
+                "bool": "bvec",
+            }
+            return f"{vector_prefixes.get(component_type, 'vec')}{count}"
+        return type_id.type.base_type
+
+    def represented_ir_diagnostic_result_type(
+        self, category: str, operation: str
+    ) -> SpirvId:
+        if category == "ray tracing" and operation == "ReportHit":
+            return self.register_primitive_type("bool")
+
+        if category == "ray query":
+            if operation == "Proceed":
+                return self.register_primitive_type("bool")
+            if operation in {"CandidateRayT", "CommittedRayT"}:
+                return self.register_primitive_type("float")
+            if operation in {
+                "CandidateObjectRayOrigin",
+                "CandidateObjectRayDirection",
+                "CommittedObjectRayOrigin",
+                "CommittedObjectRayDirection",
+            }:
+                return self.register_vector_type(
+                    self.register_primitive_type("float"), 3
+                )
+            return self.register_primitive_type("uint")
+
+        return self.register_primitive_type("uint")
+
     def flatten_vector_constructor_args(
         self,
         function_name: str,
@@ -3291,6 +3343,10 @@ class VulkanSPIRVCodeGen:
         if capability is not None:
             self.require_capability(capability)
 
+    def require_group_non_uniform_partitioned_nv(self):
+        self.require_capability("GroupNonUniformPartitionedNV")
+        self.require_extension("SPV_NV_shader_subgroup_partitioned")
+
     def subgroup_scope_id(self) -> SpirvId:
         self.require_group_non_uniform()
         return self.spirv_scope_constant("Subgroup")
@@ -3380,6 +3436,26 @@ class VulkanSPIRVCodeGen:
         if operation == "WaveReadLaneFirst":
             return self.call_group_non_uniform_broadcast_first(operation, args)
 
+        if operation == "WaveMatch":
+            return self.call_group_non_uniform_partition(args)
+
+        if operation in {
+            "WaveMultiPrefixSum",
+            "WaveMultiPrefixProduct",
+            "WaveMultiPrefixBitAnd",
+            "WaveMultiPrefixBitOr",
+            "WaveMultiPrefixBitXor",
+        }:
+            return self.call_group_non_uniform_partitioned_arithmetic(operation, args)
+
+        if operation in {
+            "QuadReadAcrossX",
+            "QuadReadAcrossY",
+            "QuadReadAcrossDiagonal",
+            "QuadReadLaneAt",
+        }:
+            return self.call_group_non_uniform_quad(operation, argument_exprs, args)
+
         self.emit(f"; WARNING: {operation} is not supported by the SPIR-V backend yet")
         return self.wave_result_default(operation, args)
 
@@ -3451,7 +3527,8 @@ class VulkanSPIRVCodeGen:
         opcode = arithmetic_ops[operation].get(component_type)
         if opcode is None:
             self.emit(
-                f"; WARNING: {operation} does not support {result_type.type.base_type}"
+                f"; WARNING: {operation} requires a compatible arithmetic or "
+                f"bitwise operand; got {result_type.type.base_type}"
             )
             return self.wave_result_default(operation, args)
 
@@ -3562,6 +3639,84 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = result_type
         return spirv_id
 
+    def call_group_non_uniform_partition(self, args: List[SpirvId]) -> SpirvId:
+        if len(args) != 1:
+            self.emit("; WARNING: WaveMatch requires exactly one argument")
+            return self.wave_result_default("WaveMatch", args)
+
+        uint_type = self.register_primitive_type("uint")
+        result_type = self.register_vector_type(uint_type, 4)
+        self.require_group_non_uniform_partitioned_nv()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpGroupNonUniformPartitionNV %{result_type.id} "
+            f"%{args[0].id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_group_non_uniform_partitioned_arithmetic(
+        self, operation: str, args: List[SpirvId]
+    ) -> SpirvId:
+        if len(args) != 2:
+            self.emit(f"; WARNING: {operation} requires value and ballot arguments")
+            return self.wave_result_default(operation, args)
+
+        result_type = self.ensure_registered_type(args[0].type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        arithmetic_ops = {
+            "WaveMultiPrefixSum": {
+                "float": "OpGroupNonUniformFAdd",
+                "double": "OpGroupNonUniformFAdd",
+                "int": "OpGroupNonUniformIAdd",
+                "uint": "OpGroupNonUniformIAdd",
+            },
+            "WaveMultiPrefixProduct": {
+                "float": "OpGroupNonUniformFMul",
+                "double": "OpGroupNonUniformFMul",
+                "int": "OpGroupNonUniformIMul",
+                "uint": "OpGroupNonUniformIMul",
+            },
+            "WaveMultiPrefixBitAnd": {
+                "int": "OpGroupNonUniformBitwiseAnd",
+                "uint": "OpGroupNonUniformBitwiseAnd",
+            },
+            "WaveMultiPrefixBitOr": {
+                "int": "OpGroupNonUniformBitwiseOr",
+                "uint": "OpGroupNonUniformBitwiseOr",
+            },
+            "WaveMultiPrefixBitXor": {
+                "int": "OpGroupNonUniformBitwiseXor",
+                "uint": "OpGroupNonUniformBitwiseXor",
+            },
+        }
+        opcode = arithmetic_ops[operation].get(component_type)
+        if opcode is None:
+            self.emit(
+                f"; WARNING: {operation} requires a compatible arithmetic or "
+                f"bitwise operand; got {result_type.type.base_type}"
+            )
+            return self.wave_result_default(operation, args)
+
+        if self.vector_component_type_and_count(args[1].type.base_type) != ("uint", 4):
+            self.emit(f"; WARNING: {operation} requires a uvec4 ballot argument")
+            return self.wave_result_default(operation, args)
+
+        self.require_group_non_uniform("GroupNonUniformArithmetic")
+        self.require_group_non_uniform_partitioned_nv()
+        scope = self.subgroup_scope_id()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = {opcode} %{result_type.id} %{scope.id} "
+            f"PartitionedExclusiveScanNV %{args[0].id} %{args[1].id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
     def convert_wave_lane_operand(
         self, operation: str, lane: SpirvId
     ) -> Optional[SpirvId]:
@@ -3575,6 +3730,65 @@ class VulkanSPIRVCodeGen:
             self.emit(f"; WARNING: {operation} requires an integer lane index")
             return None
         return converted
+
+    def call_group_non_uniform_quad(
+        self, operation: str, argument_exprs: List, args: List[SpirvId]
+    ) -> SpirvId:
+        if operation in {
+            "QuadReadAcrossX",
+            "QuadReadAcrossY",
+            "QuadReadAcrossDiagonal",
+        }:
+            if len(args) != 1:
+                self.emit(f"; WARNING: {operation} requires exactly one argument")
+                return self.wave_result_default(operation, args)
+
+            directions = {
+                "QuadReadAcrossX": 0,
+                "QuadReadAcrossY": 1,
+                "QuadReadAcrossDiagonal": 2,
+            }
+            result_type = self.ensure_registered_type(args[0].type)
+            direction = self.register_constant(
+                directions[operation], self.register_primitive_type("uint")
+            )
+            self.require_group_non_uniform("GroupNonUniformQuad")
+            scope = self.subgroup_scope_id()
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpGroupNonUniformQuadSwap %{result_type.id} "
+                f"%{scope.id} %{args[0].id} %{direction.id}"
+            )
+
+            spirv_id = SpirvId(id_value, result_type.type)
+            self.value_types[id_value] = result_type
+            return spirv_id
+
+        if len(args) != 2:
+            self.emit("; WARNING: QuadReadLaneAt requires value and lane arguments")
+            return self.wave_result_default(operation, args)
+
+        result_type = self.ensure_registered_type(args[0].type)
+        lane_value = self.literal_integer_value(argument_exprs[1], "uint")
+        if lane_value is None or not 0 <= lane_value <= 3:
+            self.emit(
+                "; WARNING: QuadReadLaneAt requires a literal lane index "
+                "between 0 and 3"
+            )
+            return self.wave_result_default(operation, args)
+
+        lane = self.register_constant(lane_value, self.register_primitive_type("uint"))
+        self.require_group_non_uniform("GroupNonUniformQuad")
+        scope = self.subgroup_scope_id()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpGroupNonUniformQuadBroadcast %{result_type.id} "
+            f"%{scope.id} %{args[0].id} %{lane.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
 
     def call_builtin_function(
         self, function_name: str, args: List[SpirvId]
@@ -8812,6 +9026,21 @@ class VulkanSPIRVCodeGen:
 
         elif isinstance(expr, WaveOpNode):
             return self.call_wave_operation(expr.operation, expr.arguments)
+
+        elif isinstance(expr, RayTracingOpNode):
+            return self.represented_ir_diagnostic_default_value(
+                "ray tracing", expr.operation
+            )
+
+        elif isinstance(expr, RayQueryOpNode):
+            return self.represented_ir_diagnostic_default_value(
+                "ray query", expr.operation
+            )
+
+        elif isinstance(expr, MeshOpNode):
+            return self.represented_ir_diagnostic_default_value(
+                "mesh shader", expr.operation
+            )
 
         elif isinstance(expr, FunctionCallNode):
             callee_expr = getattr(expr, "function", getattr(expr, "name", None))

@@ -1783,6 +1783,315 @@ class TestCudaCodeGen:
         assert "surf2Dread" not in result
         assert "surf2Dwrite" not in result
 
+    def test_qualified_resource_object_pointer_array_conversion(self):
+        """Test qualified CUDA resource object arrays retain inferred shapes."""
+        code = """
+        const cudaTextureObject_t globalConstTextures[2];
+        cudaSurfaceObject_t *__restrict__ globalSurfaceRows[2];
+
+        void qualifiedResourceHandles(
+            const cudaTextureObject_t* __restrict__ textureObjects,
+            cudaSurfaceObject_t *__restrict__ surfaceObjects,
+            const cudaTextureObject_t textureArray[2],
+            cudaSurfaceObject_t *__restrict__ surfaceRows[2],
+            int row,
+            int slot,
+            int2 pixel,
+            float2 uv
+        ) {
+            float4 pointerSample = tex2D<float4>(
+                textureObjects[slot],
+                uv.x,
+                uv.y
+            );
+            float4 arraySample = tex2D<float4>(textureArray[slot], uv);
+            float4 globalSample = tex2D<float4>(globalConstTextures[slot], uv);
+            float4 pointerRead = surf2Dread<float4>(
+                surfaceObjects[slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                pointerRead,
+                surfaceObjects[slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 rowRead = surf2Dread<float4>(
+                surfaceRows[row][slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                rowRead,
+                surfaceRows[row][slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 globalRowRead = surf2Dread<float4>(
+                globalSurfaceRows[row][slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "var globalConstTextures: array<sampler2D, 2>;" in result
+        assert "var globalSurfaceRows: array<ptr<image2D>, 2>;" in result
+        assert (
+            "void qualifiedResourceHandles("
+            "ptr<sampler2D> textureObjects, ptr<image2D> surfaceObjects, "
+            "array<sampler2D, 2> textureArray, "
+            "array<ptr<image2D>, 2> surfaceRows, i32 row, i32 slot"
+        ) in result
+        assert (
+            "var pointerSample: vec4<f32> = texture("
+            "textureObjects[slot], vec2<f32>(uv.x, uv.y));" in result
+        )
+        assert "var arraySample: vec4<f32> = texture(textureArray[slot], uv);" in result
+        assert (
+            "var globalSample: vec4<f32> = texture(globalConstTextures[slot], uv);"
+            in result
+        )
+        assert (
+            "var pointerRead: vec4<f32> = imageLoad("
+            "surfaceObjects[slot], vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(surfaceObjects[slot], vec2<i32>(pixel.x, pixel.y), "
+            "pointerRead);" in result
+        )
+        assert (
+            "var rowRead: vec4<f32> = imageLoad("
+            "surfaceRows[row][slot], vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(surfaceRows[row][slot], vec2<i32>(pixel.x, pixel.y), "
+            "rowRead);" in result
+        )
+        assert (
+            "var globalRowRead: vec4<f32> = imageLoad("
+            "globalSurfaceRows[row][slot], vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert "__restrict__" not in result
+        assert "cudaTextureObject_t" not in result
+        assert "cudaSurfaceObject_t" not in result
+        assert "tex2D" not in result
+        assert "surf2Dread" not in result
+        assert "surf2Dwrite" not in result
+
+    def test_struct_resource_object_members_infer_crossgl_resource_types(self):
+        """Test CUDA resource calls infer struct member resource types."""
+        code = """
+        struct ResourcePair {
+            cudaTextureObject_t tex;
+            cudaSurfaceObject_t surf;
+            cudaTextureObject_t ambiguous;
+        };
+
+        ResourcePair globalPairs[2];
+
+        void usePair(
+            ResourcePair pair,
+            ResourcePair pairs[2],
+            int index,
+            int2 pixel,
+            float2 uv,
+            float3 uvw
+        ) {
+            float4 sampled = tex2D<float4>(pair.tex, uv.x, uv.y);
+            float4 arraySample = tex2D<float4>(pairs[index].tex, uv);
+            float4 loaded = surf2Dread<float4>(
+                pair.surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(loaded, pair.surf, pixel.x * sizeof(float4), pixel.y);
+            float4 globalLoaded = surf2Dread<float4>(
+                globalPairs[index].surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 ambiguous2d = tex2D<float4>(pair.ambiguous, uv);
+            float4 ambiguous3d = tex3D<float4>(
+                pair.ambiguous,
+                uvw.x,
+                uvw.y,
+                uvw.z
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "struct ResourcePair {" in result
+        assert "sampler2D tex;" in result
+        assert "image2D surf;" in result
+        assert "cudaTextureObject_t ambiguous;" in result
+        assert "var globalPairs: array<ResourcePair, 2>;" in result
+        assert (
+            "void usePair(ResourcePair pair, array<ResourcePair, 2> pairs, "
+            "i32 index, vec2<i32> pixel, vec2<f32> uv, vec3<f32> uvw)" in result
+        )
+        assert (
+            "var sampled: vec4<f32> = texture(pair.tex, "
+            "vec2<f32>(uv.x, uv.y));" in result
+        )
+        assert "var arraySample: vec4<f32> = texture(pairs[index].tex, uv);" in result
+        assert (
+            "var loaded: vec4<f32> = imageLoad("
+            "pair.surf, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert "imageStore(pair.surf, vec2<i32>(pixel.x, pixel.y), loaded);" in result
+        assert (
+            "var globalLoaded: vec4<f32> = imageLoad("
+            "globalPairs[index].surf, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert "tex2D" not in result
+        assert "surf2Dread" not in result
+        assert "surf2Dwrite" not in result
+
+    def test_nested_struct_resource_object_members_infer_crossgl_resource_types(self):
+        """Test nested struct member chains infer CUDA resource handle types."""
+        code = """
+        struct ResourcePair {
+            cudaTextureObject_t tex;
+            cudaSurfaceObject_t surf;
+        };
+
+        struct ResourceBox {
+            ResourcePair pair;
+            ResourcePair* pairPtr;
+            ResourcePair pairs[2];
+        };
+
+        void useBox(
+            ResourceBox box,
+            ResourceBox* boxPtr,
+            ResourceBox boxes[2],
+            int index,
+            int2 pixel,
+            float2 uv
+        ) {
+            float4 directSample = tex2D<float4>(box.pair.tex, uv);
+            float4 pointerSample = tex2D<float4>(boxPtr->pair.tex, uv);
+            float4 pointerMemberSample = tex2D<float4>(box.pairPtr->tex, uv);
+            float4 nestedArraySample = tex2D<float4>(boxes[index].pair.tex, uv);
+            float4 arrayLoaded = surf2Dread<float4>(
+                box.pairs[index].surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                arrayLoaded,
+                boxPtr->pair.surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "struct ResourcePair {" in result
+        assert "sampler2D tex;" in result
+        assert "image2D surf;" in result
+        assert "ResourcePair pair;" in result
+        assert "ptr<ResourcePair> pairPtr;" in result
+        assert "array<ResourcePair, 2> pairs;" in result
+        assert "var directSample: vec4<f32> = texture(box.pair.tex, uv);" in result
+        assert "var pointerSample: vec4<f32> = texture(boxPtr->pair.tex, uv);" in result
+        assert (
+            "var pointerMemberSample: vec4<f32> = texture(box.pairPtr->tex, uv);"
+            in result
+        )
+        assert (
+            "var nestedArraySample: vec4<f32> = texture("
+            "boxes[index].pair.tex, uv);" in result
+        )
+        assert (
+            "var arrayLoaded: vec4<f32> = imageLoad("
+            "box.pairs[index].surf, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(boxPtr->pair.surf, "
+            "vec2<i32>(pixel.x, pixel.y), arrayLoaded);" in result
+        )
+        assert "cudaTextureObject_t" not in result
+        assert "cudaSurfaceObject_t" not in result
+        assert "tex2D" not in result
+        assert "surf2Dread" not in result
+        assert "surf2Dwrite" not in result
+
+    def test_cast_and_dereference_resource_object_members_infer_crossgl_types(self):
+        """Test casted and dereferenced struct resource handles infer types."""
+        code = """
+        struct ResourcePair {
+            cudaTextureObject_t tex;
+            cudaSurfaceObject_t surf;
+        };
+
+        void usePair(void* raw, ResourcePair* pairPtr, int2 pixel, float2 uv) {
+            float4 sampled = tex2D<float4>(((ResourcePair*)raw)->tex, uv);
+            float4 loaded = surf2Dread<float4>(
+                (*pairPtr).surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                loaded,
+                ((ResourcePair*)raw)->surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "struct ResourcePair {" in result
+        assert "sampler2D tex;" in result
+        assert "image2D surf;" in result
+        assert (
+            "void usePair(ptr<void> raw, ptr<ResourcePair> pairPtr, "
+            "vec2<i32> pixel, vec2<f32> uv)" in result
+        )
+        assert (
+            "var sampled: vec4<f32> = texture(ptr<ResourcePair>(raw)->tex, uv);"
+            in result
+        )
+        assert (
+            "var loaded: vec4<f32> = imageLoad("
+            "(*pairPtr).surf, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(ptr<ResourcePair>(raw)->surf, "
+            "vec2<i32>(pixel.x, pixel.y), loaded);" in result
+        )
+        assert "cudaTextureObject_t" not in result
+        assert "cudaSurfaceObject_t" not in result
+        assert "tex2D" not in result
+        assert "surf2Dread" not in result
+        assert "surf2Dwrite" not in result
+
     def test_nested_template_argument_conversion(self):
         """Test nested template and pointer-qualified unique_ptr conversion"""
         code = """

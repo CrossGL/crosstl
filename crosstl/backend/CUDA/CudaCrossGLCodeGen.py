@@ -131,6 +131,7 @@ class CudaToCrossGLConverter:
         self.type_alias_scopes = [{}]
         self.user_function_names = set()
         self.global_resource_object_type_hints = {}
+        self.struct_resource_member_hints = {}
         self.resource_object_hint_scopes = []
 
     def generate(self, ast_node):
@@ -143,6 +144,9 @@ class CudaToCrossGLConverter:
         self.user_function_names = self.collect_user_function_names(ast_node)
         self.global_resource_object_type_hints = (
             self.collect_global_resource_object_type_hints(ast_node)
+        )
+        self.struct_resource_member_hints = self.collect_struct_resource_member_hints(
+            ast_node
         )
         self.resource_object_hint_scopes = []
         self.visit(ast_node)
@@ -302,6 +306,24 @@ class CudaToCrossGLConverter:
             if isinstance(var, VariableNode)
         }
 
+    def collect_global_declared_variable_types(self, node):
+        return {
+            var.name: var.vtype
+            for var in getattr(node, "global_variables", [])
+            if isinstance(var, VariableNode)
+        }
+
+    def collect_struct_member_types(self, node):
+        return {
+            struct.name: {
+                member.name: member.vtype
+                for member in getattr(struct, "members", [])
+                if isinstance(member, VariableNode)
+            }
+            for struct in getattr(node, "structs", [])
+            if struct.name
+        }
+
     def collect_declared_variable_names(self, node):
         names = {
             param.name
@@ -333,6 +355,158 @@ class CudaToCrossGLConverter:
 
         collect(getattr(node, "body", []))
         return names
+
+    def collect_declared_variable_types(self, node):
+        types = {
+            param.name: param.vtype
+            for param in getattr(node, "params", [])
+            if isinstance(param, VariableNode)
+        }
+
+        for current in self.walk_ast_values(getattr(node, "body", [])):
+            if isinstance(current, VariableNode):
+                types[current.name] = current.vtype
+        return types
+
+    def walk_ast_values(self, root):
+        visited = set()
+
+        def walk(current):
+            if current is None:
+                return
+            if isinstance(current, (list, tuple)):
+                for item in current:
+                    yield from walk(item)
+                return
+            if isinstance(current, dict):
+                for item in current.values():
+                    yield from walk(item)
+                return
+            if isinstance(current, (str, int, float, bool)):
+                return
+            if not hasattr(current, "__dict__"):
+                return
+
+            current_id = id(current)
+            if current_id in visited:
+                return
+            visited.add(current_id)
+            yield current
+
+            for value in vars(current).values():
+                yield from walk(value)
+
+        yield from walk(root)
+
+    def collect_struct_resource_member_hints(self, node):
+        struct_member_types = self.collect_struct_member_types(node)
+        struct_names = set(struct_member_types)
+        if not struct_names:
+            return {}
+
+        hints = {}
+        global_variable_types = self.collect_global_declared_variable_types(node)
+        for function in [
+            *getattr(node, "functions", []),
+            *getattr(node, "kernels", []),
+        ]:
+            variable_types = dict(global_variable_types)
+            variable_types.update(self.collect_declared_variable_types(function))
+            for current in self.walk_ast_values(getattr(function, "body", [])):
+                if not isinstance(current, FunctionCallNode):
+                    continue
+                call_hint = self.get_resource_object_call_hint(current.name)
+                if call_hint is None:
+                    continue
+                arg_index, resource_type = call_hint
+                if len(current.args) <= arg_index:
+                    continue
+
+                member_access = self.resource_member_access_target(
+                    current.args[arg_index]
+                )
+                if member_access is None:
+                    continue
+
+                struct_name = self.struct_type_for_resource_member_object(
+                    member_access.object,
+                    variable_types,
+                    struct_names,
+                    struct_member_types,
+                )
+                if struct_name is None:
+                    continue
+                self.add_struct_resource_member_hint(
+                    hints, struct_name, member_access.member, resource_type
+                )
+
+        return hints
+
+    def add_struct_resource_member_hint(
+        self, hints, struct_name, member_name, resource_type
+    ):
+        key = (struct_name, member_name)
+        if key in hints and hints[key] != resource_type:
+            hints[key] = None
+            return
+        hints[key] = resource_type
+
+    def resource_member_access_target(self, expression):
+        if isinstance(expression, MemberAccessNode):
+            return expression
+        if isinstance(expression, ArrayAccessNode):
+            return self.resource_member_access_target(expression.array)
+        if isinstance(expression, CastNode):
+            return self.resource_member_access_target(expression.expression)
+        if isinstance(expression, UnaryOpNode):
+            return self.resource_member_access_target(expression.operand)
+        return None
+
+    def struct_type_for_resource_member_object(
+        self, expression, variable_types, struct_names, struct_member_types
+    ):
+        if isinstance(expression, str):
+            return self.normalized_struct_type_name(
+                variable_types.get(expression), struct_names
+            )
+        if isinstance(expression, ArrayAccessNode):
+            return self.struct_type_for_resource_member_object(
+                expression.array, variable_types, struct_names, struct_member_types
+            )
+        if isinstance(expression, CastNode):
+            cast_struct = self.normalized_struct_type_name(
+                expression.target_type, struct_names
+            )
+            if cast_struct is not None:
+                return cast_struct
+            return self.struct_type_for_resource_member_object(
+                expression.expression, variable_types, struct_names, struct_member_types
+            )
+        if isinstance(expression, UnaryOpNode):
+            return self.struct_type_for_resource_member_object(
+                expression.operand, variable_types, struct_names, struct_member_types
+            )
+        if isinstance(expression, MemberAccessNode):
+            owner_struct = self.struct_type_for_resource_member_object(
+                expression.object,
+                variable_types,
+                struct_names,
+                struct_member_types,
+            )
+            if owner_struct is None:
+                return None
+            member_type = struct_member_types.get(owner_struct, {}).get(
+                expression.member
+            )
+            return self.normalized_struct_type_name(member_type, struct_names)
+        return None
+
+    def normalized_struct_type_name(self, type_name, struct_names):
+        if not type_name:
+            return None
+        type_name = self.strip_type_qualifiers(type_name)
+        type_name = type_name.split("[", 1)[0].replace("*", "").strip()
+        return type_name if type_name in struct_names else None
 
     def get_resource_object_call_hint(self, function_name):
         base_name, _ = self.parse_cpp_template(function_name)
@@ -593,7 +767,9 @@ class CudaToCrossGLConverter:
         self.indent_level += 1
 
         for member in node.members:
-            member_type = self.convert_cuda_type_to_crossgl(member.vtype)
+            member_type = self.convert_cuda_struct_member_type_to_crossgl(
+                node.name, member.vtype, member.name
+            )
             self.emit(f"{member_type} {member.name};")
 
         self.indent_level -= 1
@@ -1362,6 +1538,17 @@ class CudaToCrossGLConverter:
         resource_type = self.convert_cuda_resource_object_type(cuda_type, name)
         if resource_type is not None:
             return resource_type
+        return self.convert_cuda_type_to_crossgl(cuda_type)
+
+    def convert_cuda_struct_member_type_to_crossgl(self, struct_name, cuda_type, name):
+        """Convert struct members, using CUDA resource call-site hints."""
+        hint = self.struct_resource_member_hints.get((struct_name, name))
+        if hint is not None:
+            resource_type = self.convert_cuda_resource_object_type_with_hint(
+                cuda_type, hint
+            )
+            if resource_type is not None:
+                return resource_type
         return self.convert_cuda_type_to_crossgl(cuda_type)
 
     def convert_cuda_resource_object_type(self, cuda_type, name):

@@ -89,7 +89,14 @@
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_preprocessor_metal_output_compiles_with_xcrun_metal"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "diagnostic",
+          "notes": "Mesh/task IR operation nodes emit deterministic unsupported diagnostics with type-correct fallback values. Real SPIR-V mesh/task stage entry-point and payload lowering is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {
@@ -101,7 +108,13 @@
           ]
         },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Storage-image readonly/writeonly access metadata is tracked for Slang RWTexture resources; invalid reads, writes, and image atomics emit deterministic diagnostics. Structured-buffer and byte-address-buffer access qualifiers are not audited yet.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics"
+          ]
+        }
       }
     },
     {
@@ -288,8 +301,11 @@
         "hip": {"status": "unsupported"},
         "mojo": {
           "status": "unsupported",
-          "notes": "Mojo codegen rejects mesh/task/object stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
-          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"]
+          "notes": "Mojo codegen rejects mesh/task/object stages and mesh IR intrinsics explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen"
+          ]
         },
         "rust": {"status": "unknown"},
         "slang": {
@@ -371,13 +387,24 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "diagnostic",
+          "notes": "Ray tracing and ray query IR operation nodes emit deterministic unsupported diagnostics with type-correct fallback values. Real SPIR-V ray tracing stage and RayQuery lowering is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {
           "status": "unsupported",
-          "notes": "Mojo codegen rejects ray tracing stages explicitly; no Mojo ray pipeline ABI is implemented in this repo.",
-          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"]
+          "notes": "Mojo codegen rejects ray tracing stages, ray tracing intrinsics, and ray query methods explicitly; no Mojo ray pipeline ABI is implemented in this repo.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_are_rejected_for_mojo_codegen"
+          ]
         },
         "rust": {"status": "unknown"},
         "slang": {
@@ -1481,9 +1508,10 @@
         "rust": {"status": "unknown"},
         "slang": {
           "status": "partial",
-          "notes": "Covers RWTexture load/store for scalar, vector, explicit-format, array, formatted-image, and multisample storage images using Slang subscript access, plus typed helper generation for formatted image queries. Access-qualifier enforcement and compiler-backed coverage remain incomplete.",
+          "notes": "Covers RWTexture load/store for scalar, vector, explicit-format, array, formatted-image, and multisample storage images using Slang subscript access, plus typed helper generation and deterministic readonly/writeonly access diagnostics. Compiler-backed coverage remains incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_load_store_emit_slang_subscript_access",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_explicit_image_formats_emit_slang_storage_element_types",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_arrays_preserve_expression_sizes",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_queries_emit_typed_slang_helpers"
@@ -1546,9 +1574,10 @@
         "rust": {"status": "unknown"},
         "slang": {
           "status": "partial",
-          "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, image arrays, and deterministic diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete.",
+          "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, image arrays, deterministic readonly/writeonly access diagnostics, and diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_integer_image_atomics_emit_slang_interlocked_helpers",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_integer_image_array_atomics_preserve_expression_indices",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_unsupported_image_atomics_emit_slang_diagnostic_stubs"
           ]
@@ -1752,17 +1781,27 @@
         },
         "vulkan": {
           "status": "partial",
-          "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, and WaveReadLaneFirst to SPIR-V GroupNonUniform operations with Vulkan 1.1 spirv-as/spirv-val coverage. Quad, WaveMatch, and WaveMultiPrefix forms still emit deterministic diagnostics.",
+          "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, QuadRead*, WaveMatch, and WaveMultiPrefix* to SPIR-V GroupNonUniform operations with spirv-as/spirv-val coverage where tools are available. Dynamic or out-of-range quad lanes and invalid multi-prefix masks emit deterministic diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_lane_intrinsics_emit_subgroup_builtins",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_intrinsics_emit_group_non_uniform_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_quad_wave_intrinsics_emit_group_non_uniform_quad_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_quad_read_lane_requires_literal_lane_index",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_match_and_multi_prefix_emit_partitioned_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_multi_prefix_requires_uvec4_ballot",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_unsupported_wave_intrinsics_emit_diagnostics",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_wave_intrinsics_compute_validates_with_spirv_tools"
           ]
         },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "validated_rejection",
+          "notes": "Mojo has no target-native subgroup ABI in this backend; WaveOpNode forms are rejected deterministically instead of stringifying unsupported IR.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_wave_intrinsics_are_rejected_for_mojo_codegen"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {
           "status": "partial",
