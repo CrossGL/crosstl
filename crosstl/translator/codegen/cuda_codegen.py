@@ -1941,6 +1941,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             x = self.surface_x_offset(coord, value_type)
             y = self.coord_component(coord, "y")
 
+            if "Cube" in image_type:
+                face = self.coord_component(coord, "z")
+                return f"surfCubemapread<{value_type}>({image_name}, {x}, {y}, {face})"
             if "3D" in image_type:
                 z = self.coord_component(coord, "z")
                 return f"surf3Dread<{value_type}>({image_name}, {x}, {y}, {z})"
@@ -1969,6 +1972,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             x = self.surface_x_offset(coord, value_type)
             y = self.coord_component(coord, "y")
 
+            if "Cube" in image_type:
+                face = self.coord_component(coord, "z")
+                return f"surfCubemapwrite({value}, {image_name}, {x}, {y}, {face})"
             if "3D" in image_type:
                 z = self.coord_component(coord, "z")
                 return f"surf3Dwrite({value}, {image_name}, {x}, {y}, {z})"

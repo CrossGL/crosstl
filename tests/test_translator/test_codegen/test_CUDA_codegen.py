@@ -3083,6 +3083,7 @@ class TestCudaCodeGen:
             sampler2darray layers;
             image2D colorImage;
             image3D volumeImage;
+            imageCube cubeImage;
             image2DArray layerImage;
             iimage2d signedImage;
 
@@ -3097,6 +3098,8 @@ class TestCudaCodeGen:
                 imageStore(colorImage, pixel, regular);
                 vec4 voxel = imageLoad(volumeImage, pixelLayer);
                 imageStore(volumeImage, pixelLayer, voxel);
+                vec4 cubeFace = imageLoad(cubeImage, pixelLayer);
+                imageStore(cubeImage, pixelLayer, cubeFace);
                 vec4 layered = imageLoad(layerImage, pixelLayer);
                 imageStore(layerImage, pixelLayer, layered);
                 int signedValue = imageLoad(signedImage, pixel);
@@ -3118,6 +3121,7 @@ class TestCudaCodeGen:
 
         assert "cudaSurfaceObject_t colorImage;" in cuda_code
         assert "cudaSurfaceObject_t volumeImage;" in cuda_code
+        assert "cudaSurfaceObject_t cubeImage;" in cuda_code
         assert "cudaSurfaceObject_t layerImage;" in cuda_code
         assert "cudaSurfaceObject_t signedImage;" in cuda_code
         assert "float4 fetched = tex2D(paramTex, pixel.x, pixel.y);" in cuda_code
@@ -3128,6 +3132,16 @@ class TestCudaCodeGen:
         assert (
             "float4 regular = surf2Dread<float4>"
             "(colorImage, pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "float4 cubeFace = surfCubemapread<float4>"
+            "(cubeImage, pixelLayer.x * sizeof(float4), pixelLayer.y, pixelLayer.z);"
+            in cuda_code
+        )
+        assert (
+            "surfCubemapwrite("
+            "cubeFace, cubeImage, pixelLayer.x * sizeof(float4), "
+            "pixelLayer.y, pixelLayer.z);" in cuda_code
         )
         assert (
             "surf2Dwrite(regular, colorImage, pixel.x * sizeof(float4), pixel.y);"
