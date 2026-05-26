@@ -350,6 +350,27 @@ class HipToCrossGLConverter:
             else:
                 self.visit(stmt)
 
+    def format_preprocessor_content(self, content):
+        text = str(content).strip()
+        compact = text.replace(" ", "")
+        if compact.startswith("<") and compact.endswith(">"):
+            return compact
+        return text
+
+    def visit_PreprocessorNode(self, node):
+        content = self.format_preprocessor_content(node.content)
+        if node.directive == "include":
+            if "hip_runtime.h" in content:
+                self.emit("// HIP runtime functionality built-in")
+            elif "hip/hip_runtime_api.h" in content:
+                self.emit("// HIP runtime API functionality built-in")
+            else:
+                self.emit(f"// include {content}".strip())
+        elif content:
+            self.emit(f"// {node.directive} {content}")
+        else:
+            self.emit(f"// {node.directive}")
+
     def visit_FunctionNode(self, node):
         """Render a HIP function node as a CrossGL function."""
         return_type = self.convert_hip_type_to_crossgl(
@@ -1244,6 +1265,12 @@ class HipToCrossGLConverter:
             "hipAtomicExch": "atomicExchange",
             "atomicCAS": "atomicCompareExchange",
             "hipAtomicCAS": "atomicCompareExchange",
+            "atomicAnd": "atomicAnd",
+            "hipAtomicAnd": "atomicAnd",
+            "atomicOr": "atomicOr",
+            "hipAtomicOr": "atomicOr",
+            "atomicXor": "atomicXor",
+            "hipAtomicXor": "atomicXor",
         }
 
         return function_mapping.get(func_name, func_name)

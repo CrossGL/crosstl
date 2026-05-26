@@ -977,6 +977,11 @@ class GLSLCodeGen:
         stage_local_resource_vars = collect_stage_local_variables(
             ast, target_stage, self.is_stage_local_resource_variable
         )
+        stage_local_interface_vars = self.deduplicate_stage_interface_declarations(
+            collect_stage_local_variables(
+                ast, target_stage, self.is_stage_local_interface_variable
+            )
+        )
         self.structs_by_name = {
             node.name: node for node in structs if isinstance(node, StructNode)
         }
@@ -1270,6 +1275,9 @@ class GLSLCodeGen:
                 code += self.generate_global_variable_declaration(
                     node, declaration, vtype
                 )
+
+        for node in stage_local_interface_vars:
+            code += self.generate_stage_local_interface_variable_declaration(node)
 
         cbuffers = getattr(ast, "cbuffers", [])
         if cbuffers:
@@ -2487,6 +2495,38 @@ class GLSLCodeGen:
             or self.is_glsl_buffer_block_variable(node, vtype)
         )
 
+    def is_stage_local_interface_variable(self, node):
+        if self.is_stage_local_resource_variable(node):
+            return False
+        return bool(self.glsl_variable_qualifier_prefix(node))
+
+    def deduplicate_stage_interface_declarations(self, nodes):
+        declarations = []
+        declarations_by_name = {}
+        for node in nodes:
+            name = self.resource_node_name(node)
+            if not name:
+                declarations.append(node)
+                continue
+
+            vtype, _, array_suffix, _ = self.resource_declaration_shape(node)
+            signature = (
+                self.map_type(vtype),
+                array_suffix,
+                self.glsl_variable_qualifier_prefix(node),
+            )
+            existing = declarations_by_name.get(name)
+            if existing is None:
+                declarations_by_name[name] = signature
+                declarations.append(node)
+                continue
+            if existing != signature:
+                raise ValueError(
+                    "Conflicting OpenGL stage interface declaration for "
+                    f"'{name}': {signature} differs from {existing}"
+                )
+        return declarations
+
     def deduplicate_resource_declaration_nodes(self, nodes):
         declarations = []
         declarations_by_name = {}
@@ -3564,8 +3604,12 @@ class GLSLCodeGen:
         return "const " if "const" in getattr(node, "qualifiers", []) else ""
 
     def global_variable_qualifier(self, node):
+        qualifier_prefix = self.glsl_variable_qualifier_prefix(node)
+        if qualifier_prefix:
+            return f"{qualifier_prefix} "
+
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
-        if "shared" in qualifiers:
+        if qualifiers & {"shared", "groupshared", "workgroup", "threadgroup"}:
             return "shared "
         if "const" in qualifiers:
             return "const "
@@ -3580,6 +3624,73 @@ class GLSLCodeGen:
                 f" = {self.generate_expression_with_expected(initial_value, vtype)}"
             )
         return f"{qualifier}{declaration}{initializer};\n"
+
+    def generate_stage_local_interface_variable_declaration(self, node):
+        vtype, _, array_suffix, _ = self.resource_declaration_shape(node)
+        declaration = format_c_style_array_declaration(
+            f"{self.map_type(vtype)}{array_suffix}", self.resource_node_name(node, "")
+        )
+        return self.generate_global_variable_declaration(node, declaration, vtype)
+
+    def glsl_variable_qualifier_prefix(self, node):
+        qualifiers = [
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        ]
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name:
+                qualifiers.append(str(attr_name).lower())
+
+        emitted = []
+
+        def add(qualifier):
+            if qualifier not in emitted:
+                emitted.append(qualifier)
+
+        for qualifier in qualifiers:
+            normalized = qualifier.removeprefix("glsl_")
+            normalized = normalized.replace("-", "_")
+            if normalized in {"perprimitive", "perprimitiveext"}:
+                add("perprimitiveEXT")
+            elif normalized in {
+                "task_payload_shared",
+                "taskpayloadshared",
+                "taskpayloadsharedext",
+            }:
+                add("taskPayloadSharedEXT")
+            elif normalized in {"shared", "groupshared", "workgroup", "threadgroup"}:
+                add("shared")
+            elif normalized in {
+                "patch",
+                "flat",
+                "smooth",
+                "noperspective",
+                "centroid",
+                "sample",
+                "in",
+                "out",
+            }:
+                add(normalized)
+
+        if not emitted:
+            return ""
+
+        order = {
+            "patch": 0,
+            "perprimitiveEXT": 1,
+            "flat": 2,
+            "smooth": 3,
+            "noperspective": 4,
+            "centroid": 5,
+            "sample": 6,
+            "in": 7,
+            "out": 8,
+            "shared": 9,
+            "taskPayloadSharedEXT": 10,
+        }
+        emitted.sort(key=lambda qualifier: order.get(qualifier, len(order)))
+        return " ".join(emitted)
 
     def type_name_string(self, vtype):
         if vtype is None:

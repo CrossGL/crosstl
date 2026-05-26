@@ -3746,9 +3746,15 @@ def test_glsl_mesh_task_stage_entries_use_distinct_names():
 def test_glsl_mesh_task_stage_extensions_and_local_size_layouts():
     shader = """
     shader MeshTaskLocalSizes {
+        struct TaskPayload {
+            uint meshlet;
+        };
+
         task {
             layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
+            @taskPayloadSharedEXT TaskPayload payload;
             void main() {
+                payload.meshlet = 0u;
                 DispatchMesh(1, 1, 1);
             }
         }
@@ -3756,8 +3762,13 @@ def test_glsl_mesh_task_stage_extensions_and_local_size_layouts():
         mesh {
             layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
             layout(triangles, max_vertices = 64, max_primitives = 32) out;
+            @taskPayloadSharedEXT TaskPayload payload;
+            perprimitive out vec3 primitiveNormal[32];
+            out vec4 vertexColor[64];
             void main() {
                 SetMeshOutputCounts(64, 32);
+                primitiveNormal[0] = vec3(0.0, 0.0, 1.0);
+                vertexColor[0] = vec4(float(payload.meshlet));
             }
         }
     }
@@ -3782,9 +3793,15 @@ def test_glsl_mesh_task_stage_extensions_and_local_size_layouts():
         "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;" in mesh_code
     )
     assert "layout(triangles, max_vertices = 64, max_primitives = 32) out;" in mesh_code
+    assert "taskPayloadSharedEXT TaskPayload payload;" in mesh_code
+    assert "perprimitiveEXT out vec3 primitiveNormal[32];" in mesh_code
+    assert "out vec4 vertexColor[64];" in mesh_code
     assert "SetMeshOutputsEXT(64, 32);" in mesh_code
+    assert "primitiveNormal[0] = vec3(0.0, 0.0, 1.0);" in mesh_code
+    assert "vertexColor[0] = vec4(float(payload.meshlet));" in mesh_code
     assert "SetMeshOutputCounts" not in mesh_code
     assert "EmitMeshTasksEXT(1, 1, 1);" in combined_code
+    assert combined_code.count("taskPayloadSharedEXT TaskPayload payload;") == 1
     assert "DispatchMesh" not in combined_code
     assert (
         "layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;"

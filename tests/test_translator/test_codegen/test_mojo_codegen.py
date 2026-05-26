@@ -434,6 +434,162 @@ def test_sampler3d_type_maps_to_texture3d():
     assert "sampler3D" not in generated_code
 
 
+def test_resource_placeholders_emit_for_sampler_types():
+    code = """
+    sampler1d ramp;
+    sampler1DArray lineArray;
+    sampler2D colorMap;
+    sampler2darray layerMap;
+    sampler3D volumeMap;
+    samplerCube cubeMap;
+    samplercubearray probeArray;
+    sampler linearSampler;
+
+    vec4 sample1D(sampler1D tex, float u) {
+        return texture(tex, u);
+    }
+    vec4 sample1DArray(sampler1DArray tex, vec2 uLayer) {
+        return texture(tex, uLayer);
+    }
+    vec4 sample2D(sampler2D tex, vec2 uv) {
+        return texture(tex, uv);
+    }
+    vec4 sample2DArray(sampler2DArray tex, vec3 uvLayer) {
+        return texture(tex, uvLayer);
+    }
+    vec4 sample3D(sampler3D tex, vec3 uvw) {
+        return texture(tex, uvw);
+    }
+    vec4 sampleCube(samplerCube tex, vec3 dir) {
+        return texture(tex, dir);
+    }
+    vec4 sampleCubeArray(samplerCubeArray tex, vec4 dirLayer) {
+        return texture(tex, dirLayer);
+    }
+    vec4 sampleMip(sampler2D tex, vec2 uv) {
+        return textureLod(tex, uv, 1.0);
+    }
+    vec4 sampleGrad(sampler2D tex, vec2 uv) {
+        return textureGrad(tex, uv, uv, uv);
+    }
+    void noop() {}
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Texture1D:" in generated_code
+    assert "struct Texture1DArray:" in generated_code
+    assert "struct Texture2D:" in generated_code
+    assert "struct Texture2DArray:" in generated_code
+    assert "struct Texture3D:" in generated_code
+    assert "struct TextureCube:" in generated_code
+    assert "struct TextureCubeArray:" in generated_code
+    assert "struct Sampler:" in generated_code
+    assert "var ramp: Texture1D = Texture1D()" in generated_code
+    assert "var lineArray: Texture1DArray = Texture1DArray()" in generated_code
+    assert "var colorMap: Texture2D = Texture2D()" in generated_code
+    assert "var layerMap: Texture2DArray = Texture2DArray()" in generated_code
+    assert "var volumeMap: Texture3D = Texture3D()" in generated_code
+    assert "var cubeMap: TextureCube = TextureCube()" in generated_code
+    assert "var probeArray: TextureCubeArray = TextureCubeArray()" in generated_code
+    assert "var linearSampler: Sampler = Sampler()" in generated_code
+    assert "fn sample(tex: Texture1D, coord: Float32)" in generated_code
+    assert (
+        "fn sample(tex: Texture1DArray, coord: SIMD[DType.float32, 2])"
+        in generated_code
+    )
+    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in generated_code
+    assert (
+        "fn sample(tex: Texture2DArray, coord: SIMD[DType.float32, 4])"
+        in generated_code
+    )
+    assert "fn sample(tex: Texture3D, coord: SIMD[DType.float32, 4])" in generated_code
+    assert (
+        "fn sample(tex: TextureCube, coord: SIMD[DType.float32, 4])" in generated_code
+    )
+    assert (
+        "fn sample(tex: TextureCubeArray, coord: SIMD[DType.float32, 4])"
+        in generated_code
+    )
+    assert (
+        "fn sample_lod(tex: Texture2D, coord: SIMD[DType.float32, 2], lod: Float32)"
+        in generated_code
+    )
+    assert (
+        "fn sample_grad(tex: Texture2D, coord: SIMD[DType.float32, 2], "
+        "ddx: SIMD[DType.float32, 2], ddy: SIMD[DType.float32, 2])" in generated_code
+    )
+    assert "return sample_lod(tex, uv, 1.0)" in generated_code
+    assert "return sample_grad(tex, uv, uv, uv)" in generated_code
+    assert "fn noop() -> None:\n    pass" in generated_code
+    assert "sampler1D" not in generated_code
+    assert "sampler1DArray" not in generated_code
+    assert "sampler2D" not in generated_code
+    assert "sampler2DArray" not in generated_code
+    assert "sampler3D" not in generated_code
+    assert "samplerCube" not in generated_code
+    assert "samplerCubeArray" not in generated_code
+    assert "sampler linearSampler" not in generated_code
+    assert "textureLod" not in generated_code
+    assert "textureGrad" not in generated_code
+
+
+def test_resource_placeholders_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    sampler1d ramp;
+    sampler1DArray lineArray;
+    sampler2D colorMap;
+    sampler2darray layerMap;
+    sampler3D volumeMap;
+    samplerCube cubeMap;
+    samplercubearray probeArray;
+    sampler linearSampler;
+
+    vec4 sample1D(sampler1D tex, float u) {
+        return texture(tex, u);
+    }
+    vec4 sample1DArray(sampler1DArray tex, vec2 uLayer) {
+        return texture(tex, uLayer);
+    }
+    vec4 sample2D(sampler2D tex, vec2 uv) {
+        return texture(tex, uv);
+    }
+    vec4 sample2DArray(sampler2DArray tex, vec3 uvLayer) {
+        return texture(tex, uvLayer);
+    }
+    vec4 sample3D(sampler3D tex, vec3 uvw) {
+        return texture(tex, uvw);
+    }
+    vec4 sampleCube(samplerCube tex, vec3 dir) {
+        return texture(tex, dir);
+    }
+    vec4 sampleCubeArray(samplerCubeArray tex, vec4 dirLayer) {
+        return texture(tex, dirLayer);
+    }
+    vec4 sampleMip(sampler2D tex, vec2 uv) {
+        return textureLod(tex, uv, 1.0);
+    }
+    vec4 sampleGrad(sampler2D tex, vec2 uv) {
+        return textureGrad(tex, uv, uv, uv);
+    }
+    void noop() {}
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "resource_placeholders.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_for_statement():
     code = """
     shader main {

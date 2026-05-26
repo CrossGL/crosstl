@@ -2794,6 +2794,40 @@ def test_mesh_object_stage_codegen():
     assert "mesh void mesh_main" not in generated
 
 
+def test_metal_mesh_object_payload_parameters_use_object_data_address_space():
+    code = """
+    shader meshpipe {
+        struct Payload {
+            vec4 color;
+        };
+
+        object {
+            void main(Payload payload @payload)
+                @max_total_threads_per_threadgroup(32)
+            {
+                payload.color = vec4(1.0, 0.0, 0.0, 1.0);
+                DispatchMesh(uvec3(1, 1, 1));
+            }
+        }
+
+        mesh {
+            void main(Payload payload @payload)
+                @max_total_threads_per_threadgroup(32)
+            {
+                vec4 color = payload.color;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "object_data Payload& payload [[payload]]" in generated
+    assert "const object_data Payload& payload [[payload]]" in generated
+    assert "payload.color = float4(1.0, 0.0, 0.0, 1.0);" in generated
+    assert "float4 color = payload.color;" in generated
+    assert "Payload payload [[payload]]" not in generated
+
+
 def test_metal_mesh_object_stage_attributes_and_threadgroup_limits():
     code = """
     shader meshpipe {
@@ -2872,6 +2906,56 @@ def test_metal_mesh_stage_vertex_and_index_writes_lower_to_mesh_output_methods()
     ) in generated
     assert "_crossglMeshOut.set_index(0, 0);" in generated
     assert "SetVertex" not in generated
+    assert "SetPrimitive" not in generated
+
+
+def test_metal_mesh_stage_vector_line_primitive_writes_use_set_indices():
+    code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(64)
+                @max_primitives(32)
+                @outputtopology(line)
+            {
+                uvec2 edge = uvec2(0, 1);
+                SetMeshOutputCounts(2, 1);
+                SetPrimitive(0, edge);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+    assert "_crossglMeshOut.set_indices((0) * 2, uchar2(edge));" in generated
+    assert "_crossglMeshOut.set_index(0, edge);" not in generated
+    assert "SetPrimitive" not in generated
+
+
+def test_metal_mesh_stage_vector_triangle_primitive_writes_expand_to_indices():
+    code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(64)
+                @max_primitives(32)
+                @outputtopology(triangle)
+            {
+                uvec3 tri = uvec3(0, 1, 2);
+                SetMeshOutputCounts(3, 1);
+                SetPrimitive(0, tri);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+    assert "_crossglMeshOut.set_index((0) * 3, tri.x);" in generated
+    assert "_crossglMeshOut.set_index(((0) * 3) + 1, tri.y);" in generated
+    assert "_crossglMeshOut.set_index(((0) * 3) + 2, tri.z);" in generated
+    assert "_crossglMeshOut.set_indices((0) * 3" not in generated
     assert "SetPrimitive" not in generated
 
 
@@ -3140,7 +3224,12 @@ def test_metal_atomic_fetch_codegen():
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
     generated = generate_code(ast)
-    assert "atomic_fetch_add_explicit" in generated
+    assert "threadgroup atomic_int counter;" in generated
+    assert (
+        "int old = atomic_fetch_add_explicit(&counter, 1, memory_order_relaxed);"
+        in generated
+    )
+    assert "atomic_fetch_add_explicit(counter" not in generated
 
 
 def test_compute_builtin_semantics_roundtrip():

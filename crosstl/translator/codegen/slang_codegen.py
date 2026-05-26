@@ -80,6 +80,7 @@ class SlangCodeGen:
         self.user_function_names = set()
         self.user_function_return_types = {}
         self.stage_entry_name_overrides = {}
+        self.identifier_aliases = {}
         self._generating = False
         self.semantic_map = {
             "gl_Position": "SV_Position",
@@ -135,6 +136,7 @@ class SlangCodeGen:
                 ast
             )
             self.stage_entry_name_overrides = {}
+            self.identifier_aliases = {}
 
         if isinstance(ast, list):
             result = ""
@@ -959,21 +961,32 @@ class SlangCodeGen:
         saved_variable_types = self.variable_types.copy()
         saved_image_resource_types = self.image_resource_types.copy()
         saved_function_return_type = self.current_function_return_type
+        saved_identifier_aliases = self.identifier_aliases.copy()
         if hasattr(node, "return_type"):
             ret_type_name = self.convert_type_node_to_string(node.return_type)
             ret_type = self.convert_type(ret_type_name)
         else:
             ret_type_name = "void"
             ret_type = "void"
-        self.current_function_return_type = ret_type_name
 
-        semantic_str = self.semantic_suffix(self.function_return_semantic(node))
+        semantic = self.function_return_semantic(node)
+        body = getattr(node, "body", [])
+        body_statements = self.get_statements(body)
+        builtin_return_rewrite = self.slang_stage_builtin_return_rewrite(
+            body_statements, shader_type, ret_type_name, semantic
+        )
+        if builtin_return_rewrite is not None:
+            ret_type_name = builtin_return_rewrite["return_type_name"]
+            ret_type = self.convert_type(ret_type_name)
+            semantic = builtin_return_rewrite["semantic"]
+
+        self.current_function_return_type = ret_type_name
+        semantic_str = self.semantic_suffix(semantic)
 
         param_list = getattr(node, "parameters", getattr(node, "params", []))
-        params_str = ""
+        params = []
         if param_list:
             if param_list and hasattr(param_list[0], "name"):
-                params = []
                 for param in param_list:
                     if hasattr(param, "param_type"):
                         param_type_name = self.convert_type_node_to_string(
@@ -997,16 +1010,31 @@ class SlangCodeGen:
                         declaration
                         + self.semantic_suffix(self.semantic_from_node(param))
                     )
-                params_str = ", ".join(params)
             else:
                 for param_type, param_name in param_list:
                     self.register_variable_type(param_name, param_type)
-                params_str = ", ".join(
-                    [
+                    params.append(
                         f"{self.map_resource_type_with_format(param_type)} {param_name}"
-                        for param_type, param_name in param_list
-                    ]
-                )
+                    )
+
+        for param_type, param_name, semantic in self.slang_implicit_stage_parameters(
+            body_statements, shader_type, param_list
+        ):
+            self.register_variable_type(param_name, param_type)
+            params.append(f"{self.convert_type(param_type)} {param_name} : {semantic}")
+
+        params_str = ", ".join(params)
+        identifier_aliases = self.slang_stage_system_value_aliases(
+            body_statements, shader_type, param_list
+        )
+        if (
+            builtin_return_rewrite is not None
+            and builtin_return_rewrite["mode"] == "local"
+        ):
+            identifier_aliases[builtin_return_rewrite["target_name"]] = (
+                builtin_return_rewrite["local_name"]
+            )
+        self.identifier_aliases = identifier_aliases
 
         result = ""
         if shader_type:
@@ -1022,24 +1050,287 @@ class SlangCodeGen:
         result += f"{ret_type} {function_name}({params_str}){semantic_str}\n{{\n"
         self.indent_level += 1
 
-        body = getattr(node, "body", [])
-        if hasattr(body, "statements"):
-            for stmt in body.statements:
-                result += self.emit_statement(stmt) + "\n"
-        elif isinstance(body, list):
-            for stmt in body:
-                result += self.emit_statement(stmt) + "\n"
+        if (
+            builtin_return_rewrite is not None
+            and builtin_return_rewrite["mode"] == "local"
+        ):
+            local_type = self.convert_type(builtin_return_rewrite["return_type_name"])
+            local_name = builtin_return_rewrite["local_name"]
+            result += f"{self.indent()}{local_type} {local_name};\n"
+
+        for statement_index, stmt in enumerate(body_statements):
+            result += (
+                self.emit_function_body_statement(
+                    stmt, statement_index, builtin_return_rewrite
+                )
+                + "\n"
+            )
+
+        if (
+            builtin_return_rewrite is not None
+            and builtin_return_rewrite["mode"] == "local"
+        ):
+            result += f"{self.indent()}return {builtin_return_rewrite['local_name']};\n"
 
         self.indent_level -= 1
         result += "}"
         self.variable_types = saved_variable_types
         self.image_resource_types = saved_image_resource_types
         self.current_function_return_type = saved_function_return_type
+        self.identifier_aliases = saved_identifier_aliases
         return result
 
     def generate_compute_numthreads(self, execution_config=None):
         x, y, z = compute_local_size(execution_config)
         return f"[numthreads({x}, {y}, {z})]\n"
+
+    def slang_implicit_stage_parameters(self, body_statements, shader_type, param_list):
+        candidates = self.slang_implicit_stage_parameter_candidates(shader_type)
+        if not candidates:
+            return []
+
+        declared_names = {
+            getattr(param, "name", None)
+            for param in param_list or []
+            if getattr(param, "name", None)
+        }
+        existing_semantics = {
+            self.map_semantic(self.semantic_from_node(param))
+            for param in param_list or []
+            if self.semantic_from_node(param)
+        }
+        for node in self.walk_ast(body_statements):
+            if isinstance(node, VariableNode):
+                declared_names.add(node.name)
+
+        used_names = set()
+        for node in self.walk_ast(body_statements):
+            if isinstance(node, IdentifierNode) and node.name in candidates:
+                used_names.add(node.name)
+
+        implicit_params = []
+        for name, (param_type, semantic) in candidates.items():
+            mapped_semantic = self.map_semantic(semantic)
+            if (
+                name in used_names
+                and name not in declared_names
+                and mapped_semantic not in existing_semantics
+            ):
+                implicit_params.append((param_type, name, mapped_semantic))
+        return implicit_params
+
+    def slang_stage_system_value_aliases(
+        self, body_statements, shader_type, param_list
+    ):
+        candidates = self.slang_implicit_stage_parameter_candidates(shader_type)
+        if not candidates:
+            return {}
+
+        declared_names = {
+            getattr(param, "name", None)
+            for param in param_list or []
+            if getattr(param, "name", None)
+        }
+        semantic_parameters = {}
+        for param in param_list or []:
+            param_name = getattr(param, "name", None)
+            semantic = self.semantic_from_node(param)
+            if param_name and semantic:
+                semantic_parameters[self.map_semantic(semantic)] = param_name
+
+        for node in self.walk_ast(body_statements):
+            if isinstance(node, VariableNode):
+                declared_names.add(node.name)
+
+        aliases = {}
+        for node in self.walk_ast(body_statements):
+            if not isinstance(node, IdentifierNode) or node.name not in candidates:
+                continue
+            if node.name in declared_names:
+                continue
+
+            _param_type, semantic = candidates[node.name]
+            existing_param_name = semantic_parameters.get(self.map_semantic(semantic))
+            if existing_param_name and existing_param_name != node.name:
+                aliases[node.name] = existing_param_name
+        return aliases
+
+    def slang_implicit_stage_parameter_candidates(self, shader_type):
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        thread_parameters = {
+            "gl_WorkGroupID": ("uvec3", "SV_GroupID"),
+            "gl_LocalInvocationID": ("uvec3", "SV_GroupThreadID"),
+            "gl_GlobalInvocationID": ("uvec3", "SV_DispatchThreadID"),
+            "gl_LocalInvocationIndex": ("uint", "SV_GroupIndex"),
+        }
+        if shader_stage in {"compute", "mesh", "amplification"}:
+            return thread_parameters
+        if shader_stage == "vertex":
+            return {
+                "gl_VertexID": ("uint", "SV_VertexID"),
+                "gl_InstanceID": ("uint", "SV_InstanceID"),
+            }
+        if shader_stage == "fragment":
+            return {
+                "gl_FragCoord": ("vec4", "SV_Position"),
+                "gl_FrontFacing": ("bool", "SV_IsFrontFace"),
+                "gl_PrimitiveID": ("uint", "SV_PrimitiveID"),
+            }
+        return {}
+
+    def walk_ast(self, root):
+        visited = set()
+
+        def walk(value):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            if isinstance(value, dict):
+                for item in value.values():
+                    yield from walk(item)
+                return
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    yield from walk(item)
+                return
+
+            value_id = id(value)
+            if value_id in visited:
+                return
+            visited.add(value_id)
+            yield value
+
+            if hasattr(value, "__dict__"):
+                for child in vars(value).values():
+                    yield from walk(child)
+
+        yield from walk(root)
+
+    def slang_stage_builtin_return_rewrite(
+        self, body_statements, shader_type, ret_type_name, semantic
+    ):
+        if semantic is not None:
+            return None
+        if self.convert_type(ret_type_name) != "void" or not body_statements:
+            return None
+
+        output_assignments = self.slang_stage_builtin_output_assignments(
+            body_statements, shader_type
+        )
+        output_targets = {
+            target_name for _assignment, target_name in output_assignments
+        }
+        if len(output_targets) != 1:
+            return None
+
+        target_name = next(iter(output_targets))
+        return_type_name = self.slang_stage_builtin_return_type(
+            shader_type, target_name
+        )
+        if return_type_name is None:
+            return None
+
+        final_statement = body_statements[-1]
+        assignment = self.assignment_from_statement(final_statement)
+        if (
+            len(output_assignments) == 1
+            and assignment is output_assignments[0][0]
+            and getattr(assignment, "operator", None) == "="
+        ):
+            return {
+                "mode": "direct",
+                "statement_index": len(body_statements) - 1,
+                "return_type_name": return_type_name,
+                "semantic": target_name,
+                "value": getattr(
+                    assignment, "right", getattr(assignment, "value", None)
+                ),
+            }
+
+        if not self.statement_contains_assignments(final_statement, output_assignments):
+            return None
+
+        return {
+            "mode": "local",
+            "return_type_name": return_type_name,
+            "semantic": target_name,
+            "target_name": target_name,
+            "local_name": self.unique_slang_builtin_output_local_name(
+                target_name, body_statements
+            ),
+        }
+
+    def slang_stage_builtin_output_assignments(self, body_statements, shader_type):
+        assignments = []
+        for node in self.walk_ast(body_statements):
+            if not isinstance(node, AssignmentNode):
+                continue
+            if getattr(node, "operator", None) != "=":
+                continue
+
+            target = getattr(node, "left", getattr(node, "target", None))
+            target_name = self.identifier_name(target)
+            if self.slang_stage_builtin_return_type(shader_type, target_name):
+                assignments.append((node, target_name))
+        return assignments
+
+    def statement_contains_assignments(self, statement, assignments):
+        statement_node_ids = {id(node) for node in self.walk_ast(statement)}
+        return all(
+            id(assignment) in statement_node_ids for assignment, _ in assignments
+        )
+
+    def unique_slang_builtin_output_local_name(self, target_name, body_statements):
+        base_name = f"cgl_{target_name.removeprefix('gl_')}"
+        used_names = set()
+        for node in self.walk_ast(body_statements):
+            if hasattr(node, "name") and isinstance(getattr(node, "name"), str):
+                used_names.add(node.name)
+        if base_name not in used_names:
+            return base_name
+
+        suffix = 1
+        while f"{base_name}_{suffix}" in used_names:
+            suffix += 1
+        return f"{base_name}_{suffix}"
+
+    def slang_stage_builtin_return_type(self, shader_type, target_name):
+        if shader_type == "vertex" and target_name == "gl_Position":
+            return "vec4"
+        if shader_type == "fragment":
+            if target_name == "gl_FragDepth":
+                return "float"
+            if target_name == "gl_FragColor" or (
+                target_name.startswith("gl_FragColor")
+                and target_name[len("gl_FragColor") :].isdigit()
+            ):
+                return "vec4"
+        return None
+
+    def assignment_from_statement(self, statement):
+        if isinstance(statement, AssignmentNode):
+            return statement
+        if isinstance(statement, ExpressionStatementNode) and isinstance(
+            getattr(statement, "expression", None), AssignmentNode
+        ):
+            return statement.expression
+        return None
+
+    def identifier_name(self, node):
+        if isinstance(node, IdentifierNode):
+            return node.name
+        return None
+
+    def emit_function_body_statement(self, statement, statement_index, rewrite):
+        if (
+            rewrite is not None
+            and rewrite["mode"] == "direct"
+            and statement_index == rewrite["statement_index"]
+        ):
+            value = self.generate_expression_with_expected(
+                rewrite["value"], rewrite["return_type_name"]
+            )
+            return f"{self.indent()}return {value};"
+        return self.emit_statement(statement)
 
     def emit_statement(self, node):
         statement = self.generate_statement(node)
@@ -1430,7 +1721,7 @@ class SlangCodeGen:
         if isinstance(node, VariableNode):
             return node.name
         elif isinstance(node, IdentifierNode):
-            return node.name
+            return self.identifier_aliases.get(node.name, node.name)
         elif isinstance(node, LiteralNode):
             return self.generate_literal(node)
         elif isinstance(node, ExpressionStatementNode):

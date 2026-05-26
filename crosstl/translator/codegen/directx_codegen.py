@@ -341,6 +341,9 @@ class HLSLCodeGen:
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
         self.current_hlsl_hull_domain = None
+        self.current_hlsl_mesh_payload_types = set()
+        self.current_hlsl_dispatch_mesh_payload_types = set()
+        self.current_hlsl_has_amplification_stage = False
         self.hlsl_temp_variable_index = 0
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
@@ -605,6 +608,9 @@ class HLSLCodeGen:
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
         self.current_hlsl_hull_domain = None
+        self.current_hlsl_mesh_payload_types = set()
+        self.current_hlsl_dispatch_mesh_payload_types = set()
+        self.current_hlsl_has_amplification_stage = False
         self.hlsl_temp_variable_index = 0
         self.current_glsl_buffer_block_parameters = {}
         self.unsupported_glsl_buffer_block_variables = set()
@@ -1389,6 +1395,13 @@ class HLSLCodeGen:
             self.hlsl_program_hull_output_control_points(ast)
         )
         self.current_hlsl_hull_domain = self.hlsl_program_hull_domain(ast)
+        self.current_hlsl_mesh_payload_types = self.hlsl_program_mesh_payload_types(ast)
+        self.current_hlsl_dispatch_mesh_payload_types = (
+            self.hlsl_program_dispatch_mesh_payload_types(ast)
+        )
+        self.current_hlsl_has_amplification_stage = (
+            self.hlsl_program_has_amplification_stage(ast)
+        )
 
         functions = getattr(ast, "functions", [])
         global_functions_by_name = {
@@ -2155,7 +2168,13 @@ class HLSLCodeGen:
         return vtype or "float"
 
     def local_variable_qualifier(self, node):
-        return "const " if "const" in getattr(node, "qualifiers", []) else ""
+        qualifiers = {str(value).lower() for value in getattr(node, "qualifiers", [])}
+        rendered = []
+        if qualifiers & {"groupshared", "shared", "threadgroup", "workgroup"}:
+            rendered.append("groupshared")
+        if "const" in qualifiers:
+            rendered.append("const")
+        return f"{' '.join(rendered)} " if rendered else ""
 
     def generate_statement_code(self, code, indent=0):
         indent_str = "    " * indent
@@ -4803,6 +4822,16 @@ class HLSLCodeGen:
             return normalized
         return None
 
+    def hlsl_mesh_payload_parameter_attribute_name(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return None
+
+        normalized = str(attr_name).lower()
+        if normalized in {"mesh_payload", "hlsl_mesh_payload"}:
+            return "payload"
+        return None
+
     def hlsl_mesh_parameter_roles(self, parameter):
         roles = []
         for qualifier in getattr(parameter, "qualifiers", []) or []:
@@ -4815,8 +4844,12 @@ class HLSLCodeGen:
             if role:
                 roles.append(role)
 
+            payload_role = self.hlsl_mesh_payload_parameter_attribute_name(attr)
+            if payload_role:
+                roles.append(payload_role)
+
         ordered_roles = []
-        for role in ("vertices", "indices", "primitives"):
+        for role in ("payload", "vertices", "indices", "primitives"):
             if role in roles:
                 ordered_roles.append(role)
         return ordered_roles
@@ -5259,7 +5292,10 @@ class HLSLCodeGen:
             self.validate_hlsl_thread_system_value_types(parameters, shader_type)
 
         if shader_type == "mesh":
+            self.validate_hlsl_mesh_payload_parameter(func, parameters)
             self.validate_hlsl_mesh_output_parameters(func, parameters)
+
+        self.validate_hlsl_dispatch_mesh_payloads(func, shader_type)
 
     def validate_hlsl_geometry_stream_output_semantics(self, parameters):
         stream_types = {"PointStream", "LineStream", "TriangleStream"}
@@ -5299,6 +5335,18 @@ class HLSLCodeGen:
             return None
         first_dimension = array_suffix[1:].split("]", 1)[0]
         return first_dimension if first_dimension else None
+
+    def hlsl_parameter_user_struct_type(self, parameter):
+        base_type, _array_suffix = self.hlsl_parameter_mapped_base_and_array_suffix(
+            parameter
+        )
+        if base_type is None:
+            return None
+
+        struct_name = base_type.split("<", 1)[0].strip()
+        if struct_name not in self.structs_by_name:
+            return None
+        return struct_name
 
     def validate_hlsl_mesh_output_array_parameter(self, parameter, role):
         if "out" not in self.hlsl_parameter_direction_qualifiers(parameter):
@@ -5516,6 +5564,154 @@ class HLSLCodeGen:
                 "DirectX mesh stage output signature must call "
                 "SetMeshOutputCounts exactly once"
             )
+
+    def hlsl_mesh_payload_parameters(self, parameters):
+        return [
+            parameter
+            for parameter in parameters
+            if "payload" in self.hlsl_mesh_parameter_roles(parameter)
+        ]
+
+    def hlsl_mesh_payload_type_from_parameters(self, parameters):
+        payload_parameters = self.hlsl_mesh_payload_parameters(parameters)
+        if len(payload_parameters) != 1:
+            return None
+        return self.hlsl_parameter_user_struct_type(payload_parameters[0])
+
+    def validate_hlsl_mesh_payload_parameter(self, func, parameters):
+        payload_parameters = self.hlsl_mesh_payload_parameters(parameters)
+        if not payload_parameters:
+            return
+        if len(payload_parameters) > 1:
+            raise ValueError(
+                "DirectX mesh stage must declare at most one mesh payload parameter"
+            )
+
+        parameter = payload_parameters[0]
+        directions = self.hlsl_parameter_direction_qualifiers(parameter)
+        if "out" in directions or "inout" in directions:
+            raise ValueError(
+                f"DirectX mesh stage payload parameter '{parameter.name}' "
+                "must be an input parameter"
+            )
+        if "in" not in directions:
+            raise ValueError(
+                f"DirectX mesh stage payload parameter '{parameter.name}' "
+                "must use the in qualifier"
+            )
+
+        payload_type = self.hlsl_parameter_user_struct_type(parameter)
+        if payload_type is None:
+            raise ValueError(
+                f"DirectX mesh stage payload parameter '{parameter.name}' "
+                "must use a user-defined struct type"
+            )
+
+        dispatch_payload_types = {
+            payload
+            for payload in self.current_hlsl_dispatch_mesh_payload_types
+            if payload is not None
+        }
+        if dispatch_payload_types and payload_type not in dispatch_payload_types:
+            expected = ", ".join(sorted(dispatch_payload_types))
+            raise ValueError(
+                "DirectX mesh stage payload parameter type "
+                f"'{payload_type}' must match DispatchMesh payload type(s): "
+                f"{expected}"
+            )
+        if (
+            self.current_hlsl_has_amplification_stage
+            and None in self.current_hlsl_dispatch_mesh_payload_types
+        ):
+            raise ValueError(
+                "DirectX mesh stage payload parameter requires amplification "
+                "DispatchMesh calls to pass a payload argument"
+            )
+
+    def hlsl_function_visible_variable_types(self, func):
+        variable_types = {}
+        for parameter in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            parameter_type = getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            variable_types[parameter.name] = self.type_name_string(parameter_type)
+
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            variable_type = self.local_variable_declared_type(node)
+            variable_types[node.name] = self.type_name_string(variable_type)
+        return variable_types
+
+    def hlsl_expression_user_struct_type(self, expr, variable_types):
+        name = self.expression_name(expr)
+        if not name:
+            return None
+        type_name = variable_types.get(name)
+        if not type_name:
+            return None
+        base_type = self.map_type(type_name).split("<", 1)[0].split("[", 1)[0].strip()
+        if base_type not in self.structs_by_name:
+            return None
+        return base_type
+
+    def hlsl_dispatch_mesh_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if isinstance(node, FunctionCallNode):
+                if self.function_call_name(node) == "DispatchMesh":
+                    calls.append(getattr(node, "arguments", getattr(node, "args", [])))
+            elif isinstance(node, MeshOpNode):
+                if getattr(node, "operation", None) == "DispatchMesh":
+                    calls.append(getattr(node, "arguments", []))
+        return calls
+
+    def hlsl_dispatch_mesh_payload_types_for_function(self, func):
+        payload_types = set()
+        variable_types = self.hlsl_function_visible_variable_types(func)
+        for args in self.hlsl_dispatch_mesh_calls(func):
+            if len(args) < 4:
+                payload_types.add(None)
+                continue
+
+            payload_type = self.hlsl_expression_user_struct_type(
+                args[3], variable_types
+            )
+            payload_types.add(payload_type)
+        return payload_types
+
+    def validate_hlsl_dispatch_mesh_payloads(self, func, shader_type):
+        if shader_type not in {"task", "amplification", "object"}:
+            return
+
+        payload_types = self.hlsl_dispatch_mesh_payload_types_for_function(func)
+        if not payload_types:
+            return
+
+        mesh_payload_types = self.current_hlsl_mesh_payload_types
+        for payload_type in payload_types:
+            if payload_type is None:
+                if mesh_payload_types:
+                    raise ValueError(
+                        "DirectX amplification DispatchMesh call must pass a "
+                        "payload argument when the mesh stage declares a "
+                        "payload parameter"
+                    )
+                continue
+
+            if payload_type not in self.structs_by_name:
+                raise ValueError(
+                    "DirectX amplification DispatchMesh payload argument must "
+                    "be a user-defined struct value"
+                )
+
+            if mesh_payload_types and payload_type not in mesh_payload_types:
+                expected = ", ".join(sorted(mesh_payload_types))
+                raise ValueError(
+                    "DirectX amplification DispatchMesh payload type "
+                    f"'{payload_type}' must match mesh payload type(s): "
+                    f"{expected}"
+                )
 
     def validate_hlsl_patch_constant_function(self, func, shader_type):
         if shader_type != "tessellation_control":
@@ -5931,6 +6127,31 @@ class HLSLCodeGen:
         if len(domains) == 1:
             return next(iter(domains))
         return None
+
+    def hlsl_program_mesh_payload_types(self, ast):
+        payload_types = {
+            self.hlsl_mesh_payload_type_from_parameters(
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            )
+            for func in self.hlsl_stage_entry_functions(ast, "mesh")
+        }
+        payload_types.discard(None)
+        return payload_types
+
+    def hlsl_program_dispatch_mesh_payload_types(self, ast):
+        payload_types = set()
+        for stage_name in ("task", "amplification", "object"):
+            for func in self.hlsl_stage_entry_functions(ast, stage_name):
+                payload_types.update(
+                    self.hlsl_dispatch_mesh_payload_types_for_function(func)
+                )
+        return payload_types
+
+    def hlsl_program_has_amplification_stage(self, ast):
+        for stage_name in ("task", "amplification", "object"):
+            if self.hlsl_stage_entry_functions(ast, stage_name):
+                return True
+        return False
 
     def collect_functions(self, root):
         functions = []
@@ -8890,6 +9111,7 @@ class HLSLCodeGen:
                 or self.is_resource_memory_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
                 or self.hlsl_mesh_parameter_role_attribute_name(attr)
+                or self.hlsl_mesh_payload_parameter_attribute_name(attr)
             ):
                 continue
             if hasattr(attr, "name"):
@@ -8912,6 +9134,7 @@ class HLSLCodeGen:
                 or self.is_resource_memory_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
                 or self.hlsl_mesh_parameter_role_attribute_name(attr)
+                or self.hlsl_mesh_payload_parameter_attribute_name(attr)
             ):
                 continue
             if hasattr(attr, "name"):

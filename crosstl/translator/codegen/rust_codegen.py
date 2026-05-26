@@ -2200,6 +2200,8 @@ class RustCodeGen:
             vtype = self.variable_declaration_type(stmt, initial_value)
             self.register_variable_type(stmt.name, vtype, scope="local")
             binding_keyword = self.local_let_keyword(stmt)
+            rust_type = self.map_type(vtype)
+            default_array_initializer = self.local_array_default_initializer(rust_type)
             if initial_value is not None:
                 increment_init = self.generate_increment_initializer_declaration(
                     stmt,
@@ -2216,15 +2218,13 @@ class RustCodeGen:
                     init_expr = self.normalize_assignment_rhs(
                         vtype, initial_value, init_expr, "="
                     )
-                return f"{indent_str}{binding_keyword} {stmt.name}: {self.map_type(vtype)} = {init_expr};\n"
+                return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = {init_expr};\n"
             elif self.is_generated_struct_type(vtype):
-                return f"{indent_str}{binding_keyword} {stmt.name}: {self.map_type(vtype)} = Default::default();\n"
-            elif self.local_array_default_initializer(self.map_type(vtype)) is not None:
-                rust_type = self.map_type(vtype)
-                initializer = self.local_array_default_initializer(rust_type)
-                return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = {initializer};\n"
+                return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = Default::default();\n"
+            elif default_array_initializer is not None:
+                return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = {default_array_initializer};\n"
             else:
-                return f"{indent_str}{binding_keyword} {stmt.name}: {self.map_type(vtype)};\n"
+                return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type};\n"
 
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)

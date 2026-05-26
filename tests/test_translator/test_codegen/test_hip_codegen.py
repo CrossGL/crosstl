@@ -2193,6 +2193,12 @@ class TestHipCodeGen:
                     int oldValue = atomicExchange(counter, 2);
                     int exchanged = atomicCompareExchange(counter, 0, 3);
                     int swapped = atomicCompSwap(counter, exchanged, 4);
+                    atomicSub(counter, 1);
+                    atomicMin(counter, 0);
+                    atomicMax(counter, 7);
+                    atomicAnd(counter, 1);
+                    atomicOr(counter, 2);
+                    atomicXor(counter, 3);
                 }
             }
         }
@@ -2210,6 +2216,12 @@ class TestHipCodeGen:
         assert "int oldValue = atomicExch(counter, 2);" in hip_code
         assert "int exchanged = atomicCAS(counter, 0, 3);" in hip_code
         assert "int swapped = atomicCAS(counter, exchanged, 4);" in hip_code
+        assert "atomicSub(counter, 1);" in hip_code
+        assert "atomicMin(counter, 0);" in hip_code
+        assert "atomicMax(counter, 7);" in hip_code
+        assert "atomicAnd(counter, 1);" in hip_code
+        assert "atomicOr(counter, 2);" in hip_code
+        assert "atomicXor(counter, 3);" in hip_code
         assert "atomicExchange(" not in hip_code
         assert "atomicCompareExchange(" not in hip_code
         assert "atomicCompSwap(" not in hip_code
@@ -2710,6 +2722,7 @@ class TestHipCodeGen:
         source_code = """
         shader Resources {
             sampler2d colorMap;
+            sampler1darray rampLayers;
             sampler2darray layers;
             sampler3d volumeTex;
             sampler querySampler;
@@ -5639,6 +5652,7 @@ class TestHipCodeGen:
         source_code = """
         shader Resources {
             sampler2d colorMap;
+            sampler1darray rampLayers;
             sampler2darray layers;
             sampler3d volumeTex;
             samplercube cubeTex;
@@ -5660,11 +5674,13 @@ class TestHipCodeGen:
             compute {
                 void main() {
                     ivec2 texSize = textureSize(colorMap, 2);
+                    ivec2 rampLayerSize = textureSize(rampLayers, 0);
                     ivec3 layerSize = textureSize(layers, 1);
                     ivec3 volumeSize = textureSize(volumeTex, 0);
                     ivec2 cubeSize = textureSize(cubeTex, 0);
                     ivec3 cubeArraySize = textureSize(cubeArrayTex, 0);
                     int texLevels = textureQueryLevels(colorMap);
+                    int rampLayerLevels = textureQueryLevels(rampLayers);
                     int layerLevels = textureQueryLevels(layers);
                     int cubeLevels = textureQueryLevels(cubeTex);
                     int cubeArrayLevels = textureQueryLevels(cubeArrayTex);
@@ -5698,6 +5714,7 @@ class TestHipCodeGen:
             "CglResourceQueryInfo paramTex_metadata)" in hip_code
         )
         assert "CglResourceQueryInfo colorMap_metadata = {};" in hip_code
+        assert "CglResourceQueryInfo rampLayers_metadata = {};" in hip_code
         assert "CglResourceQueryInfo cubeArrayTex_metadata = {};" in hip_code
         assert "CglResourceQueryInfo counters_metadata = {};" in hip_code
         assert (
@@ -5718,6 +5735,10 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
+            "int2 rampLayerSize = cgl_textureSize_sampler1DArray"
+            "(rampLayers_metadata, 0);" in hip_code
+        )
+        assert (
             "int3 layerSize = cgl_textureSize_sampler2DArray(layers_metadata, 1);"
             in hip_code
         )
@@ -5736,6 +5757,10 @@ class TestHipCodeGen:
         assert (
             "int texLevels = cgl_textureQueryLevels_sampler2D(colorMap_metadata);"
             in hip_code
+        )
+        assert (
+            "int rampLayerLevels = cgl_textureQueryLevels_sampler1DArray"
+            "(rampLayers_metadata);" in hip_code
         )
         assert (
             "int layerLevels = cgl_textureQueryLevels_sampler2DArray"

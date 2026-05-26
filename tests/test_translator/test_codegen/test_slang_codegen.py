@@ -101,8 +101,9 @@ def test_stage_only_shader_emits_slang_entry_point():
 
     assert "// Vertex Shader" in generated_code
     assert '[shader("vertex")]' in generated_code
-    assert "void main()" in generated_code
-    assert "gl_Position = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "float4 main() : SV_Position" in generated_code
+    assert "return float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "gl_Position =" not in generated_code
 
 
 def test_stage_local_functions_and_initialized_variables_emit():
@@ -127,7 +128,165 @@ def test_stage_local_functions_and_initialized_variables_emit():
     assert "float helper(float x)" in generated_code
     assert "return x;" in generated_code
     assert "float y = helper(1.0);" in generated_code
-    assert "gl_Position = float4(y, y, y, 1.0);" in generated_code
+    assert "float4 main() : SV_Position" in generated_code
+    assert "return float4(y, y, y, 1.0);" in generated_code
+    assert "gl_Position =" not in generated_code
+
+
+def test_vertex_position_assignment_rewrites_only_final_top_level_assignment():
+    code = """
+    shader main {
+        vertex {
+            void main() {
+                gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+                float y = 1.0;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void main()" in generated_code
+    assert "gl_Position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "return float4(0.0, 0.0, 0.0, 1.0);" not in generated_code
+
+
+def test_vertex_position_branch_assignment_rewrites_with_output_local():
+    code = """
+    shader main {
+        vertex {
+            void main(bool usePrimary) {
+                if (usePrimary) {
+                    gl_Position = vec4(1.0, 0.0, 0.0, 1.0);
+                } else {
+                    gl_Position = vec4(0.0, 1.0, 0.0, 1.0);
+                }
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 main(bool usePrimary) : SV_Position" in generated_code
+    assert "float4 cgl_Position;" in generated_code
+    assert "cgl_Position = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "cgl_Position = float4(0.0, 1.0, 0.0, 1.0);" in generated_code
+    assert "return cgl_Position;" in generated_code
+    assert "\n        gl_Position =" not in generated_code
+
+
+def test_fragment_output_assignments_rewrite_to_slang_return_semantics():
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                gl_FragColor = vec4(1.0, 0.5, 0.25, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 main() : SV_Target" in generated_code
+    assert "return float4(1.0, 0.5, 0.25, 1.0);" in generated_code
+    assert "gl_FragColor =" not in generated_code
+
+
+def test_fragment_depth_assignment_rewrites_to_slang_return_semantic():
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                float depth = 0.25;
+                gl_FragDepth = depth;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float main() : SV_Depth" in generated_code
+    assert "float depth = 0.25;" in generated_code
+    assert "return depth;" in generated_code
+    assert "gl_FragDepth =" not in generated_code
+
+
+def test_compute_system_value_builtins_emit_implicit_slang_parameters():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                uint globalX = gl_GlobalInvocationID.x;
+                uint localIndex = gl_LocalInvocationIndex;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void main(uint3 gl_GlobalInvocationID : SV_DispatchThreadID, "
+        "uint gl_LocalInvocationIndex : SV_GroupIndex)" in generated_code
+    )
+    assert "uint globalX = gl_GlobalInvocationID.x;" in generated_code
+    assert "uint localIndex = gl_LocalInvocationIndex;" in generated_code
+
+
+def test_system_value_builtin_uses_existing_semantic_parameter_alias():
+    code = """
+    shader main {
+        compute {
+            void main(uvec3 tid @ gl_GlobalInvocationID) {
+                uint globalX = gl_GlobalInvocationID.x;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void main(uint3 tid : SV_DispatchThreadID)" in generated_code
+    assert "uint3 gl_GlobalInvocationID : SV_DispatchThreadID" not in generated_code
+    assert "uint globalX = tid.x;" in generated_code
+    assert "gl_GlobalInvocationID.x" not in generated_code
+
+
+def test_vertex_system_value_builtin_combines_with_position_return_rewrite():
+    code = """
+    shader main {
+        vertex {
+            void main() {
+                float x = float(gl_VertexID);
+                gl_Position = vec4(x, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 main(uint gl_VertexID : SV_VertexID) : SV_Position" in generated_code
+    assert "float x = float(gl_VertexID);" in generated_code
+    assert "return float4(x, 0.0, 0.0, 1.0);" in generated_code
+
+
+def test_fragment_system_value_builtin_combines_with_color_return_rewrite():
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                bool front = gl_FrontFacing;
+                gl_FragColor = front ? vec4(1.0) : vec4(0.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "float4 main(bool gl_FrontFacing : SV_IsFrontFace) : SV_Target"
+        in generated_code
+    )
+    assert "bool front = gl_FrontFacing;" in generated_code
+    assert "return (front ? float4(1.0) : float4(0.0));" in generated_code
 
 
 def test_mix_builtin_lowers_to_lerp_without_affecting_resources_or_constructors():

@@ -2,6 +2,7 @@
 
 from .CudaAst import (
     AssignmentNode,
+    ArrayAccessNode,
     CastNode,
     FunctionCallNode,
     InitializerListNode,
@@ -77,6 +78,39 @@ class CudaToCrossGLConverter:
         "cudaSurfaceType3D": "image3D",
         "cudaSurfaceTypeCubemap": "imageCube",
     }
+    CUDA_TEXTURE_CALL_TYPE_HINTS = {
+        "tex1D": "sampler1D",
+        "tex1DLod": "sampler1D",
+        "tex1DGrad": "sampler1D",
+        "tex2D": "sampler2D",
+        "tex2DLod": "sampler2D",
+        "tex2DGrad": "sampler2D",
+        "tex3D": "sampler3D",
+        "tex3DLod": "sampler3D",
+        "tex3DGrad": "sampler3D",
+        "texCubemap": "samplerCube",
+        "texCubemapLod": "samplerCube",
+        "texCubemapGrad": "samplerCube",
+        "tex1DLayered": "sampler1DArray",
+        "tex1DLayeredLod": "sampler1DArray",
+        "tex1DLayeredGrad": "sampler1DArray",
+        "tex2DLayered": "sampler2DArray",
+        "tex2DLayeredLod": "sampler2DArray",
+        "tex2DLayeredGrad": "sampler2DArray",
+        "texCubemapLayered": "samplerCubeArray",
+        "texCubemapLayeredLod": "samplerCubeArray",
+        "texCubemapLayeredGrad": "samplerCubeArray",
+    }
+    CUDA_SURFACE_CALL_TYPE_HINTS = {
+        "surf2Dread": "image2D",
+        "surf2Dwrite": "image2D",
+        "surf3Dread": "image3D",
+        "surf3Dwrite": "image3D",
+        "surf2DLayeredread": "image2DArray",
+        "surf2DLayeredwrite": "image2DArray",
+        "surfCubemapread": "imageCube",
+        "surfCubemapwrite": "imageCube",
+    }
 
     def __init__(self):
         """Initialize CUDA-to-CrossGL visitor state."""
@@ -86,6 +120,7 @@ class CudaToCrossGLConverter:
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
         self.user_function_names = set()
+        self.resource_object_type_hints = {}
 
     def generate(self, ast_node):
         """Generate complete CrossGL source from a parsed CUDA AST."""
@@ -95,6 +130,9 @@ class CudaToCrossGLConverter:
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
         self.user_function_names = self.collect_user_function_names(ast_node)
+        self.resource_object_type_hints = self.collect_resource_object_type_hints(
+            ast_node
+        )
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -144,6 +182,74 @@ class CudaToCrossGLConverter:
         collect(node)
         names.discard(None)
         return names
+
+    def collect_resource_object_type_hints(self, node):
+        hints = {}
+
+        def add_hint(name, resource_type):
+            if not name or not resource_type:
+                return
+            if name in hints and hints[name] != resource_type:
+                hints[name] = None
+                return
+            hints[name] = resource_type
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, (list, tuple)):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, dict):
+                for item in current.values():
+                    collect(item)
+                return
+            if isinstance(current, (str, int, float, bool)):
+                return
+            if not hasattr(current, "__dict__"):
+                return
+
+            if isinstance(current, FunctionCallNode):
+                hint = self.get_resource_object_call_hint(current.name)
+                if hint is not None:
+                    arg_index, resource_type = hint
+                    if len(current.args) > arg_index:
+                        add_hint(
+                            self.get_resource_object_expression_name(
+                                current.args[arg_index]
+                            ),
+                            resource_type,
+                        )
+
+            for value in vars(current).values():
+                collect(value)
+
+        collect(node)
+        return hints
+
+    def get_resource_object_call_hint(self, function_name):
+        base_name, _ = self.parse_cpp_template(function_name)
+        if self.is_user_defined_function(base_name):
+            return None
+        if base_name in self.CUDA_TEXTURE_CALL_TYPE_HINTS:
+            return 0, self.CUDA_TEXTURE_CALL_TYPE_HINTS[base_name]
+        if base_name in self.CUDA_SURFACE_CALL_TYPE_HINTS:
+            if base_name.endswith("write"):
+                return 1, self.CUDA_SURFACE_CALL_TYPE_HINTS[base_name]
+            return 0, self.CUDA_SURFACE_CALL_TYPE_HINTS[base_name]
+        return None
+
+    def get_resource_object_expression_name(self, expression):
+        if isinstance(expression, str):
+            return expression
+        if isinstance(expression, ArrayAccessNode):
+            return self.get_resource_object_expression_name(expression.array)
+        if isinstance(expression, CastNode):
+            return self.get_resource_object_expression_name(expression.expression)
+        if isinstance(expression, UnaryOpNode):
+            return self.get_resource_object_expression_name(expression.operand)
+        return None
 
     def is_user_defined_function(self, func_name):
         return isinstance(func_name, str) and func_name in self.user_function_names
@@ -303,7 +409,7 @@ class CudaToCrossGLConverter:
         if isinstance(stmt, list):
             return ", ".join(self.format_statement_fragment(item) for item in stmt)
         if isinstance(stmt, VariableNode):
-            var_type = self.convert_cuda_type_to_crossgl(stmt.vtype)
+            var_type = self.convert_cuda_variable_type_to_crossgl(stmt.vtype, stmt.name)
             if stmt.value:
                 value = self.visit(stmt.value)
                 return f"var {stmt.name}: {var_type} = {value}"
@@ -368,7 +474,9 @@ class CudaToCrossGLConverter:
         self.indent_level += 1
 
         for member in node.members:
-            member_type = self.convert_cuda_type_to_crossgl(member.vtype)
+            member_type = self.convert_cuda_variable_type_to_crossgl(
+                member.vtype, member.name
+            )
             self.emit(f"{member_type} {member.name};")
 
         self.indent_level -= 1
@@ -380,7 +488,9 @@ class CudaToCrossGLConverter:
         params = []
 
         for param in node.params:
-            param_type = self.convert_cuda_type_to_crossgl(param.vtype)
+            param_type = self.convert_cuda_variable_type_to_crossgl(
+                param.vtype, param.name
+            )
             params.append(f"{param_type} {param.name}")
 
         param_str = ", ".join(params)
@@ -417,7 +527,9 @@ class CudaToCrossGLConverter:
                     f"@group(0) @binding({len(params)}) var<storage, read_write> {param.name}: array<{element_type}>"
                 )
             else:
-                param_type = self.convert_cuda_type_to_crossgl(param.vtype)
+                param_type = self.convert_cuda_variable_type_to_crossgl(
+                    param.vtype, param.name
+                )
                 params.append(f"{param_type} {param.name}")
 
         self.emit(f"fn {kernel.name}(")
@@ -468,7 +580,7 @@ class CudaToCrossGLConverter:
             self.emit(f"// Arguments: {args_str}")
 
     def visit_VariableNode(self, node):
-        var_type = self.convert_cuda_type_to_crossgl(node.vtype)
+        var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
 
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, node.vtype)
@@ -592,7 +704,7 @@ class CudaToCrossGLConverter:
 
     def visit_SharedMemoryNode(self, node):
         # Convert to workgroup memory in CrossGL
-        var_type = self.convert_cuda_type_to_crossgl(node.vtype)
+        var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
         if node.size:
             size = self.visit(node.size)
             self.emit(f"var<workgroup> {node.name}: array<{var_type}, {size}>;")
@@ -601,7 +713,7 @@ class CudaToCrossGLConverter:
 
     def visit_ConstantMemoryNode(self, node):
         # Convert to uniform buffer in CrossGL
-        var_type = self.convert_cuda_type_to_crossgl(node.vtype)
+        var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
         if node.value:
             value = self.visit(node.value)
             self.emit(
@@ -819,7 +931,9 @@ class CudaToCrossGLConverter:
     def format_lambda_parameter(self, arg):
         if isinstance(arg, VariableNode):
             if arg.vtype:
-                param_type = self.convert_cuda_type_to_crossgl(arg.vtype)
+                param_type = self.convert_cuda_variable_type_to_crossgl(
+                    arg.vtype, arg.name
+                )
                 return f"{param_type} {arg.name}"
             return arg.name
         return self.format_lambda_body(arg)
@@ -1101,6 +1215,71 @@ class CudaToCrossGLConverter:
         target_type = self.convert_cuda_type_to_crossgl(node.target_type)
         expression = self.visit(node.expression)
         return f"{target_type}({expression})"
+
+    def convert_cuda_variable_type_to_crossgl(self, cuda_type, name):
+        """Convert CUDA variable types, using call-site hints for resource handles."""
+        resource_type = self.convert_cuda_resource_object_type(cuda_type, name)
+        if resource_type is not None:
+            return resource_type
+        return self.convert_cuda_type_to_crossgl(cuda_type)
+
+    def convert_cuda_resource_object_type(self, cuda_type, name):
+        hint = self.resource_object_type_hints.get(name)
+        if hint is None:
+            return None
+        return self.convert_cuda_resource_object_type_with_hint(cuda_type, hint)
+
+    def convert_cuda_resource_object_type_with_hint(self, cuda_type, hint):
+        cuda_type = self.strip_type_qualifiers(cuda_type)
+
+        if self.has_array_suffix(cuda_type):
+            base_type = cuda_type.split("[", 1)[0].strip()
+            mapped_type = self.convert_cuda_resource_object_type_with_hint(
+                base_type, hint
+            )
+            if mapped_type is None:
+                return None
+            return self.wrap_mapped_cuda_array_type(cuda_type, mapped_type)
+
+        if "*" in cuda_type:
+            pointer_depth = cuda_type.count("*")
+            base_type = cuda_type.replace("*", "").strip()
+            mapped_type = self.convert_cuda_resource_object_base_type(base_type, hint)
+            if mapped_type is None:
+                return None
+            for _ in range(pointer_depth):
+                mapped_type = f"ptr<{mapped_type}>"
+            return mapped_type
+
+        return self.convert_cuda_resource_object_base_type(cuda_type, hint)
+
+    def convert_cuda_resource_object_base_type(self, cuda_type, hint):
+        cuda_type = self.strip_type_qualifiers(cuda_type)
+        if cuda_type == "cudaTextureObject_t" and hint.startswith("sampler"):
+            return hint
+        if cuda_type == "cudaSurfaceObject_t" and "image" in hint:
+            return hint
+        return None
+
+    def wrap_mapped_cuda_array_type(self, cuda_type, mapped_type):
+        base_type = cuda_type.split("[", 1)[0].strip()
+        dimensions = []
+        remainder = cuda_type[len(base_type) :].strip()
+
+        while remainder.startswith("["):
+            close_index = remainder.find("]")
+            if close_index == -1:
+                break
+            dimensions.append(remainder[1:close_index].strip())
+            remainder = remainder[close_index + 1 :].strip()
+
+        for size in reversed(dimensions):
+            if size:
+                mapped_type = f"array<{mapped_type}, {size}>"
+            else:
+                mapped_type = f"array<{mapped_type}>"
+
+        return mapped_type
 
     def convert_cuda_type_to_crossgl(self, cuda_type):
         """Convert CUDA types to CrossGL equivalents"""

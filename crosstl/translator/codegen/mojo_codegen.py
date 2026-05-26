@@ -129,16 +129,24 @@ MOJO_SCALAR_DTYPES = {
 }
 
 MOJO_RESOURCE_TYPE_MAPPING = {
+    "sampler1D": "Texture1D",
+    "sampler1DArray": "Texture1DArray",
     "sampler2D": "Texture2D",
+    "sampler2DArray": "Texture2DArray",
     "sampler3D": "Texture3D",
     "samplerCube": "TextureCube",
+    "samplerCubeArray": "TextureCubeArray",
     "sampler": "Sampler",
 }
 
 MOJO_RESOURCE_SAMPLE_COORDS = {
+    "Texture1D": "Float32",
+    "Texture1DArray": "SIMD[DType.float32, 2]",
     "Texture2D": "SIMD[DType.float32, 2]",
+    "Texture2DArray": "SIMD[DType.float32, 4]",
     "Texture3D": "SIMD[DType.float32, 4]",
     "TextureCube": "SIMD[DType.float32, 4]",
+    "TextureCubeArray": "SIMD[DType.float32, 4]",
 }
 
 MOJO_INTEGER_INDEX_TYPES = {"int", "uint", "short", "ushort", "long", "ulong"}
@@ -166,6 +174,8 @@ class MojoCodeGen:
         self.current_enum_value_aliases = {}
         self.required_resource_types = set()
         self.required_resource_sample_types = set()
+        self.required_resource_lod_types = set()
+        self.required_resource_grad_types = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -295,6 +305,8 @@ class MojoCodeGen:
         self.current_enum_value_aliases = {}
         self.required_resource_types = set()
         self.required_resource_sample_types = set()
+        self.required_resource_lod_types = set()
+        self.required_resource_grad_types = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -1727,7 +1739,11 @@ class MojoCodeGen:
                 if bool_mix_call is not None:
                     return bool_mix_call
             if func_name == "texture":
-                return self.generate_texture_call(expr.args)
+                return self.generate_texture_call(expr.args, "sample")
+            if func_name == "textureLod":
+                return self.generate_texture_call(expr.args, "sample_lod")
+            if func_name == "textureGrad":
+                return self.generate_texture_call(expr.args, "sample_grad")
 
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
@@ -1985,17 +2001,22 @@ class MojoCodeGen:
         false_value = self.generate_expression(args[0])
         return f"({true_value} if {condition} else {false_value})"
 
-    def generate_texture_call(self, args):
+    def generate_texture_call(self, args, helper_name):
         if not args:
-            return "sample()"
+            return f"{helper_name}()"
 
         texture_type = self.expression_result_type(args[0])
         mapped_type = self.map_type(texture_type)
         if mapped_type in MOJO_RESOURCE_SAMPLE_COORDS:
-            self.required_resource_sample_types.add(mapped_type)
+            if helper_name == "sample":
+                self.required_resource_sample_types.add(mapped_type)
+            elif helper_name == "sample_lod":
+                self.required_resource_lod_types.add(mapped_type)
+            elif helper_name == "sample_grad":
+                self.required_resource_grad_types.add(mapped_type)
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
-        return f"sample({generated_args})"
+        return f"{helper_name}({generated_args})"
 
     def generate_bool_vector_select_expression(
         self, condition_expr, true_expr, false_expr
@@ -2237,10 +2258,33 @@ class MojoCodeGen:
             and not self.required_matrix_constructor_helpers
             and not self.required_fract_helpers
             and not self.required_saturate_helpers
+            and not self.required_resource_types
+            and not self.required_resource_sample_types
+            and not self.required_resource_lod_types
+            and not self.required_resource_grad_types
         ):
             return ""
 
         code = ""
+        resource_sampled_types = (
+            self.required_resource_sample_types
+            | self.required_resource_lod_types
+            | self.required_resource_grad_types
+        )
+        if self.required_resource_types or resource_sampled_types:
+            code += "# CrossGL resource placeholders\n"
+            for resource_type in sorted(
+                self.required_resource_types | resource_sampled_types
+            ):
+                code += self.generate_resource_type(resource_type)
+            for resource_type in sorted(self.required_resource_sample_types):
+                code += self.generate_resource_sample_helper(resource_type)
+            for resource_type in sorted(self.required_resource_lod_types):
+                code += self.generate_resource_lod_helper(resource_type)
+            for resource_type in sorted(self.required_resource_grad_types):
+                code += self.generate_resource_grad_helper(resource_type)
+            code += "\n"
+
         if self.required_fract_helpers or self.required_saturate_helpers:
             code += "# CrossGL math helpers\n"
             for key in sorted(self.required_fract_helpers):
@@ -2281,6 +2325,38 @@ class MojoCodeGen:
                 self.required_matrix_constructor_helpers[key]
             )
         return code + "\n"
+
+    def generate_resource_type(self, resource_type):
+        code = f"@value\nstruct {resource_type}:\n"
+        code += "    pass\n\n"
+        return code
+
+    def generate_resource_sample_helper(self, resource_type):
+        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        code = (
+            f"fn sample(tex: {resource_type}, coord: {coord_type}) -> "
+            "SIMD[DType.float32, 4]:\n"
+        )
+        code += "    return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n\n"
+        return code
+
+    def generate_resource_lod_helper(self, resource_type):
+        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        code = (
+            f"fn sample_lod(tex: {resource_type}, coord: {coord_type}, "
+            "lod: Float32) -> SIMD[DType.float32, 4]:\n"
+        )
+        code += "    return SIMD[DType.float32, 4](0.0, 0.0, lod, 1.0)\n\n"
+        return code
+
+    def generate_resource_grad_helper(self, resource_type):
+        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        code = (
+            f"fn sample_grad(tex: {resource_type}, coord: {coord_type}, "
+            f"ddx: {coord_type}, ddy: {coord_type}) -> SIMD[DType.float32, 4]:\n"
+        )
+        code += "    return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n\n"
+        return code
 
     def generate_fract_helper(self, key):
         kind, dtype, source_width, storage_width = key
@@ -2608,11 +2684,6 @@ class MojoCodeGen:
         if type_name is None:
             return False
         return self.type_name(type_name) in self.struct_types
-
-    def is_resource_type_name(self, type_name):
-        if type_name is None:
-            return False
-        return self.type_name(type_name) in MOJO_RESOURCE_TYPE_MAPPING
 
     def array_type_name(self, element_type, size):
         element_type_name = self.type_name(element_type)
@@ -3031,7 +3102,18 @@ class MojoCodeGen:
         if vtype_str in self.enum_types:
             return vtype_str
 
-        return self.type_mapping.get(vtype_str, vtype_str)
+        mapped_type = self.type_mapping.get(vtype_str, vtype_str)
+        if self.is_mojo_resource_type(mapped_type):
+            self.required_resource_types.add(mapped_type)
+        return mapped_type
+
+    def is_resource_type_name(self, type_name):
+        return self.is_mojo_resource_type(
+            self.type_mapping.get(str(type_name), type_name)
+        )
+
+    def is_mojo_resource_type(self, type_name):
+        return type_name in set(MOJO_RESOURCE_TYPE_MAPPING.values())
 
     def map_operator(self, op):
         op_map = {

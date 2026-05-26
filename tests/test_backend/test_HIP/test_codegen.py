@@ -31,8 +31,10 @@ class TestHipCodeGen:
     def test_basic_kernel_conversion(self):
         """Test basic kernel to CrossGL conversion"""
         code = """
+        #include <hip/hip_runtime.h>
+        #define HIP_SCALE 2
         __global__ void simple_kernel() {
-            int idx = 0;
+            int idx = HIP_SCALE;
         }
         """
         lexer = HipLexer(code)
@@ -44,7 +46,10 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert "// HIP to CrossGL conversion" in result
+        assert "// HIP runtime functionality built-in" in result
+        assert "// define HIP_SCALE 2" in result
         assert "// Kernel: simple_kernel" in result
+        assert "PreprocessorNode" not in result
 
     def test_device_function_conversion(self):
         """Test device function conversion"""
@@ -202,8 +207,14 @@ class TestHipCodeGen:
         code = """
         __global__ void atomics(int* out, int* expected) {
             atomicAdd(out, 1);
+            hipAtomicSub(out, 1);
+            atomicMin(out, 0);
+            hipAtomicMax(out, 7);
             hipAtomicExch(out, 2);
             atomicCAS(expected, 0, 3);
+            atomicAnd(out, 1);
+            hipAtomicOr(out, 2);
+            atomicXor(out, 3);
         }
         """
         lexer = HipLexer(code)
@@ -215,9 +226,16 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert "atomicAdd(out, 1);" in result
+        assert "atomicSub(out, 1);" in result
+        assert "atomicMin(out, 0);" in result
+        assert "atomicMax(out, 7);" in result
         assert "atomicExchange(out, 2);" in result
         assert "atomicCompareExchange(expected, 0, 3);" in result
+        assert "atomicAnd(out, 1);" in result
+        assert "atomicOr(out, 2);" in result
+        assert "atomicXor(out, 3);" in result
         assert "hipAtomicExch" not in result
+        assert "hipAtomic" not in result
         assert "atomicCAS(" not in result
 
     def test_user_defined_atomic_name_call_does_not_convert_to_builtin(self):

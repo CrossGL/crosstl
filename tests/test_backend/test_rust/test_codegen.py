@@ -2305,6 +2305,89 @@ def test_function_call_conversion():
         pytest.fail(f"Function call conversion failed: {e}")
 
 
+def test_gpu_texture_helper_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn texture_helpers(
+        tex: Texture2D<f32>,
+        cube: TextureCube<f32>,
+        uv: Vec2<f32>,
+        projected: Vec3<f32>,
+        ddx: Vec2<f32>,
+        ddy: Vec2<f32>,
+        pixel: Vec2<i32>,
+        offset: Vec2<i32>,
+        offsets: [Vec2<i32>; 4],
+    ) -> Vec4<f32> {
+        let base = sample(tex, uv);
+        let lod = sample_lod(tex, uv, 1.0);
+        let grad = sample_grad(tex, uv, ddx, ddy);
+        let shifted = sample_offset(tex, uv, offset);
+        let projected_color = sample_projected(tex, projected);
+        let projected_lod = sample_projected_lod(tex, projected, 1.0);
+        let projected_grad = sample_projected_grad(tex, projected, ddx, ddy);
+        let projected_offset = sample_projected_offset(tex, projected, offset);
+        let projected_lod_offset = sample_projected_lod_offset(tex, projected, 1.0, offset);
+        let projected_grad_offset = sample_projected_grad_offset(tex, projected, ddx, ddy, offset);
+        let fetched = texel_fetch(tex, pixel, 0);
+        let fetched_offset = texel_fetch_offset(tex, pixel, 0, offset);
+        let size = texture_size_lod(tex, 0);
+        let cube_size = texture_size(cube);
+        let levels = texture_query_levels(tex);
+        let query_lod = texture_query_lod(tex, uv);
+        let samples = texture_samples(tex);
+        let gather = texture_gather(tex, uv);
+        let gather_component = texture_gather_component(tex, uv, 1);
+        let gather_offset = texture_gather_offset(tex, uv, offset);
+        let gather_offset_component = texture_gather_offset_component(tex, uv, offset, 2);
+        let gather_offsets = texture_gather_offsets(tex, uv, offsets);
+        let gather_offsets_component = texture_gather_offsets_component(tex, uv, offsets, 3);
+        return base;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec4 texture_helpers(sampler2D tex, samplerCube cube" in result
+    assert "ivec2 offsets[4]" in result
+    assert "base = texture(tex, uv);" in result
+    assert "lod = textureLod(tex, uv, 1.0);" in result
+    assert "grad = textureGrad(tex, uv, ddx, ddy);" in result
+    assert "shifted = textureOffset(tex, uv, offset);" in result
+    assert "projected_color = textureProj(tex, projected);" in result
+    assert "projected_lod = textureProjLod(tex, projected, 1.0);" in result
+    assert "projected_grad = textureProjGrad(tex, projected, ddx, ddy);" in result
+    assert "projected_offset = textureProjOffset(tex, projected, offset);" in result
+    assert (
+        "projected_lod_offset = textureProjLodOffset(tex, projected, 1.0, offset);"
+        in result
+    )
+    assert (
+        "projected_grad_offset = textureProjGradOffset(tex, projected, ddx, ddy, offset);"
+        in result
+    )
+    assert "fetched = texelFetch(tex, pixel, 0);" in result
+    assert "fetched_offset = texelFetchOffset(tex, pixel, 0, offset);" in result
+    assert "size = textureSize(tex, 0);" in result
+    assert "cube_size = textureSize(cube);" in result
+    assert "levels = textureQueryLevels(tex);" in result
+    assert "query_lod = textureQueryLod(tex, uv);" in result
+    assert "samples = textureSamples(tex);" in result
+    assert "gather = textureGather(tex, uv);" in result
+    assert "gather_component = textureGather(tex, uv, 1);" in result
+    assert "gather_offset = textureGatherOffset(tex, uv, offset);" in result
+    assert (
+        "gather_offset_component = textureGatherOffset(tex, uv, offset, 2);" in result
+    )
+    assert "gather_offsets = textureGatherOffsets(tex, uv, offsets);" in result
+    assert (
+        "gather_offsets_component = textureGatherOffsets(tex, uv, offsets, 3);"
+        in result
+    )
+    assert "sample_lod" not in result
+    assert "texture_size_lod" not in result
+    assert "texture_gather_component" not in result
+
+
 def test_char_literal_conversion():
     code = r"""
     fn test_chars(c: char) -> char {

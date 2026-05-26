@@ -67,6 +67,9 @@ class HipParser:
         "ATOMICMIN",
         "ATOMICEXCH",
         "ATOMICCAS",
+        "ATOMICAND",
+        "ATOMICOR",
+        "ATOMICXOR",
     }
     FLAT_BUILTIN_TOKEN_MAP = {
         "HIPTHREADIDX": "threadIdx",
@@ -103,6 +106,12 @@ class HipParser:
         "hipAtomicExch",
         "atomicCAS",
         "hipAtomicCAS",
+        "atomicAnd",
+        "hipAtomicAnd",
+        "atomicOr",
+        "hipAtomicOr",
+        "atomicXor",
+        "hipAtomicXor",
     }
     BUILTIN_TYPE_TOKENS = {
         "INT",

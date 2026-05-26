@@ -1590,7 +1590,7 @@ class MetalCodeGen:
                 raw_param_type, semantic, shader_type, p
             )
             declaration = self.format_parameter_declaration(
-                raw_param_type, param_type, p.name, p
+                raw_param_type, param_type, p.name, p, shader_type
             )
             params.append(f"{declaration}{param_attr}")
             if self.structured_buffer_parameter_requires_length(
@@ -2537,9 +2537,18 @@ class MetalCodeGen:
         }
         if (qualifiers | attributes) & {"shared", "groupshared", "threadgroup"}:
             return "threadgroup "
+        if self.is_metal_atomic_value_type(self.local_variable_declared_type(node)):
+            return "threadgroup "
         if "const" in qualifiers:
             return "const "
         return ""
+
+    def is_metal_atomic_value_type(self, vtype):
+        return self.type_name_string(vtype) in {
+            "atomic_bool",
+            "atomic_int",
+            "atomic_uint",
+        }
 
     def type_name_string(self, vtype):
         if vtype is None:
@@ -3335,6 +3344,10 @@ class MetalCodeGen:
             if synchronization_call is not None:
                 return synchronization_call
 
+            atomic_call = self.generate_atomic_function_call(func_name, expr.args)
+            if atomic_call is not None:
+                return atomic_call
+
             mesh_output_call = self.generate_metal_mesh_output_call(
                 func_name, expr.args
             )
@@ -3614,6 +3627,32 @@ class MetalCodeGen:
             "memoryBarrier": "threadgroup_barrier(mem_flags::mem_device)",
         }.get(func_name)
 
+    def generate_atomic_function_call(self, func_name, args):
+        if func_name in self.user_function_names:
+            return None
+        if not self.is_metal_atomic_function_name(func_name) or not args:
+            return None
+
+        rendered_args = [self.generate_expression(arg) for arg in args]
+        atomic_name = self.expression_name(args[0])
+        if self.is_metal_atomic_value_type(self.local_variable_types.get(atomic_name)):
+            rendered_args[0] = f"&{rendered_args[0]}"
+        return f"{func_name}({', '.join(rendered_args)})"
+
+    def is_metal_atomic_function_name(self, func_name):
+        return func_name in {
+            "atomic_fetch_add_explicit",
+            "atomic_fetch_sub_explicit",
+            "atomic_fetch_min_explicit",
+            "atomic_fetch_max_explicit",
+            "atomic_fetch_and_explicit",
+            "atomic_fetch_or_explicit",
+            "atomic_fetch_xor_explicit",
+            "atomic_exchange_explicit",
+            "atomic_compare_exchange_weak_explicit",
+            "atomic_compare_exchange_strong_explicit",
+        }
+
     def generate_metal_mesh_output_call(self, func_name, args):
         mesh_output = self.current_metal_mesh_output_config
         output_parameter = self.current_metal_mesh_output_parameter
@@ -3626,9 +3665,9 @@ class MetalCodeGen:
             return f"{output_parameter}.set_vertex({index}, {value})"
 
         if func_name in {"SetPrimitive", "SetIndex"} and len(args) == 2:
-            index = self.generate_expression(args[0])
-            value = self.generate_expression(args[1])
-            return f"{output_parameter}.set_index({index}, {value})"
+            return self.metal_mesh_index_output_write(
+                output_parameter, func_name, args[0], args[1]
+            )
 
         return None
 
@@ -3643,6 +3682,53 @@ class MetalCodeGen:
         if mapped_type == "float3":
             return f"{vertex_type}{{float4({value}, 1.0)}}"
         return f"{vertex_type}{{{value}}}"
+
+    def metal_mesh_index_output_write(
+        self, output_parameter, func_name, index_expr, value_expr
+    ):
+        index = self.generate_expression(index_expr)
+        value = self.generate_expression(value_expr)
+        vector_width = self.metal_mesh_index_vector_width(value_expr)
+        if vector_width is None:
+            return f"{output_parameter}.set_index({index}, {value})"
+
+        base_index = index
+        if func_name == "SetPrimitive":
+            base_index = f"({index}) * {vector_width}"
+
+        if vector_width in {2, 4}:
+            return (
+                f"{output_parameter}.set_indices("
+                f"{base_index}, uchar{vector_width}({value}))"
+            )
+
+        if vector_width == 3:
+            return "\n".join(
+                f"{output_parameter}.set_index("
+                f"{self.metal_mesh_index_component_expression(base_index, offset)}, "
+                f"{value}.{component})"
+                for offset, component in enumerate(("x", "y", "z"))
+            )
+
+        return f"{output_parameter}.set_index({index}, {value})"
+
+    def metal_mesh_index_vector_width(self, expr):
+        value_type = self.expression_result_type(expr)
+        if not value_type:
+            return None
+        mapped_type = self.map_type(value_type)
+        if (
+            len(mapped_type) < 2
+            or mapped_type[-1] not in {"2", "3", "4"}
+            or mapped_type[:-1] not in {"bool", "int", "uint"}
+        ):
+            return None
+        return int(mapped_type[-1])
+
+    def metal_mesh_index_component_expression(self, base_index, offset):
+        if offset == 0:
+            return base_index
+        return f"({base_index}) + {offset}"
 
     def generate_mesh_op_expression(self, expr):
         if (
@@ -4223,8 +4309,14 @@ class MetalCodeGen:
         return ""
 
     def format_parameter_declaration(
-        self, raw_param_type, mapped_type, name, node=None
+        self, raw_param_type, mapped_type, name, node=None, shader_type=None
     ):
+        mesh_payload_declaration = self.metal_mesh_payload_parameter_declaration(
+            mapped_type, name, node, shader_type
+        )
+        if mesh_payload_declaration is not None:
+            return mesh_payload_declaration
+
         lowered_block = self.current_glsl_buffer_block_parameters.get(name)
         if lowered_block is not None:
             array_size = self.glsl_buffer_block_parameter_array_size(
@@ -4245,6 +4337,17 @@ class MetalCodeGen:
             resource_type, array_size = array_type
             return self.format_resource_parameter(resource_type, name, array_size)
         return format_c_style_array_declaration(mapped_type, name)
+
+    def metal_mesh_payload_parameter_declaration(
+        self, mapped_type, name, node=None, shader_type=None
+    ):
+        if shader_type not in {"object", "task", "amplification", "mesh"}:
+            return None
+        if self.semantic_from_node(node) != "payload":
+            return None
+
+        address_space = "const object_data" if shader_type == "mesh" else "object_data"
+        return f"{address_space} {mapped_type}& {name}"
 
     def structured_buffer_parameter_array_size(self, vtype, node=None):
         param_name = getattr(node, "name", None)

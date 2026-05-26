@@ -59,6 +59,9 @@ TOKENS = tuple(
         ("ATOMICMIN", r"\batomicMin\b|hipAtomicMin\b"),
         ("ATOMICEXCH", r"\batomicExch\b|hipAtomicExch\b"),
         ("ATOMICCAS", r"\batomicCAS\b|hipAtomicCAS\b"),
+        ("ATOMICAND", r"\batomicAnd\b|hipAtomicAnd\b"),
+        ("ATOMICOR", r"\batomicOr\b|hipAtomicOr\b"),
+        ("ATOMICXOR", r"\batomicXor\b|hipAtomicXor\b"),
         # HIP error handling
         ("HIPERROR", r"\bhipError_t\b"),
         ("HIPSUCCESS", r"\bhipSuccess\b"),

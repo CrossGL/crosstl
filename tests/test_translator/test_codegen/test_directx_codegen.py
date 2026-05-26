@@ -3309,6 +3309,141 @@ def test_directx_mesh_output_signature_validates_struct_semantics():
         )
 
 
+def test_directx_amplification_mesh_payload_signature_emits_and_validates():
+    shader = """
+    shader MeshPayloadPipeline {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                groupshared MeshPayload payload;
+                payload.meshlet = 7u;
+                DispatchMesh(1, 1, 1, payload);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+                verts[1].position = vec4(1.0, 0.0, 0.0, 1.0);
+                verts[2].position = vec4(0.0, 1.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "groupshared MeshPayload payload;" in generated
+    assert "DispatchMesh(1, 1, 1, payload);" in generated
+    assert "in payload MeshPayload payload" in generated
+    assert ": mesh_payload" not in generated
+
+
+def test_directx_amplification_mesh_payload_type_mismatch_is_rejected():
+    shader = """
+    shader MeshPayloadMismatch {
+        struct TaskPayload {
+            uint meshlet;
+        };
+
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                groupshared TaskPayload payload;
+                DispatchMesh(1, 1, 1, payload);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="payload.*MeshPayload.*DispatchMesh"):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_mesh_payload_requires_amplification_dispatch_payload():
+    shader = """
+    shader MeshPayloadMissingDispatchArgument {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="DispatchMesh calls to pass a payload"):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_mesh_payload_does_not_capture_ray_payload_semantic():
+    shader = """
+    shader RayPayloadStillSemantic {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main(RayPayload payload @ payload) {
+                payload.color = vec3(1.0, 0.0, 0.0);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "RayPayload payload : payload" in generated
+    assert "in payload RayPayload" not in generated
+
+
 def test_directx_advanced_stage_entries_use_stage_specific_names():
     code = """
     shader advanced {

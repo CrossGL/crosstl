@@ -1345,6 +1345,11 @@ class TestCudaCodeGen:
             surface<void, 2> surface2d,
             surface<void, cudaSurfaceType3D> volumeSurface,
             surface<void, cudaSurfaceTypeCubemap> cubeSurface,
+            cudaTextureObject_t objectTex,
+            cudaSurfaceObject_t objectSurface,
+            cudaTextureObject_t objectTextures[2],
+            cudaSurfaceObject_t objectSurfaces[2],
+            cudaTextureObject_t ambiguousTex,
             int2 pixel,
             int3 voxel,
             float2 uv,
@@ -1402,6 +1407,37 @@ class TestCudaCodeGen:
                 pixel.y,
                 voxel.z
             );
+            float4 objectSample = tex2D<float4>(objectTex, uv.x, uv.y);
+            float4 objectSampleArray = tex2D<float4>(objectTextures[1], uv);
+            float4 objectRead = surf2Dread<float4>(
+                objectSurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                objectRead,
+                objectSurfaces[1],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 ambiguousSample = tex2D<float4>(ambiguousTex, uv.x, uv.y);
+            float4 ambiguousVolume = tex3D<float4>(
+                ambiguousTex,
+                uvw.x,
+                uvw.y,
+                uvw.z
+            );
+        }
+
+        void localResourceObjects(int2 pixel, float2 uv) {
+            cudaTextureObject_t localTex;
+            cudaSurfaceObject_t localSurface;
+            float4 sampled = tex2D<float4>(localTex, uv);
+            float4 loaded = surf2Dread<float4>(
+                localSurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
         }
         """
         lexer = CudaLexer(code)
@@ -1432,6 +1468,11 @@ class TestCudaCodeGen:
         assert "image2D surface2d" in result
         assert "image3D volumeSurface" in result
         assert "imageCube cubeSurface" in result
+        assert "sampler2D objectTex" in result
+        assert "image2D objectSurface" in result
+        assert "array<sampler2D, 2> objectTextures" in result
+        assert "array<image2D, 2> objectSurfaces" in result
+        assert "cudaTextureObject_t ambiguousTex" in result
         assert "var line: vec4<f32> = texture(tex1d, uv.x);" in result
         assert (
             "var sampled: vec4<f32> = texture(tex2d, vec2<f32>(uv.x, uv.y));" in result
@@ -1479,6 +1520,29 @@ class TestCudaCodeGen:
             "imageStore(cubeSurface, vec3<i32>(pixel.x, pixel.y, voxel.z), "
             "cubeRead);" in result
         )
+        assert (
+            "var objectSample: vec4<f32> = texture("
+            "objectTex, vec2<f32>(uv.x, uv.y));" in result
+        )
+        assert (
+            "var objectSampleArray: vec4<f32> = texture(objectTextures[1], uv);"
+            in result
+        )
+        assert (
+            "var objectRead: vec4<f32> = imageLoad("
+            "objectSurface, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(objectSurfaces[1], vec2<i32>(pixel.x, pixel.y), "
+            "objectRead);" in result
+        )
+        assert (
+            "var ambiguousVolume: vec4<f32> = texture(ambiguousTex, "
+            "vec3<f32>(uvw.x, uvw.y, uvw.z));" in result
+        )
+        assert "void localResourceObjects(vec2<i32> pixel, vec2<f32> uv) {" in result
+        assert "var localTex: sampler2D;" in result
+        assert "var localSurface: image2D;" in result
         assert "unsignedint" not in result
         assert "constunsigned" not in result
 
