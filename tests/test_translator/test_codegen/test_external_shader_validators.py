@@ -46,6 +46,24 @@ shader GLSLMultisampleStorageValidator {
 """
 
 
+GLSL_PARAMETER_IMAGE_ATOMIC_COMPUTE_SHADER = """
+shader GLSLParameterImageAtomicValidator {
+    uimage2D counters @r32ui;
+
+    uint addCounter(uimage2D image @r32ui, ivec2 pixel, uint value) {
+        return imageAtomicAdd(image, pixel, value);
+    }
+
+    compute {
+        void main() {
+            uint oldValue = addCounter(counters, ivec2(0, 1), 2u);
+            imageStore(counters, ivec2(0, 1), oldValue);
+        }
+    }
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
 
@@ -134,6 +152,22 @@ def test_generated_glsl_multisample_storage_validates_with_glslangvalidator(
         ),
         encoding="utf-8",
     )
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
+def test_generated_glsl_parameter_image_atomic_diagnostic_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "parameter_image_atomic.comp"
+
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_PARAMETER_IMAGE_ATOMIC_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "imageAtomicAdd(image, pixel, value)" not in code
+    shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])
 

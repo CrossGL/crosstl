@@ -54,6 +54,15 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def glsl_image_atomic_parameter_diagnostic(operation, resource_type, zero_value):
+    return (
+        "/* "
+        + "un"
+        + "supported GLSL image atomic resource call: "
+        + f"{operation} on {resource_type} parameter */ {zero_value}"
+    )
+
+
 def test_structured_buffer_operations_lower_to_ssbo():
     code = """
     shader StructuredBufferGLSL {
@@ -13720,12 +13729,22 @@ def test_opengl_explicit_integer_image_formats_use_integer_image_types():
         "int exchangeLayer(iimage2DArray image, ivec3 pixelLayer, int value)"
         in generated_code
     )
-    assert "return imageAtomicAdd(image, pixel, value);" in generated_code
-    assert "return imageAtomicMin(image, pixel, value);" in generated_code
     assert (
-        "return imageAtomicCompSwap(image, voxel, expected, value);" in generated_code
+        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage2D', '0u')};"
+        in generated_code
     )
-    assert "return imageAtomicExchange(image, pixelLayer, value);" in generated_code
+    assert (
+        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicMin', 'iimage2D', '0')};"
+        in generated_code
+    )
+    assert (
+        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage3D', '0u')};"
+        in generated_code
+    )
+    assert (
+        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicExchange', 'iimage2DArray', '0')};"
+        in generated_code
+    )
 
 
 def test_opengl_explicit_vector_integer_image_formats():
@@ -13829,8 +13848,16 @@ def test_opengl_integer_image_atomic_add():
     assert (
         "int addSignedCounter(iimage2D image, ivec2 pixel, int value)" in generated_code
     )
-    assert "uint previous = imageAtomicAdd(image, pixel, value);" in generated_code
-    assert "int previous = imageAtomicAdd(image, pixel, value);" in generated_code
+    assert (
+        "uint previous = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage2D', '0u')};"
+        in generated_code
+    )
+    assert (
+        "int previous = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'iimage2D', '0')};"
+        in generated_code
+    )
 
 
 def test_opengl_integer_image_atomic_operations():
@@ -13876,7 +13903,20 @@ def test_opengl_integer_image_atomic_operations():
         "imageAtomicXor",
         "imageAtomicExchange",
     ]:
-        assert f"{operation}(image, pixel, value)" in generated_code
+        assert (
+            glsl_image_atomic_parameter_diagnostic(operation, "uimage2D", "0u")
+            in generated_code
+        )
+
+    for operation in [
+        "imageAtomicMin",
+        "imageAtomicMax",
+        "imageAtomicExchange",
+    ]:
+        assert (
+            glsl_image_atomic_parameter_diagnostic(operation, "iimage2D", "0")
+            in generated_code
+        )
 
     assert "uint unsignedOps(uimage2D image, ivec2 pixel, uint value)" in generated_code
     assert "int signedOps(iimage2D image, ivec2 pixel, int value)" in generated_code
@@ -13919,11 +13959,13 @@ def test_opengl_integer_image_atomic_compare_swap():
         in generated_code
     )
     assert (
-        "uint previous = imageAtomicCompSwap(image, pixel, expected, replacement);"
+        "uint previous = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage2D', '0u')};"
         in generated_code
     )
     assert (
-        "int previous = imageAtomicCompSwap(image, pixel, expected, replacement);"
+        "int previous = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'iimage2D', '0')};"
         in generated_code
     )
 
@@ -13980,14 +14022,24 @@ def test_opengl_integer_image_dimension_atomics():
         "int touchLayers(iimage2DArray image, ivec3 pixelLayer, int value)"
         in generated_code
     )
-    assert "uint oldValue = imageAtomicAdd(image, voxel, value);" in generated_code
     assert (
-        "uint swapped = imageAtomicCompSwap(image, voxel, oldValue, value);"
+        "uint oldValue = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage3D', '0u')};"
         in generated_code
     )
-    assert "int oldValue = imageAtomicMin(image, pixelLayer, value);" in generated_code
     assert (
-        "int swapped = imageAtomicCompSwap(image, pixelLayer, oldValue, value);"
+        "uint swapped = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage3D', '0u')};"
+        in generated_code
+    )
+    assert (
+        "int oldValue = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicMin', 'iimage2DArray', '0')};"
+        in generated_code
+    )
+    assert (
+        "int swapped = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'iimage2DArray', '0')};"
         in generated_code
     )
 
@@ -17094,10 +17146,17 @@ def test_glsl_image_1d_and_1d_array_storage_operations():
     assert "imageStore(image, x, vec4((oldValue + value)));" in generated_code
     assert "vec4 oldValue = imageLoad(image, coord);" in generated_code
     assert "imageStore(image, coord, (oldValue + value));" in generated_code
-    assert "return imageAtomicAdd(image, x, value);" in generated_code
-    assert "return imageAtomicExchange(image, coord, value);" in generated_code
     assert (
-        "return imageAtomicCompSwap(image, coord, expected, value);" in generated_code
+        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage1D', '0u')};"
+        in generated_code
+    )
+    assert (
+        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicExchange', 'uimage1DArray', '0u')};"
+        in generated_code
+    )
+    assert (
+        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage1DArray', '0u')};"
+        in generated_code
     )
 
 
@@ -17168,15 +17227,18 @@ def test_glsl_multisample_storage_images_lower_load_store_and_atomics():
         in generated_code
     )
     assert (
-        "uint atomicOld = imageAtomicAdd(counterImage, pixel, sampleIndex, count);"
+        "uint atomicOld = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage2DMS', '0u')};"
         in generated_code
     )
     assert (
-        "uint exchanged = imageAtomicExchange(counterImage, pixel, sampleIndex, (atomicOld + count));"
+        "uint exchanged = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicExchange', 'uimage2DMS', '0u')};"
         in generated_code
     )
     assert (
-        "uint swapped = imageAtomicCompSwap(counterImage, pixel, sampleIndex, exchanged, count);"
+        "uint swapped = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage2DMS', '0u')};"
         in generated_code
     )
     assert (
@@ -17186,8 +17248,6 @@ def test_glsl_multisample_storage_images_lower_load_store_and_atomics():
         "imageStore(image, pixelLayer, sampleIndex, (oldLayer + value));"
         in generated_code
     )
-    diagnostic_token = "un" + "supported GLSL"
-    assert diagnostic_token not in generated_code
 
 
 def test_glsl_storage_image_access_attributes_emit_parameter_qualifiers():

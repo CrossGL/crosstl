@@ -204,6 +204,7 @@ from .image_access_contracts import (
     projected_texture_extra_argument_count_error,
     record_explicit_image_metadata,
     should_validate_image_load_result_shape,
+    storage_image_atomic_zero_value,
     storage_image_format_store_constructor,
     storage_image_load_component_suffix,
     storage_image_store_constructors,
@@ -246,6 +247,7 @@ from .image_access_contracts import (
     unsupported_multisample_texel_fetch_offset_expression,
     unsupported_projected_texture_call_expression,
     unsupported_projected_texture_operation_error,
+    unsupported_image_atomic_expression as image_atomic_diagnostic_expression,
     unsupported_cube_texel_fetch_expression,
     unsupported_storage_image_texture_comparison_scalar_expression,
     unsupported_storage_image_texture_operation_vector_expression,
@@ -5323,6 +5325,49 @@ class GLSLCodeGen:
             self.image_variable_accesses,
         )
 
+    def image_atomic_parameter_requires_diagnostic(self, texture_arg):
+        texture_name = self.expression_name(texture_arg)
+        if texture_name is None:
+            return False
+        return (
+            texture_name in self.current_texture_parameters
+            and texture_name not in self.texture_variable_types
+        )
+
+    def image_atomic_zero_value(self, texture_type, image_format):
+        component_kind = image_format_component_kind(image_format)
+        if component_kind is None:
+            texture_type = self.resource_base_type(texture_type)
+            if texture_type and texture_type.startswith("uimage"):
+                component_kind = "uint"
+            elif texture_type and texture_type.startswith("image"):
+                component_kind = "float"
+            else:
+                component_kind = "int"
+        return storage_image_atomic_zero_value(component_kind)
+
+    def image_atomic_parameter_fallback_call(self, func_name, args):
+        texture_type = self.texture_argument_resource_type(args[0])
+        image_format = self.image_resource_format(args[0])
+        zero_value = self.image_atomic_zero_value(texture_type, image_format)
+        texture_type = self.resource_base_type(texture_type) or expression_debug_name(
+            args[0]
+        )
+        return image_atomic_diagnostic_expression(
+            "GLSL",
+            func_name,
+            f"{texture_type} parameter",
+            zero_value,
+        )
+
+    def generate_image_atomic_call(self, func_name, args):
+        if self.image_atomic_parameter_requires_diagnostic(args[0]):
+            return self.image_atomic_parameter_fallback_call(func_name, args)
+        return "{}({})".format(
+            func_name,
+            ", ".join(self.generate_expression(arg) for arg in args),
+        )
+
     def is_integer_image_type(self, texture_type):
         return is_glsl_integer_image_type(texture_type)
 
@@ -5655,6 +5700,9 @@ class GLSLCodeGen:
             if sample is not None:
                 return f"imageStore({image_name}, {coord}, {sample}, {value})"
             return f"imageStore({image_name}, {coord}, {value})"
+
+        if is_image_atomic_operation(func_name) and args:
+            return self.generate_image_atomic_call(func_name, args)
 
         texture_type = self.texture_resource_type(args[0])
         storage_image_operation = self.storage_image_texture_operation_expression(
