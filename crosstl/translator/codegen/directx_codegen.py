@@ -1116,6 +1116,14 @@ class HLSLCodeGen:
             mapped_type = self.map_resource_type_with_format(vtype, node)
             if var_name in comparison_sampler_names and mapped_type == "SamplerState":
                 mapped_type = "SamplerComparisonState"
+            is_hlsl_resource_global = (
+                mapped_type.startswith(("Texture", "RWTexture"))
+                or self.is_multisample_storage_image_resource_type(mapped_type)
+                or self.is_hlsl_acceleration_structure_type(mapped_type)
+                or self.is_hlsl_uav_buffer_type(mapped_type)
+                or self.is_hlsl_readonly_buffer_type(mapped_type)
+                or mapped_type in ["SamplerState", "SamplerComparisonState"]
+            )
             declaration_type = self.directx_resource_declaration_type(
                 f"{mapped_type}{array_suffix}"
             )
@@ -1273,6 +1281,8 @@ class HLSLCodeGen:
                 )
 
             qualifier = self.resource_memory_qualifier(mapped_type, node)
+            if not qualifier and not is_hlsl_resource_global:
+                qualifier = self.local_variable_qualifier(node)
             code += f"{qualifier}{declaration}{register};\n"
 
             if mapped_type.startswith("Texture"):
@@ -1903,6 +1913,7 @@ class HLSLCodeGen:
             raw_return_type = "void"
             return_type = "void"
         self.current_function_return_type = raw_return_type
+        self.validate_hlsl_local_groupshared_declarations(func)
         parameter_diagnostics = self.glsl_buffer_block_parameter_diagnostics(
             "HLSL", param_list, indent
         )
@@ -6898,7 +6909,7 @@ class HLSLCodeGen:
             )
 
     def hlsl_function_visible_variable_types(self, func):
-        variable_types = {}
+        variable_types = dict(getattr(self, "global_variable_types", {}) or {})
         for parameter in getattr(func, "parameters", getattr(func, "params", [])) or []:
             parameter_type = getattr(
                 parameter, "param_type", getattr(parameter, "vtype", None)
@@ -7126,6 +7137,16 @@ class HLSLCodeGen:
     def hlsl_declaration_has_groupshared_qualifier(self, node):
         qualifiers = {str(value).lower() for value in getattr(node, "qualifiers", [])}
         return bool(qualifiers & {"groupshared", "shared", "threadgroup", "workgroup"})
+
+    def validate_hlsl_local_groupshared_declarations(self, func):
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            if not self.hlsl_declaration_has_groupshared_qualifier(node):
+                continue
+            raise ValueError(
+                "DirectX groupshared variables must be declared at shader/global scope"
+            )
 
     def validate_hlsl_dispatch_mesh_payload_storage(self, func):
         declarations = self.hlsl_function_visible_variable_declarations(func)

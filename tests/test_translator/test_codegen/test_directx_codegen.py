@@ -5170,9 +5170,10 @@ def test_directx_amplification_mesh_payload_signature_emits_and_validates():
             vec4 position @ SV_Position;
         };
 
+        groupshared MeshPayload payload;
+
         task {
             void main() @numthreads(1, 1, 1) {
-                groupshared MeshPayload payload;
                 payload.meshlet = 7u;
                 DispatchMesh(1, 1, 1, payload);
             }
@@ -5197,6 +5198,13 @@ def test_directx_amplification_mesh_payload_signature_emits_and_validates():
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "groupshared MeshPayload payload;" in generated
+    assert generated.index("groupshared MeshPayload payload;") < generated.index(
+        "void ASMain()"
+    )
+    as_body = generated[
+        generated.index("void ASMain()") : generated.index("[numthreads(32, 1, 1)]")
+    ]
+    assert "groupshared MeshPayload payload;" not in as_body
     assert "DispatchMesh(1, 1, 1, payload);" in generated
     assert "in payload MeshPayload payload" in generated
     assert ": mesh_payload" not in generated
@@ -5217,9 +5225,10 @@ def test_directx_amplification_mesh_payload_type_mismatch_is_rejected():
             vec4 position @ SV_Position;
         };
 
+        groupshared TaskPayload payload;
+
         task {
             void main() @numthreads(1, 1, 1) {
-                groupshared TaskPayload payload;
                 DispatchMesh(1, 1, 1, payload);
             }
         }
@@ -5460,6 +5469,23 @@ def test_directx_dispatch_mesh_payload_must_be_groupshared():
 
     with pytest.raises(ValueError, match="payload argument.*groupshared"):
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_groupshared_variables_must_be_global_scope():
+    shader = """
+    shader LocalGroupShared {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                groupshared uint scratch;
+                scratch = 1u;
+                DispatchMesh(1, 1, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="groupshared variables.*global scope"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "task")
 
 
 def test_directx_dispatch_mesh_rejects_calls_outside_amplification_stages():

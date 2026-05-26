@@ -155,9 +155,10 @@ shader HLSLMeshAmplificationValidator {
         vec2 uv @ TEXCOORD0;
     };
 
+    groupshared MeshPayload payload;
+
     task {
         void main() @numthreads(1, 1, 1) {
-            groupshared MeshPayload payload;
             payload.meshlet = 7u;
             DispatchMesh(1, 1, 1, payload);
         }
@@ -980,6 +981,9 @@ def test_generated_hlsl_mesh_amplification_compile_with_dxc(tmp_path):
     assert '[outputtopology("triangle")]' in code
     assert "void ASMain()" in code
     assert "groupshared MeshPayload payload;" in code
+    assert code.index("groupshared MeshPayload payload;") < code.index("void ASMain()")
+    as_body = code[code.index("void ASMain()") : code.index("[numthreads(32, 1, 1)]")]
+    assert "groupshared MeshPayload payload;" not in as_body
     assert "DispatchMesh(1, 1, 1, payload);" in code
     assert (
         "void MSMain(in payload MeshPayload payload, "
