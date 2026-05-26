@@ -656,12 +656,6 @@ class GLSLToCrossGLConverter:
             result += "\n"
         result += "shader main {\n"
 
-        layouts = getattr(node, "layouts", []) or []
-        if layouts:
-            for layout in layouts:
-                result += self.indent_str + f"// {self.format_layout(layout)}\n"
-            result += "\n"
-
         # Generate struct definitions
         for struct in node.structs:
             if struct.name in self.converted_ssbo_struct_names:
@@ -782,6 +776,14 @@ class GLSLToCrossGLConverter:
 
         # Generate shader function
         result += self.indent_str + f"{self.shader_type} {{\n"
+
+        layouts = getattr(node, "layouts", []) or []
+        if layouts:
+            self.increase_indent()
+            for layout in layouts:
+                result += self.indent() + f"{self.format_layout(layout)};\n"
+            result += "\n"
+            self.decrease_indent()
 
         main_function = None
         other_functions = []

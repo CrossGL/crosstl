@@ -148,6 +148,8 @@ class TestHipCodeGen:
         assert codegen.convert_hip_type_to_crossgl("float *") == "ptr<f32>"
         assert codegen.convert_hip_type_to_crossgl("void * *") == "ptr<ptr<void>>"
         assert codegen.convert_hip_type_to_crossgl("void * []") == "array<ptr<void>>"
+        assert codegen.convert_hip_type_to_crossgl("hipArray_t") == "ptr<void>"
+        assert codegen.convert_hip_type_to_crossgl("hipArray_t *") == "ptr<ptr<void>>"
         assert codegen.convert_hip_type_to_crossgl("hipTextureObject_t") == "sampler"
         assert (
             codegen.convert_hip_type_to_crossgl("const hipTextureObject_t *")
@@ -1124,14 +1126,31 @@ class TestHipCodeGen:
             size_t pitch;
             size_t freeMem;
             size_t totalMem;
+            size_t ptrSize;
             float symbol;
+            unsigned int flags;
+            int pointerAttrValue;
+            hipPointerAttribute_t pointerAttrs;
             void* resourceDesc;
             void* textureDesc;
             void* viewDesc;
+            void* copyParams;
+            hipArray_t array;
+            hipChannelFormatDesc desc;
+            hipPitchedPtr pitched;
+            hipExtent extent;
             hipTextureObject_t texObj;
             hipSurfaceObject_t surfObj;
             hipMalloc((void**)&d, n * sizeof(float));
+            hipHostMalloc((void**)&h, n * sizeof(float), hipHostMallocMapped);
+            hipHostAlloc((void**)&h, n * sizeof(float), hipHostMallocDefault);
+            hipHostRegister(h, n * sizeof(float), hipHostRegisterMapped);
+            hipHostGetDevicePointer((void**)&d, h, 0);
+            hipHostGetFlags(&flags, h);
             hipMallocPitch((void**)&d2, &pitch, n * sizeof(float), 4);
+            hipMallocArray(&array, &desc, n, 4, hipArrayDefault);
+            hipMalloc3D(&pitched, extent);
+            hipMalloc3DArray(&array, &desc, extent, hipArrayDefault);
             hipMemcpy(d, h, n * sizeof(float), hipMemcpyHostToDevice);
             hipMemcpy2D(
                 d2, pitch, h, n * sizeof(float), n * sizeof(float), 4,
@@ -1147,7 +1166,13 @@ class TestHipCodeGen:
             hipMemcpyFromSymbol(
                 h, symbol, n * sizeof(float), 0, hipMemcpyDeviceToHost
             );
+            hipMemcpy3D(&copyParams);
+            hipMemcpy3DAsync(&copyParams, 0);
             hipMemGetInfo(&freeMem, &totalMem);
+            hipPointerGetAttributes(&pointerAttrs, d);
+            hipPointerGetAttribute(&pointerAttrValue, hipPointerAttributeMemoryType, d);
+            hipPointerSetAttribute(&pointerAttrValue, hipPointerAttributeMemoryType, d);
+            hipMemPtrGetInfo(d, &ptrSize);
             hipCreateTextureObject(
                 &texObj, resourceDesc, textureDesc, viewDesc
             );
@@ -1155,10 +1180,24 @@ class TestHipCodeGen:
             hipDestroyTextureObject(texObj);
             hipDestroySurfaceObject(surfObj);
             hipMemset(d, 0, n * sizeof(float));
+            hipMemset2D(d2, pitch, 0, n * sizeof(float), 4);
+            hipMemset2DAsync(d2, pitch, 1, n * sizeof(float), 4, 0);
+            hipMemset3D(pitched, 0, extent);
+            hipMemset3DAsync(pitched, 1, extent, 0);
             hipDeviceSynchronize();
+            hipHostUnregister(h);
             hipFree(d);
+            hipHostFree(h);
+            hipFreeHost(h);
+            hipFreeArray(array);
+            hipArrayDestroy(array);
             hipError_t err = hipMalloc((void**)&d, n * sizeof(float));
+            err = hipHostRegister(h, n * sizeof(float), hipHostRegisterMapped);
             err = hipMallocPitch((void**)&d2, &pitch, n * sizeof(float), 4);
+            err = hipMallocArray(&array, &desc, n, 4, hipArrayDefault);
+            err = hipMemcpy3D(&copyParams);
+            err = hipMemset3D(pitched, 0, extent);
+            err = hipPointerGetAttributes(&pointerAttrs, d);
             err = hipCreateTextureObject(
                 &texObj, resourceDesc, textureDesc, viewDesc
             );
@@ -1181,12 +1220,41 @@ class TestHipCodeGen:
             result.count("// HIP memory allocate: d, bytes: (n * sizeof(float))") == 2
         )
         assert (
+            "// HIP host memory allocate: h, bytes: (n * sizeof(float)), "
+            "flags: hipHostMallocMapped"
+        ) in result
+        assert (
+            "// HIP host memory allocate: h, bytes: (n * sizeof(float)), "
+            "flags: hipHostMallocDefault"
+        ) in result
+        assert (
+            result.count(
+                "// HIP host memory register: h, bytes: (n * sizeof(float)), "
+                "flags: hipHostRegisterMapped"
+            )
+            == 2
+        )
+        assert "// HIP host device pointer: output: d, host: h, flags: 0" in result
+        assert "// HIP host memory flags: output: flags, host: h" in result
+        assert (
             result.count(
                 "// HIP pitched memory allocate: d2, pitch: pitch, "
                 "width: (n * sizeof(float)), height: 4"
             )
             == 2
         )
+        assert (
+            result.count(
+                "// HIP array allocate: array, desc: desc, width: n, "
+                "height: 4, flags: hipArrayDefault"
+            )
+            == 2
+        )
+        assert "// HIP 3D memory allocate: pitched, extent: extent" in result
+        assert (
+            "// HIP 3D array allocate: array, desc: desc, extent: extent, "
+            "flags: hipArrayDefault"
+        ) in result
         assert (
             "// HIP memory copy: h -> d, bytes: (n * sizeof(float)), "
             "kind: hipMemcpyHostToDevice"
@@ -1209,9 +1277,24 @@ class TestHipCodeGen:
             "// HIP symbol copy from: symbol, destination: h, "
             "bytes: (n * sizeof(float)), offset: 0, kind: hipMemcpyDeviceToHost"
         ) in result
+        assert result.count("// HIP 3D memory copy: params: copyParams") == 3
+        assert "// HIP 3D memory copy: params: copyParams, stream: 0" in result
         assert (
             "// HIP memory info: free output: freeMem, total output: totalMem" in result
         )
+        assert (
+            result.count("// HIP pointer attributes: output: pointerAttrs, pointer: d")
+            == 2
+        )
+        assert (
+            "// HIP pointer attribute: output: pointerAttrValue, "
+            "attribute: hipPointerAttributeMemoryType, pointer: d"
+        ) in result
+        assert (
+            "// HIP pointer set attribute: value: pointerAttrValue, "
+            "attribute: hipPointerAttributeMemoryType, pointer: d"
+        ) in result
+        assert "// HIP memory pointer info: pointer: d, size output: ptrSize" in result
         assert (
             result.count(
                 "// HIP texture object create: texObj, resource: resourceDesc, "
@@ -1228,23 +1311,64 @@ class TestHipCodeGen:
         assert result.count("// HIP texture object destroy: texObj") == 2
         assert result.count("// HIP surface object destroy: surfObj") == 2
         assert "// HIP memory set: d, value: 0, bytes: (n * sizeof(float))" in result
+        assert (
+            "// HIP 2D memory set: d2, pitch: pitch, value: 0, "
+            "width: (n * sizeof(float)), height: 4"
+        ) in result
+        assert (
+            "// HIP 2D memory set: d2, pitch: pitch, value: 1, "
+            "width: (n * sizeof(float)), height: 4, stream: 0"
+        ) in result
+        assert (
+            result.count("// HIP 3D memory set: pitched, value: 0, extent: extent") == 2
+        )
+        assert (
+            "// HIP 3D memory set: pitched, value: 1, extent: extent, stream: 0"
+            in result
+        )
         assert "// HIP device synchronize" in result
+        assert result.count("// HIP memory free: h") == 2
+        assert "// HIP host memory unregister: h" in result
         assert "// HIP memory free: d" in result
+        assert result.count("// HIP array free: array") == 2
         assert "workgroupBarrier();" not in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert "if ((err != hipSuccess))" in result
         assert "err = hipSuccess;" in result
         assert "hipMalloc(ptr<ptr<void>>((&d)), (n * sizeof(float)))" not in result
+        assert "hipHostMalloc(" not in result
+        assert "hipHostAlloc(" not in result
+        assert "hipHostRegister(" not in result
+        assert "hipHostGetDevicePointer(" not in result
+        assert "hipHostGetFlags(" not in result
         assert "hipMallocPitch(" not in result
+        assert "hipMallocArray(" not in result
+        assert "hipMalloc3D(" not in result
+        assert "hipMalloc3DArray(" not in result
         assert "hipMemcpy2D(" not in result
         assert "hipMemcpy2DAsync(" not in result
+        assert "hipMemcpy3D(" not in result
+        assert "hipMemcpy3DAsync(" not in result
         assert "hipMemcpyToSymbol(" not in result
         assert "hipMemcpyFromSymbol(" not in result
         assert "hipMemGetInfo(" not in result
+        assert "hipPointerGetAttributes(" not in result
+        assert "hipPointerGetAttribute(" not in result
+        assert "hipPointerSetAttribute(" not in result
+        assert "hipMemPtrGetInfo(" not in result
+        assert "hipMemset2D(" not in result
+        assert "hipMemset2DAsync(" not in result
+        assert "hipMemset3D(" not in result
+        assert "hipMemset3DAsync(" not in result
         assert "hipCreateTextureObject(" not in result
         assert "hipCreateSurfaceObject(" not in result
         assert "hipDestroyTextureObject(" not in result
         assert "hipDestroySurfaceObject(" not in result
+        assert "hipHostUnregister(" not in result
+        assert "hipHostFree(" not in result
+        assert "hipFreeHost(" not in result
+        assert "hipFreeArray(" not in result
+        assert "hipArrayDestroy(" not in result
         assert "err = hipDeviceSynchronize();" not in result
 
     def test_hip_runtime_memset_async_conversion(self):
@@ -1339,11 +1463,44 @@ class TestHipCodeGen:
             float ms;
             int device = 0;
             int count = 0;
+            int gridSize = 0;
+            int blockSize = 0;
+            int activeBlocks = 0;
+            int attr = 0;
+            int major = 0;
+            int minor = 0;
+            size_t total = 0;
+            char name[64];
             hipDeviceProp_t props;
+            void* kernel;
             hipGetDevice(&device);
             hipGetDeviceCount(&count);
             hipSetDevice(device);
             hipGetDeviceProperties(&props, device);
+            hipDeviceGetAttribute(
+                &attr, hipDeviceAttributeMaxThreadsPerBlock, device
+            );
+            hipDeviceGetName(name, 64, device);
+            hipDeviceTotalMem(&total, device);
+            hipDeviceComputeCapability(&major, &minor, device);
+            hipChooseDevice(&device, &props);
+            hipGetDeviceFlags(&flags);
+            hipSetDeviceFlags(hipDeviceScheduleAuto);
+            hipOccupancyMaxPotentialBlockSize(
+                &gridSize, &blockSize, kernel, 0, 0
+            );
+            hipOccupancyMaxPotentialBlockSizeVariableSMem(
+                &gridSize, &blockSize, kernel, 0, 256
+            );
+            hipOccupancyMaxPotentialBlockSizeVariableSMemWithFlags(
+                &gridSize, &blockSize, kernel, 0, 256, 1
+            );
+            hipOccupancyMaxActiveBlocksPerMultiprocessor(
+                &activeBlocks, kernel, blockSize, 0
+            );
+            hipOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
+                &activeBlocks, kernel, blockSize, 0, 1
+            );
             hipStreamCreate(&stream);
             hipStreamCreateWithFlags(&stream, hipStreamNonBlocking);
             hipEventCreate(&start);
@@ -1357,6 +1514,12 @@ class TestHipCodeGen:
             hipStreamDestroy(stream);
             hipError_t err = hipEventRecord(stop, stream);
             err = hipGetDeviceCount(&count);
+            err = hipDeviceGetAttribute(
+                &attr, hipDeviceAttributeMaxThreadsPerBlock, device
+            );
+            err = hipOccupancyMaxPotentialBlockSize(
+                &gridSize, &blockSize, kernel, 0, 0
+            );
         }
         """
         lexer = HipLexer(code)
@@ -1383,6 +1546,52 @@ class TestHipCodeGen:
         assert result.count("// HIP get device count: output: count") == 2
         assert "// HIP set device: device" in result
         assert "// HIP get device properties: props, device: device" in result
+        assert (
+            result.count(
+                "// HIP get device attribute: output: attr, "
+                "attribute: hipDeviceAttributeMaxThreadsPerBlock, device: device"
+            )
+            == 2
+        )
+        assert (
+            "// HIP get device name: output: name, length: 64, device: device" in result
+        )
+        assert "// HIP get device total memory: output: total, device: device" in result
+        assert (
+            "// HIP get device compute capability: major output: major, "
+            "minor output: minor, device: device"
+        ) in result
+        assert "// HIP choose device: output: device, properties: (&props)" in result
+        assert "// HIP get device flags: output: flags" in result
+        assert "// HIP set device flags: hipDeviceScheduleAuto" in result
+        assert (
+            result.count(
+                "// HIP occupancy max potential block size: grid output: gridSize, "
+                "block output: blockSize, kernel: kernel, "
+                "dynamic shared memory: 0, block size limit: 0"
+            )
+            == 2
+        )
+        assert (
+            "// HIP occupancy max potential block size: grid output: gridSize, "
+            "block output: blockSize, kernel: kernel, dynamic shared memory: 0, "
+            "block size limit: 256"
+        ) in result
+        assert (
+            "// HIP occupancy max potential block size: grid output: gridSize, "
+            "block output: blockSize, kernel: kernel, dynamic shared memory: 0, "
+            "block size limit: 256, flags: 1"
+        ) in result
+        assert (
+            "// HIP occupancy active blocks per multiprocessor: "
+            "output: activeBlocks, kernel: kernel, block size: blockSize, "
+            "dynamic shared memory: 0"
+        ) in result
+        assert (
+            "// HIP occupancy active blocks per multiprocessor: "
+            "output: activeBlocks, kernel: kernel, block size: blockSize, "
+            "dynamic shared memory: 0, flags: 1"
+        ) in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert "err = hipSuccess;" in result
         assert "var err: hipError_t = hipEventRecord(stop, stream);" not in result
@@ -1391,6 +1600,18 @@ class TestHipCodeGen:
         assert "hipGetDeviceCount(" not in result
         assert "hipSetDevice(" not in result
         assert "hipGetDeviceProperties(" not in result
+        assert "hipDeviceGetAttribute(" not in result
+        assert "hipDeviceGetName(" not in result
+        assert "hipDeviceTotalMem(" not in result
+        assert "hipDeviceComputeCapability(" not in result
+        assert "hipChooseDevice(" not in result
+        assert "hipGetDeviceFlags(" not in result
+        assert "hipSetDeviceFlags(" not in result
+        assert "hipOccupancyMaxPotentialBlockSize(" not in result
+        assert "hipOccupancyMaxPotentialBlockSizeVariableSMem(" not in result
+        assert "hipOccupancyMaxPotentialBlockSizeVariableSMemWithFlags(" not in result
+        assert "hipOccupancyMaxActiveBlocksPerMultiprocessor(" not in result
+        assert "hipOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(" not in result
 
     def test_hip_runtime_stream_create_with_flags_status_conversion(self):
         """Test hipStreamCreateWithFlags status expressions lower to success"""
@@ -1411,6 +1632,121 @@ class TestHipCodeGen:
         assert "// HIP stream create: stream, flags: hipStreamNonBlocking" in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert "hipStreamCreateWithFlags(" not in result
+
+    def test_hip_runtime_module_api_conversion(self):
+        """Test HIP module and function APIs emit metadata comments."""
+        code = """
+        void load_module(hipStream_t stream) {
+            hipModule_t module;
+            hipFunction_t function;
+            hipFunction_t symbolFunction;
+            hipFuncAttributes attrs;
+            int attrValue;
+            void* globalPtr;
+            size_t globalBytes;
+            void** params;
+            void** extra;
+            void* image;
+            hipJitOption options;
+            void* optionValues;
+            hipModuleLoad(&module, "kernel.hsaco");
+            hipModuleLoadData(&module, image);
+            hipModuleLoadDataEx(&module, image, 1, &options, &optionValues);
+            hipModuleGetFunction(&function, module, "kernel");
+            hipGetFuncBySymbol(&symbolFunction, function);
+            hipFuncGetAttribute(
+                &attrValue, HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, function
+            );
+            hipFuncGetAttributes(&attrs, function);
+            hipFuncSetAttribute(
+                function, HIP_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, 1024
+            );
+            hipFuncSetCacheConfig(function, hipFuncCachePreferL1);
+            hipFuncSetSharedMemConfig(function, hipSharedMemBankSizeEightByte);
+            hipModuleGetGlobal(&globalPtr, &globalBytes, module, "symbol");
+            hipModuleLaunchKernel(
+                function, 8, 1, 1, 64, 1, 1, 0, stream, params, extra
+            );
+            hipModuleUnload(module);
+            hipError_t err = hipModuleGetFunction(&function, module, "kernel");
+            err = hipModuleLaunchKernel(
+                function, 8, 1, 1, 64, 1, 1, 0, stream, params, extra
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert '// HIP module load: output: module, file: "kernel.hsaco"' in result
+        assert "// HIP module load: output: module, image: image" in result
+        assert (
+            "// HIP module load data ex: output: module, image: image, options: 1, "
+            "option keys: (&options), option values: (&optionValues)"
+        ) in result
+        assert (
+            result.count(
+                "// HIP module get function: output: function, module: module, "
+                'name: "kernel"'
+            )
+            == 2
+        )
+        assert (
+            "// HIP get function by symbol: output: symbolFunction, symbol: function"
+            in result
+        )
+        assert (
+            "// HIP function get attribute: output: attrValue, "
+            "attribute: HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, function: function"
+        ) in result
+        assert (
+            "// HIP function get attributes: output: attrs, function: function"
+            in result
+        )
+        assert (
+            "// HIP function set attribute: function: function, "
+            "attribute: HIP_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, value: 1024"
+        ) in result
+        assert (
+            "// HIP function set cache config: function: function, "
+            "config: hipFuncCachePreferL1"
+        ) in result
+        assert (
+            "// HIP function set shared memory config: function: function, "
+            "config: hipSharedMemBankSizeEightByte"
+        ) in result
+        assert (
+            "// HIP module get global: pointer output: globalPtr, "
+            'size output: globalBytes, module: module, name: "symbol"'
+        ) in result
+        assert (
+            result.count(
+                "// HIP module launch kernel: function: function, "
+                "grid: (8, 1, 1), block: (64, 1, 1), shared memory: 0, "
+                "stream: stream, params: params, extra: extra"
+            )
+            == 2
+        )
+        assert "// HIP module unload: module" in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert "err = hipSuccess;" in result
+        assert "hipModuleLoad(" not in result
+        assert "hipModuleLoadData(" not in result
+        assert "hipModuleLoadDataEx(" not in result
+        assert "hipModuleGetFunction(" not in result
+        assert "hipGetFuncBySymbol(" not in result
+        assert "hipFuncGetAttribute(" not in result
+        assert "hipFuncGetAttributes(" not in result
+        assert "hipFuncSetAttribute(" not in result
+        assert "hipFuncSetCacheConfig(" not in result
+        assert "hipFuncSetSharedMemConfig(" not in result
+        assert "hipModuleGetGlobal(" not in result
+        assert "hipModuleLaunchKernel(" not in result
+        assert "hipModuleUnload(" not in result
 
     def test_hip_runtime_stream_create_with_priority_status_conversion(self):
         """Test hipStreamCreateWithPriority emits priority metadata"""

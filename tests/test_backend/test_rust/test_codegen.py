@@ -864,6 +864,48 @@ def test_scalar_math_method_conversion():
         pytest.fail(f"Scalar math method conversion failed: {e}")
 
 
+def test_common_math_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn common_intrinsics(
+        normal: Vec3<f32>,
+        incident: Vec3<f32>,
+        reference: Vec3<f32>,
+        x: f32,
+        y: f32,
+        angle: f32,
+    ) -> f32 {
+        let dist = distance(normal, incident);
+        let facing = faceforward(normal, incident, reference);
+        let rounded = round(x);
+        let exponential = exp(x);
+        let exponential2 = exp2(x);
+        let natural_log = log(y);
+        let binary_log = log2(y);
+        let deg = degrees(angle);
+        let rad = radians(deg);
+        let arc = asin(x) + acos(x) + atan(x) + atan2(y, x);
+        let hyper = sinh(x) + cosh(x) + tanh(x);
+        return dist + rounded + exponential + exponential2 + natural_log
+            + binary_log + deg + rad + arc + hyper;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "dist = distance(normal, incident);" in result
+    assert "facing = faceforward(normal, incident, reference);" in result
+    assert "rounded = round(x);" in result
+    assert "exponential = exp(x);" in result
+    assert "exponential2 = exp2(x);" in result
+    assert "natural_log = log(y);" in result
+    assert "binary_log = log2(y);" in result
+    assert "deg = degrees(angle);" in result
+    assert "rad = radians(deg);" in result
+    assert "arc = (((asin(x) + acos(x)) + atan(x)) + atan2(y, x));" in result
+    assert "hyper = ((sinh(x) + cosh(x)) + tanh(x));" in result
+    assert "Vec3" not in result
+
+
 def test_lerp_function_converts_to_crossgl_mix():
     code = """
     fn blend(a: f32, b: f32, t: f32) -> f32 {
@@ -2386,6 +2428,41 @@ def test_gpu_texture_helper_calls_convert_to_crossgl_intrinsics():
     assert "sample_lod" not in result
     assert "texture_size_lod" not in result
     assert "texture_gather_component" not in result
+
+
+def test_gpu_multisample_texture_types_convert_to_crossgl_intrinsics():
+    code = """
+    fn multisample_texture_helpers(
+        ms_tex: Texture2DMS<f32>,
+        ms_array: Texture2DMSArray<f32>,
+        pixel: Vec2<i32>,
+        pixel_layer: Vec3<i32>,
+        sample_index: i32,
+    ) -> Vec4<f32> {
+        let size = texture_size(ms_tex);
+        let array_size = texture_size(ms_array);
+        let samples = texture_samples(ms_tex);
+        let fetched = texel_fetch(ms_tex, pixel, sample_index);
+        let fetched_array = texel_fetch(ms_array, pixel_layer, sample_index);
+        return fetched;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "vec4 multisample_texture_helpers(sampler2DMS ms_tex, sampler2DMSArray ms_array"
+        in result
+    )
+    assert "size = textureSize(ms_tex);" in result
+    assert "array_size = textureSize(ms_array);" in result
+    assert "samples = textureSamples(ms_tex);" in result
+    assert "fetched = texelFetch(ms_tex, pixel, sample_index);" in result
+    assert "fetched_array = texelFetch(ms_array, pixel_layer, sample_index);" in result
+    assert "Texture2DMS" not in result
+    assert "texture_size" not in result
+    assert "texture_samples" not in result
+    assert "texel_fetch" not in result
 
 
 def test_gpu_explicit_sampler_texture_helpers_convert_to_crossgl_intrinsics():

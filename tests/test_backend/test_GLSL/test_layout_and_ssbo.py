@@ -70,6 +70,13 @@ def test_parse_early_fragment_tests_layout():
     ast = parse_glsl(code, "fragment")
     assert ast is not None
 
+    crossgl = generate_crossgl(code, "fragment")
+    assert "layout(early_fragment_tests) in;" in crossgl
+    assert "// layout(" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+    assert "layout(early_fragment_tests) in;" in glsl
+
 
 def test_parse_ray_shader_record_layout_roundtrips_without_binding():
     code = """
@@ -150,6 +157,138 @@ def test_parse_ray_shader_record_layout_rejects_binding():
 
 
 @pytest.mark.parametrize(
+    (
+        "shader_type",
+        "source",
+        "expected_crossgl",
+        "expected_glsl",
+    ),
+    [
+        (
+            "ray_closest_hit",
+            """
+            #version 460 core
+            #extension GL_EXT_ray_tracing : require
+
+            struct RayPayload {
+                vec4 color;
+            };
+
+            layout(location = 0) rayPayloadInEXT RayPayload closestPayload;
+            hitAttributeEXT vec2 hitAttributes;
+
+            void main() {
+                closestPayload.color = vec4(hitAttributes, 0.0, 1.0);
+            }
+            """,
+            [
+                "RayPayload closestPayload @location(0) @rayPayloadInEXT;",
+                "vec2 hitAttributes @hitAttributeEXT;",
+                "void main()",
+            ],
+            [
+                "layout(location = 0) rayPayloadInEXT RayPayload closestPayload;",
+                "hitAttributeEXT vec2 hitAttributes;",
+                "closestPayload.color = vec4(hitAttributes, 0.0, 1.0);",
+            ],
+        ),
+        (
+            "ray_any_hit",
+            """
+            #version 460 core
+            #extension GL_EXT_ray_tracing : require
+
+            struct RayPayload {
+                vec4 color;
+            };
+
+            layout(location = 0) rayPayloadInEXT RayPayload anyPayload;
+            hitAttributeEXT vec2 anyHitAttributes;
+
+            void main() {
+                anyPayload.color = vec4(anyHitAttributes, 1.0, 1.0);
+                ignoreIntersectionEXT;
+            }
+            """,
+            [
+                "RayPayload anyPayload @location(0) @rayPayloadInEXT;",
+                "vec2 anyHitAttributes @hitAttributeEXT;",
+                "IgnoreHit();",
+            ],
+            [
+                "layout(location = 0) rayPayloadInEXT RayPayload anyPayload;",
+                "hitAttributeEXT vec2 anyHitAttributes;",
+                "ignoreIntersectionEXT;",
+            ],
+        ),
+        (
+            "ray_callable",
+            """
+            #version 460 core
+            #extension GL_EXT_ray_tracing : require
+
+            struct CallableData {
+                vec4 value;
+            };
+
+            layout(location = 1) callableDataInEXT CallableData callableInput;
+
+            void main() {
+                callableInput.value = vec4(1.0);
+            }
+            """,
+            [
+                "CallableData callableInput @location(1) @callableDataInEXT;",
+                "void main()",
+            ],
+            [
+                "layout(location = 1) callableDataInEXT CallableData callableInput;",
+                "callableInput.value = vec4(1.0);",
+            ],
+        ),
+    ],
+)
+def test_parse_ray_stage_storage_qualifiers_roundtrip(
+    shader_type,
+    source,
+    expected_crossgl,
+    expected_glsl,
+):
+    crossgl = generate_crossgl(source, shader_type)
+
+    assert "RayGenerationInput" not in crossgl
+    assert "RayGenerationOutput" not in crossgl
+    for expected in expected_crossgl:
+        assert expected in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert glsl.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_tracing : require" in glsl
+    for expected in expected_glsl:
+        assert expected in glsl
+
+
+def test_parse_compute_layout_roundtrips_as_stage_layout():
+    code = """
+    #version 450 core
+    layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;
+
+    void main() { }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "// layout(" not in crossgl
+    assert "compute {" in crossgl
+    assert "layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;" in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;" in glsl
+
+
+@pytest.mark.parametrize(
     ("shader_type", "glsl_call", "crossgl_call", "regenerated_call"),
     [
         (
@@ -223,10 +362,17 @@ def test_parse_mesh_stage_interface_qualifiers_roundtrip():
     assert "SetMeshOutputCounts(64, 32);" in crossgl
     assert "taskPayloadSharedEXT TaskPayload payload;" not in crossgl
     assert "perprimitiveEXT out vec3 primitiveNormal[32];" not in crossgl
+    assert (
+        "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;" in crossgl
+    )
+    assert "layout(triangles, max_vertices = 64, max_primitives = 32) out;" in crossgl
+    assert "// layout(" not in crossgl
 
     glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
 
     assert "#extension GL_EXT_mesh_shader : require" in glsl
+    assert "layout(triangles, max_vertices = 64, max_primitives = 32) out;" in glsl
+    assert "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;" in glsl
     assert "taskPayloadSharedEXT TaskPayload payload;" in glsl
     assert "perprimitiveEXT out vec3 primitiveNormal[32];" in glsl
     assert "out vec4 vertexColor[64];" in glsl

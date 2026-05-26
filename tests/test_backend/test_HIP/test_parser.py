@@ -1235,6 +1235,7 @@ class TestHipParser:
         signed int signedMask = -1;
         long long wide = 2ll;
         unsigned long long uwide = 3ull;
+        hipArray_t array;
 
         __global__ void kernel(unsigned int* out, const float scale, long long x) {
             const int local = 1;
@@ -1255,15 +1256,16 @@ class TestHipParser:
         assert ast.statements[2].vtype == "signed int"
         assert ast.statements[3].vtype == "long long"
         assert ast.statements[4].vtype == "unsigned long long"
-        assert ast.statements[5].params[0]["type"] == "unsigned int *"
-        assert ast.statements[5].params[1]["type"] == "const float"
-        assert ast.statements[5].params[2]["type"] == "long long"
-        assert ast.statements[5].body[0].vtype == "const int"
-        assert ast.statements[5].body[1].vtype == "unsigned int"
-        assert ast.statements[5].body[2].vtype == "unsigned long long"
-        assert ast.statements[5].body[3].vtype == "long long"
-        assert ast.statements[5].body[3].value.target_type == "long long"
-        assert ast.statements[5].body[4].vtype == "float"
+        assert ast.statements[5].vtype == "hipArray_t"
+        assert ast.statements[6].params[0]["type"] == "unsigned int *"
+        assert ast.statements[6].params[1]["type"] == "const float"
+        assert ast.statements[6].params[2]["type"] == "long long"
+        assert ast.statements[6].body[0].vtype == "const int"
+        assert ast.statements[6].body[1].vtype == "unsigned int"
+        assert ast.statements[6].body[2].vtype == "unsigned long long"
+        assert ast.statements[6].body[3].vtype == "long long"
+        assert ast.statements[6].body[3].value.target_type == "long long"
+        assert ast.statements[6].body[4].vtype == "float"
 
     def test_qualified_and_pointer_return_functions_parsing(self):
         """Test qualified scalar and pointer return types"""
