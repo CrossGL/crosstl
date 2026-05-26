@@ -3711,7 +3711,7 @@ def test_ray_payload_semantics():
         struct Payload {
             vec3 color;
         };
-        ray_generation {
+        ray_miss {
             void main(Payload payload @ payload) {
                 payload.color = vec3(1.0, 0.0, 0.0);
             }
@@ -3721,7 +3721,9 @@ def test_ray_payload_semantics():
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
     generated = generate_code(ast)
-    assert "payload" in generated
+    assert '[shader("miss")]' in generated
+    assert "void MissMain(inout Payload payload)" in generated
+    assert ": payload" not in generated
 
 
 def test_ray_and_mesh_shader_attributes():
@@ -3751,10 +3753,6 @@ def test_directx_ray_stage_semantic_parameters_emit_and_validate():
             vec3 color;
         };
 
-        struct HitAttributes {
-            vec2 barycentrics;
-        };
-
         struct CallableData {
             uint value;
         };
@@ -3762,7 +3760,7 @@ def test_directx_ray_stage_semantic_parameters_emit_and_validate():
         ray_closest_hit {
             void main(
                 RayPayload payload @ payload,
-                HitAttributes attributes @ hit_attribute
+                BuiltInTriangleIntersectionAttributes attributes @ hit_attribute
             ) {
                 payload.color = vec3(attributes.barycentrics, 1.0);
             }
@@ -3785,15 +3783,37 @@ def test_directx_ray_stage_semantic_parameters_emit_and_validate():
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert '[shader("closesthit")]' in generated
-    assert "RayPayload payload : payload" in generated
-    assert "HitAttributes attributes : hit_attribute" in generated
+    assert (
+        "void ClosestHitMain(inout RayPayload payload, "
+        "in BuiltInTriangleIntersectionAttributes attributes)"
+    ) in generated
     assert '[shader("callable")]' in generated
-    assert "CallableData data : callable_data" in generated
+    assert "void CallableMain(inout CallableData data)" in generated
     assert '[shader("miss")]' in generated
-    assert "void MissMain(RayPayload payload : payload)" in generated
+    assert "void MissMain(inout RayPayload payload)" in generated
+    assert ": payload" not in generated
+    assert ": hit_attribute" not in generated
+    assert ": callable_data" not in generated
+    assert "struct BuiltInTriangleIntersectionAttributes" not in generated
 
 
 def test_directx_ray_stage_semantic_parameters_reject_invalid_stages_and_types():
+    raygen_payload_code = """
+    shader BadRaygenPayload {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main(RayPayload payload @ payload) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ray_generation.*payload"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(raygen_payload_code), "ray_generation"
+        )
+
     callable_payload_code = """
     shader BadCallablePayload {
         struct RayPayload {
@@ -3836,6 +3856,111 @@ def test_directx_ray_stage_semantic_parameters_reject_invalid_stages_and_types()
     with pytest.raises(ValueError, match="payload.*user-defined struct"):
         HLSLCodeGen().generate_stage(
             crosstl.translator.parse(scalar_payload_code), "ray_miss"
+        )
+
+    builtin_payload_code = """
+    shader BadBuiltinRayPayload {
+        ray_miss {
+            void main(BuiltInTriangleIntersectionAttributes payload @ payload) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="payload.*user-defined struct"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(builtin_payload_code), "ray_miss"
+        )
+
+    builtin_callable_data_code = """
+    shader BadBuiltinCallableData {
+        ray_callable {
+            void main(BuiltInTriangleIntersectionAttributes data @ callable_data) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="callable_data.*user-defined struct"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(builtin_callable_data_code), "ray_callable"
+        )
+
+
+def test_directx_ray_stage_semantic_parameters_reject_duplicates_order_and_extras():
+    duplicate_payload_code = """
+    shader DuplicateRayPayload {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_miss {
+            void main(RayPayload first @ payload, RayPayload second @ payload) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="at most one payload"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(duplicate_payload_code), "ray_miss"
+        )
+
+    wrong_order_code = """
+    shader WrongRayHitOrder {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        ray_closest_hit {
+            void main(
+                HitAttributes attributes @ hit_attribute,
+                RayPayload payload @ payload
+            ) { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="parameters must be declared as payload, hit_attribute",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(wrong_order_code), "ray_closest_hit"
+        )
+
+    extra_closest_hit_parameter_code = """
+    shader ExtraClosestHitParameter {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute,
+                uint primitiveId
+            ) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="primitiveId.*payload, hit_attribute"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(extra_closest_hit_parameter_code),
+            "ray_closest_hit",
+        )
+
+    intersection_parameter_code = """
+    shader IntersectionWithParameter {
+        ray_intersection {
+            void main(uint primitiveId) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ray_intersection.*must not declare"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(intersection_parameter_code), "ray_intersection"
         )
 
 
@@ -5155,7 +5280,7 @@ def test_directx_mesh_payload_does_not_capture_ray_payload_semantic():
             vec3 color;
         };
 
-        ray_generation {
+        ray_miss {
             void main(RayPayload payload @ payload) {
                 payload.color = vec3(1.0, 0.0, 0.0);
             }
@@ -5165,8 +5290,9 @@ def test_directx_mesh_payload_does_not_capture_ray_payload_semantic():
 
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "RayPayload payload : payload" in generated
+    assert "void MissMain(inout RayPayload payload)" in generated
     assert "in payload RayPayload" not in generated
+    assert ": payload" not in generated
 
 
 def test_directx_dispatch_mesh_validates_argument_count_and_group_count_types():
@@ -10815,6 +10941,95 @@ def test_directx_formatted_image_arrays_preserve_format_metadata():
     assert "RWTexture3D<int" not in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
+
+
+def test_directx_resource_arrays_account_register_spaces_independently():
+    shader = """
+    shader RegisterSpaceResourceArrays {
+        sampler2D colorMaps[2] @register(t0, space1);
+        sampler colorSamplers[2] @register(s0, space1);
+        sampler2D spaceTwoMaps[3] @register(t0, space2);
+        image2D counters @r32ui @register(u0, space2)[3];
+        sampler2D afterSpaceOne @space(space1);
+        sampler2D afterSpaceTwo @space(space2);
+        image2D afterCounter @r32ui @space(space2);
+
+        struct FSInput {
+            vec2 uv;
+            ivec2 pixel;
+            int layer;
+        };
+
+        uint touchCounters(image2D images[3] @r32ui, ivec2 pixel, uint value) {
+            uint oldValue = imageLoad(images[2], pixel);
+            imageStore(images[1], pixel, oldValue + value);
+            return oldValue;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 explicitSample = texture(colorMaps[input.layer], colorSamplers[input.layer], input.uv);
+                vec4 implicitSample = texture(spaceTwoMaps[0], input.uv);
+                uint oldValue = touchCounters(counters, input.pixel, 1u);
+                return explicitSample + implicitSample + vec4(float(oldValue));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Texture2D colorMaps[2] : register(t0, space1);" in generated_code
+    assert "SamplerState colorSamplers[2] : register(s0, space1);" in generated_code
+    assert "Texture2D spaceTwoMaps[3] : register(t0, space2);" in generated_code
+    assert "SamplerState spaceTwoMapsSampler : register(s0, space2);" in generated_code
+    assert "RWTexture2D<uint> counters[3] : register(u0, space2);" in generated_code
+    assert "Texture2D afterSpaceOne : register(t2, space1);" in generated_code
+    assert "Texture2D afterSpaceTwo : register(t3, space2);" in generated_code
+    assert "RWTexture2D<uint> afterCounter : register(u3, space2);" in generated_code
+    assert (
+        "colorMaps[input.layer].Sample(colorSamplers[input.layer], input.uv)"
+        in generated_code
+    )
+    assert "spaceTwoMaps[0].Sample(spaceTwoMapsSampler, input.uv)" in generated_code
+    assert (
+        "uint touchCounters(RWTexture2D<uint> images[3], int2 pixel, uint value)"
+        in generated_code
+    )
+    assert "uint oldValue = images[2][pixel];" in generated_code
+    assert "images[1][pixel] = (oldValue + value);" in generated_code
+    assert "Texture2D afterSpaceOne : register(t2, space2);" not in generated_code
+    assert "Texture2D afterSpaceTwo : register(t3, space1);" not in generated_code
+    assert (
+        "RWTexture2D<uint> afterCounter : register(u1, space2);" not in generated_code
+    )
+    assert "colorMapsSampler" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_directx_resource_array_register_space_conflicts_use_full_ranges():
+    shader = """
+    shader ConflictingResourceArraySpaces {
+        sampler2D first[3] @register(t2, space1);
+        sampler2D second[2] @register(t4, space1);
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "Conflicting DirectX resource binding for 'second': "
+            "t4-t5, space1 overlaps 'first' t2-t4, space1"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
 def test_directx_rg_image_arrays_respect_scalar_and_vector_context():

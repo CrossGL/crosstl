@@ -2401,6 +2401,270 @@ def test_matching_layout_and_function_tessellation_metadata_values_are_allowed()
     ]
 
 
+def test_tessellation_patch_and_control_point_metadata_are_allowed():
+    code = """
+    shader TessellationPatchMetadata {
+        struct VSOut {
+            vec4 position @position;
+        };
+
+        struct HSOut {
+            vec4 position @position;
+        };
+
+        tessellation_control {
+            layout(vertices = 3) out;
+            void main(
+                InputPatch<VSOut, 4> inputPatch,
+                OutputPatch<HSOut, 3> outputPatch
+            ) @outputcontrolpoints(3) @patchconstantfunc(HSConst) {
+            }
+        }
+
+        tessellation_evaluation {
+            layout(triangles, fractional_odd_spacing, cw, point_mode) in;
+            void main(OutputPatch<HSOut, 3> patch)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @cw
+                @point_mode
+            {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    control = ast.stages[ShaderStage.TESSELLATION_CONTROL].entry_point
+    evaluation = ast.stages[ShaderStage.TESSELLATION_EVALUATION].entry_point
+
+    assert [parameter.param_type.name for parameter in control.parameters] == [
+        "InputPatch",
+        "OutputPatch",
+    ]
+    assert control.parameters[0].param_type.generic_args[1].value == 4
+    assert control.parameters[1].param_type.generic_args[1].value == 3
+    assert [attr.name for attr in control.attributes] == [
+        "outputcontrolpoints",
+        "patchconstantfunc",
+    ]
+    assert evaluation.parameters[0].param_type.name == "OutputPatch"
+    assert evaluation.parameters[0].param_type.generic_args[1].value == 3
+    assert [attr.name for attr in evaluation.attributes] == [
+        "domain",
+        "partitioning",
+        "cw",
+        "point_mode",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            geometry {
+                layout(vertices = 3) out;
+                void main() {
+                }
+            }
+            """,
+            "Stage layout 'vertices'.*requires tessellation_control stage 'out' layout",
+        ),
+        (
+            """
+            tessellation_control {
+                layout(quads) in;
+                void main() {
+                }
+            }
+            """,
+            "Stage layout 'quads'.*requires tessellation_evaluation stage 'in' layout",
+        ),
+        (
+            """
+            compute {
+                layout(fractional_odd_spacing) in;
+                void main() {
+                }
+            }
+            """,
+            (
+                "Stage layout 'fractional_odd_spacing'.*requires "
+                "tessellation_evaluation stage 'in' layout"
+            ),
+        ),
+    ],
+)
+def test_tessellation_layout_metadata_requires_matching_stage(stage_source, message):
+    code = f"""
+    shader InvalidTessellationLayoutMetadata {{
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            geometry {
+                void main() @outputcontrolpoints(3) {
+                }
+            }
+            """,
+            "Function metadata '@outputcontrolpoints'.*requires tessellation_control stage",
+        ),
+        (
+            """
+            tessellation_evaluation {
+                void main() @patchconstantfunc(HSConst) {
+                }
+            }
+            """,
+            "Function metadata '@patchconstantfunc'.*requires tessellation_control stage",
+        ),
+        (
+            """
+            compute {
+                void main() @domain(tri) {
+                }
+            }
+            """,
+            "Function metadata '@domain'.*requires tessellation stage",
+        ),
+        (
+            """
+            fragment {
+                void main() @cw {
+                }
+            }
+            """,
+            "Function metadata '@cw'.*requires tessellation_evaluation stage",
+        ),
+    ],
+)
+def test_tessellation_function_metadata_requires_matching_stage(stage_source, message):
+    code = f"""
+    shader InvalidTessellationFunctionMetadata {{
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            vertex {
+                void main(InputPatch<VSOut, 3> patch) {
+                }
+            }
+            """,
+            (
+                "Patch type 'InputPatch'.*requires tessellation_control or "
+                "tessellation_evaluation stage"
+            ),
+        ),
+        (
+            """
+            fragment {
+                void main(OutputPatch<HSOut, 3> patch) {
+                }
+            }
+            """,
+            (
+                "Patch type 'OutputPatch'.*requires tessellation_control or "
+                "tessellation_evaluation stage"
+            ),
+        ),
+    ],
+)
+def test_tessellation_patch_parameters_require_matching_stage(stage_source, message):
+    code = f"""
+    shader InvalidTessellationPatchParameters {{
+        struct VSOut {{
+            vec4 position;
+        }};
+
+        struct HSOut {{
+            vec4 position;
+        }};
+
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            tessellation_control {
+                void main(OutputPatch<HSOut, 4> outputPatch)
+                    @outputcontrolpoints(3)
+                {
+                }
+            }
+            """,
+            (
+                "Conflicting tessellation output control-point metadata.*"
+                "OutputPatch<HSOut, 4>.*outputcontrolpoints\\(3\\).*"
+                "OutputPatch control points=4"
+            ),
+        ),
+        (
+            """
+            tessellation_control {
+                HSOut main() @outputcontrolpoints(3) {
+                    HSOut output;
+                    return output;
+                }
+            }
+
+            tessellation_evaluation {
+                void main(OutputPatch<HSOut, 4> patch) @domain(tri) {
+                }
+            }
+            """,
+            (
+                "Conflicting tessellation patch control-point metadata.*"
+                "OutputPatch<HSOut, 4>.*tessellation_control output "
+                "OutputPatch<HSOut, 3>.*outputcontrolpoints\\(3\\).*"
+                "OutputPatch control points=4"
+            ),
+        ),
+    ],
+)
+def test_tessellation_patch_control_point_mismatches_fail_validation(
+    stage_source, message
+):
+    code = f"""
+    shader InvalidTessellationPatchCounts {{
+        struct HSOut {{
+            vec4 position;
+        }};
+
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
 @pytest.mark.parametrize(
     ("stage_source", "message"),
     [
@@ -3194,6 +3458,57 @@ def test_image_format_attributes_parse():
     assert ast.global_variables[2].attributes[0].arguments[0].name == "rgba8"
 
 
+def test_storage_image_format_metadata_is_allowed_on_storage_images():
+    code = """
+    shader StorageImageFormats {
+        image2D color @rgba32f;
+        uimage2D counters @format(r32ui);
+        RWTexture2D<uint> hlslCounters @r32ui;
+
+        void consume(
+            image3D volume @rgba16f,
+            RWTexture2D<float4> target @format(rgba32f),
+            texture2d<uint, access::read> storageTexture @format(r32ui)
+        ) {
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert [attr.name for attr in ast.global_variables[0].attributes] == ["rgba32f"]
+    assert [attr.name for attr in ast.global_variables[1].attributes] == ["format"]
+    assert [attr.name for attr in ast.global_variables[2].attributes] == ["r32ui"]
+
+    volume, target, storage_texture = ast.functions[0].parameters
+    assert [attr.name for attr in volume.attributes] == ["rgba16f"]
+    assert [attr.name for attr in target.attributes] == ["format"]
+    assert [attr.name for attr in storage_texture.attributes] == ["format"]
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "sampler2D sampled @rgba32f;",
+        "Texture2D sampled @format(rgba32f);",
+        "texture2d<float> sampled @r32f;",
+        "float scalar @format(r32f);",
+    ],
+)
+def test_image_format_metadata_requires_storage_image_type(declaration):
+    code = f"""
+    shader NonStorageImageFormat {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Image format metadata.*requires storage image type",
+    ):
+        parse_code(tokenize_code(code))
+
+
 def test_global_io_location_attributes_parse():
     code = """
     shader Interface {
@@ -3640,6 +3955,109 @@ def test_conflicting_resource_access_metadata_fails_validation(declaration, mess
         parse_code(tokenize_code(code))
 
 
+def test_resource_access_metadata_is_allowed_on_resource_families():
+    code = """
+    shader ResourceAccessFamilies {
+        readonly image2D source @rgba32f;
+        writeonly RWStructuredBuffer<int> values;
+
+        struct BlockData {
+            uint value;
+        };
+
+        ReadBlock readonlyBlocks[] @glsl_buffer_block(std430) @readonly;
+
+        void consume(
+            readonly device BlockData* rawBlock @buffer(0),
+            readonly texture2d<uint, access::read> storageTexture
+        ) {
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert ast.global_variables[0].qualifiers == ["readonly"]
+    assert ast.global_variables[1].qualifiers == ["writeonly"]
+    assert [attr.name for attr in ast.global_variables[2].attributes] == [
+        "glsl_buffer_block",
+        "readonly",
+    ]
+
+    raw_block, storage_texture = ast.functions[0].parameters
+    assert raw_block.qualifiers == ["readonly", "device"]
+    assert storage_texture.qualifiers == ["readonly"]
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "readonly float scalar;",
+        "vec4 color @writeonly;",
+        "struct Payload { float value @access(read); };",
+    ],
+)
+def test_resource_access_metadata_requires_resource_family(declaration):
+    code = f"""
+    shader NonResourceAccess {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Resource access metadata.*requires resource type",
+    ):
+        parse_code(tokenize_code(code))
+
+
+def test_descriptor_index_metadata_is_allowed_on_matching_resource_roles():
+    code = """
+    shader DescriptorIndexRoles {
+        sampler2D sampled @texture(0);
+        image2D storage @texture(1);
+        sampler linearSampler @sampler(0);
+        RWStructuredBuffer<int> values @uav(2);
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert [attr.name for attr in ast.global_variables[0].attributes] == ["texture"]
+    assert [attr.name for attr in ast.global_variables[1].attributes] == ["texture"]
+    assert [attr.name for attr in ast.global_variables[2].attributes] == ["sampler"]
+    assert [attr.name for attr in ast.global_variables[3].attributes] == ["uav"]
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        ("float scalar @texture(0);", "texture metadata.*requires texture resource"),
+        (
+            "sampler linearSampler @texture(0);",
+            "texture metadata.*requires texture resource",
+        ),
+        ("vec4 color @sampler(0);", "sampler metadata.*requires sampler resource"),
+        (
+            "sampler2D sampled @sampler(0);",
+            "sampler metadata.*requires sampler resource",
+        ),
+        ("float scalar @uav(0);", "uav metadata.*requires storage resource"),
+    ],
+)
+def test_descriptor_index_metadata_requires_matching_resource_role(
+    declaration, message
+):
+    code = f"""
+    shader NonResourceDescriptorRole {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
 def test_conflicting_layout_attribute_values_fail_validation():
     code = """
     shader ConflictingLayoutValues {
@@ -3766,7 +4184,7 @@ def test_image_format_parameter_attributes_parse():
 def test_ray_and_mesh_role_metadata_parse():
     code = """
     shader RoleMetadata {
-        struct Payload {
+        struct Payload @payload {
             float value;
         };
         struct HitAttributes {
@@ -3774,6 +4192,9 @@ def test_ray_and_mesh_role_metadata_parse():
         };
         struct CallableData {
             uint id;
+        };
+        struct MeshPayload @mesh_payload {
+            uint meshlet;
         };
         struct MeshVertex {
             vec4 position;
@@ -3793,7 +4214,7 @@ def test_ray_and_mesh_role_metadata_parse():
 
         mesh {
             void emit(
-                Payload payload @payload,
+                MeshPayload payload @mesh_payload,
                 MeshVertex vertices[] @vertices,
                 uint indices[] @indices,
                 MeshPrimitive primitives[] @primitives
@@ -3804,6 +4225,12 @@ def test_ray_and_mesh_role_metadata_parse():
     """
 
     ast = parse_code(tokenize_code(code))
+    payload_struct = ast.structs[0]
+    mesh_payload_struct = ast.structs[3]
+
+    assert [attr.name for attr in payload_struct.attributes] == ["payload"]
+    assert [attr.name for attr in mesh_payload_struct.attributes] == ["mesh_payload"]
+
     trace = ast.stages[ShaderStage.RAY_GENERATION].local_functions[0]
     ray_payload, hit_attributes, callable_data = trace.parameters
 
@@ -3814,7 +4241,7 @@ def test_ray_and_mesh_role_metadata_parse():
     emit = ast.stages[ShaderStage.MESH].local_functions[0]
     mesh_payload, vertices, indices, primitives = emit.parameters
 
-    assert [attr.name for attr in mesh_payload.attributes] == ["payload"]
+    assert [attr.name for attr in mesh_payload.attributes] == ["mesh_payload"]
     assert [attr.name for attr in vertices.attributes] == ["vertices"]
     assert [attr.name for attr in indices.attributes] == ["indices"]
     assert [attr.name for attr in primitives.attributes] == ["primitives"]
@@ -3838,6 +4265,10 @@ def test_ray_and_mesh_role_metadata_parse():
             "Payload payload @vertices @primitives",
             "Conflicting declaration role metadata.*@primitives.*@vertices",
         ),
+        (
+            "Payload payload @payload @mesh_payload",
+            "Conflicting declaration role metadata.*@mesh_payload.*@payload",
+        ),
     ],
 )
 def test_conflicting_declaration_role_metadata_fails_validation(parameter, message):
@@ -3851,6 +4282,49 @@ def test_conflicting_declaration_role_metadata_fails_validation(parameter, messa
             void emit({parameter}) {{
             }}
         }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "Payload payload @payload;",
+            "Declaration role metadata.*@payload.*requires function parameter or role struct",
+        ),
+        (
+            "Payload payload @callable_data;",
+            "Declaration role metadata.*@callable_data.*requires function parameter or role struct",
+        ),
+        (
+            "MeshVertex vertices[] @vertices;",
+            "Declaration role metadata.*@vertices.*requires function parameter",
+        ),
+        (
+            "struct MeshVertex @vertices { vec4 position; };",
+            "Declaration role metadata.*@vertices.*requires function parameter",
+        ),
+        (
+            "struct Payload { float value @hit_attribute; };",
+            "Declaration role metadata.*@hit_attribute.*requires function parameter or role struct",
+        ),
+    ],
+)
+def test_declaration_role_metadata_requires_valid_owner(declaration, message):
+    code = f"""
+    shader InvalidRoleOwner {{
+        struct Payload {{
+            float value;
+        }};
+        struct MeshVertex {{
+            vec4 position;
+        }};
+
+        {declaration}
     }}
     """
 

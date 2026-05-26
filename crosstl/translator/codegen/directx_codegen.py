@@ -1778,6 +1778,11 @@ class HLSLCodeGen:
             getattr(func, "_generic_substitutions", {}) or {}
         )
         self.local_variable_types = {}
+        if hasattr(func, "qualifiers") and func.qualifiers:
+            qualifier = func.qualifiers[0] if func.qualifiers else None
+        else:
+            qualifier = getattr(func, "qualifier", None)
+        effective_shader_type = shader_type or qualifier
         for p in param_list:
             if hasattr(p, "param_type"):
                 raw_param_type = (
@@ -1821,9 +1826,17 @@ class HLSLCodeGen:
 
             semantic = self.semantic_from_node(p)
 
-            param_type = self.apply_hlsl_parameter_qualifiers(param_type, p)
+            ray_role = None
+            if effective_shader_type in self.hlsl_ray_stage_types():
+                ray_role = self.hlsl_ray_semantic_role(p)
+            if ray_role:
+                param_type = self.apply_hlsl_ray_parameter_direction(
+                    param_type, ray_role
+                )
+            else:
+                param_type = self.apply_hlsl_parameter_qualifiers(param_type, p)
             declaration = format_c_style_array_declaration(param_type, p.name)
-            semantic_attr = self.map_semantic(semantic)
+            semantic_attr = "" if ray_role else self.map_semantic(semantic)
             params.append(
                 f"{declaration} {semantic_attr}" if semantic_attr else declaration
             )
@@ -1924,13 +1937,6 @@ class HLSLCodeGen:
                 previous_glsl_buffer_block_parameter_struct_failures
             )
             return code
-
-        if hasattr(func, "qualifiers") and func.qualifiers:
-            qualifier = func.qualifiers[0] if func.qualifiers else None
-        else:
-            qualifier = getattr(func, "qualifier", None)
-
-        effective_shader_type = shader_type or qualifier
 
         return_semantic = self.hlsl_function_return_semantic(func)
 
@@ -5270,6 +5276,16 @@ class HLSLCodeGen:
             return normalized
         return None
 
+    def apply_hlsl_ray_parameter_direction(self, param_type, role):
+        direction = {
+            "payload": "inout",
+            "hit_attribute": "in",
+            "callable_data": "inout",
+        }.get(role)
+        if direction is None:
+            return param_type
+        return f"{direction} {param_type}"
+
     def hlsl_ray_role_parameters(self, parameters):
         role_parameters = {}
         for parameter in parameters:
@@ -5285,14 +5301,23 @@ class HLSLCodeGen:
         if base_type is None:
             return
 
-        allowed_builtin_types = {"BuiltInTriangleIntersectionAttributes"}
+        allowed_builtin_types = (
+            {"BuiltInTriangleIntersectionAttributes"}
+            if role == "hit_attribute"
+            else set()
+        )
+        expected_type_description = (
+            "user-defined struct type or BuiltInTriangleIntersectionAttributes"
+            if allowed_builtin_types
+            else "user-defined struct type"
+        )
         if array_suffix or (
             base_type not in self.structs_by_name
             and base_type not in allowed_builtin_types
         ):
             raise ValueError(
                 f"DirectX ray {role} parameter '{parameter.name}' must use a "
-                "user-defined struct type"
+                f"{expected_type_description}"
             )
 
     def validate_hlsl_ray_stage_parameters(self, func, shader_type, parameters):
@@ -5302,7 +5327,6 @@ class HLSLCodeGen:
         role_parameters = self.hlsl_ray_role_parameters(parameters)
         allowed_stages = {
             "payload": {
-                "ray_generation",
                 "ray_closest_hit",
                 "ray_any_hit",
                 "ray_miss",
@@ -5345,6 +5369,50 @@ class HLSLCodeGen:
             required_roles.get(shader_type, set()) - set(role_parameters)
         ):
             raise ValueError(f"DirectX {shader_type} stage requires a {role} parameter")
+
+        exact_role_order = {
+            "ray_generation": [],
+            "ray_intersection": [],
+            "ray_closest_hit": ["payload", "hit_attribute"],
+            "ray_any_hit": ["payload", "hit_attribute"],
+            "ray_miss": ["payload"],
+            "ray_callable": ["callable_data"],
+            "intersection": [],
+            "closesthit": ["payload", "hit_attribute"],
+            "anyhit": ["payload", "hit_attribute"],
+            "miss": ["payload"],
+            "callable": ["callable_data"],
+        }
+        expected_roles = exact_role_order.get(shader_type)
+        if expected_roles is None:
+            return
+
+        extra_parameters = [
+            parameter
+            for parameter in parameters
+            if self.hlsl_ray_semantic_role(parameter) is None
+        ]
+        if extra_parameters:
+            if expected_roles:
+                expected = ", ".join(expected_roles)
+                raise ValueError(
+                    f"DirectX {shader_type} stage parameter "
+                    f"'{extra_parameters[0].name}' must be one of: {expected}"
+                )
+            raise ValueError(
+                f"DirectX {shader_type} stage must not declare entry parameters"
+            )
+
+        role_sequence = [
+            self.hlsl_ray_semantic_role(parameter) for parameter in parameters
+        ]
+        if role_sequence != expected_roles:
+            expected = ", ".join(expected_roles) if expected_roles else "no parameters"
+            actual = ", ".join(role_sequence) if role_sequence else "no parameters"
+            raise ValueError(
+                f"DirectX {shader_type} stage parameters must be declared as "
+                f"{expected}, got {actual}"
+            )
 
     def hlsl_ray_tracing_calls(self, func):
         calls = []
@@ -5478,14 +5546,23 @@ class HLSLCodeGen:
 
         mapped_type = self.map_type(argument_type)
         base_type, array_suffix = split_array_type_suffix(mapped_type)
-        allowed_builtin_types = {"BuiltInTriangleIntersectionAttributes"}
+        allowed_builtin_types = (
+            {"BuiltInTriangleIntersectionAttributes"}
+            if role == "hit attribute"
+            else set()
+        )
+        expected_type_description = (
+            "user-defined struct type or BuiltInTriangleIntersectionAttributes"
+            if allowed_builtin_types
+            else "user-defined struct type"
+        )
         if array_suffix or (
             base_type not in self.structs_by_name
             and base_type not in allowed_builtin_types
         ):
             raise ValueError(
                 f"DirectX {shader_type} {operation} {role} argument must use "
-                f"a user-defined struct type, got {mapped_type}"
+                f"a {expected_type_description}, got {mapped_type}"
             )
 
     def hlsl_expression_mapped_base_and_array_suffix(self, expr):

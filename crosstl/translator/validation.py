@@ -224,6 +224,116 @@ RESOURCE_ACCESS_METADATA_NAMES = {
     "access::read_write": "readwrite",
 }
 
+IMAGE_FORMAT_METADATA_NAMES = frozenset(
+    {
+        "r8",
+        "r8_snorm",
+        "r8i",
+        "r8ui",
+        "r16",
+        "r16_snorm",
+        "r16f",
+        "r16i",
+        "r16ui",
+        "r32f",
+        "r32i",
+        "r32ui",
+        "rg8",
+        "rg8_snorm",
+        "rg8i",
+        "rg8ui",
+        "rg16",
+        "rg16_snorm",
+        "rg16f",
+        "rg16i",
+        "rg16ui",
+        "rg32f",
+        "rg32i",
+        "rg32ui",
+        "rgba8",
+        "rgba8_snorm",
+        "rgba8i",
+        "rgba8ui",
+        "rgba16",
+        "rgba16_snorm",
+        "rgba16f",
+        "rgba16i",
+        "rgba16ui",
+        "rgba32f",
+        "rgba32i",
+        "rgba32ui",
+    }
+)
+
+STORAGE_IMAGE_TYPE_NAMES = frozenset(
+    {
+        "image1d",
+        "image1darray",
+        "image2d",
+        "image3d",
+        "imagecube",
+        "image2darray",
+        "image2dms",
+        "image2dmsarray",
+        "imagebuffer",
+        "iimage1d",
+        "iimage1darray",
+        "iimage2d",
+        "iimage3d",
+        "iimagecube",
+        "iimage2darray",
+        "iimage2dms",
+        "iimage2dmsarray",
+        "iimagebuffer",
+        "uimage1d",
+        "uimage1darray",
+        "uimage2d",
+        "uimage3d",
+        "uimagecube",
+        "uimage2darray",
+        "uimage2dms",
+        "uimage2dmsarray",
+        "uimagebuffer",
+    }
+)
+
+RESOURCE_BUFFER_TYPE_NAMES = frozenset(
+    {
+        "appendstructuredbuffer",
+        "buffer",
+        "byteaddressbuffer",
+        "consumestructuredbuffer",
+        "rasterizerorderedbuffer",
+        "rasterizerorderedbyteaddressbuffer",
+        "rasterizerorderedstructuredbuffer",
+        "rwbuffer",
+        "rwbyteaddressbuffer",
+        "rwstructuredbuffer",
+        "structuredbuffer",
+    }
+)
+
+UAV_RESOURCE_BUFFER_TYPE_NAMES = frozenset(
+    {
+        "appendstructuredbuffer",
+        "consumestructuredbuffer",
+        "rasterizerorderedbuffer",
+        "rasterizerorderedbyteaddressbuffer",
+        "rasterizerorderedstructuredbuffer",
+        "rwbuffer",
+        "rwbyteaddressbuffer",
+        "rwstructuredbuffer",
+    }
+)
+
+SAMPLER_STATE_TYPE_NAMES = frozenset(
+    {
+        "sampler",
+        "samplerstate",
+        "samplercomparisonstate",
+    }
+)
+
 ADDRESS_SPACE_METADATA_NAMES = {
     "device": "device",
     "global": "device",
@@ -253,10 +363,33 @@ DECLARATION_ROLE_METADATA_NAMES = {
     "hitattribute": "hit_attribute",
     "callable_data": "callable_data",
     "callabledata": "callable_data",
+    "mesh_payload": "mesh_payload",
+    "meshpayload": "mesh_payload",
     "vertices": "mesh_vertices",
     "indices": "mesh_indices",
     "primitives": "mesh_primitives",
 }
+
+STRUCT_DECLARATION_ROLE_NAMES = frozenset(
+    {
+        "callable_data",
+        "hit_attribute",
+        "mesh_payload",
+        "payload",
+    }
+)
+
+PARAMETER_DECLARATION_ROLE_NAMES = frozenset(
+    {
+        "callable_data",
+        "hit_attribute",
+        "mesh_indices",
+        "mesh_payload",
+        "mesh_primitives",
+        "mesh_vertices",
+        "payload",
+    }
+)
 
 BUILTIN_SEMANTIC_METADATA_NAMES = {
     "position": "position",
@@ -392,6 +525,48 @@ FUNCTION_STAGE_LAYOUT_VALUE_ENTRIES = {
     "maxvertexcount": ("out", ("max_vertices", "maxvertexcount")),
     "maxprimitivecount": ("out", ("max_primitives", "maxprimitivecount")),
 }
+
+TESSELLATION_CONTROL_STAGE_LAYOUT_ENTRIES = frozenset(
+    {
+        "outputcontrolpoints",
+        "vertices",
+    }
+)
+
+TESSELLATION_EVALUATION_STAGE_LAYOUT_ENTRIES = frozenset(
+    {
+        "ccw",
+        "cw",
+        "equal_spacing",
+        "fractional_even_spacing",
+        "fractional_odd_spacing",
+        "isolines",
+        "point_mode",
+        "quads",
+    }
+)
+
+TESSELLATION_CONTROL_FUNCTION_ATTRIBUTE_NAMES = frozenset(
+    {
+        "outputcontrolpoints",
+        "patchconstantfunc",
+    }
+)
+
+TESSELLATION_STAGE_FUNCTION_ATTRIBUTE_NAMES = frozenset(
+    {
+        "domain",
+        "partitioning",
+    }
+)
+
+TESSELLATION_EVALUATION_FUNCTION_FLAG_NAMES = frozenset(
+    {
+        "ccw",
+        "cw",
+        "point_mode",
+    }
+)
 
 IMAGE_RESOURCE_INTRINSIC_NAMES = {
     "imageLoad",
@@ -900,6 +1075,7 @@ def validate_shader_metadata(shader):
         validate_node_metadata(node, context)
     for stage in getattr(shader, "stages", {}).values():
         validate_stage_layout_metadata(stage)
+    validate_tessellation_patch_cross_stage_metadata(shader)
     validate_cross_stage_interfaces(shader)
     return shader
 
@@ -975,6 +1151,7 @@ def validate_node_metadata(node, context):
             f"Conflicting declaration role metadata on {context}: "
             f"{_metadata_name_phrase(declaration_roles)}"
         )
+    validate_declaration_role_metadata(node, context, declaration_roles)
 
     builtin_semantics = _node_builtin_semantic_metadata(node)
     if len(set(builtin_semantics.values())) > 1:
@@ -989,7 +1166,16 @@ def validate_node_metadata(node, context):
         raise ValueError(
             f"Conflicting resource access metadata on {context}: {access_list}"
         )
+    if access_names and not _node_allows_resource_access_metadata(node):
+        access_list = ", ".join(sorted(f"@{name}" for name in access_names))
+        type_name = _type_debug_name(_node_declared_type(node)) or "<unknown>"
+        raise ValueError(
+            f"Resource access metadata on {context} requires resource type: "
+            f"{access_list} on {type_name}"
+        )
 
+    validate_image_format_metadata(node, context)
+    validate_descriptor_index_metadata(node, context)
     validate_hlsl_semantic_metadata(node, context)
 
     values_by_name = {}
@@ -1040,6 +1226,7 @@ def validate_stage_layout_metadata(stage):
                     f"Stage layout '{entry_name}' on {context} must use "
                     f"'{required_direction}' direction"
                 )
+            validate_stage_layout_entry_placement(stage, direction, entry_name)
 
             entry_value = _stage_layout_entry_value(entry)
             key = (direction, entry_name)
@@ -1089,6 +1276,7 @@ def validate_stage_layout_metadata(stage):
                 )
 
     validate_function_stage_layout_metadata(stage)
+    validate_tessellation_patch_parameter_metadata(stage)
 
 
 def validate_cross_stage_interfaces(shader):
@@ -1452,6 +1640,8 @@ def _stage_interface_type_name(type_node):
         return None
     if isinstance(type_node, str):
         return type_node
+    if hasattr(type_node, "value"):
+        return str(getattr(type_node, "value"))
     if type_node.__class__.__name__ == "ArrayType":
         size = (
             expression_debug_name(type_node.size) if type_node.size is not None else ""
@@ -1541,6 +1731,234 @@ def _node_resource_access_names(node):
             access_names.add(access_name)
 
     return access_names
+
+
+def _node_allows_resource_access_metadata(node):
+    names = _node_metadata_names(node)
+    node_type = _node_declared_type(node)
+    return (
+        _is_storage_image_type(node_type)
+        or _is_resource_buffer_type(node_type)
+        or _type_has_access_qualifier(node_type)
+        or "buffer" in names
+        or "glsl_buffer_block" in names
+        or bool(_normalized_metadata_names(names, ADDRESS_SPACE_METADATA_NAMES))
+        or any(name in {"buffer", "texture", "sampler", "uav"} for name in names)
+    )
+
+
+def validate_declaration_role_metadata(node, context, declaration_roles):
+    """Validate declaration role metadata is attached to supported owners."""
+    if not declaration_roles:
+        return
+
+    role_values = set(declaration_roles.values())
+    role_names = sorted(declaration_roles)
+
+    if _is_parameter_node(node):
+        unsupported = role_values - PARAMETER_DECLARATION_ROLE_NAMES
+        if not unsupported:
+            return
+
+    if _is_struct_node(node):
+        unsupported = role_values - STRUCT_DECLARATION_ROLE_NAMES
+        if not unsupported:
+            return
+
+    role_list = ", ".join(f"@{name}" for name in role_names)
+    if role_values <= STRUCT_DECLARATION_ROLE_NAMES:
+        requirement = "function parameter or role struct"
+    else:
+        requirement = "function parameter"
+    raise ValueError(
+        f"Declaration role metadata on {context} {role_list} " f"requires {requirement}"
+    )
+
+
+def validate_image_format_metadata(node, context):
+    """Validate storage-image format metadata appears on storage images only."""
+    format_metadata = _node_image_format_metadata(node)
+    if not format_metadata:
+        return
+
+    node_type = _node_declared_type(node)
+    if _is_storage_image_type(node_type):
+        return
+
+    format_list = ", ".join(sorted(f"@{name}" for name in format_metadata))
+    type_name = _type_debug_name(node_type) or "<unknown>"
+    raise ValueError(
+        f"Image format metadata on {context} requires storage image type: "
+        f"{format_list} on {type_name}"
+    )
+
+
+def validate_descriptor_index_metadata(node, context):
+    """Validate descriptor role attributes match the declared resource family."""
+    attributes = getattr(node, "attributes", []) or []
+    node_type = _node_declared_type(node)
+
+    for attr in attributes:
+        attr_name = _normalized_metadata_name(getattr(attr, "name", None))
+        if attr_name == "texture" and not _is_texture_descriptor_type(node_type):
+            _raise_descriptor_role_error("texture", "texture resource", node, context)
+        if attr_name == "sampler" and not _is_sampler_descriptor_type(node_type):
+            _raise_descriptor_role_error("sampler", "sampler resource", node, context)
+        if attr_name == "uav" and not _is_uav_descriptor_type(node_type):
+            _raise_descriptor_role_error("uav", "storage resource", node, context)
+
+
+def _raise_descriptor_role_error(role, required_role, node, context):
+    type_name = _type_debug_name(_node_declared_type(node)) or "<unknown>"
+    raise ValueError(
+        f"{role} metadata on {context} requires {required_role}: "
+        f"@{role} on {type_name}"
+    )
+
+
+def _node_image_format_metadata(node):
+    format_metadata = set()
+    for attr in getattr(node, "attributes", []) or []:
+        attr_name = _normalized_metadata_name(getattr(attr, "name", None))
+        if attr_name in IMAGE_FORMAT_METADATA_NAMES:
+            format_metadata.add(attr_name)
+            continue
+        if attr_name != "format":
+            continue
+        format_name = _normalized_metadata_name(_attribute_metadata_value(attr))
+        if format_name:
+            format_metadata.add(f"format({format_name})")
+        else:
+            format_metadata.add("format")
+    return format_metadata
+
+
+def _node_declared_type(node):
+    return getattr(
+        node,
+        "var_type",
+        getattr(node, "param_type", getattr(node, "member_type", None)),
+    )
+
+
+def _is_parameter_node(node):
+    return node.__class__.__name__ == "ParameterNode"
+
+
+def _is_struct_node(node):
+    return node.__class__.__name__ == "StructNode"
+
+
+def _is_storage_image_type(type_node):
+    base_name = _type_base_name(type_node)
+    if not base_name:
+        return False
+
+    normalized_name = base_name.lower()
+    if normalized_name in STORAGE_IMAGE_TYPE_NAMES:
+        return True
+    if normalized_name.startswith(("rwtexture", "rasterizerorderedtexture")):
+        return True
+    if normalized_name.startswith("texture_storage"):
+        return True
+    if normalized_name.startswith("texture") and _type_has_access_qualifier(type_node):
+        return True
+    return False
+
+
+def _is_resource_buffer_type(type_node):
+    base_name = _type_base_name(type_node)
+    return bool(base_name and base_name.lower() in RESOURCE_BUFFER_TYPE_NAMES)
+
+
+def _is_texture_descriptor_type(type_node):
+    if _is_storage_image_type(type_node):
+        return True
+
+    base_name = _type_base_name(type_node)
+    if not base_name:
+        return False
+
+    normalized_name = base_name.lower()
+    if normalized_name in SAMPLER_STATE_TYPE_NAMES:
+        return False
+    return normalized_name.startswith(
+        (
+            "isampler",
+            "itexture",
+            "sampler1d",
+            "sampler2d",
+            "sampler3d",
+            "samplercube",
+            "texture",
+            "usampler",
+            "utexture",
+        )
+    )
+
+
+def _is_sampler_descriptor_type(type_node):
+    base_name = _type_base_name(type_node)
+    return bool(base_name and base_name.lower() in SAMPLER_STATE_TYPE_NAMES)
+
+
+def _is_uav_descriptor_type(type_node):
+    if _is_storage_image_type(type_node):
+        return True
+
+    base_name = _type_base_name(type_node)
+    return bool(base_name and base_name.lower() in UAV_RESOURCE_BUFFER_TYPE_NAMES)
+
+
+def _type_has_access_qualifier(type_node):
+    generic_args = getattr(type_node, "generic_args", None)
+    if generic_args is None:
+        nested_type = _nested_resource_type(type_node)
+        generic_args = getattr(nested_type, "generic_args", None)
+
+    for argument in generic_args or []:
+        argument_name = _type_debug_name(argument)
+        if argument_name is None:
+            continue
+        if RESOURCE_ACCESS_METADATA_NAMES.get(argument_name.lower()):
+            return True
+    return False
+
+
+def _type_base_name(type_node):
+    type_node = _nested_resource_type(type_node)
+    name = getattr(type_node, "name", None)
+    if name is not None:
+        return str(name).split("<", 1)[0]
+
+    if type_node is None:
+        return None
+
+    return str(type_node).split("<", 1)[0].strip()
+
+
+def _nested_resource_type(type_node):
+    current = type_node
+    while current is not None:
+        nested = None
+        for attribute_name in ("element_type", "pointee_type", "referenced_type"):
+            candidate = getattr(current, attribute_name, None)
+            if candidate is not None:
+                nested = candidate
+                break
+        if nested is None:
+            return current
+        current = nested
+    return None
+
+
+def _type_debug_name(type_node):
+    if type_node is None:
+        return None
+    name = getattr(type_node, "name", None)
+    if name is not None:
+        return str(name)
+    return str(type_node)
 
 
 def _node_memory_layout_names(node):
@@ -1652,6 +2070,8 @@ def validate_function_stage_layout_metadata(stage):
 
     for attr in getattr(function, "attributes", []) or []:
         attr_name = _normalized_metadata_name(getattr(attr, "name", None))
+        validate_stage_function_attribute_placement(stage, function, attr_name)
+
         attr_value = _first_attribute_metadata_value(attr)
         if attr_value is None:
             continue
@@ -1704,6 +2124,158 @@ def validate_function_stage_layout_metadata(stage):
                     f"layout {entry_name}={layout_value} vs "
                     f"{attr_name}={function_value}"
                 )
+
+
+def validate_stage_layout_entry_placement(stage, direction, entry_name):
+    """Validate stage layout entries appear on stages that can consume them."""
+    stage_name = _normalized_metadata_name(getattr(stage, "stage", None))
+    context = _stage_layout_context(stage, direction)
+
+    if entry_name in TESSELLATION_CONTROL_STAGE_LAYOUT_ENTRIES and (
+        stage_name != "tessellation_control" or direction != "out"
+    ):
+        raise ValueError(
+            f"Stage layout '{entry_name}' on {context} requires "
+            "tessellation_control stage 'out' layout"
+        )
+
+    if entry_name in TESSELLATION_EVALUATION_STAGE_LAYOUT_ENTRIES and (
+        stage_name != "tessellation_evaluation" or direction != "in"
+    ):
+        raise ValueError(
+            f"Stage layout '{entry_name}' on {context} requires "
+            "tessellation_evaluation stage 'in' layout"
+        )
+
+
+def validate_stage_function_attribute_placement(stage, function, attr_name):
+    """Validate function metadata that is meaningful only on specific stages."""
+    if not attr_name:
+        return
+
+    stage_name = _normalized_metadata_name(getattr(stage, "stage", None))
+    context = _stage_entry_function_context(stage, function)
+
+    if (
+        attr_name in TESSELLATION_CONTROL_FUNCTION_ATTRIBUTE_NAMES
+        and stage_name != "tessellation_control"
+    ):
+        raise ValueError(
+            f"Function metadata '@{attr_name}' on {context} requires "
+            "tessellation_control stage"
+        )
+
+    if attr_name in TESSELLATION_STAGE_FUNCTION_ATTRIBUTE_NAMES and stage_name not in {
+        "tessellation_control",
+        "tessellation_evaluation",
+    }:
+        raise ValueError(
+            f"Function metadata '@{attr_name}' on {context} requires "
+            "tessellation stage"
+        )
+
+    if (
+        attr_name in TESSELLATION_EVALUATION_FUNCTION_FLAG_NAMES
+        and stage_name != "tessellation_evaluation"
+    ):
+        raise ValueError(
+            f"Function metadata '@{attr_name}' on {context} requires "
+            "tessellation_evaluation stage"
+        )
+
+
+def validate_tessellation_patch_parameter_metadata(stage):
+    """Validate patch parameter placement and control-point counts."""
+    stage_name = _normalized_metadata_name(getattr(stage, "stage", None))
+    function = getattr(stage, "entry_point", None)
+    if function is None:
+        return
+
+    output_control_points = _stage_output_control_point_count(stage)
+    for parameter, patch_type, control_points in _patch_parameters(function):
+        context = _stage_entry_function_context(stage, function)
+        parameter_name = getattr(parameter, "name", "<anonymous>")
+        display_type = _type_debug_name(_node_declared_type(parameter)) or patch_type
+        patch_display_type = (
+            _stage_interface_type_name(_node_declared_type(parameter)) or display_type
+        )
+
+        if patch_type == "inputpatch" and stage_name not in {
+            "tessellation_control",
+            "tessellation_evaluation",
+        }:
+            raise ValueError(
+                f"Patch type '{display_type}' parameter '{parameter_name}' on "
+                f"{context} requires tessellation_control or "
+                "tessellation_evaluation stage"
+            )
+
+        if patch_type == "outputpatch" and stage_name not in {
+            "tessellation_control",
+            "tessellation_evaluation",
+        }:
+            raise ValueError(
+                f"Patch type '{display_type}' parameter '{parameter_name}' on "
+                f"{context} requires tessellation_control or "
+                "tessellation_evaluation stage"
+            )
+
+        if (
+            patch_type == "outputpatch"
+            and stage_name == "tessellation_control"
+            and output_control_points is not None
+            and control_points is not None
+            and output_control_points != control_points
+        ):
+            raise ValueError(
+                "Conflicting tessellation output control-point metadata on "
+                f"{context}: {patch_display_type} must match "
+                f"outputcontrolpoints({output_control_points}); OutputPatch "
+                f"control points={control_points} on parameter '{parameter_name}'"
+            )
+
+
+def validate_tessellation_patch_cross_stage_metadata(shader):
+    """Validate tessellation patch sizes agree across control/evaluation stages."""
+    stages = _shader_stages_by_name(shader)
+    control_stage = stages.get("tessellation_control")
+    evaluation_stage = stages.get("tessellation_evaluation")
+    if control_stage is None or evaluation_stage is None:
+        return
+
+    control_points = _tessellation_control_output_count(control_stage)
+    if control_points is None:
+        return
+
+    evaluation_function = getattr(evaluation_stage, "entry_point", None)
+    for parameter, patch_type, evaluation_points in _patch_parameters(
+        evaluation_function
+    ):
+        if patch_type != "outputpatch" or evaluation_points is None:
+            continue
+        if control_points == evaluation_points:
+            continue
+        parameter_name = getattr(parameter, "name", "<anonymous>")
+        patch_display_type = _stage_interface_type_name(_node_declared_type(parameter))
+        control_patch_type = _tessellation_control_output_patch_type(
+            control_stage, control_points
+        )
+        raise ValueError(
+            "Conflicting tessellation patch control-point metadata from "
+            "tessellation_control to tessellation_evaluation: "
+            f"{patch_display_type} must match tessellation_control output "
+            f"{control_patch_type} from outputcontrolpoints({control_points}); "
+            f"OutputPatch control points={evaluation_points} on parameter "
+            f"'{parameter_name}'"
+        )
+
+
+def _stage_entry_function_context(stage, function):
+    stage_name = _normalized_metadata_name(getattr(stage, "stage", None))
+    return (
+        f"{stage_name or '<unknown>'} stage entry function "
+        f"'{getattr(function, 'name', '<anonymous>')}'"
+    )
 
 
 def _validate_function_stage_layout_flag(
@@ -1819,6 +2391,75 @@ def _function_threadgroup_size(function):
         if len(values) == 3:
             return values
     return None
+
+
+def _stage_output_control_point_count(stage):
+    function = getattr(stage, "entry_point", None)
+    for attr in getattr(function, "attributes", []) or []:
+        attr_name = _normalized_metadata_name(getattr(attr, "name", None))
+        if attr_name != "outputcontrolpoints":
+            continue
+        attr_value = _attribute_metadata_value(attr)
+        if attr_value is not None:
+            return attr_value
+
+    layout_entries = _stage_layout_entries_by_direction(stage)
+    for entry_name in ("vertices", "outputcontrolpoints"):
+        entry_value = layout_entries.get(("out", entry_name))
+        if entry_value is not None:
+            return entry_value
+    return None
+
+
+def _tessellation_control_output_count(stage):
+    control_points = _stage_output_control_point_count(stage)
+    if control_points is not None:
+        return control_points
+
+    function = getattr(stage, "entry_point", None)
+    for _parameter, patch_type, patch_points in _patch_parameters(function):
+        if patch_type == "outputpatch" and patch_points is not None:
+            return patch_points
+    return None
+
+
+def _tessellation_control_output_patch_type(stage, control_points):
+    function = getattr(stage, "entry_point", None)
+    for parameter, patch_type, patch_points in _patch_parameters(function):
+        if patch_type != "outputpatch":
+            continue
+        if patch_points is not None and patch_points != control_points:
+            continue
+        return _stage_interface_type_name(_node_declared_type(parameter))
+
+    return_type = getattr(function, "return_type", None)
+    return_type_name = _stage_interface_type_name(return_type)
+    if return_type_name and return_type_name != "void":
+        return f"OutputPatch<{return_type_name}, {control_points}>"
+    return f"OutputPatch<unknown, {control_points}>"
+
+
+def _patch_parameters(function):
+    if function is None:
+        return
+
+    for parameter in getattr(function, "parameters", []) or []:
+        parameter_type = _node_declared_type(parameter)
+        base_name = _type_base_name(parameter_type)
+        if base_name is None:
+            continue
+        patch_type = base_name.lower()
+        if patch_type not in {"inputpatch", "outputpatch"}:
+            continue
+        yield parameter, patch_type, _patch_control_point_count(parameter_type)
+
+
+def _patch_control_point_count(type_node):
+    type_node = _nested_resource_type(type_node)
+    generic_args = getattr(type_node, "generic_args", []) or []
+    if len(generic_args) < 2:
+        return None
+    return expression_debug_name(generic_args[1])
 
 
 def _shader_function_contexts(shader):

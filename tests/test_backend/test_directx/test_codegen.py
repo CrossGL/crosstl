@@ -808,6 +808,60 @@ def test_codegen_resource_array_receivers_use_canonical_calls():
     assert "buffer_load(" not in hlsl
 
 
+def test_codegen_resource_array_spaces_roundtrip_for_srv_uav_and_typed_buffers():
+    code = textwrap.dedent("""
+        Texture2D textures[2] : register(t3, space1);
+        SamplerState samplers[2] : register(s5, space1);
+        RWTexture2D<float4> images[2] : register(u4, space2);
+        RWStructuredBuffer<int> buffers[2] : register(u6, space3);
+        RWBuffer<uint> counters[2] : register(u8, space4);
+
+        float4 main(float2 uv : TEXCOORD0, uint index : TEXCOORD1) : SV_Target0 {
+            float4 c = textures[index].Sample(samplers[index], uv);
+            images[index][uint2(1, 2)] = c;
+            buffers[index].Store(0, 7);
+            int v = buffers[index].Load(0);
+            uint oldValue;
+            InterlockedAdd(counters[index][0], 1u, oldValue);
+            return c + images[index][uint2(1, 2)] + float4(v + int(oldValue));
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "@ register(t3, space1)" in crossgl
+    assert "sampler2D textures[2];" in crossgl
+    assert "@ register(s5, space1)" in crossgl
+    assert "sampler samplers[2];" in crossgl
+    assert "@ register(u4, space2)" in crossgl
+    assert "image2D images[2];" in crossgl
+    assert "@ register(u6, space3)" in crossgl
+    assert "RWStructuredBuffer<int> buffers[2];" in crossgl
+    assert "@ register(u8, space4)" in crossgl
+    assert "RWBuffer<uint> counters[2];" in crossgl
+    assert "texture(textures[index], samplers[index], uv)" in crossgl
+    assert "imageStore(images[index], uvec2(1, 2), c);" in crossgl
+    assert "buffer_store(buffers[index], 0, 7);" in crossgl
+    assert "buffer_load(buffers[index], 0)" in crossgl
+    assert "oldValue = atomicAdd(counters[index][0], 1u);" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Texture2D textures[2] : register(t3, space1);" in hlsl
+    assert "SamplerState samplers[2] : register(s5, space1);" in hlsl
+    assert "RWTexture2D<float4> images[2] : register(u4, space2);" in hlsl
+    assert "RWStructuredBuffer<int> buffers[2] : register(u6, space3);" in hlsl
+    assert "RWBuffer<uint> counters[2] : register(u8, space4);" in hlsl
+    assert "textures[index].Sample(samplers[index], uv)" in hlsl
+    assert "images[index][uint2(1, 2)] = c;" in hlsl
+    assert "buffers[index].Store(0, 7);" in hlsl
+    assert "buffers[index].Load(0)" in hlsl
+    assert "InterlockedAdd(counters[index][0], 1u, oldValue);" in hlsl
+    assert "buffer_store(" not in hlsl
+    assert "buffer_load(" not in hlsl
+    assert "atomicAdd(counters" not in hlsl
+
+
 def test_codegen_append_consume_structured_buffers_roundtrip():
     code = textwrap.dedent("""
         AppendStructuredBuffer<int> appendValues : register(u1);
