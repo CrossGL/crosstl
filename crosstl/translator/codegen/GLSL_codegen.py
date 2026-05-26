@@ -496,6 +496,8 @@ class GLSLCodeGen:
         self.current_stage_parameter_aliases = {}
         self.current_identifier_aliases = {}
         self.current_mesh_output_parameters = {}
+        self.current_mesh_output_topology = None
+        self.task_payload_shared_variables = []
         self.current_target_stage = None
         self.stage_io_used_locations = {}
         self.stage_io_declarations = {}
@@ -1095,6 +1097,7 @@ class GLSLCodeGen:
         self.current_stage_parameter_aliases = {}
         self.current_identifier_aliases = {}
         self.current_target_stage = target_stage
+        self.task_payload_shared_variables = []
         self.stage_io_used_locations = {}
         self.stage_io_declarations = {}
         self.flattened_stage_variables = set()
@@ -1273,6 +1276,9 @@ class GLSLCodeGen:
             collect_stage_local_variables(
                 ast, target_stage, self.is_stage_local_interface_variable
             )
+        )
+        self.task_payload_shared_variables = (
+            self.glsl_task_payload_shared_variable_infos(stage_local_interface_vars)
         )
         self.structs_by_name = {
             node.name: node for node in structs if isinstance(node, StructNode)
@@ -2447,6 +2453,55 @@ class GLSLCodeGen:
         }
         return mesh_intrinsics.get(operation, operation)
 
+    def is_task_payload_shared_variable(self, node):
+        return (
+            "taskPayloadSharedEXT" in self.glsl_variable_qualifier_prefix(node).split()
+        )
+
+    def glsl_task_payload_shared_variable_infos(self, nodes):
+        infos = []
+        for node in nodes:
+            if not self.is_task_payload_shared_variable(node):
+                continue
+            name = self.resource_node_name(node)
+            if not name:
+                continue
+            vtype, _, array_suffix, _ = self.resource_declaration_shape(node)
+            infos.append(
+                {
+                    "name": name,
+                    "type": self.map_type(vtype),
+                    "raw_type": self.type_name_string(vtype),
+                    "array_suffix": array_suffix,
+                }
+            )
+        return infos
+
+    def glsl_dispatch_mesh_payload_target(self, payload_expr):
+        if not self.task_payload_shared_variables:
+            return None
+
+        payload_name = self.expression_name(payload_expr)
+        for info in self.task_payload_shared_variables:
+            if payload_name == info["name"]:
+                return info
+
+        payload_type = self.expression_result_type(payload_expr)
+        mapped_payload_type = self.map_type(payload_type) if payload_type else None
+        if mapped_payload_type:
+            matches = [
+                info
+                for info in self.task_payload_shared_variables
+                if info["type"] == mapped_payload_type
+            ]
+            if len(matches) == 1:
+                return matches[0]
+
+        if len(self.task_payload_shared_variables) == 1:
+            return self.task_payload_shared_variables[0]
+
+        return None
+
     def mesh_output_parameter_role(self, node):
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
@@ -2813,6 +2868,11 @@ class GLSLCodeGen:
         mesh_output_parameters = self.mesh_output_parameter_infos(
             func, shader_type, stage_layout_qualifiers
         )
+        mesh_output_topology = (
+            self.glsl_mesh_stage_output_topology_name(func, stage_layout_qualifiers)
+            if shader_type == "mesh"
+            else None
+        )
         stage_output = self.stage_return_output(func, shader_type)
         if stage_output and stage_output["declaration"]:
             code += f"{stage_output['declaration']}\n"
@@ -2850,6 +2910,7 @@ class GLSLCodeGen:
         previous_stage_output_member_map = self.current_stage_output_member_map
         previous_stage_parameter_aliases = self.current_stage_parameter_aliases
         previous_mesh_output_parameters = self.current_mesh_output_parameters
+        previous_mesh_output_topology = self.current_mesh_output_topology
         previous_flattened_stage_variables = self.flattened_stage_variables
         previous_stage_return_type = self.current_stage_return_type
         previous_stage_entry_type = self.current_stage_entry_type
@@ -2888,6 +2949,7 @@ class GLSLCodeGen:
             func, shader_type
         )
         self.current_mesh_output_parameters = mesh_output_parameters
+        self.current_mesh_output_topology = mesh_output_topology
         self.flattened_stage_variables = set(self.current_stage_outputs)
         self.current_stage_return_type = self.type_node_name(
             getattr(func, "return_type", None)
@@ -2915,6 +2977,7 @@ class GLSLCodeGen:
         self.current_stage_output_member_map = previous_stage_output_member_map
         self.current_stage_parameter_aliases = previous_stage_parameter_aliases
         self.current_mesh_output_parameters = previous_mesh_output_parameters
+        self.current_mesh_output_topology = previous_mesh_output_topology
         self.flattened_stage_variables = previous_flattened_stage_variables
         self.current_stage_return_type = previous_stage_return_type
         self.current_stage_entry_type = previous_stage_entry_type
@@ -4253,10 +4316,26 @@ class GLSLCodeGen:
             )
             if mesh_assignment is not None:
                 return mesh_assignment
+            mesh_intrinsic = self.generate_mesh_intrinsic_statement(
+                getattr(stmt, "expression", None), indent
+            )
+            if mesh_intrinsic is not None:
+                return mesh_intrinsic
+            mesh_helper = self.generate_mesh_output_helper_call_statement(
+                getattr(stmt, "expression", None), indent
+            )
+            if mesh_helper is not None:
+                return mesh_helper
             expr_code = self.generate_expression_statement(stmt)
             return f"{indent_str}{expr_code};\n"
         else:
             # Handle expressions that may be used as statements
+            mesh_intrinsic = self.generate_mesh_intrinsic_statement(stmt, indent)
+            if mesh_intrinsic is not None:
+                return mesh_intrinsic
+            mesh_helper = self.generate_mesh_output_helper_call_statement(stmt, indent)
+            if mesh_helper is not None:
+                return mesh_helper
             expr_result = self.generate_expression(stmt)
             if expr_result.strip():
                 return f"{indent_str}{expr_result};\n"
@@ -4726,6 +4805,79 @@ class GLSLCodeGen:
             return self.local_variable_types.get(getattr(expr, "name", None))
         return None
 
+    def generate_mesh_intrinsic_statement(self, node, indent=0):
+        if not isinstance(node, MeshOpNode):
+            return None
+        if node.operation != "DispatchMesh":
+            return None
+
+        if self.current_stage_entry_type not in {"task", "amplification", "object"}:
+            return None
+
+        args = getattr(node, "arguments", []) or []
+        if len(args) not in {3, 4}:
+            return None
+
+        indent_str = "    " * indent
+        dispatch_args = ", ".join(self.generate_expression(arg) for arg in args[:3])
+        statements = []
+
+        if len(args) == 4:
+            payload_expr = args[3]
+            target = self.glsl_dispatch_mesh_payload_target(payload_expr)
+            if target is None:
+                statements.append(
+                    f"{indent_str}/* GLSL DispatchMesh payload argument "
+                    "requires taskPayloadSharedEXT storage */;"
+                )
+            elif self.expression_name(payload_expr) != target["name"]:
+                payload_value = self.generate_expression_with_expected(
+                    payload_expr, target["raw_type"]
+                )
+                statements.append(f"{indent_str}{target['name']} = {payload_value};")
+
+        statements.append(f"{indent_str}EmitMeshTasksEXT({dispatch_args});")
+        return "\n".join(statements) + "\n"
+
+    def generate_mesh_output_helper_call_statement(self, node, indent=0):
+        if not isinstance(node, FunctionCallNode):
+            return None
+        if self.current_stage_entry_type != "mesh":
+            return None
+
+        func_name = self.function_call_name(node)
+        args = getattr(node, "arguments", getattr(node, "args", [])) or []
+        indent_str = "    " * indent
+
+        if func_name == "SetVertex" and len(args) == 2:
+            index = self.generate_expression(args[0])
+            value = self.glsl_mesh_vertex_helper_value(args[1])
+            return (
+                f"{indent_str}gl_MeshVerticesEXT[{index}].gl_Position = " f"{value};\n"
+            )
+
+        if func_name == "SetPrimitive" and len(args) == 2:
+            index_builtin = self.mesh_primitive_index_builtin(
+                self.current_mesh_output_topology
+            )
+            if index_builtin is None:
+                return (
+                    f"{indent_str}/* GLSL mesh SetPrimitive requires "
+                    "output topology */;\n"
+                )
+            index = self.generate_expression(args[0])
+            value = self.generate_expression_with_expected(args[1], None)
+            return f"{indent_str}{index_builtin}[{index}] = {value};\n"
+
+        return None
+
+    def glsl_mesh_vertex_helper_value(self, expr):
+        value = self.generate_expression_with_expected(expr, None)
+        value_type = self.map_type(self.expression_result_type(expr))
+        if value_type == "vec3":
+            return f"vec4({value}, 1.0)"
+        return value
+
     def generate_mesh_output_assignment_statement(self, node, indent=0):
         if (
             not isinstance(node, AssignmentNode)
@@ -4749,14 +4901,74 @@ class GLSLCodeGen:
         if expanded_targets is None or op != "=":
             return None
 
+        access = self.mesh_output_array_access(left_node)
+        constructor_values = (
+            self.mesh_output_constructor_assignment_values(access[0], right_node)
+            if access is not None
+            else None
+        )
         right = self.generate_expression_with_expected(
             right_node, self.expression_result_type(left_node)
         )
         code = ""
-        for target, member_name in expanded_targets:
-            value = f"{right}.{member_name}"
+        for target, member_name, member_type in expanded_targets:
+            value_expr = (
+                constructor_values.get(member_name)
+                if constructor_values is not None
+                else None
+            )
+            if value_expr is None:
+                value = f"{right}.{member_name}"
+            else:
+                value = self.generate_expression_with_expected(value_expr, member_type)
             code += f"{indent_str}{target} = {value};\n"
         return code
+
+    def mesh_output_constructor_assignment_values(self, info, expr):
+        struct = self.structs_by_name.get(info["element_type"])
+        if struct is None:
+            return None
+
+        members = getattr(struct, "members", []) or []
+        field_values = self.mesh_output_constructor_field_values(
+            expr, info["element_type"], members
+        )
+        if field_values is None:
+            return None
+        return {member.name: value_expr for member, value_expr in field_values}
+
+    def mesh_output_constructor_field_values(self, expr, struct_name, members):
+        if isinstance(expr, FunctionCallNode):
+            if self.function_call_name(expr) != struct_name:
+                return None
+            args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+            if len(args) != len(members):
+                return None
+            return list(zip(members, args))
+
+        if not isinstance(expr, ConstructorNode):
+            return None
+
+        constructor_type = self.type_name_string(
+            getattr(expr, "constructor_type", None)
+        )
+        if constructor_type != struct_name:
+            return None
+
+        args = list(getattr(expr, "arguments", []) or [])
+        named_args = dict(getattr(expr, "named_arguments", {}) or {})
+        if len(args) > len(members):
+            return None
+
+        values = []
+        for index, member in enumerate(members):
+            if index < len(args):
+                values.append((member, args[index]))
+                continue
+            if member.name not in named_args:
+                return None
+            values.append((member, named_args[member.name]))
+        return values
 
     def mesh_output_assignment_target(self, node):
         if isinstance(node, MemberAccessNode):
@@ -4789,7 +5001,7 @@ class GLSLCodeGen:
             target = self.mesh_output_member_target(info, index, member_name)
             if target is None:
                 return None
-            targets.append((target, member_name))
+            targets.append((target, member_name, member_info["type"]))
         return targets
 
     def mesh_output_array_access(self, node):
@@ -5116,7 +5328,10 @@ class GLSLCodeGen:
             args = [self.generate_expression(arg) for arg in expr.arguments]
             return self.map_ray_tracing_intrinsic(expr.operation, args)
         elif isinstance(expr, MeshOpNode):
-            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
+            arguments = expr.arguments
+            if expr.operation == "DispatchMesh" and len(arguments) == 4:
+                arguments = arguments[:3]
+            args = ", ".join(self.generate_expression(arg) for arg in arguments)
             operation = self.map_mesh_intrinsic(expr.operation)
             return f"{operation}({args})"
         elif isinstance(expr, RayQueryOpNode):

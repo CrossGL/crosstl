@@ -1292,6 +1292,133 @@ def test_generated_glsl_mesh_output_signature_validates_with_glslangvalidator(
     _run_validator([glslang, "-S", "mesh", str(shader_path)])
 
 
+def test_generated_glsl_mesh_whole_output_constructor_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    _require_glslang_stage(glslang, "mesh")
+    shader_path = tmp_path / "mesh_whole_output_constructor.mesh"
+    shader = """
+    shader GLSLMeshWholeOutputConstructorValidator {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct MeshPrimitive {
+            int primitiveId @ gl_PrimitiveID;
+            vec3 normal @ NORMAL;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(1, 1, 1)
+              @outputtopology(triangle)
+              @max_vertices(3)
+              @max_primitives(1)
+            {
+                SetMeshOutputCounts(3, 1);
+                verts[1] = MeshVertex {
+                    position: vec4(1.0, 0.0, 0.0, 1.0),
+                    uv: vec2(0.25, 0.75)
+                };
+                gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);
+                prims[0] = MeshPrimitive {
+                    primitiveId: 11,
+                    normal: vec3(0.0, 1.0, 0.0)
+                };
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+    assert "gl_MeshVerticesEXT[1].gl_Position = vec4(1.0, 0.0, 0.0, 1.0);" in code
+    assert "uv[1] = vec2(0.25, 0.75);" in code
+    assert "gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 11;" in code
+    assert "normal[0] = vec3(0.0, 1.0, 0.0);" in code
+    assert "MeshVertex(" not in code
+    assert "MeshPrimitive(" not in code
+    assert "verts[1]" not in code
+    assert "prims[0]" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "mesh", str(shader_path)])
+
+
+def test_generated_glsl_mesh_helper_intrinsics_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    _require_glslang_stage(glslang, "mesh")
+    shader_path = tmp_path / "mesh_helper_intrinsics.mesh"
+    shader = """
+    shader GLSLMeshHelperIntrinsicValidator {
+        mesh {
+            void main()
+                @numthreads(1, 1, 1)
+                @outputtopology(triangle)
+                @max_vertices(3)
+                @max_primitives(1)
+            {
+                vec3 position = vec3(0.0, 0.5, 1.0);
+                SetMeshOutputCounts(3, 1);
+                SetVertex(0, position);
+                SetVertex(1, vec4(1.0, 0.0, 0.0, 1.0));
+                SetVertex(2, vec3(0.0, 1.0, 0.0));
+                SetPrimitive(0, uvec3(0u, 1u, 2u));
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+    assert "gl_MeshVerticesEXT[0].gl_Position = vec4(position, 1.0);" in code
+    assert "gl_MeshVerticesEXT[1].gl_Position = vec4(1.0, 0.0, 0.0, 1.0);" in code
+    assert "gl_MeshVerticesEXT[2].gl_Position = vec4(vec3(0.0, 1.0, 0.0), 1.0);" in code
+    assert "gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);" in code
+    assert "SetVertex" not in code
+    assert "SetPrimitive" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "mesh", str(shader_path)])
+
+
+def test_generated_glsl_task_dispatch_payload_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    _require_glslang_stage(glslang, "task")
+    shader_path = tmp_path / "task_dispatch_payload.task"
+    shader = """
+    shader GLSLTaskDispatchPayloadValidator {
+        struct TaskPayload {
+            uint meshlet;
+        };
+
+        task {
+            @taskPayloadSharedEXT TaskPayload payload;
+            void main() @numthreads(1, 1, 1) {
+                TaskPayload localPayload;
+                localPayload.meshlet = 7u;
+                DispatchMesh(2, 3, 4, localPayload);
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "task")
+    assert "taskPayloadSharedEXT TaskPayload payload;" in code
+    assert "payload = localPayload;" in code
+    assert "EmitMeshTasksEXT(2, 3, 4);" in code
+    assert "EmitMeshTasksEXT(2, 3, 4, localPayload)" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "task", str(shader_path)])
+
+
 def test_generated_glsl_ray_generation_validates_with_glslangvalidator(tmp_path):
     glslang = _require_tool("glslangValidator")
     _require_glslang_stage(glslang, "rgen")

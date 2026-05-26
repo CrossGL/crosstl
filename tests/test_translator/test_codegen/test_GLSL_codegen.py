@@ -3881,6 +3881,35 @@ def test_glsl_mesh_task_stage_extensions_and_local_size_layouts():
     )
 
 
+def test_glsl_task_dispatch_mesh_payload_argument_assigns_shared_payload_storage():
+    shader = """
+    shader MeshTaskPayloadDispatch {
+        struct TaskPayload {
+            uint meshlet;
+        };
+
+        task {
+            @taskPayloadSharedEXT TaskPayload payload;
+            void main() @numthreads(1, 1, 1) {
+                TaskPayload localPayload;
+                localPayload.meshlet = 7u;
+                DispatchMesh(2, 3, 4, localPayload);
+            }
+        }
+    }
+    """
+
+    task_code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "task")
+
+    assert "taskPayloadSharedEXT TaskPayload payload;" in task_code
+    assert "TaskPayload localPayload;" in task_code
+    assert "localPayload.meshlet = 7u;" in task_code
+    assert "payload = localPayload;" in task_code
+    assert "EmitMeshTasksEXT(2, 3, 4);" in task_code
+    assert "EmitMeshTasksEXT(2, 3, 4, localPayload)" not in task_code
+    assert "DispatchMesh" not in task_code
+
+
 @pytest.mark.parametrize(
     (
         "topology",
@@ -4007,6 +4036,128 @@ def test_glsl_mesh_output_signature_parameters_lower_to_native_outputs():
     assert "verts[0]" not in generated_code
     assert "tris[0]" not in generated_code
     assert "prims[0]" not in generated_code
+    assert "SetMeshOutputCounts" not in generated_code
+
+
+def test_glsl_mesh_whole_output_constructor_assignments_expand_to_native_outputs():
+    shader = """
+    shader MeshWholeOutputConstructors {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct MeshPrimitive {
+            int primitiveId @ gl_PrimitiveID;
+            vec3 normal @ NORMAL;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(1, 1, 1)
+              @outputtopology(triangle)
+              @max_vertices(3)
+              @max_primitives(1)
+            {
+                SetMeshOutputCounts(3, 1);
+                verts[1] = MeshVertex {
+                    position: vec4(1.0, 0.0, 0.0, 1.0),
+                    uv: vec2(0.25, 0.75)
+                };
+                prims[0] = MeshPrimitive {
+                    primitiveId: 11,
+                    normal: vec3(0.0, 1.0, 0.0)
+                };
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "mesh"
+    )
+
+    assert (
+        "gl_MeshVerticesEXT[1].gl_Position = vec4(1.0, 0.0, 0.0, 1.0);"
+        in generated_code
+    )
+    assert "uv[1] = vec2(0.25, 0.75);" in generated_code
+    assert "gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 11;" in generated_code
+    assert "normal[0] = vec3(0.0, 1.0, 0.0);" in generated_code
+    assert "MeshVertex(" not in generated_code
+    assert "MeshPrimitive(" not in generated_code
+    assert "verts[1]" not in generated_code
+    assert "prims[0]" not in generated_code
+    assert "SetMeshOutputCounts" not in generated_code
+
+
+@pytest.mark.parametrize(
+    (
+        "topology",
+        "max_vertices",
+        "primitive_value",
+        "expected_primitive_assignment",
+    ),
+    [
+        (
+            "point",
+            1,
+            "0u",
+            "gl_PrimitivePointIndicesEXT[0] = 0u;",
+        ),
+        (
+            "line",
+            2,
+            "uvec2(0u, 1u)",
+            "gl_PrimitiveLineIndicesEXT[0] = uvec2(0u, 1u);",
+        ),
+        (
+            "triangle",
+            3,
+            "uvec3(0u, 1u, 2u)",
+            "gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);",
+        ),
+    ],
+)
+def test_glsl_mesh_set_vertex_and_set_primitive_helpers_lower_to_builtins(
+    topology,
+    max_vertices,
+    primitive_value,
+    expected_primitive_assignment,
+):
+    shader = f"""
+    shader MeshHelperIntrinsics {{
+        mesh {{
+            void main()
+                @numthreads(1, 1, 1)
+                @outputtopology({topology})
+                @max_vertices({max_vertices})
+                @max_primitives(1)
+            {{
+                vec3 position = vec3(0.0, 0.5, 1.0);
+                SetMeshOutputCounts({max_vertices}, 1);
+                SetVertex(0, position);
+                SetVertex({max_vertices - 1}, vec4(1.0, 0.0, 0.0, 1.0));
+                SetPrimitive(0, {primitive_value});
+            }}
+        }}
+    }}
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "mesh"
+    )
+
+    assert "gl_MeshVerticesEXT[0].gl_Position = vec4(position, 1.0);" in generated_code
+    assert (
+        f"gl_MeshVerticesEXT[{max_vertices - 1}].gl_Position = "
+        "vec4(1.0, 0.0, 0.0, 1.0);"
+    ) in generated_code
+    assert expected_primitive_assignment in generated_code
+    assert "SetVertex" not in generated_code
+    assert "SetPrimitive" not in generated_code
     assert "SetMeshOutputCounts" not in generated_code
 
 
