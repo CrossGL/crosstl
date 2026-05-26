@@ -4058,6 +4058,46 @@ def test_descriptor_index_metadata_requires_matching_resource_role(
         parse_code(tokenize_code(code))
 
 
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "sampler2D sampled @texture;",
+            "texture metadata.*requires exactly one descriptor index value",
+        ),
+        (
+            "sampler linearSampler @sampler;",
+            "sampler metadata.*requires exactly one descriptor index value",
+        ),
+        (
+            "RWStructuredBuffer<int> values @uav;",
+            "uav metadata.*requires exactly one descriptor index value",
+        ),
+        (
+            "sampler2D sampled @texture(0, 1);",
+            "texture metadata.*requires exactly one descriptor index value",
+        ),
+        (
+            "sampler linearSampler @sampler(0, 1);",
+            "sampler metadata.*requires exactly one descriptor index value",
+        ),
+        (
+            "RWStructuredBuffer<int> values @uav(0, 1);",
+            "uav metadata.*requires exactly one descriptor index value",
+        ),
+    ],
+)
+def test_descriptor_index_metadata_requires_one_value(declaration, message):
+    code = f"""
+    shader DescriptorIndexArity {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
 def test_conflicting_layout_attribute_values_fail_validation():
     code = """
     shader ConflictingLayoutValues {

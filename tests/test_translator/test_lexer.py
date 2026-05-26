@@ -180,6 +180,30 @@ shader main {
         pytest.fail("Function call tokenization not implemented.")
 
 
+def test_comment_tokens_are_skipped_as_trivia():
+    code = """
+    // leading comment should not become parser input
+    shader Comments {
+        /* block comment
+           with stage-like words: vertex fragment compute */
+        compute {
+            void main() { return; } // trailing comment
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    token_types = [token[0] for token in tokens]
+    token_values = [str(token[1]) for token in tokens]
+
+    assert "COMMENT_SINGLE" not in token_types
+    assert "COMMENT_MULTI" not in token_types
+    assert "COMMENT_SINGLE" not in token_values
+    assert "COMMENT_MULTI" not in token_values
+    assert ("SHADER", "shader") in tokens
+    assert ("COMPUTE", "compute") in tokens
+
+
 def test_stage_and_ray_keywords_tokenization():
     code = """
     object { }

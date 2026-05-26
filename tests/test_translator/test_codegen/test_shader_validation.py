@@ -2844,6 +2844,54 @@ shader MetalStorageImageAccessQualifiersValidation {
 """
 
 
+METAL_STORAGE_IMAGE_QUERY_DIAGNOSTICS_COMPUTE_SHADER = """
+shader MetalStorageImageQueryDiagnosticsValidation {
+    image2D colorImage @rgba32f;
+    image3D volumeImage @rgba32f;
+    image2DArray layerImage @rgba32f;
+    image2D target @rgba32f @writeonly;
+
+    int imageLevels(image2D image @rgba32f) {
+        return textureQueryLevels(image);
+    }
+
+    vec2 imageLod(image2D image @rgba32f, vec2 uv) {
+        return textureQueryLod(image, uv);
+    }
+
+    int imageSampleCount(image2D image @rgba32f) {
+        return imageSamples(image) + textureSamples(image);
+    }
+
+    int volumeLevels(image3D image @rgba32f) {
+        return textureQueryLevels(image);
+    }
+
+    int layerLevels(image2DArray image @rgba32f) {
+        return textureQueryLevels(image);
+    }
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(0, 1);
+            vec2 uv = vec2(0.25, 0.75);
+            vec3 uvw = vec3(0.25, 0.75, 1.0);
+            int levels = imageLevels(colorImage)
+                + volumeLevels(volumeImage)
+                + layerLevels(layerImage)
+                + textureQueryLevels(colorImage);
+            vec2 lod = imageLod(colorImage, uv)
+                + textureQueryLod(volumeImage, uvw);
+            int samples = imageSampleCount(colorImage)
+                + imageSamples(volumeImage)
+                + textureSamples(layerImage);
+            imageStore(target, pixel, vec4(float(levels + samples) + lod.x));
+        }
+    }
+}
+"""
+
+
 RG_IMAGE_ARRAY_COMPUTE_SHADER = """
 shader RGImageArrayValidation {
     image2D rgFloatImages @rg32f[3];
@@ -4964,6 +5012,49 @@ def test_generated_metal_compute_storage_image_access_qualifiers_compile_with_me
     assert "texture2d<float, access::read> source [[texture(0)]]" in code
     assert "texture2d<float, access::write> target [[texture(1)]]" in code
     assert "texture2d<uint, access::read_write> counters [[texture(2)]]" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_storage_image_query_diagnostics_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_storage_image_query_diagnostics.metal"
+    output = tmp_path / "compute_storage_image_query_diagnostics.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_STORAGE_IMAGE_QUERY_DIAGNOSTICS_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "texture2d<float, access::read_write> colorImage [[texture(0)]]" in code
+    assert "texture3d<float, access::read_write> volumeImage [[texture(1)]]" in code
+    assert (
+        "texture2d_array<float, access::read_write> layerImage [[texture(2)]]" in code
+    )
+    assert "texture2d<float, access::write> target [[texture(3)]]" in code
+    assert (
+        "unsupported Metal texture query: textureQueryLevels on "
+        "texture2d<float, access::read_write>"
+    ) in code
+    assert (
+        "unsupported Metal texture query: textureQueryLod on "
+        "texture3d<float, access::read_write>"
+    ) in code
+    assert (
+        "unsupported Metal texture samples query: requires multisample texture" in code
+    )
+    assert "textureQueryLevels(" not in code
+    assert "textureQueryLod(" not in code
+    assert "textureSamples(" not in code
+    assert "imageSamples(" not in code
+    assert "get_num_mip_levels" not in code
+    assert "get_num_samples" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

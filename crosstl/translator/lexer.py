@@ -56,7 +56,6 @@ TOKENS = OrderedDict(
         ("UNIFORM", r"\buniform\b"),
         ("CBUFFER", r"\bcbuffer\b"),
         ("BUFFER", r"\bbuffer\b"),
-        ("BUFFER", r"\bbuffer\b"),
         # Visibility/Access
         ("PUBLIC", r"\bpub\b"),
         ("PRIVATE", r"\bpriv\b"),
@@ -270,6 +269,8 @@ TOKENS = OrderedDict(
         ("WHITESPACE", r"\s+"),
     ]
 )
+
+SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
 KEYWORDS = {
     # Core Language
@@ -506,7 +507,7 @@ class Lexer:
                 if token_type == "IDENTIFIER" and text in KEYWORDS:
                     token_type = KEYWORDS[text]
 
-                if token_type != "WHITESPACE":
+                if token_type not in SKIP_TOKENS:
                     token = self._get_cached_token(text, token_type)
                     self.tokens.append(token)
 

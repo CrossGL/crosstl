@@ -230,6 +230,12 @@ RESOURCE_ACCESS_METADATA_NAMES = {
     "access::read_write": "readwrite",
 }
 
+DESCRIPTOR_INDEX_METADATA_NAMES = {
+    "texture": "texture resource",
+    "sampler": "sampler resource",
+    "uav": "storage resource",
+}
+
 IMAGE_FORMAT_METADATA_NAMES = frozenset(
     {
         "r8",
@@ -1816,12 +1822,24 @@ def validate_descriptor_index_metadata(node, context):
 
     for attr in attributes:
         attr_name = _normalized_metadata_name(getattr(attr, "name", None))
+        required_role = DESCRIPTOR_INDEX_METADATA_NAMES.get(attr_name)
+        if required_role is None:
+            continue
+
+        attr_values = _attribute_metadata_values(attr)
+        if len(attr_values) != 1:
+            raise ValueError(
+                f"{attr_name} metadata on {context} requires exactly one "
+                f"descriptor index value: @{attr_name}"
+                f"{_metadata_value_phrase(attr_values)}"
+            )
+
         if attr_name == "texture" and not _is_texture_descriptor_type(node_type):
-            _raise_descriptor_role_error("texture", "texture resource", node, context)
+            _raise_descriptor_role_error("texture", required_role, node, context)
         if attr_name == "sampler" and not _is_sampler_descriptor_type(node_type):
-            _raise_descriptor_role_error("sampler", "sampler resource", node, context)
+            _raise_descriptor_role_error("sampler", required_role, node, context)
         if attr_name == "uav" and not _is_uav_descriptor_type(node_type):
-            _raise_descriptor_role_error("uav", "storage resource", node, context)
+            _raise_descriptor_role_error("uav", required_role, node, context)
 
 
 def _raise_descriptor_role_error(role, required_role, node, context):

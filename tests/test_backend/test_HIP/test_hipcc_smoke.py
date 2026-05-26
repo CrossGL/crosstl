@@ -651,6 +651,112 @@ def test_native_hip_graph_memcpy_nodes_parse_and_compile_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_graph_symbol_memcpy_nodes_parse_and_compile_if_available(
+    tmp_path,
+):
+    """Smoke native HIP graph symbol memcpy node add, set, and exec patch APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void graph_symbol_memcpy_nodes() {
+        hipGraph_t graph;
+        hipGraphExec_t exec;
+        hipGraphNode_t from_symbol_node;
+        hipGraphNode_t to_symbol_node;
+        hipGraphNode_t error_node;
+        void* dst = NULL;
+        const void* symbol = NULL;
+        const void* src = NULL;
+        size_t bytes = 64;
+        size_t offset = 4;
+        char log[128];
+
+        hipGraphCreate(&graph, 0);
+        hipGraphAddMemcpyNodeFromSymbol(
+            &from_symbol_node, graph, NULL, 0, dst, symbol, bytes, offset,
+            hipMemcpyDeviceToDevice
+        );
+        hipGraphMemcpyNodeSetParamsFromSymbol(
+            from_symbol_node, dst, symbol, bytes, offset, hipMemcpyDeviceToDevice
+        );
+        hipGraphAddMemcpyNodeToSymbol(
+            &to_symbol_node, graph, NULL, 0, symbol, src, bytes, offset,
+            hipMemcpyDeviceToDevice
+        );
+        hipGraphMemcpyNodeSetParamsToSymbol(
+            to_symbol_node, symbol, src, bytes, offset, hipMemcpyDeviceToDevice
+        );
+        hipGraphInstantiate(&exec, graph, &error_node, log, 128);
+        hipGraphExecMemcpyNodeSetParamsFromSymbol(
+            exec, from_symbol_node, dst, symbol, bytes, offset,
+            hipMemcpyDeviceToDevice
+        );
+        hipGraphExecMemcpyNodeSetParamsToSymbol(
+            exec, to_symbol_node, symbol, src, bytes, offset,
+            hipMemcpyDeviceToDevice
+        );
+        hipGraphExecDestroy(exec);
+        hipGraphDestroy(graph);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: graph_symbol_memcpy_nodes" in crossgl
+    assert "void graph_symbol_memcpy_nodes()" in crossgl
+    assert "var graph: hipGraph_t;" in crossgl
+    assert "var exec: hipGraphExec_t;" in crossgl
+    assert "var from_symbol_node: hipGraphNode_t;" in crossgl
+    assert "var to_symbol_node: hipGraphNode_t;" in crossgl
+    assert "var error_node: hipGraphNode_t;" in crossgl
+    assert "var dst: ptr<void> = NULL;" in crossgl
+    assert "var symbol: ptr<void> = NULL;" in crossgl
+    assert "var src: ptr<void> = NULL;" in crossgl
+    assert "var bytes: u32 = 64;" in crossgl
+    assert "var offset: u32 = 4;" in crossgl
+    assert "var log: array<i8, 128>;" in crossgl
+    assert "// HIP graph create: output: graph, flags: 0" in crossgl
+    assert (
+        "// HIP graph add memcpy from symbol node: output: from_symbol_node, "
+        "graph: graph, dependencies: NULL, count: 0, destination: dst, "
+        "source: symbol, bytes: bytes, offset: offset, "
+        "kind: hipMemcpyDeviceToDevice"
+    ) in crossgl
+    assert (
+        "// HIP graph memcpy from symbol node set params: "
+        "node: from_symbol_node, destination: dst, source: symbol, "
+        "bytes: bytes, offset: offset, kind: hipMemcpyDeviceToDevice"
+    ) in crossgl
+    assert (
+        "// HIP graph add memcpy to symbol node: output: to_symbol_node, "
+        "graph: graph, dependencies: NULL, count: 0, destination: symbol, "
+        "source: src, bytes: bytes, offset: offset, kind: hipMemcpyDeviceToDevice"
+    ) in crossgl
+    assert (
+        "// HIP graph memcpy to symbol node set params: node: to_symbol_node, "
+        "destination: symbol, source: src, bytes: bytes, offset: offset, "
+        "kind: hipMemcpyDeviceToDevice"
+    ) in crossgl
+    assert (
+        "// HIP graph instantiate: output: exec, graph: graph, "
+        "error node output: error_node, log buffer: log, log bytes: 128"
+    ) in crossgl
+    assert (
+        "// HIP graph exec memcpy from symbol node set params: exec: exec, "
+        "node: from_symbol_node, destination: dst, source: symbol, "
+        "bytes: bytes, offset: offset, kind: hipMemcpyDeviceToDevice"
+    ) in crossgl
+    assert (
+        "// HIP graph exec memcpy to symbol node set params: exec: exec, "
+        "node: to_symbol_node, destination: symbol, source: src, bytes: bytes, "
+        "offset: offset, kind: hipMemcpyDeviceToDevice"
+    ) in crossgl
+    assert "// HIP graph exec destroy: exec" in crossgl
+    assert "// HIP graph destroy: graph" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_graph_child_kernel_attributes_parse_and_compile_if_available(
     tmp_path,
 ):
