@@ -368,6 +368,38 @@ void main() {
 """
 
 
+MIXED_GLSL_SSBO_READONLY_AGGREGATE_COMPUTE_SHADER = """
+#version 450 core
+struct ReadOnlyAggregateItem {
+    vec2 uv;
+    bvec2 flags;
+};
+
+struct ReadOnlyAggregateData {
+    float weights[2];
+    ReadOnlyAggregateItem items[2];
+    uint id;
+};
+
+layout(std430, binding = 13) readonly buffer ReadOnlyAggregateBlock {
+    ReadOnlyAggregateData inner;
+    ReadOnlyAggregateData entries[];
+} readAggregateBlock;
+
+ReadOnlyAggregateData readEntry(uint i) {
+    return readAggregateBlock.entries[i];
+}
+
+void main() {
+    uint i = 1u;
+    ReadOnlyAggregateData inner = readAggregateBlock.inner;
+    ReadOnlyAggregateData entry = readEntry(i);
+    float weight = entry.weights[1] + inner.weights[0];
+    bool flag = entry.items[1].flags.y;
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
 
@@ -1043,6 +1075,58 @@ def test_mixed_glsl_ssbo_aggregate_layout_helper_hlsl_output_compiles_with_dxc(
     assert output_path.exists()
 
 
+def test_mixed_glsl_ssbo_readonly_aggregate_hlsl_output_compiles_with_dxc(
+    tmp_path,
+):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / "mixed_glsl_ssbo_readonly_aggregate.hlsl"
+    output_path = tmp_path / "mixed_glsl_ssbo_readonly_aggregate.dxil"
+
+    code = HLSLCodeGen().generate(
+        _mixed_glsl_ast(
+            MIXED_GLSL_SSBO_READONLY_AGGREGATE_COMPUTE_SHADER,
+            "compute",
+        )
+    )
+    assert "ByteAddressBuffer readAggregateBlock : register(t13);" in code
+    assert "RWByteAddressBuffer readAggregateBlock" not in code
+    assert re.search(
+        r"ReadOnlyAggregateData __crossgl_load_ro_glsl_buffer_"
+        r"ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(ByteAddressBuffer buffer, uint offset\)",
+        code,
+    )
+    assert re.search(
+        r"return __crossgl_load_ro_glsl_buffer_ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(readAggregateBlock, \(48 \+ i \* 48\)\);",
+        code,
+    )
+    assert re.search(
+        r"ReadOnlyAggregateData inner = "
+        r"__crossgl_load_ro_glsl_buffer_ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(readAggregateBlock, 0\);",
+        code,
+    )
+    assert "result.items[1].flags = bool2" in code
+    assert "readAggregateBlock.Store" not in code
+    assert ("un" + "supported HLSL GLSL buffer block") not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
 def test_mixed_glsl_ssbo_bool_metal_output_compiles_with_xcrun_metal(tmp_path):
     xcrun = _require_xcrun_tool("metal")
     shader_path = tmp_path / "mixed_glsl_ssbo_bool.metal"
@@ -1346,6 +1430,58 @@ def test_mixed_glsl_ssbo_aggregate_layout_helper_metal_output_compiles_with_xcru
     assert "buffer + (offset + 32)" in code
     assert "block430 + 4" in code
     assert "block140 + 16" in code
+    assert ("un" + "supported Metal GLSL buffer block") not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_ssbo_readonly_aggregate_metal_output_compiles_with_xcrun_metal(
+    tmp_path,
+):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "mixed_glsl_ssbo_readonly_aggregate.metal"
+    output_path = tmp_path / "mixed_glsl_ssbo_readonly_aggregate.air"
+
+    code = MetalCodeGen().generate(
+        _mixed_glsl_ast(
+            MIXED_GLSL_SSBO_READONLY_AGGREGATE_COMPUTE_SHADER,
+            "compute",
+        )
+    )
+    assert "const device uchar* readAggregateBlock [[buffer(13)]]" in code
+    assert "kernel void kernel_main(device uchar* readAggregateBlock" not in code
+    assert re.search(
+        r"ReadOnlyAggregateData __crossgl_load_glsl_buffer_"
+        r"ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(const device uchar\* buffer, uint offset\)",
+        code,
+    )
+    assert re.search(
+        r"return __crossgl_load_glsl_buffer_ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(readAggregateBlock, \(48 \+ i \* 48\)\);",
+        code,
+    )
+    assert re.search(
+        r"ReadOnlyAggregateData inner = "
+        r"__crossgl_load_glsl_buffer_ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(readAggregateBlock, 0\);",
+        code,
+    )
+    assert "result.items[1].flags = bool2" in code
+    assert "reinterpret_cast<device" not in code
     assert ("un" + "supported Metal GLSL buffer block") not in code
     shader_path.write_text(code, encoding="utf-8")
 

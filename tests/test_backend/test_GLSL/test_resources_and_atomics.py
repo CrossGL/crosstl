@@ -1983,6 +1983,109 @@ def test_codegen_mixed_ssbo_nested_struct_aggregate_arrays_materialize_leaf_fiel
     assert "arrayAggregateBlock.entries[i] = inner;" in glsl
 
 
+def test_codegen_mixed_ssbo_readonly_aggregate_helpers_use_const_readers():
+    crossgl = """
+    shader main {
+        struct ReadOnlyAggregateItem {
+            vec2 uv;
+            bvec2 flags;
+        };
+
+        struct ReadOnlyAggregateData {
+            float weights[2];
+            ReadOnlyAggregateItem items[2];
+            uint id;
+        };
+
+        struct ReadOnlyAggregateBlock {
+            ReadOnlyAggregateData inner;
+            ReadOnlyAggregateData entries[];
+        };
+
+        ReadOnlyAggregateBlock readAggregateBlock @glsl_buffer_block(std430) @binding(95) @readonly;
+
+        ReadOnlyAggregateData readEntry(ReadOnlyAggregateBlock localBlock @glsl_buffer_block(std430) @readonly, uint i) {
+            return localBlock.entries[i];
+        }
+
+        compute {
+            void main() {
+                uint i = 1u;
+                ReadOnlyAggregateData inner = readAggregateBlock.inner;
+                ReadOnlyAggregateData entry = readEntry(readAggregateBlock, i);
+                float weight = entry.weights[1] + inner.weights[0];
+                bool flag = entry.items[1].flags.y;
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "ByteAddressBuffer readAggregateBlock : register(t95);" in hlsl
+    assert "RWByteAddressBuffer readAggregateBlock" not in hlsl
+    assert re.search(
+        r"ReadOnlyAggregateData __crossgl_load_ro_glsl_buffer_"
+        r"ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(ByteAddressBuffer buffer, uint offset\)",
+        hlsl,
+    )
+    assert (
+        "ReadOnlyAggregateData readEntry(ByteAddressBuffer localBlock, uint i)" in hlsl
+    )
+    assert re.search(
+        r"return __crossgl_load_ro_glsl_buffer_ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(localBlock, \(48 \+ i \* 48\)\);",
+        hlsl,
+    )
+    assert re.search(
+        r"ReadOnlyAggregateData inner = "
+        r"__crossgl_load_ro_glsl_buffer_ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(readAggregateBlock, 0\);",
+        hlsl,
+    )
+    assert "result.items[1].flags = bool2" in hlsl
+    assert "readAggregateBlock.Store" not in hlsl
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    assert "const device uchar* readAggregateBlock [[buffer(95)]]" in metal
+    assert "kernel void kernel_main(device uchar* readAggregateBlock" not in metal
+    assert re.search(
+        r"ReadOnlyAggregateData __crossgl_load_glsl_buffer_"
+        r"ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(const device uchar\* buffer, uint offset\)",
+        metal,
+    )
+    assert (
+        "ReadOnlyAggregateData readEntry(const device uchar* localBlock, uint i)"
+        in metal
+    )
+    assert re.search(
+        r"return __crossgl_load_glsl_buffer_ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(localBlock, \(48 \+ i \* 48\)\);",
+        metal,
+    )
+    assert re.search(
+        r"ReadOnlyAggregateData inner = "
+        r"__crossgl_load_glsl_buffer_ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(readAggregateBlock, 0\);",
+        metal,
+    )
+    assert "result.items[1].flags = bool2" in metal
+    assert "reinterpret_cast<device" not in metal
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 95) readonly buffer ReadOnlyAggregateBlock" in glsl
+    assert "ReadOnlyAggregateData readEntry(ReadOnlyAggregateBlock localBlock" in glsl
+    assert "ReadOnlyAggregateData inner = readAggregateBlock.inner;" in glsl
+    assert "ReadOnlyAggregateData entry = readEntry(readAggregateBlock, i);" in glsl
+
+
 def test_codegen_mixed_ssbo_aggregate_helpers_distinguish_std140_and_std430_layouts():
     crossgl = """
     shader main {
