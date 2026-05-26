@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 694
+        "test_count": 696
       },
       "translator_codegen": {
         "exists": true,
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 446
+        "test_count": 448
       },
       "translator_codegen": {
         "exists": true,
@@ -433,7 +433,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 338
+        "test_count": 341
       },
       "translator_codegen": {
         "exists": true,
@@ -457,8 +457,28 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 13,
+        "unsupported_marker_count": 18,
         "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_structured_buffer_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_structured_buffer_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "def unsupported_structured_buffer_call(self, operation, buffer_type, fallback):"
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "\"\"\"Return diagnostic code for unsupported structured-buffer operations.\"\"\""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "f\"/* unsupported {self.resource_backend_name()} structured buffer call: \""
+          },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "\"Unsupported match arm for CUDA codegen; only unguarded \""
@@ -519,7 +539,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 240
+        "test_count": 241
       },
       "translator_codegen": {
         "exists": true,
@@ -769,7 +789,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 447
+        "test_count": 449
       },
       "translator_codegen": {
         "exists": true,
@@ -883,7 +903,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 261
+        "test_count": 267
       },
       "translator_codegen": {
         "exists": true,
@@ -1249,7 +1269,7 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "Ray generation payloads lower to device references; acceleration structures lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
+      "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
       "status": "partial"
     },
     {
@@ -1555,8 +1575,8 @@
       "category": "resources",
       "feature": "Structured/storage buffers",
       "feature_id": "resources.structured_buffers",
-      "notes": "",
-      "status": "unknown"
+      "notes": "StructuredBuffer and RWStructuredBuffer globals lower to Vulkan-compatible SPIR-V BufferBlock descriptors with runtime-array storage, descriptor set/binding allocation, std430-style member/array layout decorations, buffer_load/buffer_store lowering, direct indexed member access, read-only store diagnostics, and spirv-as/spirv-val coverage. Append/consume and byte-address buffer operations are not implemented yet.",
+      "status": "partial"
     },
     {
       "backend": "CUDA",
@@ -3310,11 +3330,14 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_callshader_accepts_explicit_visible_function_table_argument",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_callable_dispatch_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_stages_compile_with_metal3",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_intersection_function_table_globals_lower_to_buffer_parameters",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_intersection_function_table_globals_thread_through_helpers",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_intersection_function_table_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_lowers_to_metal_intersection_attribute",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_accepts_bounding_box_result_struct",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
           ],
-          "notes": "Ray generation payloads lower to device references; acceleration structures lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
+          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
           "status": "partial"
         },
         "mojo": {
@@ -3688,9 +3711,13 @@
           "status": "unknown"
         },
         "vulkan": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffers_emit_spirv_buffer_blocks_and_accesses",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_diagnostic",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_structured_buffer_compute_validates_with_spirv_tools"
+          ],
+          "notes": "StructuredBuffer and RWStructuredBuffer globals lower to Vulkan-compatible SPIR-V BufferBlock descriptors with runtime-array storage, descriptor set/binding allocation, std430-style member/array layout decorations, buffer_load/buffer_store lowering, direct indexed member access, read-only store diagnostics, and spirv-as/spirv-val coverage. Append/consume and byte-address buffer operations are not implemented yet.",
+          "status": "partial"
         }
       }
     },
@@ -5422,9 +5449,9 @@
       },
       "vulkan": {
         "diagnostic": 0,
-        "partial": 12,
+        "partial": 13,
         "supported": 17,
-        "unknown": 13,
+        "unknown": 12,
         "unsupported": 0,
         "validated_rejection": 0
       }

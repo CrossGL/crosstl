@@ -250,7 +250,7 @@
         },
         "metal": {
           "status": "partial",
-          "notes": "Ray generation payloads lower to device references; acceleration structures lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
+          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_payload_semantics",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_hit_and_callable_stages_lower_to_visible_functions",
@@ -265,6 +265,9 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_callshader_accepts_explicit_visible_function_table_argument",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_callable_dispatch_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_stages_compile_with_metal3",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_intersection_function_table_globals_lower_to_buffer_parameters",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_intersection_function_table_globals_thread_through_helpers",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_intersection_function_table_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_lowers_to_metal_intersection_attribute",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_accepts_bounding_box_result_struct",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
@@ -426,7 +429,15 @@
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "partial",
+          "notes": "StructuredBuffer and RWStructuredBuffer globals lower to Vulkan-compatible SPIR-V BufferBlock descriptors with runtime-array storage, descriptor set/binding allocation, std430-style member/array layout decorations, buffer_load/buffer_store lowering, direct indexed member access, read-only store diagnostics, and spirv-as/spirv-val coverage. Append/consume and byte-address buffer operations are not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffers_emit_spirv_buffer_blocks_and_accesses",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_diagnostic",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_structured_buffer_compute_validates_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
         "mojo": {"status": "unknown"},
