@@ -1867,7 +1867,10 @@ class RustCodeGen:
         for p in param_list:
             param_type = self.function_parameter_type(p)
             self.register_variable_type(p.name, param_type, scope="local")
-            params.append(f"{p.name}: {self.map_type(param_type)}")
+            param_name = p.name
+            if param_name in self.current_mutated_names:
+                param_name = f"mut {param_name}"
+            params.append(f"{param_name}: {self.map_type(param_type)}")
 
         params_str = ", ".join(params) if params else ""
 
@@ -4158,7 +4161,10 @@ class RustCodeGen:
                 self.array_object_depth -= 1
             array = self.lazy_static_object_expression(array_expr, array)
             index = self.generate_array_index_expression(index_expr)
-            return f"{array}[{index}]"
+            access = f"{array}[{index}]"
+            if self.should_clone_array_access_value(expr):
+                return self.clone_value_expression(access)
+            return access
         elif hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__):
             func_expr = getattr(expr, "function", getattr(expr, "name", "unknown"))
             func_name = None
@@ -4882,6 +4888,23 @@ class RustCodeGen:
 
         return not self.type_is_copy_derivable(
             member_type,
+            self.current_generic_param_names,
+        )
+
+    def should_clone_array_access_value(self, expr):
+        if (
+            self.assignment_lhs_depth > 0
+            or self.member_object_depth > 0
+            or self.array_object_depth > 0
+        ):
+            return False
+
+        element_type = self.expression_result_type(expr)
+        if element_type is None:
+            return False
+
+        return not self.type_is_copy_derivable(
+            element_type,
             self.current_generic_param_names,
         )
 

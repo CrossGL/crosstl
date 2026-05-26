@@ -3572,6 +3572,37 @@ def test_non_copy_identifier_reads_clone_in_value_contexts_and_compile(tmp_path)
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_non_copy_array_access_clones_in_value_contexts_and_compile(tmp_path):
+    code = """
+    shader NonCopyArrayAccess {
+        struct Payload {
+            float weights[];
+            int count;
+        };
+
+        fn sum(Payload payloads[2], Payload replacement) -> int {
+            let first = payloads[0];
+            let second = payloads[1];
+            payloads[0] = replacement;
+            first.count + second.count + payloads[0].count
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub fn sum(mut payloads: [Payload; 2], replacement: Payload)" in (
+        generated_code
+    )
+    assert "let first: Payload = payloads[0].clone();" in generated_code
+    assert "let second: Payload = payloads[1].clone();" in generated_code
+    assert "payloads[0] = replacement.clone();" in generated_code
+    assert "payloads[0].clone() =" not in generated_code
+    assert "payloads.clone()[0]" not in generated_code
+    assert "payloads[0].count" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_legacy_generic_wrappers_emit_rust_generic_params():
     code = """
     shader GenericWrappers {
