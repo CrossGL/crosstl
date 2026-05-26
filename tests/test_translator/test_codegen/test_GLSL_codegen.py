@@ -17144,21 +17144,24 @@ def test_glsl_multisample_storage_images_lower_load_store_and_atomics():
     ast = crosstl.translator.parse(shader)
     generated_code = GLSLCodeGen().generate(ast)
 
-    assert "layout(rgba16f, binding = 0) uniform image2DMS colorImage;" in generated_code
+    assert (
+        "layout(rgba16f, binding = 0) uniform image2DMS colorImage;" in generated_code
+    )
     assert "layout(r32ui, binding = 1) uniform uimage2DMS counters;" in generated_code
     assert (
-        "layout(rgba16f, binding = 2) uniform image2DMSArray layered;"
-        in generated_code
+        "layout(rgba16f, binding = 2) uniform image2DMSArray layered;" in generated_code
     )
     assert (
         "vec4 touch(image2DMS image, uimage2DMS counterImage, ivec2 pixel, int sampleIndex, vec4 value, uint count)"
         in generated_code
     )
     assert "vec4 oldColor = imageLoad(image, pixel, sampleIndex);" in generated_code
-    assert "uint oldCount = imageLoad(counterImage, pixel, sampleIndex).x;" in generated_code
     assert (
-        "imageStore(image, pixel, sampleIndex, (oldColor + value));"
+        "uint oldCount = imageLoad(counterImage, pixel, sampleIndex).x;"
         in generated_code
+    )
+    assert (
+        "imageStore(image, pixel, sampleIndex, (oldColor + value));" in generated_code
     )
     assert (
         "imageStore(counterImage, pixel, sampleIndex, uvec4((oldCount + count)));"
@@ -17177,8 +17180,7 @@ def test_glsl_multisample_storage_images_lower_load_store_and_atomics():
         in generated_code
     )
     assert (
-        "vec4 oldLayer = imageLoad(image, pixelLayer, sampleIndex);"
-        in generated_code
+        "vec4 oldLayer = imageLoad(image, pixelLayer, sampleIndex);" in generated_code
     )
     assert (
         "imageStore(image, pixelLayer, sampleIndex, (oldLayer + value));"
