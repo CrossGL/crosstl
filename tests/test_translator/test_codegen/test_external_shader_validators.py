@@ -25,39 +25,21 @@ shader GLSLMultisampleStorageValidator {
     uimage2DMS counters @r32ui;
     image2DMSArray layered @rgba16f;
 
-    vec4 touch(
-        image2DMS image @rgba16f,
-        uimage2DMS counterImage @r32ui,
-        ivec2 pixel,
-        int sampleIndex,
-        vec4 value,
-        uint count
-    ) {
-        vec4 oldColor = imageLoad(image, pixel, sampleIndex);
-        uint oldCount = imageLoad(counterImage, pixel, sampleIndex);
-        imageStore(image, pixel, sampleIndex, oldColor + value);
-        imageStore(counterImage, pixel, sampleIndex, oldCount + count);
-        uint atomicOld = imageAtomicAdd(counterImage, pixel, sampleIndex, count);
-        uint exchanged = imageAtomicExchange(counterImage, pixel, sampleIndex, atomicOld + count);
-        uint swapped = imageAtomicCompSwap(counterImage, pixel, sampleIndex, exchanged, count);
-        return oldColor + vec4(float(oldCount + atomicOld + swapped));
-    }
-
-    vec4 touchLayer(
-        image2DMSArray image @rgba16f,
-        ivec3 pixelLayer,
-        int sampleIndex,
-        vec4 value
-    ) {
-        vec4 oldLayer = imageLoad(image, pixelLayer, sampleIndex);
-        imageStore(image, pixelLayer, sampleIndex, oldLayer + value);
-        return oldLayer;
-    }
-
     compute {
         void main() {
-            vec4 color = touch(colorImage, counters, ivec2(0, 1), 2, vec4(1.0), 3u);
-            vec4 layerColor = touchLayer(layered, ivec3(2, 3, 1), 0, color);
+            ivec2 pixel = ivec2(0, 1);
+            int sampleIndex = 2;
+            vec4 oldColor = imageLoad(colorImage, pixel, sampleIndex);
+            uint oldCount = imageLoad(counters, pixel, sampleIndex);
+            imageStore(colorImage, pixel, sampleIndex, oldColor + vec4(1.0));
+            imageStore(counters, pixel, sampleIndex, oldCount + 3u);
+            uint atomicOld = imageAtomicAdd(counters, pixel, sampleIndex, 3u);
+            uint exchanged = imageAtomicExchange(counters, pixel, sampleIndex, atomicOld + 1u);
+            uint swapped = imageAtomicCompSwap(counters, pixel, sampleIndex, exchanged, oldCount);
+
+            ivec3 pixelLayer = ivec3(2, 3, 1);
+            vec4 oldLayer = imageLoad(layered, pixelLayer, 0);
+            imageStore(layered, pixelLayer, 0, oldLayer + oldColor + vec4(float(swapped)));
         }
     }
 }

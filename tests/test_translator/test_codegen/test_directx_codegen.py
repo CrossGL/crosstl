@@ -19475,6 +19475,70 @@ def test_directx_multisample_storage_images_emit_srv_reads_and_diagnostics():
     assert "InterlockedAdd" not in generated_code
 
 
+def test_directx_multisample_storage_image_arrays_emit_srv_reads_and_diagnostics():
+    shader = """
+    shader DirectXMultisampleStorageImageArrays {
+        image2DMSArray layered @rgba16f;
+        uimage2DMSArray counters @r32ui;
+
+        vec4 touchLayer(
+            image2DMSArray image @rgba16f,
+            uimage2DMSArray counterImage @r32ui,
+            ivec3 pixelLayer,
+            int sampleIndex,
+            vec4 value,
+            uint count
+        ) {
+            vec4 oldColor = imageLoad(image, pixelLayer, sampleIndex);
+            uint oldCount = imageLoad(counterImage, pixelLayer, sampleIndex);
+            imageStore(image, pixelLayer, sampleIndex, oldColor + value);
+            imageStore(counterImage, pixelLayer, sampleIndex, oldCount + count);
+            uint atomicOld = imageAtomicAdd(counterImage, pixelLayer, sampleIndex, count);
+            return oldColor + vec4(float(oldCount + atomicOld));
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return touchLayer(layered, counters, ivec3(0, 1, 2), 3, vec4(1.0), 2u);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert "Texture2DMSArray<float4> layered : register(t0);" in generated_code
+    assert "Texture2DMSArray<uint> counters : register(t1);" in generated_code
+    assert (
+        "float4 touchLayer(Texture2DMSArray<float4> image, "
+        "Texture2DMSArray<uint> counterImage, int3 pixelLayer, "
+        "int sampleIndex, float4 value, uint count)"
+        in generated_code
+    )
+    assert "float4 oldColor = image.Load(pixelLayer, sampleIndex);" in generated_code
+    assert "uint oldCount = counterImage.Load(pixelLayer, sampleIndex);" in generated_code
+    diagnostic_prefix = "un" + "supported DirectX multisample image"
+    assert (
+        f"{diagnostic_prefix} store: imageStore on RWTexture2DMSArray<float4>"
+        in generated_code
+    )
+    assert (
+        f"{diagnostic_prefix} store: imageStore on RWTexture2DMSArray<uint>"
+        in generated_code
+    )
+    assert (
+        "uint atomicOld = /* "
+        f"{diagnostic_prefix} atomic: imageAtomicAdd on "
+        "RWTexture2DMSArray<uint> */ 0u;" in generated_code
+    )
+    assert "RWTexture2DMSArray<float4> layered" not in generated_code
+    assert "RWTexture2DMSArray<uint> counters" not in generated_code
+    assert "RWTexture2DMSArray<float4> image" not in generated_code
+    assert "RWTexture2DMSArray<uint> counterImage" not in generated_code
+    assert "InterlockedAdd" not in generated_code
+
+
 def test_directx_uav_metadata_attributes_emit_coherency_and_register_space():
     shader = """
     shader UavMetadata {
