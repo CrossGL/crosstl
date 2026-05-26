@@ -112,6 +112,8 @@ class SlangCodeGen:
         self.variable_types = {}
         self.image_resource_types = {}
         self.image_resource_accesses = {}
+        self.buffer_resource_types = {}
+        self.buffer_resource_accesses = {}
         self.helper_functions = {}
         self.helper_name_aliases = {}
         self.user_symbol_names = set()
@@ -182,6 +184,8 @@ class SlangCodeGen:
             self.variable_types = {}
             self.image_resource_types = {}
             self.image_resource_accesses = {}
+            self.buffer_resource_types = {}
+            self.buffer_resource_accesses = {}
             self.helper_functions = {}
             self.helper_name_aliases = {}
             self.user_symbol_names = self.collect_user_symbol_names(ast)
@@ -1536,13 +1540,17 @@ class SlangCodeGen:
         if not isinstance(type_name, str):
             type_name = self.convert_type_node_to_string(type_name)
         self.variable_types[name] = type_name
+        mapped_type = self.map_resource_type_with_format(type_name, node)
         if self.is_storage_image_type(type_name):
-            self.image_resource_types[name] = self.map_resource_type_with_format(
-                type_name, node
-            )
+            self.image_resource_types[name] = mapped_type
             access = self.explicit_resource_access(node)
             if access is not None:
                 self.image_resource_accesses[name] = access
+        if self.is_buffer_resource_type(mapped_type):
+            self.buffer_resource_types[name] = self.resource_base_type(mapped_type)
+            access = self.explicit_resource_access(node)
+            if access is not None:
+                self.buffer_resource_accesses[name] = access
 
     def binding_index_value(self, value, prefixes=()):
         if hasattr(value, "value") and value.value is not None:
@@ -2096,6 +2104,8 @@ class SlangCodeGen:
         saved_variable_types = self.variable_types.copy()
         saved_image_resource_types = self.image_resource_types.copy()
         saved_image_resource_accesses = self.image_resource_accesses.copy()
+        saved_buffer_resource_types = self.buffer_resource_types.copy()
+        saved_buffer_resource_accesses = self.buffer_resource_accesses.copy()
         saved_function_return_type = self.current_function_return_type
         saved_shader_type = self.current_shader_type
         saved_identifier_aliases = self.identifier_aliases.copy()
@@ -2290,6 +2300,8 @@ class SlangCodeGen:
         self.variable_types = saved_variable_types
         self.image_resource_types = saved_image_resource_types
         self.image_resource_accesses = saved_image_resource_accesses
+        self.buffer_resource_types = saved_buffer_resource_types
+        self.buffer_resource_accesses = saved_buffer_resource_accesses
         self.current_function_return_type = saved_function_return_type
         self.current_shader_type = saved_shader_type
         self.identifier_aliases = saved_identifier_aliases
@@ -3035,6 +3047,8 @@ class SlangCodeGen:
             "IgnoreHit": {0},
         }
         saved_variable_types = self.variable_types.copy()
+        saved_buffer_resource_types = self.buffer_resource_types.copy()
+        saved_buffer_resource_accesses = self.buffer_resource_accesses.copy()
         try:
             for parameter in parameters or []:
                 type_name = self.slang_parameter_type_name(parameter)
@@ -3068,6 +3082,8 @@ class SlangCodeGen:
                 )
         finally:
             self.variable_types = saved_variable_types
+            self.buffer_resource_types = saved_buffer_resource_types
+            self.buffer_resource_accesses = saved_buffer_resource_accesses
 
     def slang_ray_query_method_return_type(self, operation):
         return {
@@ -3242,6 +3258,8 @@ class SlangCodeGen:
             return
 
         saved_variable_types = self.variable_types.copy()
+        saved_buffer_resource_types = self.buffer_resource_types.copy()
+        saved_buffer_resource_accesses = self.buffer_resource_accesses.copy()
         try:
             for parameter in parameters or []:
                 type_name = self.slang_parameter_type_name(parameter)
@@ -3260,6 +3278,8 @@ class SlangCodeGen:
                 )
         finally:
             self.variable_types = saved_variable_types
+            self.buffer_resource_types = saved_buffer_resource_types
+            self.buffer_resource_accesses = saved_buffer_resource_accesses
 
     def slang_ray_stage_parameter_declaration(
         self, declaration, parameter, shader_type
@@ -4812,9 +4832,13 @@ class SlangCodeGen:
 
         if "[" in type_name and "]" in type_name:
             base_type, array_suffix = split_array_type_suffix(type_name)
-            mapped_base = self.map_image_base_type_with_format(base_type, node)
+            mapped_base = self.map_resource_base_type_with_format(base_type, node)
             return f"{mapped_base}{array_suffix}"
-        return self.map_image_base_type_with_format(type_name, node)
+        return self.map_resource_base_type_with_format(type_name, node)
+
+    def map_resource_base_type_with_format(self, type_name, node=None):
+        mapped_type = self.map_image_base_type_with_format(type_name, node)
+        return self.map_buffer_base_type_with_access(mapped_type, node)
 
     def map_image_base_type_with_format(self, type_name, node=None):
         base_type = self.resource_base_type(type_name)
@@ -4849,6 +4873,34 @@ class SlangCodeGen:
         if component_type and texture_type:
             return f"{texture_type}<{component_type}>"
         return self.convert_type(type_name)
+
+    def map_buffer_base_type_with_access(self, type_name, node=None):
+        access = self.explicit_resource_access(node)
+        if access is None:
+            return type_name
+
+        base_type = self.resource_base_type(type_name)
+        if not isinstance(base_type, str):
+            return type_name
+
+        if base_type in {"ByteAddressBuffer", "RWByteAddressBuffer"}:
+            mapped_base = (
+                "ByteAddressBuffer" if access == "readonly" else "RWByteAddressBuffer"
+            )
+            return type_name.replace(base_type, mapped_base, 1)
+
+        structured_prefixes = ("StructuredBuffer<", "RWStructuredBuffer<")
+        if not base_type.startswith(structured_prefixes) or not base_type.endswith(">"):
+            return type_name
+
+        element_type = base_type[base_type.find("<") + 1 : -1].strip()
+        if not element_type:
+            return type_name
+
+        resource_type = (
+            "StructuredBuffer" if access == "readonly" else "RWStructuredBuffer"
+        )
+        return type_name.replace(base_type, f"{resource_type}<{element_type}>", 1)
 
     def is_storage_image_type(self, type_name):
         base_type = self.resource_base_type(type_name)
@@ -4967,11 +5019,31 @@ class SlangCodeGen:
         return f"{image_name}[{coord}] = {value}"
 
     def structured_buffer_resource_type(self, buffer_arg):
+        buffer_name = self.get_expression_name(buffer_arg)
+        if buffer_name:
+            tracked_type = self.buffer_resource_types.get(buffer_name)
+            if tracked_type is not None:
+                return tracked_type
+
         buffer_type = self.get_expression_type(buffer_arg)
         if buffer_type is None:
             buffer_type = self.expression_result_type(buffer_arg)
         mapped_type = self.map_resource_type_with_format(buffer_type)
         return self.resource_base_type(mapped_type)
+
+    def buffer_resource_access(self, buffer_arg):
+        buffer_name = self.get_expression_name(buffer_arg)
+        if not buffer_name:
+            return None
+        return self.buffer_resource_accesses.get(buffer_name)
+
+    def is_buffer_resource_type(self, buffer_type):
+        return (
+            self.is_byte_address_buffer_resource_type(buffer_type)
+            or self.is_structured_buffer_resource_type(buffer_type)
+            or self.is_append_structured_buffer_resource_type(buffer_type)
+            or self.is_consume_structured_buffer_resource_type(buffer_type)
+        )
 
     def is_byte_address_buffer_resource_type(self, buffer_type):
         buffer_type = self.resource_base_type(buffer_type)
@@ -5057,6 +5129,18 @@ class SlangCodeGen:
 
         buffer_type = self.structured_buffer_resource_type(args[0])
         element_type = self.structured_buffer_element_type(buffer_type) or "uint"
+        if self.buffer_resource_access(args[0]) == "writeonly":
+            if self.is_byte_address_buffer_resource_type(buffer_type):
+                return self.unsupported_byte_address_buffer_call(
+                    "buffer_load",
+                    "requires readable byte-address buffer resource",
+                    "uint",
+                )
+            return self.unsupported_structured_buffer_call(
+                "buffer_load",
+                "requires readable structured buffer resource",
+                element_type,
+            )
         if self.is_byte_address_buffer_resource_type(buffer_type):
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
@@ -5081,6 +5165,10 @@ class SlangCodeGen:
 
         buffer_type = self.structured_buffer_resource_type(args[0])
         if self.is_byte_address_buffer_resource_type(buffer_type):
+            if self.buffer_resource_access(args[0]) == "readonly":
+                return self.unsupported_byte_address_buffer_call(
+                    "buffer_store", "requires writable byte-address buffer resource"
+                )
             if not self.is_writable_byte_address_buffer_resource_type(buffer_type):
                 return self.unsupported_byte_address_buffer_call(
                     "buffer_store", "requires RWByteAddressBuffer resource"
@@ -5089,6 +5177,11 @@ class SlangCodeGen:
             index = self.generate_expression(args[1])
             value = self.generate_expression(args[2])
             return f"{buffer}.Store({index}, {value})"
+
+        if self.buffer_resource_access(args[0]) == "readonly":
+            return self.unsupported_structured_buffer_call(
+                "buffer_store", "requires writable structured buffer resource"
+            )
 
         if not self.is_writable_structured_buffer_resource_type(buffer_type):
             return self.unsupported_structured_buffer_call(
@@ -5107,6 +5200,10 @@ class SlangCodeGen:
             )
 
         buffer_type = self.structured_buffer_resource_type(args[0])
+        if self.buffer_resource_access(args[0]) == "readonly":
+            return self.unsupported_structured_buffer_call(
+                "buffer_append", "requires writable structured buffer resource"
+            )
         if not self.is_append_structured_buffer_resource_type(buffer_type):
             return self.unsupported_structured_buffer_call(
                 "buffer_append", "requires AppendStructuredBuffer resource"
@@ -5124,6 +5221,12 @@ class SlangCodeGen:
 
         buffer_type = self.structured_buffer_resource_type(args[0])
         element_type = self.structured_buffer_element_type(buffer_type) or "uint"
+        if self.buffer_resource_access(args[0]) == "writeonly":
+            return self.unsupported_structured_buffer_call(
+                "buffer_consume",
+                "requires readable structured buffer resource",
+                element_type,
+            )
         if not self.is_consume_structured_buffer_resource_type(buffer_type):
             return self.unsupported_structured_buffer_call(
                 "buffer_consume",
@@ -5211,11 +5314,22 @@ class SlangCodeGen:
 
         member = str(getattr(func_expr, "member", ""))
         if member in {"Load", "Load2", "Load3", "Load4"}:
+            if self.buffer_resource_access(receiver) == "writeonly":
+                result_type = self.byte_address_member_call_result_type(func_expr)
+                return self.unsupported_byte_address_buffer_call(
+                    member,
+                    "requires readable byte-address buffer receiver",
+                    result_type or "uint",
+                )
             receiver_expr = self.generate_expression(receiver)
             args_expr = ", ".join(self.generate_expression(arg) for arg in args)
             return f"{receiver_expr}.{member}({args_expr})"
 
         if member in {"Store", "Store2", "Store3", "Store4"}:
+            if self.buffer_resource_access(receiver) == "readonly":
+                return self.unsupported_byte_address_buffer_call(
+                    member, "requires writable byte-address buffer receiver"
+                )
             if not self.is_writable_byte_address_buffer_resource_type(receiver_type):
                 return self.unsupported_byte_address_buffer_call(
                     member, "requires RWByteAddressBuffer receiver"

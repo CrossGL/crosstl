@@ -1225,6 +1225,52 @@ class TestCudaParser:
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
 
+    def test_atomic_address_taken_pointer_array_and_shared_targets_parsing(self):
+        """Test CUDA atomics preserve address-taken lvalue target shape."""
+        code = """
+        __global__ void kernel(int* values, int* expected, int* desired, int index) {
+            __shared__ int sharedCounts[32];
+            atomicAdd(&values[index], 1);
+            int old = atomicCAS(&values[index], expected[index], desired[index]);
+            atomicMax(&sharedCounts[threadIdx.x], old);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.kernels[0].body
+        atomic_add = body[1]
+        atomic_cas = body[2].value
+        atomic_max = body[3]
+
+        assert isinstance(atomic_add, AtomicOperationNode)
+        assert atomic_add.operation == "atomicAdd"
+        assert isinstance(atomic_add.args[0], UnaryOpNode)
+        assert atomic_add.args[0].op == "&"
+        assert isinstance(atomic_add.args[0].operand, ArrayAccessNode)
+        assert atomic_add.args[0].operand.array == "values"
+        assert atomic_add.args[0].operand.index == "index"
+
+        assert isinstance(atomic_cas, AtomicOperationNode)
+        assert atomic_cas.operation == "atomicCAS"
+        assert isinstance(atomic_cas.args[0], UnaryOpNode)
+        assert isinstance(atomic_cas.args[1], ArrayAccessNode)
+        assert atomic_cas.args[1].array == "expected"
+        assert isinstance(atomic_cas.args[2], ArrayAccessNode)
+        assert atomic_cas.args[2].array == "desired"
+
+        assert isinstance(atomic_max, AtomicOperationNode)
+        assert atomic_max.operation == "atomicMax"
+        assert isinstance(atomic_max.args[0], UnaryOpNode)
+        shared_target = atomic_max.args[0].operand
+        assert isinstance(shared_target, ArrayAccessNode)
+        assert shared_target.array == "sharedCounts"
+        assert isinstance(shared_target.index, CudaBuiltinNode)
+        assert shared_target.index.builtin_name == "threadIdx"
+        assert shared_target.index.component == "x"
+
     def test_user_defined_atomic_name_is_not_parsed_as_builtin_atomic(self):
         """Test user-defined atomic names shadow CUDA atomic parsing."""
         code = """

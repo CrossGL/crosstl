@@ -3014,6 +3014,108 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_ray_query_proceed_and_intersection_t_emit_khr_instructions(self, tmp_path):
+        bool_type = PrimitiveType("bool")
+        float_type = PrimitiveType("float")
+        ray_query_type = PrimitiveType("RayQuery")
+        void_type = PrimitiveType("void")
+
+        entry_point = FunctionNode(
+            name="main",
+            return_type=void_type,
+            parameters=[],
+            body=BlockNode(
+                [
+                    VariableNode("rq", ray_query_type),
+                    VariableNode(
+                        "advanced",
+                        bool_type,
+                        RayQueryOpNode("Proceed", "rq", []),
+                    ),
+                    VariableNode(
+                        "candidateT",
+                        float_type,
+                        RayQueryOpNode("CandidateRayT", "rq", []),
+                    ),
+                    VariableNode(
+                        "committedT",
+                        float_type,
+                        RayQueryOpNode("CommittedRayT", "rq", []),
+                    ),
+                ]
+            ),
+        )
+        shader_node = ShaderNode(
+            name="RayQueryLowering",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            stages={
+                ShaderStage.COMPUTE: StageNode(
+                    ShaderStage.COMPUTE,
+                    entry_point,
+                    execution_config={"local_size": (1, 1, 1)},
+                )
+            },
+        )
+
+        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
+
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert re.search(r"%\d+ = OpTypeRayQueryKHR\b", spv_code)
+        assert "OpRayQueryProceedKHR" in spv_code
+        assert spv_code.count("OpRayQueryGetIntersectionTKHR") == 2
+        assert "Proceed yet; using a default bool value" not in spv_code
+        assert "CandidateRayT yet; using a default float value" not in spv_code
+        assert "CommittedRayT yet; using a default float value" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_parsed_ray_query_generic_type_lowers_to_khr_instructions(self, tmp_path):
+        source_code = """
+        shader RayQueryCompute {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    bool advanced = rq.Proceed();
+                    float candidateT = rq.CandidateRayT();
+                    float committedT = rq.CommittedRayT();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert "OpRayQueryProceedKHR" in spv_code
+        assert spv_code.count("OpRayQueryGetIntersectionTKHR") == 2
+        assert "RayQueryOpNode" not in spv_code
+        assert "using a default" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_ray_query_supported_operations_reject_unexpected_arguments(self):
+        source_code = """
+        shader RayQueryBadArgs {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    bool advanced = rq.Proceed(1);
+                    float candidateT = rq.CandidateRayT(2);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "WARNING: SPIR-V RayQuery.Proceed requires 0 arguments" in spv_code
+        assert "WARNING: SPIR-V RayQuery.CandidateRayT requires 0 arguments" in spv_code
+        assert "OpRayQueryProceedKHR" not in spv_code
+        assert "OpRayQueryGetIntersectionTKHR" not in spv_code
+
     def test_integer_image_atomics_emit_spirv_atomic_operations(self):
         source_code = """
         shader ImageAtomics {

@@ -106,6 +106,7 @@ class VulkanSPIRVCodeGen:
         self.layout_struct_source_types = {}
         self.resource_types = {}
         self.resource_image_types = {}
+        self.ray_query_types = {}
 
         self.required_capabilities = set()
         self.global_variables = {}
@@ -458,6 +459,21 @@ class VulkanSPIRVCodeGen:
         spirv_type = SpirvType(f"fn_{return_type.type.base_type}")
         spirv_id = SpirvId(id_value, spirv_type)
         self.function_types[key] = spirv_id
+        return spirv_id
+
+    def register_ray_query_type(self, type_name: str = "RayQuery") -> SpirvId:
+        """Create and register the opaque SPIR-V ray-query type."""
+        cache_key = re.sub(r"\s+", "", str(type_name))
+        if cache_key in self.ray_query_types:
+            return self.ray_query_types[cache_key]
+
+        self.require_capability("RayQueryKHR")
+        self.require_extension("SPV_KHR_ray_query")
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpTypeRayQueryKHR")
+
+        spirv_id = SpirvId(id_value, SpirvType(cache_key), cache_key)
+        self.ray_query_types[cache_key] = spirv_id
         return spirv_id
 
     def register_constant(
@@ -3115,6 +3131,82 @@ class VulkanSPIRVCodeGen:
 
         return self.register_primitive_type("uint")
 
+    def ray_query_pointer_from_expression(self, expr) -> Optional[SpirvId]:
+        query_pointer = self.variable_pointer_from_expression(expr)
+        if query_pointer is None:
+            return None
+
+        query_type = self.pointer_pointee_type(query_pointer)
+        if query_type is None:
+            return None
+
+        if not self.is_ray_query_type_name(query_type.type.base_type):
+            return None
+
+        return query_pointer
+
+    def ray_query_intersection_constant(self, operation: str) -> Optional[SpirvId]:
+        selectors = {
+            "CandidateRayT": 0,
+            "CommittedRayT": 1,
+        }
+        selector = selectors.get(operation)
+        if selector is None:
+            return None
+
+        return self.register_constant(selector, self.register_primitive_type("uint"))
+
+    def process_ray_query_operation(self, expr: RayQueryOpNode) -> SpirvId:
+        operation = expr.operation
+        arguments = getattr(expr, "args", getattr(expr, "arguments", [])) or []
+
+        supported_argument_counts = {
+            "Proceed": 0,
+            "CandidateRayT": 0,
+            "CommittedRayT": 0,
+        }
+        if operation not in supported_argument_counts:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        if len(arguments) != supported_argument_counts[operation]:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.{operation} requires "
+                f"{supported_argument_counts[operation]} arguments"
+            )
+            return self.default_value_for_type(
+                self.represented_ir_diagnostic_result_type("ray query", operation)
+            )
+
+        query_pointer = self.ray_query_pointer_from_expression(expr.query_expr)
+        if query_pointer is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        self.require_capability("RayQueryKHR")
+        self.require_extension("SPV_KHR_ray_query")
+
+        if operation == "Proceed":
+            result_type = self.register_primitive_type("bool")
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpRayQueryProceedKHR %{result_type.id} "
+                f"%{query_pointer.id}"
+            )
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
+
+        intersection = self.ray_query_intersection_constant(operation)
+        if intersection is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        result_type = self.register_primitive_type("float")
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpRayQueryGetIntersectionTKHR %{result_type.id} "
+            f"%{query_pointer.id} %{intersection.id}"
+        )
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
+
     def flatten_vector_constructor_args(
         self,
         function_name: str,
@@ -4539,6 +4631,10 @@ class VulkanSPIRVCodeGen:
     def is_resource_type_name(self, type_str: str) -> bool:
         return self.resource_type_info(type_str) is not None
 
+    def is_ray_query_type_name(self, type_str: str) -> bool:
+        compact = re.sub(r"\s+", "", str(type_str))
+        return compact == "RayQuery" or compact.startswith("RayQuery<")
+
     def structured_buffer_type_info(self, type_str: str):
         type_str = re.sub(r"\s+", "", str(type_str))
         match = re.fullmatch(r"(StructuredBuffer|RWStructuredBuffer)<(.+)>", type_str)
@@ -4765,6 +4861,7 @@ class VulkanSPIRVCodeGen:
             self.layout_array_types,
             self.resource_types,
             self.resource_image_types,
+            self.ray_query_types,
         ]:
             for type_id in type_dict.values():
                 if type_id.type.base_type == base_type:
@@ -4782,6 +4879,7 @@ class VulkanSPIRVCodeGen:
             self.layout_array_types,
             self.resource_types,
             self.resource_image_types,
+            self.ray_query_types,
         ]:
             for type_id in type_dict.values():
                 if type_id.id == id_value:
@@ -4843,6 +4941,9 @@ class VulkanSPIRVCodeGen:
         registered_type = self.find_registered_type_by_base(type_str)
         if registered_type:
             return registered_type
+
+        if self.is_ray_query_type_name(type_str):
+            return self.register_ray_query_type(type_str)
 
         if self.is_resource_type_name(type_str):
             return self.register_resource_type(type_str)
@@ -9033,9 +9134,7 @@ class VulkanSPIRVCodeGen:
             )
 
         elif isinstance(expr, RayQueryOpNode):
-            return self.represented_ir_diagnostic_default_value(
-                "ray query", expr.operation
-            )
+            return self.process_ray_query_operation(expr)
 
         elif isinstance(expr, MeshOpNode):
             return self.represented_ir_diagnostic_default_value(

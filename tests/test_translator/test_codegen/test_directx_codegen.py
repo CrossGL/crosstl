@@ -7752,6 +7752,52 @@ def test_directx_ray_query_methods_validate_trace_and_infer_results():
     assert "rq.Abort();" in generated
 
 
+def test_directx_ray_query_result_methods_infer_all_hlsl_result_types():
+    result_methods = [
+        ("CommittedStatus", "uint"),
+        ("CandidatePrimitiveIndex", "uint"),
+        ("CommittedPrimitiveIndex", "uint"),
+        ("CandidateInstanceID", "uint"),
+        ("CommittedInstanceID", "uint"),
+        ("CandidateInstanceIndex", "uint"),
+        ("CommittedInstanceIndex", "uint"),
+        ("CandidateGeometryIndex", "uint"),
+        ("CommittedGeometryIndex", "uint"),
+        ("CandidateObjectRayDirection", "float3"),
+        ("CommittedObjectRayOrigin", "float3"),
+        ("CommittedObjectRayDirection", "float3"),
+        ("CandidateRayT", "float"),
+        ("CandidateObjectRayTMin", "float"),
+        ("CommittedTriangleBarycentrics", "float2"),
+        ("CandidateTriangleFrontFace", "bool"),
+        ("CommittedTriangleFrontFace", "bool"),
+        ("CandidateObjectToWorld3x4", "float3x4"),
+        ("CandidateWorldToObject3x4", "float3x4"),
+        ("CommittedObjectToWorld3x4", "float3x4"),
+        ("CommittedWorldToObject3x4", "float3x4"),
+    ]
+    declarations = "\n".join(
+        f"                let value{index} = rq.{method}();"
+        for index, (method, _expected_type) in enumerate(result_methods)
+    )
+    code = f"""
+    shader RayQueryResultTypes {{
+        compute {{
+            void main() {{
+                RayQuery<RAY_FLAG_NONE> rq;
+{declarations}
+            }}
+        }}
+    }}
+    """
+
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    for index, (method, expected_type) in enumerate(result_methods):
+        assert f"{expected_type} value{index} = rq.{method}();" in generated
+    assert "None value" not in generated
+
+
 def test_directx_ray_query_validates_receiver_and_trace_ray_inline_arguments():
     bad_receiver_code = """
     shader BadRayQueryReceiver {

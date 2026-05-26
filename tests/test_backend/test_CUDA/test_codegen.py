@@ -312,6 +312,36 @@ class TestCudaCodeGen:
         assert "atomicCompareExchange(expected, 0, 3);" in result
         assert "atomicExchange(7)" not in result
 
+    def test_address_taken_pointer_array_and_shared_atomics_lower_to_lvalues(self):
+        """Test CUDA pointer atomics convert address-taken targets to CrossGL lvalues."""
+        code = """
+        __global__ void kernel(int* values, int* expected, int* desired, int index) {
+            __shared__ int sharedCounts[32];
+            atomicAdd(&values[index], 1);
+            int old = atomicCAS(&values[index], expected[index], desired[index]);
+            atomicMax(&sharedCounts[threadIdx.x], old);
+            atomicExch(&values[index + 1], old);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var<workgroup> sharedCounts: array<i32, 32>;" in result
+        assert "atomicAdd(values[index], 1);" in result
+        assert (
+            "var old: i32 = atomicCompareExchange("
+            "values[index], expected[index], desired[index]);"
+        ) in result
+        assert "atomicMax(sharedCounts[gl_LocalInvocationID.x], old);" in result
+        assert "atomicExchange(values[(index + 1)], old);" in result
+        assert "(&values[index])" not in result
+        assert "(&sharedCounts[gl_LocalInvocationID.x])" not in result
+
     def test_user_defined_cuda_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined CUDA runtime names shadow runtime call comments."""
         code = """

@@ -4322,6 +4322,72 @@ def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic():
     assert "buffer_store(values" not in generated_code
 
 
+def test_structured_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics():
+    code = """
+    shader SlangStructuredBufferAccessQualifiers {
+        readonly RWStructuredBuffer<float> readOnlyValues @binding(4);
+        writeonly StructuredBuffer<float> writeOnlyValues @binding(5);
+        readwrite StructuredBuffer<float> readWriteValues @binding(6);
+        RWStructuredBuffer<float> attrReadOnly @access(read) @binding(7);
+        StructuredBuffer<float> attrWriteOnly @access(write) @binding(8);
+
+        compute {
+            void main() {
+                float blockedLoad = buffer_load(writeOnlyValues, 0u);
+                float blockedAttrLoad = buffer_load(attrWriteOnly, 0u);
+                buffer_store(readOnlyValues, 0u, 1.0);
+                buffer_store(readWriteValues, 0u, 2.0);
+                buffer_store(attrReadOnly, 0u, 3.0);
+                buffer_store(attrWriteOnly, 0u, 4.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(4, 0)]] StructuredBuffer<float> readOnlyValues "
+        ": register(t4);" in generated_code
+    )
+    assert (
+        "[[vk::binding(5, 0)]] RWStructuredBuffer<float> writeOnlyValues "
+        ": register(u5);" in generated_code
+    )
+    assert (
+        "[[vk::binding(6, 0)]] RWStructuredBuffer<float> readWriteValues "
+        ": register(u6);" in generated_code
+    )
+    assert (
+        "[[vk::binding(7, 0)]] StructuredBuffer<float> attrReadOnly "
+        ": register(t7);" in generated_code
+    )
+    assert (
+        "[[vk::binding(8, 0)]] RWStructuredBuffer<float> attrWriteOnly "
+        ": register(u8);" in generated_code
+    )
+    assert (
+        "float blockedLoad = /* unsupported Slang structured buffer: "
+        "buffer_load requires readable structured buffer resource */ 0;"
+        in generated_code
+    )
+    assert (
+        "float blockedAttrLoad = /* unsupported Slang structured buffer: "
+        "buffer_load requires readable structured buffer resource */ 0;"
+        in generated_code
+    )
+    assert (
+        "/* unsupported Slang structured buffer: buffer_store requires "
+        "writable structured buffer resource */;" in generated_code
+    )
+    assert "readWriteValues.Store(0u, 2.0);" in generated_code
+    assert "attrWriteOnly.Store(0u, 4.0);" in generated_code
+    assert "writeOnlyValues.Load" not in generated_code
+    assert "attrWriteOnly.Load" not in generated_code
+    assert "buffer_load(" not in generated_code
+    assert "buffer_store(" not in generated_code
+
+
 def test_append_consume_structured_buffers_emit_slang_methods_and_uav_bindings():
     code = """
     shader SlangAppendConsumeStructuredBuffers {
@@ -4539,6 +4605,73 @@ def test_byte_address_buffer_store_to_readonly_helper_emits_slang_diagnostic():
         "/* unsupported Slang byte-address buffer: buffer_store requires "
         "RWByteAddressBuffer resource */;" in generated_code
     )
+    assert "buffer_store(" not in generated_code
+
+
+def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics():
+    code = """
+    shader SlangByteAddressBufferAccessQualifiers {
+        readonly RWByteAddressBuffer readOnlyRaw @binding(9);
+        writeonly ByteAddressBuffer writeOnlyRaw @binding(10);
+        readwrite ByteAddressBuffer readWriteRaw @binding(11);
+        RWByteAddressBuffer attrReadOnlyRaw @access(read) @binding(12);
+        ByteAddressBuffer attrWriteOnlyRaw @access(write) @binding(13);
+
+        void main(uint offset) {
+            uint blockedLoad = buffer_load(writeOnlyRaw, offset);
+            uint blockedAttrLoad = attrWriteOnlyRaw.Load(offset);
+            buffer_store(readOnlyRaw, offset, uint(1));
+            attrReadOnlyRaw.Store(offset, uint(2));
+            buffer_store(readWriteRaw, offset, uint(3));
+            attrWriteOnlyRaw.Store(offset, uint(4));
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(9, 0)]] ByteAddressBuffer readOnlyRaw "
+        ": register(t9);" in generated_code
+    )
+    assert (
+        "[[vk::binding(10, 0)]] RWByteAddressBuffer writeOnlyRaw "
+        ": register(u10);" in generated_code
+    )
+    assert (
+        "[[vk::binding(11, 0)]] RWByteAddressBuffer readWriteRaw "
+        ": register(u11);" in generated_code
+    )
+    assert (
+        "[[vk::binding(12, 0)]] ByteAddressBuffer attrReadOnlyRaw "
+        ": register(t12);" in generated_code
+    )
+    assert (
+        "[[vk::binding(13, 0)]] RWByteAddressBuffer attrWriteOnlyRaw "
+        ": register(u13);" in generated_code
+    )
+    assert (
+        "uint blockedLoad = /* unsupported Slang byte-address buffer: "
+        "buffer_load requires readable byte-address buffer resource */ 0u;"
+        in generated_code
+    )
+    assert (
+        "uint blockedAttrLoad = /* unsupported Slang byte-address buffer: "
+        "Load requires readable byte-address buffer receiver */ 0u;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang byte-address buffer: buffer_store requires "
+        "writable byte-address buffer resource */;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang byte-address buffer: Store requires "
+        "writable byte-address buffer receiver */;" in generated_code
+    )
+    assert "readWriteRaw.Store(offset, uint(3));" in generated_code
+    assert "attrWriteOnlyRaw.Store(offset, uint(4));" in generated_code
+    assert "writeOnlyRaw.Load" not in generated_code
+    assert "attrWriteOnlyRaw.Load" not in generated_code
+    assert "buffer_load(" not in generated_code
     assert "buffer_store(" not in generated_code
 
 

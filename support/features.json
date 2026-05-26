@@ -388,9 +388,12 @@
           ]
         },
         "vulkan": {
-          "status": "diagnostic",
-          "notes": "Ray tracing and ray query IR operation nodes emit deterministic unsupported diagnostics with type-correct fallback values. Real SPIR-V ray tracing stage and RayQuery lowering is not implemented yet.",
+          "status": "partial",
+          "notes": "Registers RayQuery types as SPIR-V KHR ray-query objects and lowers Proceed, CandidateRayT, and CommittedRayT to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, acceleration-structure resources, ray-query initialization, object/world ray vectors, and broader intersection metadata remain incomplete.",
           "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_proceed_and_intersection_t_emit_khr_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_parsed_ray_query_generic_type_lowers_to_khr_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_supported_operations_reject_unexpected_arguments",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
           ]
@@ -896,7 +899,15 @@
           ]
         },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Storage-image, structured-buffer, and byte-address-buffer readonly/writeonly access metadata is tracked for Slang resources; invalid reads, writes, appends, and atomics emit deterministic diagnostics. Coherent/volatile/restrict-style resource qualifiers and compiler-backed validation are not fully audited yet.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics"
+          ]
+        }
       }
     },
     {

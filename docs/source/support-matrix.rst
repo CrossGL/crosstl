@@ -22,15 +22,15 @@ implicitly supported.
 .. csv-table:: Backend inventory
    :header: "Backend", "Ext", "Target generator", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
-   "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "525", "277", "Microsoft Learn HLSL reference; HLSL specification project"
+   "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "526", "277", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "724", "146", "GLSL 4.60 specification; OpenGL registry"
    "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "492", "366", "Apple Metal resources; Metal Shading Language specification"
-   "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "380", "12", "SPIR-V unified specification; Khronos SPIR-V registry"
-   "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "263", "36", "CUDA C++ programming guide"
+   "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "383", "12", "SPIR-V unified specification; Khronos SPIR-V registry"
+   "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "265", "36", "CUDA C++ programming guide"
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "291", "11", "ROCm HIP documentation"
    "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "292", "32", "Mojo manual"
-   "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "491", "35", "Rust reference"
-   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "310", "76", "Slang user guide"
+   "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "492", "35", "Rust reference"
+   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "312", "84", "Slang user guide"
 
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
@@ -38,12 +38,12 @@ implicitly supported.
    "DirectX / HLSL", "37", "6", "0", "0", "0", "0"
    "OpenGL / GLSL", "38", "4", "0", "0", "1", "0"
    "Metal", "35", "5", "0", "0", "3", "0"
-   "Vulkan SPIR-V", "17", "16", "2", "0", "0", "8"
+   "Vulkan SPIR-V", "17", "17", "1", "0", "0", "8"
    "CUDA", "11", "11", "0", "0", "3", "18"
    "HIP", "10", "12", "0", "0", "3", "18"
    "Mojo", "10", "27", "0", "1", "5", "0"
    "Rust", "11", "6", "0", "0", "0", "26"
-   "Slang", "14", "20", "0", "0", "0", "9"
+   "Slang", "14", "21", "0", "0", "0", "8"
 
 Graphics Backend Focus
 ----------------------
@@ -107,7 +107,7 @@ Each category below uses the status codes from the legend.
    "Geometry stage", "Y", "Y", "U", "?", "U", "U", "U", "?", "P"
    "Tessellation stages", "Y", "Y", "U", "?", "U", "U", "U", "?", "P"
    "Mesh/task/amplification stages", "P", "P", "P", "?", "U", "U", "U", "?", "P"
-   "Ray tracing stages", "P", "P", "P", "D", "?", "?", "U", "?", "P"
+   "Ray tracing stages", "P", "P", "P", "P", "?", "?", "U", "?", "P"
 
 .. csv-table:: stage I/O
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
@@ -124,7 +124,7 @@ Each category below uses the status codes from the legend.
    "Structured/storage buffers", "Y", "Y", "Y", "P", "P", "P", "P", "?", "P"
    "Resource arrays", "Y", "Y", "Y", "?", "?", "?", "P", "?", "P"
    "Texture and sampler object model", "Y", "Y", "Y", "?", "?", "?", "P", "?", "P"
-   "GLSL buffer block lowering", "P", "Y", "P", "P", "?", "?", "P", "?", "?"
+   "GLSL buffer block lowering", "P", "Y", "P", "P", "?", "?", "P", "?", "P"
    "Resource memory qualifiers", "Y", "Y", "Y", "P", "P", "P", "P", "?", "?"
 
 .. csv-table:: textures
@@ -214,7 +214,7 @@ need an audit before implementation work can be scoped accurately.
    "DirectX / HLSL", "stages", "Ray tracing stages", "partial", "Ray entry points lower to HLSL library shader attributes with stage-specific names and payload semantics, but full ray pipeline object/signature coverage remains incomplete."
    "OpenGL / GLSL", "stages", "Ray tracing stages", "partial", "Entry points and combined-stage names lower with GL_EXT_ray_tracing enablement, but full GLSL ray tracing layout and payload semantics are not complete."
    "Metal", "stages", "Ray tracing stages", "partial", "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete."
-   "Vulkan SPIR-V", "stages", "Ray tracing stages", "diagnostic", "Ray tracing and ray query IR operation nodes emit deterministic unsupported diagnostics with type-correct fallback values. Real SPIR-V ray tracing stage and RayQuery lowering is not implemented yet."
+   "Vulkan SPIR-V", "stages", "Ray tracing stages", "partial", "Registers RayQuery types as SPIR-V KHR ray-query objects and lowers Proceed, CandidateRayT, and CommittedRayT to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, acceleration-structure resources, ray-query initialization, object/world ray vectors, and broader intersection metadata remain incomplete."
    "CUDA", "stages", "Ray tracing stages", "unknown", ""
    "HIP", "stages", "Ray tracing stages", "unknown", ""
    "Mojo", "stages", "Ray tracing stages", "unsupported", "Mojo codegen rejects ray tracing stages, ray tracing intrinsics, and ray query methods explicitly; no Mojo ray pipeline ABI is implemented in this repo."
@@ -271,7 +271,7 @@ need an audit before implementation work can be scoped accurately.
    "HIP", "resources", "GLSL buffer block lowering", "unknown", ""
    "Mojo", "resources", "GLSL buffer block lowering", "partial", "GLSL layout(...) buffer blocks, direct buffer array declarations, and explicit @glsl_buffer_block variables emit compile-safe Mojo value placeholders with resource metadata comments for layout, set/binding, and access. Fixed-array member access compile-smokes, readonly assignment diagnostics, and buffer-namespace binding collision diagnostics are covered; std140/std430 layout conversion, runtime-array storage semantics, atomics, and native GPU buffer ABI remain incomplete."
    "Rust", "resources", "GLSL buffer block lowering", "unknown", ""
-   "Slang", "resources", "GLSL buffer block lowering", "unknown", ""
+   "Slang", "resources", "GLSL buffer block lowering", "partial", "Storage-image, structured-buffer, and byte-address-buffer readonly/writeonly access metadata is tracked for Slang resources; invalid reads, writes, appends, and atomics emit deterministic diagnostics. Coherent/volatile/restrict-style resource qualifiers and compiler-backed validation are not fully audited yet."
    "Vulkan SPIR-V", "resources", "Resource memory qualifiers", "partial", "Storage-image readonly/writeonly/coherent/volatile/restrict qualifiers lower to validated SPIR-V variable decorations with direct and interprocedural invalid read/write/atomic diagnostics; StructuredBuffer, RWStructuredBuffer, and GLSL buffer-block helper parameters inline to avoid invalid Uniform pointer calls while preserving read/write access diagnostics; GLSL buffer-block qualifiers lower to BufferBlock member decorations with direct/helper/atomic access diagnostics."
    "CUDA", "resources", "Resource memory qualifiers", "partial", ""
    "HIP", "resources", "Resource memory qualifiers", "partial", ""

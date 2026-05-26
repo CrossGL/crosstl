@@ -80,6 +80,70 @@ shader ExternalValidatorTypedBufferAtomics {
 """
 
 
+HLSL_DXR_LIBRARY_VALIDATOR_SHADER = """
+shader HLSLDXRLibraryValidator {
+    RaytracingAccelerationStructure accel @register(t0);
+
+    struct Payload {
+        vec3 color;
+    };
+
+    struct CallableData {
+        uint value;
+    };
+
+    ray_generation {
+        void main() {
+            RayDesc ray;
+            ray.Origin = vec3(0.0, 0.0, 0.0);
+            ray.TMin = 0.001;
+            ray.Direction = vec3(0.0, 0.0, 1.0);
+            ray.TMax = 100.0;
+
+            Payload payload;
+            payload.color = vec3(0.0, 0.0, 0.0);
+            TraceRay(accel, 0, 0xFF, 0, 1, 0, ray, payload);
+
+            CallableData data;
+            data.value = 0u;
+            CallShader(0, data);
+        }
+    }
+
+    ray_miss {
+        void main(Payload payload @ payload) {
+            payload.color = vec3(0.0, 0.0, 1.0);
+        }
+    }
+
+    ray_closest_hit {
+        void main(
+            Payload payload @ payload,
+            BuiltInTriangleIntersectionAttributes attributes @ hit_attribute
+        ) {
+            payload.color = vec3(attributes.barycentrics, 1.0);
+        }
+    }
+
+    ray_any_hit {
+        void main(
+            Payload payload @ payload,
+            BuiltInTriangleIntersectionAttributes attributes @ hit_attribute
+        ) {
+            IgnoreHit();
+            AcceptHitAndEndSearch();
+        }
+    }
+
+    ray_callable {
+        void main(CallableData data @ callable_data) {
+            data.value = data.value + 1u;
+        }
+    }
+}
+"""
+
+
 GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER = """
 shader GLSLMultisampleStorageValidator {
     image2DMS colorImage @rgba16f;
@@ -809,6 +873,51 @@ def test_generated_hlsl_typed_buffer_atomics_compile_with_dxc(tmp_path):
             "cs_6_0",
             "-E",
             "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_generated_hlsl_dxr_library_compiles_with_dxc(tmp_path):
+    shader_path = tmp_path / "dxr_library.hlsl"
+    output_path = tmp_path / "dxr_library.dxil"
+
+    code = HLSLCodeGen().generate(
+        crosstl.translator.parse(HLSL_DXR_LIBRARY_VALIDATOR_SHADER)
+    )
+    assert '[shader("raygeneration")]' in code
+    assert '[shader("miss")]' in code
+    assert '[shader("closesthit")]' in code
+    assert '[shader("anyhit")]' in code
+    assert '[shader("callable")]' in code
+    assert "void RayGenMain()" in code
+    assert "void MissMain(inout Payload payload)" in code
+    assert (
+        "void ClosestHitMain(inout Payload payload, "
+        "in BuiltInTriangleIntersectionAttributes attributes)"
+    ) in code
+    assert (
+        "void AnyHitMain(inout Payload payload, "
+        "in BuiltInTriangleIntersectionAttributes attributes)"
+    ) in code
+    assert "void CallableMain(inout CallableData data)" in code
+    assert "TraceRay(accel, 0, 255, 0, 1, 0, ray, payload);" in code
+    assert "CallShader(0, data);" in code
+    assert ": payload" not in code
+    assert ": hit_attribute" not in code
+    assert ": callable_data" not in code
+    assert "struct BuiltInTriangleIntersectionAttributes" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    dxc = _require_tool("dxc")
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "lib_6_3",
             str(shader_path),
             "-Fo",
             str(output_path),

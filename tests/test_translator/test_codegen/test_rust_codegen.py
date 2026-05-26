@@ -4166,6 +4166,186 @@ def test_non_copy_member_and_indexed_return_places_clone_only_when_required_comp
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_non_copy_branch_return_places_clone_only_when_required_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    wrapper_type = NamedType("Wrapper")
+    ast = ShaderNode(
+        "NonCopyBranchReturnPlaces",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode("Wrapper", [StructMemberNode("payload", payload_type)]),
+        ],
+        global_variables=[
+            VariableNode("globalWrapper", wrapper_type),
+            ArrayNode("Payload", "globalValues", 2),
+        ],
+        functions=[
+            FunctionNode(
+                "choose_member_ternary",
+                payload_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("left", wrapper_type),
+                    ParameterNode("right", wrapper_type),
+                ],
+                [
+                    ReturnNode(
+                        TernaryOpNode(
+                            IdentifierNode("flag"),
+                            MemberAccessNode(IdentifierNode("left"), "payload"),
+                            MemberAccessNode(IdentifierNode("right"), "payload"),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "choose_static_or_indexed_ternary",
+                payload_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("values", ArrayType(payload_type, 2)),
+                ],
+                [
+                    ReturnNode(
+                        TernaryOpNode(
+                            IdentifierNode("flag"),
+                            MemberAccessNode(
+                                IdentifierNode("globalWrapper"),
+                                "payload",
+                            ),
+                            ArrayAccessNode(
+                                IdentifierNode("values"),
+                                LiteralNode(0, PrimitiveType("int")),
+                            ),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "choose_match_member_or_static",
+                payload_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("left", wrapper_type),
+                ],
+                [
+                    ReturnNode(
+                        MatchNode(
+                            IdentifierNode("flag"),
+                            [
+                                MatchArmNode(
+                                    LiteralPatternNode(
+                                        LiteralNode(True, PrimitiveType("bool"))
+                                    ),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            MemberAccessNode(
+                                                IdentifierNode("left"),
+                                                "payload",
+                                            ),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                                MatchArmNode(
+                                    LiteralPatternNode(
+                                        LiteralNode(False, PrimitiveType("bool"))
+                                    ),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            MemberAccessNode(
+                                                IdentifierNode("globalWrapper"),
+                                                "payload",
+                                            ),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "choose_match_indexed",
+                payload_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("values", ArrayType(payload_type, 2)),
+                ],
+                [
+                    ReturnNode(
+                        MatchNode(
+                            IdentifierNode("flag"),
+                            [
+                                MatchArmNode(
+                                    LiteralPatternNode(
+                                        LiteralNode(True, PrimitiveType("bool"))
+                                    ),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            ArrayAccessNode(
+                                                IdentifierNode("values"),
+                                                LiteralNode(0, PrimitiveType("int")),
+                                            ),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                                MatchArmNode(
+                                    LiteralPatternNode(
+                                        LiteralNode(False, PrimitiveType("bool"))
+                                    ),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            ArrayAccessNode(
+                                                IdentifierNode("globalValues"),
+                                                LiteralNode(1, PrimitiveType("int")),
+                                            ),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                            ],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "return (if flag { left.payload } else { right.payload });" in (
+        generated_code
+    )
+    assert "left.payload.clone()" not in generated_code
+    assert "right.payload.clone()" not in generated_code
+    assert (
+        "return (if flag { (*GLOBAL_WRAPPER).payload.clone() } "
+        "else { values[0].clone() });"
+    ) in generated_code
+    assert "true => {\n        left.payload\n    }" in generated_code
+    assert (
+        "false => {\n        (*GLOBAL_WRAPPER).payload.clone()\n    }" in generated_code
+    )
+    assert "true => {\n        values[0].clone()\n    }" in generated_code
+    assert "false => {\n        (*GLOBAL_VALUES)[1].clone()\n    }" in (generated_code)
+    assert "(*GLOBAL_VALUES)[1]\n    }" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_legacy_generic_wrappers_emit_rust_generic_params():
     code = """
     shader GenericWrappers {

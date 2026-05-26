@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 525
+        "test_count": 526
       },
       "translator_codegen": {
         "exists": true,
@@ -437,7 +437,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 380
+        "test_count": 383
       },
       "translator_codegen": {
         "exists": true,
@@ -551,7 +551,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 263
+        "test_count": 265
       },
       "translator_codegen": {
         "exists": true,
@@ -857,7 +857,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 491
+        "test_count": 492
       },
       "translator_codegen": {
         "exists": true,
@@ -881,7 +881,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 76,
+        "unsupported_marker_count": 84,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -971,7 +971,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 310
+        "test_count": 312
       },
       "translator_codegen": {
         "exists": true,
@@ -1346,8 +1346,8 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "Ray tracing and ray query IR operation nodes emit deterministic unsupported diagnostics with type-correct fallback values. Real SPIR-V ray tracing stage and RayQuery lowering is not implemented yet.",
-      "status": "diagnostic"
+      "notes": "Registers RayQuery types as SPIR-V KHR ray-query objects and lowers Proceed, CandidateRayT, and CommittedRayT to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, acceleration-structure resources, ray-query initialization, object/world ray vectors, and broader intersection metadata remain incomplete.",
+      "status": "partial"
     },
     {
       "backend": "CUDA",
@@ -1859,8 +1859,8 @@
       "category": "resources",
       "feature": "GLSL buffer block lowering",
       "feature_id": "resources.glsl_buffer_blocks",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Storage-image, structured-buffer, and byte-address-buffer readonly/writeonly access metadata is tracked for Slang resources; invalid reads, writes, appends, and atomics emit deterministic diagnostics. Coherent/volatile/restrict-style resource qualifiers and compiler-backed validation are not fully audited yet.",
+      "status": "partial"
     },
     {
       "backend": "Vulkan SPIR-V",
@@ -3593,11 +3593,14 @@
         },
         "vulkan": {
           "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_proceed_and_intersection_t_emit_khr_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_parsed_ray_query_generic_type_lowers_to_khr_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_supported_operations_reject_unexpected_arguments",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
           ],
-          "notes": "Ray tracing and ray query IR operation nodes emit deterministic unsupported diagnostics with type-correct fallback values. Real SPIR-V ray tracing stage and RayQuery lowering is not implemented yet.",
-          "status": "diagnostic"
+          "notes": "Registers RayQuery types as SPIR-V KHR ray-query objects and lowers Proceed, CandidateRayT, and CommittedRayT to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, acceleration-structure resources, ray-query initialization, object/world ray vectors, and broader intersection metadata remain incomplete.",
+          "status": "partial"
         }
       }
     },
@@ -4256,9 +4259,13 @@
           "status": "unknown"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics"
+          ],
+          "notes": "Storage-image, structured-buffer, and byte-address-buffer readonly/writeonly access metadata is tracked for Slang resources; invalid reads, writes, appends, and atomics emit deterministic diagnostics. Coherent/volatile/restrict-style resource qualifiers and compiler-backed validation are not fully audited yet.",
+          "status": "partial"
         },
         "vulkan": {
           "evidence": [
@@ -5924,15 +5931,15 @@
       },
       "slang": {
         "diagnostic": 0,
-        "partial": 20,
+        "partial": 21,
         "supported": 14,
-        "unknown": 9,
+        "unknown": 8,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "vulkan": {
-        "diagnostic": 2,
-        "partial": 16,
+        "diagnostic": 1,
+        "partial": 17,
         "supported": 17,
         "unknown": 8,
         "unsupported": 0,

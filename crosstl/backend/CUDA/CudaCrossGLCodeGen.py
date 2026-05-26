@@ -1312,8 +1312,13 @@ class CudaToCrossGLConverter:
         alias_type = self.convert_cuda_type_to_crossgl(node.alias_type)
         self.emit(f"typedef {alias_type} {node.name};")
 
+    def format_atomic_argument(self, arg, index):
+        if index == 0 and isinstance(arg, UnaryOpNode) and arg.op == "&":
+            return self.visit(arg.operand)
+        return self.visit(arg)
+
     def visit_AtomicOperationNode(self, node):
-        args = [self.visit(arg) for arg in node.args]
+        args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node.args)]
         args_str = ", ".join(args)
 
         atomic_map = {
