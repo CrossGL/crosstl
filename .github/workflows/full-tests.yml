@@ -54,6 +54,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslang-tools
 
+      - name: Install GLSL validator (macOS)
+        if: runner.os == 'macOS'
+        run: brew install glslang
+
+      - name: Install GLSL validator (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --version=1.4.341 -y --no-progress
+          $sdkRoot = Get-ChildItem "C:\VulkanSDK" -Directory |
+            Sort-Object Name -Descending |
+            Select-Object -First 1
+          if ($null -eq $sdkRoot) {
+            throw "Vulkan SDK install directory was not found"
+          }
+          Join-Path $sdkRoot.FullName "Bin" |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Install DirectX Shader Compiler (Linux)
         if: runner.os == 'Linux'
         run: |
