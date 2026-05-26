@@ -2519,7 +2519,19 @@ class MetalCodeGen:
         return self.type_name_string(var_type) or "float"
 
     def local_variable_qualifier(self, node):
-        return "const " if "const" in getattr(node, "qualifiers", []) else ""
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        attributes = {
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(node, "attributes", []) or []
+        }
+        if (qualifiers | attributes) & {"shared", "groupshared", "threadgroup"}:
+            return "threadgroup "
+        if "const" in qualifiers:
+            return "const "
+        return ""
 
     def type_name_string(self, vtype):
         if vtype is None:

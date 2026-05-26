@@ -97,6 +97,28 @@ def test_metal_user_defined_synchronization_names_are_not_lowered():
     assert "threadgroup_barrier(" not in generated_code
 
 
+def test_metal_shared_local_variables_use_threadgroup_address_space():
+    shader = """
+    shader SharedLocalStorage {
+        compute {
+            void main() {
+                shared int data[4];
+                int scratch[4] @threadgroup;
+                data[0] = 1;
+                scratch[0] = data[0];
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "threadgroup int data[4];" in generated_code
+    assert "threadgroup int scratch[4];" in generated_code
+    assert "\n    int data[4];" not in generated_code
+    assert "\n    int scratch[4];" not in generated_code
+
+
 def test_metal_precision_aliases_map_to_native_metal_types():
     shader = """
     shader PrecisionAliasSmoke {
