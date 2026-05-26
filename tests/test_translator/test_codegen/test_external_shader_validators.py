@@ -840,10 +840,10 @@ def test_mixed_glsl_ssbo_nested_struct_aggregate_hlsl_output_compiles_with_dxc(
         )
     )
     assert "RWByteAddressBuffer aggregateBlock : register(u30);" in code
-    assert "AggregateBlockData inner = AggregateBlockData(AggregatePayload" in code
+    assert "AggregateBlockData inner = AggregateBlockData{AggregatePayload" in code
     assert (
         "AggregateBlockData item = AggregateBlockData"
-        "(AggregatePayload(asfloat(aggregateBlock.Load((48 + i * 48)))" in code
+        "{AggregatePayload{asfloat(aggregateBlock.Load((48 + i * 48)))" in code
     )
     assert "AggregateBlockData __crossgl_aggregate_store_0 = item;" in code
     assert (

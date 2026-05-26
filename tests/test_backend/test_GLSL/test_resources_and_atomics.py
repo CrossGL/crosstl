@@ -1747,20 +1747,20 @@ def test_codegen_mixed_ssbo_nested_struct_aggregates_materialize_leaf_fields():
         "AggregateBlockData passThrough(RWByteAddressBuffer localBlock, uint i)" in hlsl
     )
     assert (
-        "return AggregateBlockData(AggregatePayload("
+        "return AggregateBlockData{AggregatePayload{"
         "asfloat(localBlock.Load((48 + i * 48))), "
         "bool3((localBlock.Load((48 + i * 48 + 16)) != 0u), "
         "(localBlock.Load((48 + i * 48 + 16 + 4)) != 0u), "
-        "(localBlock.Load((48 + i * 48 + 16 + 8)) != 0u))), "
-        "localBlock.Load((48 + i * 48 + 32)));" in hlsl
+        "(localBlock.Load((48 + i * 48 + 16 + 8)) != 0u))}, "
+        "localBlock.Load((48 + i * 48 + 32))};" in hlsl
     )
     assert (
-        "AggregateBlockData inner = AggregateBlockData("
-        "AggregatePayload(asfloat(aggregateBlock.Load(0)), "
+        "AggregateBlockData inner = AggregateBlockData{"
+        "AggregatePayload{asfloat(aggregateBlock.Load(0)), "
         "bool3((aggregateBlock.Load(16) != 0u), "
         "(aggregateBlock.Load(20) != 0u), "
-        "(aggregateBlock.Load(24) != 0u))), "
-        "aggregateBlock.Load(32));" in hlsl
+        "(aggregateBlock.Load(24) != 0u))}, "
+        "aggregateBlock.Load(32)};" in hlsl
     )
     assert "AggregateBlockData __crossgl_aggregate_store_0 = item;" in hlsl
     assert (

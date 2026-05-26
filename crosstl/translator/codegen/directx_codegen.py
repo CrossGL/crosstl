@@ -101,7 +101,6 @@ from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
     collect_generic_struct_specializations,
-    format_struct_constructor_expression,
     generate_generic_structs,
     generate_struct_constructor_expression,
     generic_struct_specialized_type_name,
@@ -8988,7 +8987,7 @@ class HLSLCodeGen:
             if value is None:
                 return None
             values.append(value)
-        return format_struct_constructor_expression(self, access["hlsl_type"], values)
+        return f"{access['hlsl_type']}{{{', '.join(values)}}}"
 
     def hlsl_byteaddress_leaf_store(self, buffer_name, offset, value, access):
         if access.get("matrix_columns"):
