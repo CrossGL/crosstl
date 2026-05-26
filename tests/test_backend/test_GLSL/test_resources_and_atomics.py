@@ -1555,8 +1555,7 @@ def test_codegen_mixed_ssbo_nested_struct_members_lower_as_leaf_offsets():
     assert "float readNested(device uchar* localBlock, uint i)" in metal
     assert (
         "return (*reinterpret_cast<const device float*>(localBlock + 16)) + "
-        "(*reinterpret_cast<const device float*>(localBlock + (48 + i * 4)));"
-        in metal
+        "(*reinterpret_cast<const device float*>(localBlock + (48 + i * 4)));" in metal
     )
     assert (
         "float scale = (*reinterpret_cast<const device float*>"
@@ -1566,12 +1565,10 @@ def test_codegen_mixed_ssbo_nested_struct_members_lower_as_leaf_offsets():
         "bool3 mask = bool3(((*reinterpret_cast<const device uint*>"
         "(nestedBlock + 32)) != 0u), "
         "((*reinterpret_cast<const device uint*>(nestedBlock + 36)) != 0u), "
-        "((*reinterpret_cast<const device uint*>(nestedBlock + 40)) != 0u));"
-        in metal
+        "((*reinterpret_cast<const device uint*>(nestedBlock + 40)) != 0u));" in metal
     )
     assert (
-        "(*reinterpret_cast<device float*>(nestedBlock + 16)) = scale + 1.0;"
-        in metal
+        "(*reinterpret_cast<device float*>(nestedBlock + 16)) = scale + 1.0;" in metal
     )
     assert "bool3 __crossgl_buffer_store_0 = bool3(mask.y, mask.x, true);" in metal
     assert (

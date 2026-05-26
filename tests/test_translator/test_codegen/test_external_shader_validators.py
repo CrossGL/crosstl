@@ -715,7 +715,9 @@ def test_mixed_glsl_ssbo_nested_struct_hlsl_output_compiles_with_dxc(tmp_path):
     assert "bool3((nestedBlock.Load(32) != 0u)" in code
     assert "nestedBlock.Store(16, asuint((scale + 1.0)));" in code
     assert "nestedBlock.Store3(32, uint3" in code
-    assert "nestedBlock.Store((48 + i * 4), asuint(asfloat(nestedBlock.Load(16))))" in code
+    assert (
+        "nestedBlock.Store((48 + i * 4), asuint(asfloat(nestedBlock.Load(16))))" in code
+    )
     assert ("un" + "supported HLSL GLSL buffer block") not in code
     shader_path.write_text(code, encoding="utf-8")
 
