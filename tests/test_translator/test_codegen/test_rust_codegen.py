@@ -341,6 +341,24 @@ mod gpu {
         }
     }
 
+    #[derive(Debug, Clone, Copy)]
+    pub struct Texture2DMS<T>(PhantomData<T>);
+
+    impl<T> Default for Texture2DMS<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Texture2DMSArray<T>(PhantomData<T>);
+
+    impl<T> Default for Texture2DMSArray<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
     #[derive(Debug, Clone, Copy, Default)]
     pub struct Sampler;
 
@@ -507,6 +525,8 @@ mod gpu {
     impl<T> TextureLike for Texture3D<T> {}
     impl<T> TextureLike for TextureCube<T> {}
     impl<T> TextureLike for TextureCubeArray<T> {}
+    impl<T> TextureLike for Texture2DMS<T> {}
+    impl<T> TextureLike for Texture2DMSArray<T> {}
     impl<T> TextureLike for DepthTexture2D<T> {}
     impl<T> TextureLike for DepthTexture2DArray<T> {}
     impl<T> TextureLike for DepthTextureCube<T> {}
@@ -1572,6 +1592,17 @@ mod gpu {
         Coord: SampleCoord,
     {
         Vec4::default()
+    }
+
+    pub fn image_size<Image, Result>(_image: Image) -> Result
+    where
+        Result: Default,
+    {
+        Result::default()
+    }
+
+    pub fn image_samples<Image>(_image: Image) -> i32 {
+        1
     }
 
     pub fn image_load<Image, Coord, Value>(_image: Image, _coord: Coord) -> Value
@@ -3460,6 +3491,14 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
                 let ramp = imageLoad(rampImage, 0);
                 let signedValue = imageLoad(signedVolume, ivec3(0));
                 let unsignedValue = imageLoad(counterLayers, ivec3(0));
+                let size1D = imageSize(rampImage);
+                let size2D = imageSize(colorImage);
+                let size3D = imageSize(volumeImage);
+                let sizeCube = imageSize(cubeImage);
+                let sizeArray = imageSize(layerImage);
+                let sizeMs = imageSize(msImage);
+                let sizeMsArray = imageSize(msArrayImage);
+                let sampleCount = imageSamples(msImage);
                 imageStore(colorImage, pixel, color + vec4(1.0));
                 let previous = imageAtomicAdd(counterImage, pixel, amount);
                 let minValue = imageAtomicMin(counterImage, pixel, amount);
@@ -3474,7 +3513,11 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
                 uint length = 0u;
                 buffer_dimensions(values, length);
                 buffer_store(values, index, value + int(previous));
-                return color + ramp + vec4(weight + float(signedValue.x + int(unsignedValue.x)));
+                return color + ramp + vec4(
+                    weight + float(signedValue.x + int(unsignedValue.x))
+                        + float(size1D + size2D.x + size3D.z + sizeCube.y
+                            + sizeArray.z + sizeMs.y + sizeMsArray.z + sampleCount)
+                );
             }
         }
     }
@@ -3541,6 +3584,14 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
         "let unsignedValue: Vec4<u32> = image_load(*COUNTER_LAYERS, Vec3::<i32>::new(0, 0, 0));"
         in generated_code
     )
+    assert "let size1D: i32 = image_size(*RAMP_IMAGE);" in generated_code
+    assert "let size2D: Vec2<i32> = image_size(*COLOR_IMAGE);" in generated_code
+    assert "let size3D: Vec3<i32> = image_size(*VOLUME_IMAGE);" in generated_code
+    assert "let sizeCube: Vec2<i32> = image_size(*CUBE_IMAGE);" in generated_code
+    assert "let sizeArray: Vec3<i32> = image_size(*LAYER_IMAGE);" in generated_code
+    assert "let sizeMs: Vec2<i32> = image_size(*MS_IMAGE);" in generated_code
+    assert "let sizeMsArray: Vec3<i32> = image_size(*MS_ARRAY_IMAGE);" in generated_code
+    assert "let sampleCount: i32 = image_samples(*MS_IMAGE);" in generated_code
     assert "image_store(*COLOR_IMAGE, pixel, (color + Vec4::<f32>::new" in (
         generated_code
     )
@@ -3589,6 +3640,8 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
     assert "std::sync::LazyLock<Buffer<f32>>" not in generated_code
     assert "imageLoad" not in generated_code
     assert "imageStore" not in generated_code
+    assert "imageSize" not in generated_code
+    assert "imageSamples" not in generated_code
     assert "imageAtomicAdd" not in generated_code
     assert "imageAtomicMin" not in generated_code
     assert "imageAtomicMax" not in generated_code

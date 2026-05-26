@@ -954,6 +954,101 @@ def test_structured_buffer_placeholders_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_byte_address_buffer_placeholders_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    ByteAddressBuffer rawBytes;
+    RWByteAddressBuffer rawOutput;
+    RWByteAddressBuffer rawArray[2];
+
+    uint readRaw(ByteAddressBuffer input, uint offset) {
+        return buffer_load(input, offset);
+    }
+
+    float readFloat(ByteAddressBuffer input, uint offset) {
+        return asfloat(buffer_load(input, offset));
+    }
+
+    void writeRaw(RWByteAddressBuffer output, uint offset, uint value, float weight) {
+        buffer_store(output, offset, value);
+        buffer_store(output, offset + uint(4), asuint(weight));
+    }
+
+    uint updateArray(int slot, uint offset) {
+        uint value = buffer_load(rawArray[slot], offset);
+        buffer_store(rawArray[slot], offset, value + uint(1));
+        return value;
+    }
+
+    void queryRaw(ByteAddressBuffer input) {
+        uint count = 0;
+        buffer_dimensions(input, count);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct ByteAddressBuffer:" in generated_code
+    assert "struct RWByteAddressBuffer:" in generated_code
+    assert "var rawBytes: ByteAddressBuffer = ByteAddressBuffer()" in generated_code
+    assert (
+        "var rawOutput: RWByteAddressBuffer = RWByteAddressBuffer()" in generated_code
+    )
+    assert "InlineArray[RWByteAddressBuffer, 2]" in generated_code
+    assert (
+        "fn buffer_load(buffer: ByteAddressBuffer, index: UInt32) -> UInt32:"
+        in generated_code
+    )
+    assert (
+        "fn buffer_load(buffer: RWByteAddressBuffer, index: UInt32) -> UInt32:"
+        in generated_code
+    )
+    assert (
+        "fn buffer_store(buffer: RWByteAddressBuffer, index: UInt32, value: UInt32):"
+        in generated_code
+    )
+    assert (
+        "fn buffer_dimensions(buffer: ByteAddressBuffer, dimensions: UInt32):"
+        in generated_code
+    )
+    assert "fn asfloat(value: UInt32) -> Float32:" in generated_code
+    assert "fn asuint(value: Float32) -> UInt32:" in generated_code
+    assert "return asfloat(buffer_load(input, offset))" in generated_code
+    assert (
+        "buffer_store(output, (offset + UInt32(4)), asuint(weight))" in generated_code
+    )
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "byte_address_buffer_placeholders.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_invalid_buffer_operations_are_rejected_for_mojo_codegen():
+    code = """
+    ByteAddressBuffer rawBytes;
+    StructuredBuffer<int> readonlyValues;
+
+    void invalidRaw(ByteAddressBuffer input, uint offset, uint value) {
+        buffer_store(input, offset, value);
+    }
+
+    void invalidStructured(StructuredBuffer<int> input, uint index, int value) {
+        buffer_store(input, index, value);
+    }
+    """
+
+    with pytest.raises(ValueError, match="Unsupported buffer_store"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_advanced_texture_placeholder_builtins_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 

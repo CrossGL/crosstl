@@ -134,6 +134,8 @@ class RustCodeGen:
             "sampler3D": "Texture3D<f32>",
             "samplerCube": "TextureCube<f32>",
             "samplerCubeArray": "TextureCubeArray<f32>",
+            "sampler2DMS": "Texture2DMS<f32>",
+            "sampler2DMSArray": "Texture2DMSArray<f32>",
             "sampler2DShadow": "DepthTexture2D<f32>",
             "sampler2DArrayShadow": "DepthTexture2DArray<f32>",
             "samplerCubeShadow": "DepthTextureCube<f32>",
@@ -222,6 +224,8 @@ class RustCodeGen:
             "textureSamples": "texture_samples",
             "imageLoad": "image_load",
             "imageStore": "image_store",
+            "imageSize": "image_size",
+            "imageSamples": "image_samples",
             "imageAtomicAdd": "image_atomic_add",
             "imageAtomicMin": "image_atomic_min",
             "imageAtomicMax": "image_atomic_max",
@@ -5389,6 +5393,12 @@ class RustCodeGen:
         if mapped_name == "image_load" and arg_types:
             return self.storage_image_value_result_type(arg_types[0])
 
+        if mapped_name == "image_size" and arg_types:
+            return self.storage_image_size_result_type(arg_types[0])
+
+        if mapped_name == "image_samples":
+            return "int"
+
         if mapped_name.startswith("image_atomic_") and arg_types:
             return self.storage_image_atomic_result_type(arg_types[0])
 
@@ -5452,6 +5462,8 @@ class RustCodeGen:
             "Texture1DArray<f32>",
             "Texture2D<f32>",
             "TextureCube<f32>",
+            "sampler2DMS",
+            "Texture2DMS<f32>",
             "sampler2DShadow",
             "samplerCubeShadow",
             "DepthTexture2D<f32>",
@@ -5465,6 +5477,8 @@ class RustCodeGen:
             "Texture2DArray<f32>",
             "Texture3D<f32>",
             "TextureCubeArray<f32>",
+            "sampler2DMSArray",
+            "Texture2DMSArray<f32>",
             "sampler2DArrayShadow",
             "samplerCubeArrayShadow",
             "DepthTexture2DArray<f32>",
@@ -5480,6 +5494,45 @@ class RustCodeGen:
         if image_type.startswith("iimage") or "Vec4<i32>" in image_type:
             return "ivec4"
         return "vec4"
+
+    def storage_image_size_result_type(self, image_type):
+        image_base, _ = self.generic_type_parts(image_type)
+        image_base = image_base.rsplit("::", 1)[-1]
+        if image_base in {"image1D", "iimage1D", "uimage1D", "Image1D"}:
+            return "int"
+        if image_base in {
+            "image1DArray",
+            "iimage1DArray",
+            "uimage1DArray",
+            "image2D",
+            "iimage2D",
+            "uimage2D",
+            "imageCube",
+            "Image1DArray",
+            "Image2D",
+            "ImageCube",
+            "image2DMS",
+            "iimage2DMS",
+            "uimage2DMS",
+            "Image2DMS",
+        }:
+            return "ivec2"
+        if image_base in {
+            "image3D",
+            "iimage3D",
+            "uimage3D",
+            "image2DArray",
+            "iimage2DArray",
+            "uimage2DArray",
+            "Image3D",
+            "Image2DArray",
+            "image2DMSArray",
+            "iimage2DMSArray",
+            "uimage2DMSArray",
+            "Image2DMSArray",
+        }:
+            return "ivec3"
+        return "ivec2"
 
     def storage_image_atomic_result_type(self, image_type):
         image_type = str(image_type or "")
