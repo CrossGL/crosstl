@@ -22,105 +22,105 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 372,
+        "unsupported_marker_count": 373,
         "unsupported_marker_samples": [
           {
-            "line": 260,
+            "line": 261,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_image_atomic_expression,"
           },
           {
-            "line": 261,
+            "line": 262,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_image_atomic_expression,"
           },
           {
-            "line": 262,
+            "line": 263,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_image_store_expression,"
           },
           {
-            "line": 263,
+            "line": 264,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_cube_texel_fetch_expression,"
           },
           {
-            "line": 264,
+            "line": 265,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texture_call_vector_expression,"
           },
           {
-            "line": 265,
+            "line": 266,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texture_compare_scalar_expression,"
           },
           {
-            "line": 266,
+            "line": 267,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texture_gather_compare_vector_expression,"
           },
           {
-            "line": 267,
+            "line": 268,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texture_query_lod_expression,"
           },
           {
-            "line": 268,
+            "line": 269,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texel_fetch_offset_expression,"
           },
           {
-            "line": 269,
+            "line": 270,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_projected_texture_call_expression,"
           },
           {
-            "line": 270,
+            "line": 271,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_storage_image_texture_comparison_scalar_expression,"
           },
           {
-            "line": 271,
+            "line": 272,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_storage_image_texture_operation_vector_expression,"
           },
           {
-            "line": 272,
+            "line": 273,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_gather_compare_call_expression,"
           },
           {
-            "line": 273,
+            "line": 274,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_gather_call_expression,"
           },
           {
-            "line": 274,
+            "line": 275,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_compare_scalar_expression,"
           },
           {
-            "line": 275,
+            "line": 276,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_compare_operation_error,"
           },
           {
-            "line": 276,
+            "line": 277,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_offset_call_expression,"
           },
           {
-            "line": 277,
+            "line": 278,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_offset_operation_error,"
           },
           {
-            "line": 278,
+            "line": 279,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_projected_texture_operation_error,"
           },
           {
-            "line": 279,
+            "line": 280,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_query_levels_expression,"
           }
@@ -271,7 +271,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 676
+        "test_count": 677
       },
       "translator_codegen": {
         "exists": true,
@@ -300,105 +300,105 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 380,
+        "unsupported_marker_count": 381,
         "unsupported_marker_samples": [
           {
-            "line": 259,
+            "line": 260,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_image_atomic_expression,"
           },
           {
-            "line": 260,
+            "line": 261,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_cube_texel_fetch_expression,"
           },
           {
-            "line": 261,
+            "line": 262,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_image_atomic_expression,"
           },
           {
-            "line": 262,
+            "line": 263,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_image_store_expression,"
           },
           {
-            "line": 263,
+            "line": 264,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_call_vector_expression,"
           },
           {
-            "line": 264,
+            "line": 265,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_compare_scalar_expression,"
           },
           {
-            "line": 265,
+            "line": 266,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_gather_compare_vector_expression,"
           },
           {
-            "line": 266,
+            "line": 267,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_query_lod_expression,"
           },
           {
-            "line": 267,
+            "line": 268,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texel_fetch_offset_expression,"
           },
           {
-            "line": 268,
+            "line": 269,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_projected_texture_call_expression,"
           },
           {
-            "line": 269,
+            "line": 270,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_storage_image_texture_comparison_scalar_expression,"
           },
           {
-            "line": 270,
+            "line": 271,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_storage_image_texture_operation_vector_expression,"
           },
           {
-            "line": 271,
+            "line": 272,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_gather_compare_call_expression,"
           },
           {
-            "line": 272,
+            "line": 273,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_gather_call_expression,"
           },
           {
-            "line": 273,
+            "line": 274,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_compare_scalar_expression,"
           },
           {
-            "line": 274,
+            "line": 275,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_compare_operation_error,"
           },
           {
-            "line": 275,
+            "line": 276,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_offset_call_expression,"
           },
           {
-            "line": 276,
+            "line": 277,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_offset_operation_error,"
           },
           {
-            "line": 277,
+            "line": 278,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_projected_texture_operation_error,"
           },
           {
-            "line": 278,
+            "line": 279,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_query_levels_expression,"
           }
@@ -2013,7 +2013,7 @@
       "category": "resources",
       "feature": "GLSL buffer block lowering",
       "feature_id": "resources.glsl_buffer_blocks",
-      "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including bool/int/uint/float scalars, vectors, matrices, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
+      "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
       "status": "partial"
     },
     {
@@ -2022,7 +2022,7 @@
       "category": "resources",
       "feature": "GLSL buffer block lowering",
       "feature_id": "resources.glsl_buffer_blocks",
-      "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including bool/int/uint/float scalars, vectors, matrices, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
+      "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
       "status": "partial"
     },
     {
@@ -4167,6 +4167,7 @@
           "evidence": [
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_uint_atomics_lower_to_byteaddress_and_device_atomics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_bool_members_lower_as_uint_slots",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_struct_members_lower_as_leaf_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_int_atomics_lower_to_byteaddress_and_device_atomics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_runtime_array_atomics_lower_dynamic_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_std140_blocks_lower_to_explicit_offsets",
@@ -4177,9 +4178,10 @@
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_std140_hlsl_output_compiles_with_dxc",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_struct_hlsl_output_compiles_with_dxc",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_atomics_hlsl_output_compiles_with_dxc"
           ],
-          "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including bool/int/uint/float scalars, vectors, matrices, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
+          "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
           "status": "partial"
         },
         "hip": {
@@ -4191,6 +4193,7 @@
           "evidence": [
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_uint_atomics_lower_to_byteaddress_and_device_atomics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_bool_members_lower_as_uint_slots",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_struct_members_lower_as_leaf_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_int_atomics_lower_to_byteaddress_and_device_atomics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_runtime_array_atomics_lower_dynamic_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_std140_blocks_lower_to_explicit_offsets",
@@ -4201,12 +4204,13 @@
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_std140_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_struct_metal_output_compiles_with_xcrun_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_uint_atomics_metal_output_compiles_with_xcrun_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_int_atomics_metal_output_compiles_with_xcrun_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_runtime_array_atomics_metal_output_compiles_with_xcrun_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_unsupported_atomics_metal_output_compiles_with_xcrun_metal"
           ],
-          "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including bool/int/uint/float scalars, vectors, matrices, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
+          "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
           "status": "partial"
         },
         "mojo": {

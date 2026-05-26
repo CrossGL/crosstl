@@ -66,11 +66,12 @@ def block_var(*, layout="std430", qualifiers=None, var_type=None):
     )
 
 
-def collect_for(struct, var=None, *, literal_int_value=None):
+def collect_for(struct, var=None, *, literal_int_value=None, structs_by_name=None):
     var = var or block_var()
+    structs_by_name = {"Block": struct, **(structs_by_name or {})}
     return collect_lowered_glsl_buffer_blocks(
         [var],
-        structs_by_name={"Block": struct},
+        structs_by_name=structs_by_name,
         is_glsl_buffer_block_variable=lambda node: True,
         resource_base_type=lambda vtype: getattr(vtype, "name", str(vtype)),
         glsl_buffer_block_layout=lambda node: node.attributes[0].arguments[0].value,
@@ -330,6 +331,59 @@ def test_collect_lowered_glsl_buffer_blocks_lays_out_bool_vector_members():
     assert data["runtime_array"] is True
     assert data["components"] == 4
     assert data["target_type"] == "mapped_bvec4"
+
+
+def test_collect_lowered_glsl_buffer_blocks_lays_out_nested_struct_members():
+    inner = StructNode(
+        "Inner",
+        [
+            member("scale", primitive("float")),
+            member("mask", primitive("bvec3")),
+            member("flags", ArrayType(primitive("bool"), size=2)),
+        ],
+    )
+    struct = block_struct(
+        member("count", primitive("uint")),
+        member("inner", primitive("Inner")),
+        member("data", ArrayType(primitive("float"), size=None)),
+    )
+
+    blocks, var_failures, struct_failures = collect_for(
+        struct,
+        structs_by_name={"Inner": inner},
+    )
+
+    assert not var_failures
+    assert not struct_failures
+    block = blocks["block"]
+    assert block["runtime_array"] == "data"
+
+    count = block["members"]["count"]
+    assert count["offset"] == 0
+    assert count["size"] == 4
+
+    inner_info = block["members"]["inner"]
+    assert inner_info["offset"] == 16
+    assert inner_info["size"] == 48
+    assert inner_info["align"] == 16
+    assert inner_info["target_type"] == "mapped_Inner"
+    assert set(inner_info["members"]) == {"scale", "mask", "flags"}
+
+    assert inner_info["members"]["scale"]["offset"] == 0
+    assert inner_info["members"]["scale"]["component_type"] == "float"
+    assert inner_info["members"]["mask"]["offset"] == 16
+    assert inner_info["members"]["mask"]["components"] == 3
+
+    flags = inner_info["members"]["flags"]
+    assert flags["offset"] == 28
+    assert flags["stride"] == 4
+    assert flags["array_count"] == 2
+    assert flags["component_type"] == "bool"
+
+    data = block["members"]["data"]
+    assert data["offset"] == 64
+    assert data["stride"] == 4
+    assert data["runtime_array"] is True
 
 
 def test_collect_lowered_glsl_buffer_blocks_tracks_readonly_qualifier():

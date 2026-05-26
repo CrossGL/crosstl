@@ -115,6 +115,7 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
 )
 from .glsl_buffer_layout import (
+    byte_offset_add,
     byte_offset_expression,
     collect_lowered_glsl_buffer_blocks,
     glsl_buffer_compound_binary_operator,
@@ -2420,6 +2421,9 @@ class MetalCodeGen:
                 return base_type
             return array_type
         if isinstance(expr, MemberAccessNode):
+            block_access = self.glsl_buffer_block_member_access(expr)
+            if block_access is not None:
+                return block_access["type"]
             object_type = self.expression_result_type(
                 expr.object
             ) or self.unsupported_glsl_buffer_block_expression_type(expr.object)
@@ -4898,23 +4902,37 @@ class MetalCodeGen:
             return None
         object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
         var_name = self.expression_name(object_expr)
-        if not var_name:
-            return None
-        block = self.current_glsl_buffer_block_parameters.get(
-            var_name
-        ) or self.lowered_glsl_buffer_blocks.get(var_name)
-        if block is None:
-            return None
-        buffer_expr = self.generate_expression(object_expr)
         member_name = getattr(expr, "member", None)
-        member = block["members"].get(member_name)
+        if var_name:
+            block = self.current_glsl_buffer_block_parameters.get(
+                var_name
+            ) or self.lowered_glsl_buffer_blocks.get(var_name)
+            if block is not None:
+                buffer_expr = self.generate_expression(object_expr)
+                member = block["members"].get(member_name)
+                if member is None:
+                    return None
+                return {
+                    "buffer": buffer_expr,
+                    "member": member_name,
+                    "readonly": block["readonly"],
+                    **member,
+                }
+
+        parent = self.glsl_buffer_block_array_access(
+            object_expr
+        ) or self.glsl_buffer_block_member_access(object_expr)
+        if parent is None or not parent.get("members"):
+            return None
+        member = parent["members"].get(member_name)
         if member is None:
             return None
         return {
-            "buffer": buffer_expr,
-            "member": member_name,
-            "readonly": block["readonly"],
+            "buffer": parent["buffer"],
+            "member": f"{parent['member']}.{member_name}",
+            "readonly": parent["readonly"],
             **member,
+            "offset": byte_offset_add(parent["offset"], member["offset"]),
         }
 
     def glsl_buffer_block_array_access(self, expr):
@@ -4927,7 +4945,7 @@ class MetalCodeGen:
         index_expr = getattr(expr, "index_expr", getattr(expr, "index", None))
         index = self.generate_expression(index_expr)
         offset = byte_offset_expression(member["offset"], index, member["stride"])
-        return {**member, "offset_expr": offset}
+        return {**member, "offset": offset, "offset_expr": offset}
 
     def metal_scalar_load(self, component_type, buffer_name, offset):
         if component_type == "bool":
@@ -5060,13 +5078,13 @@ class MetalCodeGen:
 
     def generate_glsl_buffer_block_member_load(self, expr):
         access = self.glsl_buffer_block_member_access(expr)
-        if access is None or access.get("is_array"):
+        if access is None or access.get("is_array") or access.get("members"):
             return None
         return self.metal_buffer_load(access["buffer"], access["offset"], access)
 
     def generate_glsl_buffer_block_array_load(self, expr):
         access = self.glsl_buffer_block_array_access(expr)
-        if access is None:
+        if access is None or access.get("members"):
             return None
         return self.metal_buffer_load(access["buffer"], access["offset_expr"], access)
 
@@ -5084,6 +5102,11 @@ class MetalCodeGen:
             return (
                 "/* unsupported Metal GLSL buffer block store: "
                 "readonly device buffer cannot be written */"
+            )
+        if access.get("members"):
+            return (
+                "/* unsupported Metal GLSL buffer block aggregate store: "
+                "select a concrete leaf member */"
             )
 
         if access.get("matrix_columns"):

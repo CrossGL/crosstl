@@ -96,7 +96,7 @@
       "category": "resources",
       "feature": "GLSL buffer block lowering",
       "feature_id": "resources.glsl_buffer_blocks",
-      "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including bool/int/uint/float scalars, vectors, matrices, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
+      "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
       "status": "partial"
     },
     {
@@ -105,7 +105,7 @@
       "category": "resources",
       "feature": "GLSL buffer block lowering",
       "feature_id": "resources.glsl_buffer_blocks",
-      "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including bool/int/uint/float scalars, vectors, matrices, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
+      "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
       "status": "partial"
     },
     {
@@ -694,6 +694,7 @@
           "evidence": [
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_uint_atomics_lower_to_byteaddress_and_device_atomics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_bool_members_lower_as_uint_slots",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_struct_members_lower_as_leaf_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_int_atomics_lower_to_byteaddress_and_device_atomics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_runtime_array_atomics_lower_dynamic_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_std140_blocks_lower_to_explicit_offsets",
@@ -704,15 +705,17 @@
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_std140_hlsl_output_compiles_with_dxc",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_struct_hlsl_output_compiles_with_dxc",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_atomics_hlsl_output_compiles_with_dxc"
           ],
-          "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including bool/int/uint/float scalars, vectors, matrices, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
+          "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
           "status": "partial"
         },
         "metal": {
           "evidence": [
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_uint_atomics_lower_to_byteaddress_and_device_atomics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_bool_members_lower_as_uint_slots",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_struct_members_lower_as_leaf_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_int_atomics_lower_to_byteaddress_and_device_atomics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_runtime_array_atomics_lower_dynamic_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_std140_blocks_lower_to_explicit_offsets",
@@ -723,12 +726,13 @@
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_std140_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_struct_metal_output_compiles_with_xcrun_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_uint_atomics_metal_output_compiles_with_xcrun_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_int_atomics_metal_output_compiles_with_xcrun_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_runtime_array_atomics_metal_output_compiles_with_xcrun_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_unsupported_atomics_metal_output_compiles_with_xcrun_metal"
           ],
-          "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including bool/int/uint/float scalars, vectors, matrices, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
+          "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
           "status": "partial"
         },
         "opengl": {

@@ -116,6 +116,7 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
 )
 from .glsl_buffer_layout import (
+    byte_offset_add,
     byte_offset_expression,
     collect_lowered_glsl_buffer_blocks,
     glsl_buffer_compound_binary_operator,
@@ -8821,23 +8822,38 @@ class HLSLCodeGen:
             return None
         object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
         var_name = self.expression_name(object_expr)
-        if not var_name:
-            return None
-        block = self.current_glsl_buffer_block_parameters.get(
-            var_name
-        ) or self.lowered_glsl_buffer_blocks.get(var_name)
-        if block is None:
-            return None
-        buffer_expr = self.generate_expression(object_expr)
         member_name = getattr(expr, "member", None)
-        member = block["members"].get(member_name)
+        if var_name:
+            block = self.current_glsl_buffer_block_parameters.get(
+                var_name
+            ) or self.lowered_glsl_buffer_blocks.get(var_name)
+            if block is not None:
+                buffer_expr = self.generate_expression(object_expr)
+                member = block["members"].get(member_name)
+                if member is None:
+                    return None
+                return {
+                    "buffer": buffer_expr,
+                    "member": member_name,
+                    "readonly": block["readonly"],
+                    **member,
+                }
+
+        parent = self.glsl_buffer_block_array_access(
+            object_expr
+        ) or self.glsl_buffer_block_member_access(object_expr)
+        if parent is None or not parent.get("members"):
+            return None
+        member_name = getattr(expr, "member", None)
+        member = parent["members"].get(member_name)
         if member is None:
             return None
         return {
-            "buffer": buffer_expr,
-            "member": member_name,
-            "readonly": block["readonly"],
+            "buffer": parent["buffer"],
+            "member": f"{parent['member']}.{member_name}",
+            "readonly": parent["readonly"],
             **member,
+            "offset": byte_offset_add(parent["offset"], member["offset"]),
         }
 
     def glsl_buffer_block_array_access(self, expr):
@@ -8850,7 +8866,7 @@ class HLSLCodeGen:
         index_expr = getattr(expr, "index_expr", getattr(expr, "index", None))
         index = self.generate_expression(index_expr)
         offset = byte_offset_expression(member["offset"], index, member["stride"])
-        return {**member, "offset_expr": offset}
+        return {**member, "offset": offset, "offset_expr": offset}
 
     def hlsl_byteaddress_load_method(self, components):
         return "Load" if components == 1 else f"Load{components}"
@@ -8981,13 +8997,13 @@ class HLSLCodeGen:
 
     def generate_glsl_buffer_block_member_load(self, expr):
         access = self.glsl_buffer_block_member_access(expr)
-        if access is None or access.get("runtime_array"):
+        if access is None or access.get("runtime_array") or access.get("members"):
             return None
         return self.hlsl_byteaddress_load(access["buffer"], access["offset"], access)
 
     def generate_glsl_buffer_block_array_load(self, expr):
         access = self.glsl_buffer_block_array_access(expr)
-        if access is None:
+        if access is None or access.get("members"):
             return None
         return self.hlsl_byteaddress_load(
             access["buffer"], access["offset_expr"], access
@@ -9007,6 +9023,11 @@ class HLSLCodeGen:
             return (
                 "/* unsupported HLSL GLSL buffer block store: "
                 "readonly ByteAddressBuffer cannot be written */"
+            )
+        if access.get("members"):
+            return (
+                "/* unsupported HLSL GLSL buffer block aggregate store: "
+                "select a concrete leaf member */"
             )
 
         rhs = self.generate_expression_with_expected(value, access["type"])

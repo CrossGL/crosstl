@@ -1490,6 +1490,106 @@ def test_codegen_mixed_ssbo_bool_vector_members_lower_as_uint_components():
     assert "boolVectorBlock.values[1] = bvec4(mask.x, pair.y, dynamic.z, true);" in glsl
 
 
+def test_codegen_mixed_ssbo_nested_struct_members_lower_as_leaf_offsets():
+    crossgl = """
+    shader main {
+        struct InnerBlockData {
+            float scale;
+            bvec3 mask;
+        };
+
+        struct NestedBlock {
+            uint count;
+            InnerBlockData inner;
+            float values[];
+        };
+
+        NestedBlock nestedBlock @glsl_buffer_block(std430) @binding(56);
+
+        float readNested(NestedBlock localBlock @glsl_buffer_block(std430), uint i) {
+            return localBlock.inner.scale + localBlock.values[i];
+        }
+
+        compute {
+            void main() {
+                float scale = nestedBlock.inner.scale;
+                bvec3 mask = nestedBlock.inner.mask;
+                nestedBlock.inner.scale = scale + 1.0;
+                nestedBlock.inner.mask = bvec3(mask.y, mask.x, true);
+                nestedBlock.values[0] = readNested(nestedBlock, 0u);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer nestedBlock : register(u56);" in hlsl
+    assert "float readNested(RWByteAddressBuffer localBlock, uint i)" in hlsl
+    assert (
+        "return (asfloat(localBlock.Load(16)) + "
+        "asfloat(localBlock.Load((48 + i * 4))));" in hlsl
+    )
+    assert "float scale = asfloat(nestedBlock.Load(16));" in hlsl
+    assert (
+        "bool3 mask = bool3((nestedBlock.Load(32) != 0u), "
+        "(nestedBlock.Load(36) != 0u), "
+        "(nestedBlock.Load(40) != 0u));" in hlsl
+    )
+    assert "nestedBlock.Store(16, asuint((scale + 1.0)));" in hlsl
+    assert "bool3 __crossgl_bool_store_0 = bool3(mask.y, mask.x, true);" in hlsl
+    assert (
+        "nestedBlock.Store3(32, uint3((__crossgl_bool_store_0.x ? 1u : 0u), "
+        "(__crossgl_bool_store_0.y ? 1u : 0u), "
+        "(__crossgl_bool_store_0.z ? 1u : 0u)));" in hlsl
+    )
+    assert "nestedBlock.Store(48, asuint(readNested(nestedBlock, 0u)));" in hlsl
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    assert "kernel void kernel_main(device uchar* nestedBlock [[buffer(56)]])" in metal
+    assert "float readNested(device uchar* localBlock, uint i)" in metal
+    assert (
+        "return (*reinterpret_cast<const device float*>(localBlock + 16)) + "
+        "(*reinterpret_cast<const device float*>(localBlock + (48 + i * 4)));"
+        in metal
+    )
+    assert (
+        "float scale = (*reinterpret_cast<const device float*>"
+        "(nestedBlock + 16));" in metal
+    )
+    assert (
+        "bool3 mask = bool3(((*reinterpret_cast<const device uint*>"
+        "(nestedBlock + 32)) != 0u), "
+        "((*reinterpret_cast<const device uint*>(nestedBlock + 36)) != 0u), "
+        "((*reinterpret_cast<const device uint*>(nestedBlock + 40)) != 0u));"
+        in metal
+    )
+    assert (
+        "(*reinterpret_cast<device float*>(nestedBlock + 16)) = scale + 1.0;"
+        in metal
+    )
+    assert "bool3 __crossgl_buffer_store_0 = bool3(mask.y, mask.x, true);" in metal
+    assert (
+        "(*reinterpret_cast<device uint*>(nestedBlock + 40)) = "
+        "((__crossgl_buffer_store_0.z) ? 1u : 0u);" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device float*>(nestedBlock + 48)) = "
+        "readNested(nestedBlock, 0u);" in metal
+    )
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 56) buffer NestedBlock" in glsl
+    assert "InnerBlockData inner;" in glsl
+    assert "nestedBlock.inner.scale = (scale + 1.0);" in glsl
+    assert "nestedBlock.inner.mask = bvec3(mask.y, mask.x, true);" in glsl
+
+
 def test_codegen_mixed_ssbo_metal_store_parenthesizes_binary_ternary_operand():
     crossgl = """
     shader main {

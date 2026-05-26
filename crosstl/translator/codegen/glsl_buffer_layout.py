@@ -300,8 +300,93 @@ def glsl_buffer_block_predicate_matches(predicate, node, node_type):
     return predicate(node)
 
 
+def glsl_buffer_struct_type_info(
+    type_name,
+    structs_by_name,
+    convert_type_node_to_string,
+    literal_int_value,
+    map_type,
+    target_type_key,
+    layout,
+    type_stack,
+):
+    type_name = str(type_name)
+    if type_name in type_stack:
+        return None
+    struct = structs_by_name.get(type_name)
+    if struct is None:
+        return None
+
+    offset = 0
+    max_align = 0
+    members = {}
+    for member in getattr(struct, "members", []) or []:
+        member_info = glsl_buffer_block_member_type(
+            member,
+            convert_type_node_to_string,
+            map_type,
+            target_type_key,
+            layout,
+            structs_by_name=structs_by_name,
+            literal_int_value=literal_int_value,
+            type_stack=(*type_stack, type_name),
+        )
+        member_name = getattr(member, "name", None)
+        if member_info is None or not member_name:
+            return None
+
+        if member_info["is_array"]:
+            if member_info["array_size"] is None:
+                return None
+            member_align = glsl_buffer_array_align(member_info, layout)
+            offset = align_to(offset, member_align)
+            array_count = literal_int_value(member_info["array_size"])
+            if array_count is None:
+                return None
+            members[member_name] = {
+                **member_info,
+                "offset": offset,
+                "stride": glsl_buffer_array_stride(member_info, layout),
+                "array_count": array_count,
+                "runtime_array": False,
+            }
+            offset += members[member_name]["stride"] * array_count
+            max_align = max(max_align, member_align)
+            continue
+
+        offset = align_to(offset, member_info["align"])
+        members[member_name] = {
+            **member_info,
+            "offset": offset,
+            "runtime_array": False,
+        }
+        offset += member_info["size"]
+        max_align = max(max_align, member_info["align"])
+
+    if not members or max_align == 0:
+        return None
+
+    struct_align = max_align
+    if str(layout).lower() == "std140":
+        struct_align = max(16, struct_align)
+    return {
+        "size": align_to(offset, struct_align),
+        "align": struct_align,
+        "members": members,
+        "is_struct": True,
+    }
+
+
 def glsl_buffer_block_member_type(
-    member, convert_type_node_to_string, map_type, target_type_key, layout
+    member,
+    convert_type_node_to_string,
+    map_type,
+    target_type_key,
+    layout,
+    *,
+    structs_by_name=None,
+    literal_int_value=None,
+    type_stack=(),
 ):
     member_type = getattr(member, "member_type", None)
     is_array = False
@@ -324,6 +409,17 @@ def glsl_buffer_block_member_type(
     type_name = str(type_name)
     layout_type_name = std430_layout_type_name(type_name)
     type_info = glsl_buffer_layout_value_type_info(layout_type_name, layout)
+    if type_info is None and structs_by_name is not None:
+        type_info = glsl_buffer_struct_type_info(
+            layout_type_name,
+            structs_by_name,
+            convert_type_node_to_string,
+            literal_int_value or (lambda value: None),
+            map_type,
+            target_type_key,
+            layout,
+            type_stack,
+        )
     if type_info is None:
         return None
     return {
@@ -386,7 +482,13 @@ def collect_lowered_glsl_buffer_blocks(
         failure_reason = None
         for index, member in enumerate(struct_members):
             member_info = glsl_buffer_block_member_type(
-                member, convert_type_node_to_string, map_type, target_type_key, layout
+                member,
+                convert_type_node_to_string,
+                map_type,
+                target_type_key,
+                layout,
+                structs_by_name=structs_by_name,
+                literal_int_value=literal_int_value,
             )
             member_name = getattr(member, "name", None)
             if member_info is None:

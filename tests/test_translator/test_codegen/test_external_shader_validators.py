@@ -239,6 +239,30 @@ void main() {
 """
 
 
+MIXED_GLSL_SSBO_NESTED_STRUCT_COMPUTE_SHADER = """
+#version 450 core
+struct InnerBlockData {
+    float scale;
+    bvec3 mask;
+};
+
+layout(std430, binding = 28) buffer NestedBlock {
+    uint count;
+    InnerBlockData inner;
+    float values[];
+} nestedBlock;
+
+void main() {
+    uint i = nestedBlock.count;
+    float scale = nestedBlock.inner.scale;
+    bvec3 mask = nestedBlock.inner.mask;
+    nestedBlock.inner.scale = scale + 1.0;
+    nestedBlock.inner.mask = bvec3(mask.y, mask.x, true);
+    nestedBlock.values[i] = nestedBlock.inner.scale;
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
 
@@ -677,6 +701,39 @@ def test_mixed_glsl_ssbo_bool_vector_hlsl_output_compiles_with_dxc(tmp_path):
     assert output_path.exists()
 
 
+def test_mixed_glsl_ssbo_nested_struct_hlsl_output_compiles_with_dxc(tmp_path):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / "mixed_glsl_ssbo_nested_struct.hlsl"
+    output_path = tmp_path / "mixed_glsl_ssbo_nested_struct.dxil"
+
+    code = HLSLCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_SSBO_NESTED_STRUCT_COMPUTE_SHADER, "compute")
+    )
+    assert "RWByteAddressBuffer nestedBlock : register(u28);" in code
+    assert "uint i = nestedBlock.Load(0);" in code
+    assert "float scale = asfloat(nestedBlock.Load(16));" in code
+    assert "bool3((nestedBlock.Load(32) != 0u)" in code
+    assert "nestedBlock.Store(16, asuint((scale + 1.0)));" in code
+    assert "nestedBlock.Store3(32, uint3" in code
+    assert "nestedBlock.Store((48 + i * 4), asuint(asfloat(nestedBlock.Load(16))))" in code
+    assert ("un" + "supported HLSL GLSL buffer block") not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
 def test_mixed_glsl_ssbo_bool_metal_output_compiles_with_xcrun_metal(tmp_path):
     xcrun = _require_xcrun_tool("metal")
     shader_path = tmp_path / "mixed_glsl_ssbo_bool.metal"
@@ -735,6 +792,42 @@ def test_mixed_glsl_ssbo_bool_vector_metal_output_compiles_with_xcrun_metal(
     assert "reinterpret_cast<device uint*>(boolVectorBlock + 20)" in code
     assert "bool4 __crossgl_buffer_store_2" in code
     assert "reinterpret_cast<device uint*>(boolVectorBlock + 60)" in code
+    assert ("un" + "supported Metal GLSL buffer block") not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_ssbo_nested_struct_metal_output_compiles_with_xcrun_metal(
+    tmp_path,
+):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "mixed_glsl_ssbo_nested_struct.metal"
+    output_path = tmp_path / "mixed_glsl_ssbo_nested_struct.air"
+
+    code = MetalCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_SSBO_NESTED_STRUCT_COMPUTE_SHADER, "compute")
+    )
+    assert "device uchar* nestedBlock [[buffer(28)]]" in code
+    assert "uint i = (*reinterpret_cast<const device uint*>(nestedBlock + 0));" in code
+    assert "reinterpret_cast<const device float*>(nestedBlock + 16)" in code
+    assert "reinterpret_cast<const device uint*>(nestedBlock + 32)" in code
+    assert "reinterpret_cast<device float*>(nestedBlock + 16)" in code
+    assert "bool3 __crossgl_buffer_store_0" in code
+    assert "reinterpret_cast<device uint*>(nestedBlock + 40)" in code
+    assert "reinterpret_cast<device float*>(nestedBlock + (48 + i * 4))" in code
     assert ("un" + "supported Metal GLSL buffer block") not in code
     shader_path.write_text(code, encoding="utf-8")
 
