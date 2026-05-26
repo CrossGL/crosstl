@@ -217,6 +217,21 @@ DECLARATION_ROLE_METADATA_NAMES = {
     "primitives": "mesh_primitives",
 }
 
+FUNCTION_STAGE_ATTRIBUTE_NAMES = {
+    "domain": "domain",
+    "local_size": "threadgroup_size",
+    "max_total_threads_per_threadgroup": "max_total_threads_per_threadgroup",
+    "maxprimitivecount": "maxprimitivecount",
+    "maxvertexcount": "maxvertexcount",
+    "numthreads": "threadgroup_size",
+    "outputcontrolpoints": "outputcontrolpoints",
+    "outputtopology": "outputtopology",
+    "partitioning": "partitioning",
+    "patchconstantfunc": "patchconstantfunc",
+    "shader": "shader",
+    "workgroup_size": "threadgroup_size",
+}
+
 STAGE_LAYOUT_DIRECTION_REQUIREMENTS = {
     "local_size_x": "in",
     "local_size_y": "in",
@@ -757,11 +772,35 @@ def collect_non_resource_global_resource_shadows(
 
 def validate_shader_metadata(shader):
     """Validate backend-neutral declaration metadata for contradictions."""
+    for function, context in _shader_function_contexts(shader):
+        validate_function_metadata(function, context)
     for node, context in _shader_metadata_nodes(shader):
         validate_node_metadata(node, context)
     for stage in getattr(shader, "stages", {}).values():
         validate_stage_layout_metadata(stage)
     return shader
+
+
+def validate_function_metadata(function, context):
+    """Validate backend-neutral function/stage metadata for contradictions."""
+    values_by_name = {}
+    display_names = {}
+
+    for attr in getattr(function, "attributes", []) or []:
+        attr_name = _normalized_metadata_name(getattr(attr, "name", None))
+        canonical_name = FUNCTION_STAGE_ATTRIBUTE_NAMES.get(attr_name)
+        if canonical_name is None:
+            continue
+
+        attr_value = _attribute_metadata_values(attr)
+        previous_value = values_by_name.setdefault(canonical_name, attr_value)
+        display_names.setdefault(canonical_name, attr_name)
+        if previous_value != attr_value:
+            raise ValueError(
+                f"Conflicting {display_names[canonical_name]} metadata on {context}: "
+                f"{_metadata_value_phrase(previous_value)} vs "
+                f"{_metadata_value_phrase(attr_value)}"
+            )
 
 
 def validate_node_metadata(node, context):
@@ -876,6 +915,23 @@ def validate_stage_layout_metadata(stage):
                     f"{', '.join(conflicts)}"
                 )
 
+    layout_threadgroup_size = _stage_layout_threadgroup_size(stage)
+    function_threadgroup_size = _function_threadgroup_size(
+        getattr(stage, "entry_point", None)
+    )
+    if layout_threadgroup_size and function_threadgroup_size:
+        for index, name in enumerate(("local_size_x", "local_size_y", "local_size_z")):
+            layout_value = layout_threadgroup_size.get(name)
+            if layout_value is None:
+                continue
+            function_value = function_threadgroup_size[index]
+            if layout_value != function_value:
+                context = _stage_layout_context(stage, "in")
+                raise ValueError(
+                    f"Conflicting stage threadgroup size metadata on {context}: "
+                    f"{name}={layout_value} vs numthreads[{index}]={function_value}"
+                )
+
 
 def _node_metadata_names(node):
     names = {
@@ -951,6 +1007,63 @@ def _attribute_metadata_value(attr):
     if not arguments:
         return None
     return expression_debug_name(arguments[0])
+
+
+def _attribute_metadata_values(attr):
+    return tuple(
+        expression_debug_name(argument)
+        for argument in getattr(attr, "arguments", []) or []
+    )
+
+
+def _metadata_value_phrase(value):
+    if isinstance(value, tuple):
+        return f"({', '.join(value)})"
+    return str(value)
+
+
+def _stage_layout_threadgroup_size(stage):
+    values = {}
+    for layout in getattr(stage, "layout_qualifiers", []) or []:
+        direction = _normalized_layout_direction(getattr(layout, "direction", None))
+        if direction != "in":
+            continue
+        for entry in getattr(layout, "entries", []) or []:
+            entry_name = _normalized_metadata_name(getattr(entry, "name", None))
+            if entry_name in {"local_size_x", "local_size_y", "local_size_z"}:
+                values[entry_name] = _stage_layout_entry_value(entry)
+    return values
+
+
+def _function_threadgroup_size(function):
+    for attr in getattr(function, "attributes", []) or []:
+        attr_name = _normalized_metadata_name(getattr(attr, "name", None))
+        if FUNCTION_STAGE_ATTRIBUTE_NAMES.get(attr_name) != "threadgroup_size":
+            continue
+
+        values = _attribute_metadata_values(attr)
+        if len(values) == 3:
+            return values
+    return None
+
+
+def _shader_function_contexts(shader):
+    for function in getattr(shader, "functions", []) or []:
+        yield function, f"function '{getattr(function, 'name', '<anonymous>')}'"
+
+    for stage in getattr(shader, "stages", {}).values():
+        stage_name = _normalized_metadata_name(getattr(stage, "stage", None))
+        entry_point = getattr(stage, "entry_point", None)
+        if entry_point is not None:
+            yield entry_point, (
+                f"{stage_name or '<unknown>'} stage entry function "
+                f"'{getattr(entry_point, 'name', '<anonymous>')}'"
+            )
+        for function in getattr(stage, "local_functions", []) or []:
+            yield function, (
+                f"{stage_name or '<unknown>'} stage local function "
+                f"'{getattr(function, 'name', '<anonymous>')}'"
+            )
 
 
 def _shader_metadata_nodes(shader):

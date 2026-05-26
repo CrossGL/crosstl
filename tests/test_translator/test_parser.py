@@ -1172,6 +1172,55 @@ def test_compute_layout_execution_config_parsing():
     assert [entry.arguments[0].value for entry in layout.entries[1:]] == [8, 1]
 
 
+def test_square_bracket_stage_attributes_parse_to_function_metadata():
+    code = """
+    shader NativeStageAttributes {
+        compute {
+            [shader("compute")]
+            [numthreads(8, GROUP_SIZE, 1)]
+            void main() {
+            }
+        }
+
+        hull HullMain {
+            [domain("tri"), partitioning("fractional_odd")]
+            [outputtopology("triangle_cw")]
+            [outputcontrolpoints(3)]
+            [patchconstantfunc("HSConst")]
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    compute_stage = ast.stages[ShaderStage.COMPUTE]
+    compute_attrs = compute_stage.entry_point.attributes
+
+    assert compute_stage.execution_config == {"numthreads": ("8", "GROUP_SIZE", "1")}
+    assert [attr.name for attr in compute_attrs] == ["shader", "numthreads"]
+    assert compute_attrs[0].arguments[0].value == "compute"
+    assert [arg.value for arg in compute_attrs[1].arguments[::2]] == [8, 1]
+    assert compute_attrs[1].arguments[1].name == "GROUP_SIZE"
+
+    hull_entry = ast.stages[ShaderStage.TESSELLATION_CONTROL].entry_point
+    assert hull_entry.name == "HullMain"
+    assert [attr.name for attr in hull_entry.attributes] == [
+        "domain",
+        "partitioning",
+        "outputtopology",
+        "outputcontrolpoints",
+        "patchconstantfunc",
+    ]
+    assert [attr.arguments[0].value for attr in hull_entry.attributes] == [
+        "tri",
+        "fractional_odd",
+        "triangle_cw",
+        3,
+        "HSConst",
+    ]
+
+
 def test_compute_layout_does_not_consume_resource_layouts():
     code = """
     shader ComputeLayoutWithResources {
@@ -1363,6 +1412,85 @@ def test_resource_layout_preserves_access_and_memory_qualifiers():
 
     assert device_value.qualifiers == ["device"]
     assert lookup.qualifiers == ["constant"]
+
+
+def test_texture_resource_type_tokens_parse_with_generic_metadata():
+    code = """
+    shader TextureResourceTypes {
+        layout(binding = 0) texture2d<float> colorTexture;
+        readonly texture2d<uint, access::read> readOnlyTexture;
+        texturecube<float> skyTexture;
+
+        void consume(texture2darray<float> layers[4]) {
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    color_texture, read_only_texture, sky_texture = ast.global_variables
+
+    assert color_texture.var_type.name == "texture2D"
+    assert color_texture.var_type.generic_args[0].name == "float"
+    assert color_texture.attributes[0].name == "binding"
+
+    assert read_only_texture.qualifiers == ["readonly"]
+    assert read_only_texture.var_type.name == "texture2D"
+    assert [arg.name for arg in read_only_texture.var_type.generic_args] == [
+        "uint",
+        "access::read",
+    ]
+
+    assert sky_texture.var_type.name == "textureCube"
+    assert sky_texture.var_type.generic_args[0].name == "float"
+
+    layers = ast.functions[0].parameters[0]
+    assert isinstance(layers.param_type, ArrayType)
+    assert layers.param_type.element_type.name == "texture2DArray"
+    assert layers.param_type.element_type.generic_args[0].name == "float"
+    assert layers.param_type.size.value == 4
+
+
+def test_hlsl_colon_semantics_parse_as_attributes():
+    code = """
+    shader HlslColonSemantics {
+        cbuffer Camera : register(b2, space1) {
+            mat4 viewProj;
+        }
+
+        struct VSOutput {
+            vec4 position : SV_Position;
+            vec2 uv : TEXCOORD0;
+        };
+
+        Texture2D colorMap : register(t0);
+
+        vertex {
+            vec4 main(vec3 position : POSITION) : SV_Position {
+                return vec4(position, 1.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    cbuffer = ast.cbuffers[0]
+    assert [attr.name for attr in cbuffer.attributes] == ["register"]
+    assert [arg.name for arg in cbuffer.attributes[0].arguments] == ["b2", "space1"]
+
+    output_struct = ast.structs[0]
+    position, uv = output_struct.members
+    assert [attr.name for attr in position.attributes] == ["SV_Position"]
+    assert [attr.name for attr in uv.attributes] == ["TEXCOORD0"]
+
+    color_map = ast.global_variables[0]
+    assert color_map.var_type.name == "Texture2D"
+    assert [attr.name for attr in color_map.attributes] == ["register"]
+    assert color_map.attributes[0].arguments[0].name == "t0"
+
+    entry = ast.stages[ShaderStage.VERTEX].entry_point
+    assert [attr.name for attr in entry.attributes] == ["SV_Position"]
+    assert [attr.name for attr in entry.parameters[0].attributes] == ["POSITION"]
 
 
 def test_glsl_layout_buffer_block_lowers_to_struct_and_resource_variable():
@@ -1594,6 +1722,65 @@ def test_duplicate_matching_stage_layout_metadata_values_are_allowed():
         "local_size_y": "4",
     }
     assert len(compute_stage.layout_qualifiers) == 2
+
+
+def test_matching_layout_and_function_threadgroup_size_metadata_values_are_allowed():
+    code = """
+    shader MatchingThreadgroupSize {
+        compute {
+            layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
+            [numthreads(8, 4, 1)]
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    compute_stage = ast.stages[ShaderStage.COMPUTE]
+
+    assert compute_stage.execution_config == {
+        "local_size_x": "8",
+        "local_size_y": "4",
+        "local_size_z": "1",
+        "numthreads": ("8", "4", "1"),
+    }
+
+
+def test_conflicting_function_threadgroup_size_metadata_fails_validation():
+    code = """
+    shader ConflictingFunctionThreadgroupSize {
+        compute {
+            void main() @numthreads(8, 4, 1) @workgroup_size(16, 4, 1) {
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting numthreads metadata"):
+        parse_code(tokenize_code(code))
+
+
+def test_conflicting_layout_and_function_threadgroup_size_metadata_fails_validation():
+    code = """
+    shader ConflictingThreadgroupSize {
+        compute {
+            layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
+            [numthreads(16, 4, 1)]
+            void main() {
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Conflicting stage threadgroup size metadata.*"
+            "local_size_x=8.*numthreads\\[0\\]=16"
+        ),
+    ):
+        parse_code(tokenize_code(code))
 
 
 def test_lambda_call_preserves_typed_parameters_and_block_body_parse():

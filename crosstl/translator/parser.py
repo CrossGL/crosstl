@@ -200,6 +200,14 @@ PARAMETER_PRIMITIVE_QUALIFIER_NAMES = frozenset(
     }
 )
 
+TEXTURE_TYPE_NAMES = {
+    "TEXTURE1D": "texture1D",
+    "TEXTURE2D": "texture2D",
+    "TEXTURE3D": "texture3D",
+    "TEXTURECUBE": "textureCube",
+    "TEXTURE2DARRAY": "texture2DArray",
+}
+
 RAYQUERY_METHODS = {
     "Proceed",
     "Abort",
@@ -654,6 +662,10 @@ class Parser:
         if stage_name:
             main_function.name = stage_name
 
+        execution_config.update(
+            self.execution_config_from_function_attributes(main_function)
+        )
+
         return StageNode(
             stage=stage_enum,
             entry_point=main_function,
@@ -685,6 +697,74 @@ class Parser:
         self.eat("SEMICOLON")
 
         return ImportNode(path=path, alias=alias, items=items)
+
+    def parse_square_attributes(self):
+        """Parse HLSL-style ``[attribute(...)]`` metadata into attributes."""
+        attributes = []
+
+        while self.current_token_starts_square_attribute():
+            self.eat("LBRACKET")
+
+            while self.current_token[0] != "RBRACKET":
+                name = str(self.current_token[1])
+                self.eat(self.current_token[0])
+
+                arguments = []
+                if self.current_token[0] == "LPAREN":
+                    self.eat("LPAREN")
+                    while self.current_token[0] != "RPAREN":
+                        arguments.append(self.parse_expression())
+                        if self.current_token[0] == "COMMA":
+                            self.eat("COMMA")
+                            continue
+                        break
+                    self.eat("RPAREN")
+
+                attributes.append(AttributeNode(name=name, arguments=arguments))
+
+                if self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    continue
+                break
+
+            self.eat("RBRACKET")
+
+        return attributes
+
+    def current_token_starts_square_attribute(self):
+        """Return whether the current bracketed group is metadata."""
+        if self.current_token[0] != "LBRACKET":
+            return False
+
+        name_token_type, name_token_value = self.peek()
+        if name_token_type in {"RBRACKET", "EOF"}:
+            return False
+        if not isinstance(name_token_value, str) or not name_token_value.isidentifier():
+            return False
+
+        return self.peek(2)[0] in {"LPAREN", "COMMA", "RBRACKET"}
+
+    def parse_colon_semantic_attributes(self):
+        """Parse HLSL-style ``: SEMANTIC`` metadata into attributes."""
+        if self.current_token[0] != "COLON":
+            return []
+
+        self.eat("COLON")
+        name = str(self.current_token[1])
+        self.eat(self.current_token[0])
+
+        arguments = []
+        if self.current_token[0] == "LPAREN":
+            self.eat("LPAREN")
+            while self.current_token[0] != "RPAREN":
+                arguments.append(self.parse_expression())
+                if self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    continue
+                break
+            self.eat("RPAREN")
+
+        return [AttributeNode(name=name, arguments=arguments)]
 
     def parse_compute_layout(self):
         """Parse compute local-size layout metadata inside a stage block."""
@@ -761,6 +841,22 @@ class Parser:
                 entry.arguments[0]
             )
         return execution_config
+
+    def execution_config_from_function_attributes(self, function):
+        """Return execution metadata implied by stage function attributes."""
+        for attr in getattr(function, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name not in {"local_size", "numthreads", "workgroup_size"}:
+                continue
+
+            arguments = getattr(attr, "arguments", []) or []
+            if len(arguments) != 3:
+                continue
+
+            values = tuple(self.layout_argument_to_string(arg) for arg in arguments)
+            return {"numthreads": values}
+
+        return {}
 
     def layout_argument_to_string(self, argument):
         """Return the source-like value for simple layout argument expressions."""
@@ -1002,8 +1098,10 @@ class Parser:
             member_type = self.parse_type()
 
             attributes = list(leading_attributes)
+            attributes.extend(self.parse_colon_semantic_attributes())
             if self.current_token[0] in ["AT", "ATTRIBUTE"]:
                 attributes.extend(self.parse_attributes())
+            attributes.extend(self.parse_colon_semantic_attributes())
 
             if self.current_token[0] not in ["SEMICOLON", "COMMA", "RBRACE"]:
                 while self.current_token[0] not in [
@@ -1053,8 +1151,10 @@ class Parser:
             member_type = ArrayType(member_type, size)
 
         attributes = list(leading_attributes)
+        attributes.extend(self.parse_colon_semantic_attributes())
         if self.current_token[0] in ["AT", "ATTRIBUTE"]:
             attributes.extend(self.parse_attributes())
+        attributes.extend(self.parse_colon_semantic_attributes())
 
         if self.current_token[0] != "SEMICOLON":
             # Skip malformed member
@@ -1161,16 +1261,22 @@ class Parser:
         qualifiers = []
         attributes = []
 
-        while self.current_token[0] in [
-            "ASYNC",
-            "UNSAFE",
-            "GLOBAL",
-            "KERNEL",
-            "AT",
-            "ATTRIBUTE",
-        ]:
+        while (
+            self.current_token[0]
+            in {
+                "ASYNC",
+                "UNSAFE",
+                "GLOBAL",
+                "KERNEL",
+                "AT",
+                "ATTRIBUTE",
+            }
+            or self.current_token_starts_square_attribute()
+        ):
             if self.current_token[0] in ["AT", "ATTRIBUTE"]:
                 attributes.extend(self.parse_attributes())
+            elif self.current_token_starts_square_attribute():
+                attributes.extend(self.parse_square_attributes())
             else:
                 qualifiers.append(self.current_token[1])
                 self.eat(self.current_token[0])
@@ -1203,8 +1309,10 @@ class Parser:
             return_type = self.parse_type()
 
         post_attributes = []
+        post_attributes.extend(self.parse_colon_semantic_attributes())
         if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            post_attributes = self.parse_attributes()
+            post_attributes.extend(self.parse_attributes())
+        post_attributes.extend(self.parse_colon_semantic_attributes())
 
         body = None
         if self.current_token[0] == "LBRACE":
@@ -1289,8 +1397,10 @@ class Parser:
             self.eat("RBRACKET")
             param_type = ArrayType(param_type, size)
 
+        attributes.extend(self.parse_colon_semantic_attributes())
         if self.current_token[0] in ["AT", "ATTRIBUTE"]:
             attributes.extend(self.parse_attributes())
+        attributes.extend(self.parse_colon_semantic_attributes())
 
         default_value = None
         if self.current_token[0] == "EQUALS":
@@ -1410,8 +1520,10 @@ class Parser:
             self.eat("RBRACKET")
             var_type = ArrayType(var_type, size)
 
+        attributes.extend(self.parse_colon_semantic_attributes())
         if self.current_token[0] in ["AT", "ATTRIBUTE"]:
             attributes.extend(self.parse_attributes())
+        attributes.extend(self.parse_colon_semantic_attributes())
 
         while self.current_token[0] == "LBRACKET":
             self.eat("LBRACKET")
@@ -1721,6 +1833,23 @@ class Parser:
             base_type = MatrixType(PrimitiveType(element_type), rows, cols)
 
         elif self.current_token[0] in [
+            "TEXTURE1D",
+            "TEXTURE2D",
+            "TEXTURE3D",
+            "TEXTURECUBE",
+            "TEXTURE2DARRAY",
+        ]:
+            token_type = self.current_token[0]
+            type_name = TEXTURE_TYPE_NAMES[token_type]
+            self.eat(token_type)
+
+            generic_args = []
+            if self.current_token[0] == "LESS_THAN":
+                generic_args = self.parse_generic_arguments()
+
+            base_type = NamedType(type_name, generic_args)
+
+        elif self.current_token[0] in [
             "SAMPLER",
             "SAMPLER1D",
             "SAMPLER1DARRAY",
@@ -1885,7 +2014,9 @@ class Parser:
         args = []
 
         while self.current_token[0] != "GREATER_THAN":
-            if self.current_token_starts_type():
+            if self.current_token_starts_qualified_identifier():
+                args.append(IdentifierNode(self.parse_qualified_identifier()))
+            elif self.current_token_starts_type():
                 args.append(self.parse_type())
             elif self.current_token[0] in {
                 "BOOLEAN_LITERAL",
@@ -1906,6 +2037,24 @@ class Parser:
 
         self.eat("GREATER_THAN")
         return args
+
+    def current_token_starts_qualified_identifier(self):
+        """Return whether current tokens form a ``namespace::name`` value."""
+        return (
+            self.current_token[0] == "IDENTIFIER" and self.peek()[0] == "DOUBLE_COLON"
+        )
+
+    def parse_qualified_identifier(self):
+        """Parse a double-colon-qualified identifier into a string."""
+        segments = [str(self.current_token[1])]
+        self.eat("IDENTIFIER")
+
+        while self.current_token[0] == "DOUBLE_COLON":
+            self.eat("DOUBLE_COLON")
+            segments.append(str(self.current_token[1]))
+            self.eat(self.current_token[0])
+
+        return "::".join(segments)
 
     def current_token_starts_type(self):
         """Return whether the current token can start a type expression."""
@@ -1935,6 +2084,11 @@ class Parser:
             "CHAR",
             "STRING",
             "VOID",
+            "TEXTURE1D",
+            "TEXTURE2D",
+            "TEXTURE3D",
+            "TEXTURECUBE",
+            "TEXTURE2DARRAY",
             "VEC2",
             "VEC3",
             "VEC4",
@@ -3121,7 +3275,11 @@ class Parser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        attributes = self.parse_attributes()
+        attributes = []
+        attributes.extend(self.parse_colon_semantic_attributes())
+        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
+            attributes.extend(self.parse_attributes())
+        attributes.extend(self.parse_colon_semantic_attributes())
 
         self.eat("LBRACE")
         members = []
@@ -3225,16 +3383,22 @@ class Parser:
         saved_token = self.current_token
 
         try:
-            while self.current_token[0] in [
-                "ASYNC",
-                "UNSAFE",
-                "GLOBAL",
-                "KERNEL",
-                "AT",
-                "ATTRIBUTE",
-            ]:
+            while (
+                self.current_token[0]
+                in {
+                    "ASYNC",
+                    "UNSAFE",
+                    "GLOBAL",
+                    "KERNEL",
+                    "AT",
+                    "ATTRIBUTE",
+                }
+                or self.current_token_starts_square_attribute()
+            ):
                 if self.current_token[0] in ["AT", "ATTRIBUTE"]:
                     self.parse_attributes()
+                elif self.current_token_starts_square_attribute():
+                    self.parse_square_attributes()
                 else:
                     self.eat(self.current_token[0])
 
@@ -3291,6 +3455,11 @@ class Parser:
             "CHAR",
             "STRING",
             "VOID",
+            "TEXTURE1D",
+            "TEXTURE2D",
+            "TEXTURE3D",
+            "TEXTURECUBE",
+            "TEXTURE2DARRAY",
             "VEC2",
             "VEC3",
             "VEC4",
