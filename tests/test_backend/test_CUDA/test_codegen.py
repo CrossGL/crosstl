@@ -342,6 +342,34 @@ class TestCudaCodeGen:
         assert "(&values[index])" not in result
         assert "(&sharedCounts[gl_LocalInvocationID.x])" not in result
 
+    def test_bitwise_atomics_lower_to_crossgl_lvalue_targets(self):
+        """Test CUDA bitwise atomics convert to CrossGL atomic calls."""
+        code = """
+        __global__ void kernel(unsigned int* values, unsigned int mask, int index) {
+            __shared__ unsigned int sharedMasks[32];
+            unsigned int oldAnd = atomicAnd(&values[index], mask);
+            unsigned int oldOr = atomicOr(&sharedMasks[threadIdx.x], oldAnd);
+            atomicXor(&values[index + 1], oldOr);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var<workgroup> sharedMasks: array<u32, 32>;" in result
+        assert "var oldAnd: u32 = atomicAnd(values[index], mask);" in result
+        expected_old_or = (
+            "var oldOr: u32 = atomicOr(sharedMasks[gl_LocalInvocationID.x], oldAnd);"
+        )
+        assert expected_old_or in result
+        assert "atomicXor(values[(index + 1)], oldOr);" in result
+        assert "(&values[index])" not in result
+        assert "(&sharedMasks[gl_LocalInvocationID.x])" not in result
+
     def test_user_defined_cuda_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined CUDA runtime names shadow runtime call comments."""
         code = """

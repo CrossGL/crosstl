@@ -6937,11 +6937,127 @@ class HLSLCodeGen:
 
     def validate_hlsl_dispatch_mesh_group_count_arguments(self, args, shader_type):
         labels = ("ThreadGroupCountX", "ThreadGroupCountY", "ThreadGroupCountZ")
+        literal_counts = []
         for label, argument in zip(labels, args[:3]):
             self.validate_hlsl_scalar_int_uint_expression(
                 argument,
                 f"DirectX {shader_type} DispatchMesh {label} argument",
             )
+            literal_count = self.hlsl_integer_constant_value(argument)
+            literal_counts.append(literal_count)
+            if literal_count is None:
+                continue
+            if literal_count < 0:
+                raise ValueError(
+                    f"DirectX {shader_type} DispatchMesh {label} argument "
+                    "must be non-negative"
+                )
+            if literal_count >= 65536:
+                raise ValueError(
+                    f"DirectX {shader_type} DispatchMesh {label} argument "
+                    "must be less than 65536"
+                )
+
+        if (
+            len(literal_counts) == 3
+            and all(count is not None for count in literal_counts)
+            and literal_counts[0] * literal_counts[1] * literal_counts[2] > (1 << 22)
+        ):
+            raise ValueError(
+                f"DirectX {shader_type} DispatchMesh thread group count product "
+                "must not exceed 4194304"
+            )
+
+    def hlsl_expression_is_dispatch_mesh(self, expr):
+        if isinstance(expr, FunctionCallNode):
+            return self.function_call_name(expr) == "DispatchMesh"
+        if isinstance(expr, MeshOpNode):
+            return getattr(expr, "operation", None) == "DispatchMesh"
+        return False
+
+    def hlsl_statement_contains_dispatch_mesh(self, stmt):
+        return any(
+            self.hlsl_expression_is_dispatch_mesh(node) for node in self.walk_ast(stmt)
+        )
+
+    def validate_hlsl_dispatch_mesh_control_flow(
+        self,
+        statements,
+        thread_varying_names,
+        shader_type,
+        in_loop=False,
+        in_thread_varying_branch=False,
+    ):
+        for stmt in statements:
+            contains_dispatch_mesh = self.hlsl_statement_contains_dispatch_mesh(stmt)
+            if contains_dispatch_mesh and in_loop:
+                raise ValueError(
+                    f"DirectX {shader_type} DispatchMesh must not be called from "
+                    "loop control flow"
+                )
+            if contains_dispatch_mesh and in_thread_varying_branch:
+                raise ValueError(
+                    f"DirectX {shader_type} DispatchMesh must not be called from "
+                    "thread-varying control flow"
+                )
+
+            if isinstance(stmt, BlockNode) or hasattr(stmt, "statements"):
+                self.validate_hlsl_dispatch_mesh_control_flow(
+                    self.hlsl_statement_body_items(stmt),
+                    thread_varying_names,
+                    shader_type,
+                    in_loop,
+                    in_thread_varying_branch,
+                )
+                continue
+
+            if isinstance(stmt, IfNode):
+                condition = getattr(
+                    stmt, "condition", getattr(stmt, "if_condition", None)
+                )
+                branch_is_thread_varying = (
+                    in_thread_varying_branch
+                    or self.hlsl_condition_uses_thread_varying_name(
+                        condition, thread_varying_names
+                    )
+                )
+                self.validate_hlsl_dispatch_mesh_control_flow(
+                    self.hlsl_statement_body_items(
+                        getattr(stmt, "then_branch", getattr(stmt, "if_body", None))
+                    ),
+                    thread_varying_names,
+                    shader_type,
+                    in_loop,
+                    branch_is_thread_varying,
+                )
+                else_branch = getattr(
+                    stmt, "else_branch", getattr(stmt, "else_body", None)
+                )
+                if else_branch is not None:
+                    self.validate_hlsl_dispatch_mesh_control_flow(
+                        self.hlsl_statement_body_items(else_branch),
+                        thread_varying_names,
+                        shader_type,
+                        in_loop,
+                        branch_is_thread_varying,
+                    )
+                continue
+
+            if isinstance(stmt, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)):
+                self.validate_hlsl_dispatch_mesh_control_flow(
+                    self.hlsl_statement_body_items(getattr(stmt, "body", None)),
+                    thread_varying_names,
+                    shader_type,
+                    True,
+                    in_thread_varying_branch,
+                )
+
+    def validate_hlsl_dispatch_mesh_placement(self, func, shader_type):
+        self.validate_hlsl_dispatch_mesh_control_flow(
+            self.hlsl_statement_body_items(getattr(func, "body", [])),
+            self.hlsl_thread_varying_mesh_condition_names(func),
+            shader_type,
+        )
 
     def validate_hlsl_dispatch_mesh_calls(self, func, shader_type):
         calls = self.hlsl_dispatch_mesh_calls(func)
@@ -6970,6 +7086,7 @@ class HLSLCodeGen:
                     "mesh payload argument"
                 )
             self.validate_hlsl_dispatch_mesh_group_count_arguments(args, shader_type)
+        self.validate_hlsl_dispatch_mesh_placement(func, shader_type)
 
     def hlsl_dispatch_mesh_payload_types_for_function(self, func):
         payload_types = set()
@@ -6985,6 +7102,50 @@ class HLSLCodeGen:
             payload_types.add(payload_type)
         return payload_types
 
+    def hlsl_function_visible_variable_declarations(self, func):
+        declarations = {}
+        for node in (
+            getattr(self, "current_global_resource_declaration_nodes", []) or []
+        ):
+            name = getattr(node, "name", getattr(node, "variable_name", None))
+            if name:
+                declarations[name] = node
+
+        for parameter in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            if getattr(parameter, "name", None):
+                declarations[parameter.name] = parameter
+
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            name = getattr(node, "name", None)
+            if name:
+                declarations[name] = node
+        return declarations
+
+    def hlsl_declaration_has_groupshared_qualifier(self, node):
+        qualifiers = {str(value).lower() for value in getattr(node, "qualifiers", [])}
+        return bool(qualifiers & {"groupshared", "shared", "threadgroup", "workgroup"})
+
+    def validate_hlsl_dispatch_mesh_payload_storage(self, func):
+        declarations = self.hlsl_function_visible_variable_declarations(func)
+        for args in self.hlsl_dispatch_mesh_calls(func):
+            if len(args) < 4:
+                continue
+
+            payload_expr = args[3]
+            payload_name = self.expression_name(payload_expr)
+            declaration = declarations.get(payload_name)
+            if (
+                payload_name is None
+                or declaration is None
+                or not self.hlsl_declaration_has_groupshared_qualifier(declaration)
+            ):
+                raise ValueError(
+                    "DirectX amplification DispatchMesh payload argument must be "
+                    "a groupshared user-defined struct variable"
+                )
+
     def validate_hlsl_dispatch_mesh_payloads(self, func, shader_type):
         if shader_type not in {"task", "amplification", "object"}:
             return
@@ -6992,6 +7153,7 @@ class HLSLCodeGen:
         payload_types = self.hlsl_dispatch_mesh_payload_types_for_function(func)
         if not payload_types:
             return
+        self.validate_hlsl_dispatch_mesh_payload_storage(func)
 
         mesh_payload_types = self.current_hlsl_mesh_payload_types
         for payload_type in payload_types:

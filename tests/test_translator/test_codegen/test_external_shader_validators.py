@@ -144,6 +144,45 @@ shader HLSLDXRLibraryValidator {
 """
 
 
+HLSL_MESH_AMPLIFICATION_VALIDATOR_SHADER = """
+shader HLSLMeshAmplificationValidator {
+    struct MeshPayload {
+        uint meshlet;
+    };
+
+    struct MeshVertex {
+        vec4 position @ SV_Position;
+        vec2 uv @ TEXCOORD0;
+    };
+
+    task {
+        void main() @numthreads(1, 1, 1) {
+            groupshared MeshPayload payload;
+            payload.meshlet = 7u;
+            DispatchMesh(1, 1, 1, payload);
+        }
+    }
+
+    mesh {
+        void main(
+            @mesh_payload in MeshPayload payload,
+            @vertices out MeshVertex verts[3],
+            @indices out uvec3 tris[1]
+        ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+            SetMeshOutputCounts(3, 1);
+            verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+            verts[0].uv = vec2(0.0, 0.0);
+            verts[1].position = vec4(1.0, 0.0, 0.0, 1.0);
+            verts[1].uv = vec2(1.0, 0.0);
+            verts[2].position = vec4(0.0, 1.0, 0.0, 1.0);
+            verts[2].uv = vec2(0.0, 1.0);
+            tris[0] = uvec3(0u, 1u, 2u);
+        }
+    }
+}
+"""
+
+
 GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER = """
 shader GLSLMultisampleStorageValidator {
     image2DMS colorImage @rgba16f;
@@ -924,6 +963,62 @@ def test_generated_hlsl_dxr_library_compiles_with_dxc(tmp_path):
         ]
     )
     assert output_path.exists()
+
+
+def test_generated_hlsl_mesh_amplification_compile_with_dxc(tmp_path):
+    shader_path = tmp_path / "mesh_amplification.hlsl"
+    amplification_output = tmp_path / "mesh_amplification_as.dxil"
+    mesh_output = tmp_path / "mesh_amplification_ms.dxil"
+
+    code = HLSLCodeGen().generate(
+        crosstl.translator.parse(HLSL_MESH_AMPLIFICATION_VALIDATOR_SHADER)
+    )
+    assert '[shader("amplification")]' in code
+    assert '[shader("mesh")]' in code
+    assert "[numthreads(1, 1, 1)]" in code
+    assert "[numthreads(32, 1, 1)]" in code
+    assert '[outputtopology("triangle")]' in code
+    assert "void ASMain()" in code
+    assert "groupshared MeshPayload payload;" in code
+    assert "DispatchMesh(1, 1, 1, payload);" in code
+    assert (
+        "void MSMain(in payload MeshPayload payload, "
+        "out vertices MeshVertex verts[3], out indices uint3 tris[1])"
+    ) in code
+    assert "SetMeshOutputCounts(3, 1);" in code
+    assert "tris[0] = uint3(0u, 1u, 2u);" in code
+    assert ": mesh_payload" not in code
+    assert "EmitMeshTasksEXT" not in code
+    assert "SetMeshOutputsEXT" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    dxc = _require_tool("dxc")
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "as_6_5",
+            "-E",
+            "ASMain",
+            str(shader_path),
+            "-Fo",
+            str(amplification_output),
+        ]
+    )
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "ms_6_5",
+            "-E",
+            "MSMain",
+            str(shader_path),
+            "-Fo",
+            str(mesh_output),
+        ]
+    )
+    assert amplification_output.exists()
+    assert mesh_output.exists()
 
 
 @pytest.mark.parametrize(

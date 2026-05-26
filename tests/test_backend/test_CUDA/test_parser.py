@@ -1271,6 +1271,47 @@ class TestCudaParser:
         assert shared_target.index.builtin_name == "threadIdx"
         assert shared_target.index.component == "x"
 
+    def test_bitwise_atomic_operations_parsing(self):
+        """Test CUDA bitwise atomic operations parse as atomic nodes."""
+        code = """
+        __global__ void kernel(unsigned int* values, unsigned int mask, int index) {
+            __shared__ unsigned int sharedMasks[32];
+            unsigned int oldAnd = atomicAnd(&values[index], mask);
+            unsigned int oldOr = atomicOr(&sharedMasks[threadIdx.x], oldAnd);
+            atomicXor(&values[index + 1], oldOr);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.kernels[0].body
+        atomic_and = body[1].value
+        atomic_or = body[2].value
+        atomic_xor = body[3]
+
+        assert isinstance(atomic_and, AtomicOperationNode)
+        assert atomic_and.operation == "atomicAnd"
+        assert isinstance(atomic_and.args[0], UnaryOpNode)
+        assert atomic_and.args[0].op == "&"
+        assert isinstance(atomic_and.args[0].operand, ArrayAccessNode)
+        assert atomic_and.args[0].operand.array == "values"
+
+        assert isinstance(atomic_or, AtomicOperationNode)
+        assert atomic_or.operation == "atomicOr"
+        assert isinstance(atomic_or.args[0], UnaryOpNode)
+        shared_target = atomic_or.args[0].operand
+        assert isinstance(shared_target, ArrayAccessNode)
+        assert shared_target.array == "sharedMasks"
+        assert isinstance(shared_target.index, CudaBuiltinNode)
+        assert shared_target.index.builtin_name == "threadIdx"
+
+        assert isinstance(atomic_xor, AtomicOperationNode)
+        assert atomic_xor.operation == "atomicXor"
+        assert isinstance(atomic_xor.args[0], UnaryOpNode)
+        assert isinstance(atomic_xor.args[0].operand, ArrayAccessNode)
+
     def test_user_defined_atomic_name_is_not_parsed_as_builtin_atomic(self):
         """Test user-defined atomic names shadow CUDA atomic parsing."""
         code = """

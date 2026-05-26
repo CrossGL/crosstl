@@ -92,7 +92,10 @@ class TestCudaLexer:
 
     def test_atomic_operations(self):
         """Test atomic operation tokenization"""
-        code = "atomicAdd atomicSub atomicMax atomicMin"
+        code = (
+            "atomicAdd atomicSub atomicMax atomicMin atomicExch atomicCAS "
+            "atomicAnd atomicOr atomicXor"
+        )
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
 
@@ -101,6 +104,11 @@ class TestCudaLexer:
             ("ATOMICSUB", "atomicSub"),
             ("ATOMICMAX", "atomicMax"),
             ("ATOMICMIN", "atomicMin"),
+            ("ATOMICEXCH", "atomicExch"),
+            ("ATOMICCAS", "atomicCAS"),
+            ("ATOMICAND", "atomicAnd"),
+            ("ATOMICOR", "atomicOr"),
+            ("ATOMICXOR", "atomicXor"),
             ("EOF", ""),
         ]
 

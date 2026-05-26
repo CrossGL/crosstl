@@ -944,5 +944,52 @@ def test_codegen_threadgroup_memory_and_barrier():
     assert "@threadgroup" in result or "threadgroup" in result
 
 
+def test_codegen_preserves_native_address_space_qualifiers():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Payload {
+        float value;
+    };
+
+    void update(threadgroup Payload& scratch,
+                device float values[],
+                constant uint& count,
+                thread float& localValue) {
+        scratch.value = values[count] + localValue;
+    }
+
+    kernel void main(device float* outData [[buffer(0)]],
+                     constant float* inData [[buffer(1)]],
+                     uint tid [[thread_index_in_threadgroup]]) {
+        threadgroup Payload scratch;
+        thread float localValue = inData[tid];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        scratch.value = localValue;
+        outData[tid] = scratch.value;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "void update(threadgroup Payload& scratch" in crossgl
+    assert "device float[] values" in crossgl
+    assert "constant uint& count" in crossgl
+    assert "thread float& localValue" in crossgl
+    assert "threadgroup Payload scratch;" in crossgl
+    assert "thread float localValue = buffer_load(inData, tid);" in crossgl
+    assert "RWStructuredBuffer<float> outData @buffer(0)" in crossgl
+    assert "StructuredBuffer<float> inData @buffer(1)" in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "void update(threadgroup Payload& scratch" in metal
+    assert "device float values[]" in metal
+    assert "constant uint& count" in metal
+    assert "thread float& localValue" in metal
+    assert "threadgroup Payload scratch;" in metal
+    assert "float localValue = inData[tid];" in metal
+    assert "unsupported Metal address-space call" not in metal
+
+
 if __name__ == "__main__":
     pytest.main()

@@ -3251,6 +3251,12 @@ class MojoCodeGen:
                     args, "sample_grad_offset", "vec4"
                 )
             return self.generate_texture_call(args, "sample_grad")
+        if operation in {"SampleBias", "sample_bias"}:
+            if len(expr.arguments) >= 3:
+                return self.generate_resource_builtin_call(
+                    args, "sample_bias_offset", "vec4"
+                )
+            return self.generate_resource_builtin_call(args, "sample_bias", "vec4")
 
         resource_builtin = {
             "SampleCmp": (
@@ -3261,11 +3267,27 @@ class MojoCodeGen:
                 ),
                 "float",
             ),
+            "SampleCmpLevel": (
+                (
+                    "texture_compare_lod_offset"
+                    if len(expr.arguments) >= 4
+                    else "texture_compare_lod"
+                ),
+                "float",
+            ),
             "SampleCmpLevelZero": (
                 (
                     "texture_compare_offset"
                     if len(expr.arguments) >= 3
                     else "texture_compare"
+                ),
+                "float",
+            ),
+            "SampleCmpGrad": (
+                (
+                    "texture_compare_grad_offset"
+                    if len(expr.arguments) >= 5
+                    else "texture_compare_grad"
                 ),
                 "float",
             ),
@@ -5316,7 +5338,9 @@ class MojoCodeGen:
             operation = getattr(expr, "operation", "")
             if operation in {
                 "SampleCmp",
+                "SampleCmpLevel",
                 "SampleCmpLevelZero",
+                "SampleCmpGrad",
                 "textureCompare",
                 "textureCompareOffset",
                 "textureCompareLod",

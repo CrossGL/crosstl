@@ -5336,6 +5336,48 @@ def test_directx_dispatch_mesh_validates_argument_count_and_group_count_types():
             crosstl.translator.parse(vector_count_code), "task"
         )
 
+    negative_count_code = """
+    shader DispatchMeshNegativeCount {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                DispatchMesh(-1, 1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ThreadGroupCountX.*non-negative"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(negative_count_code), "task"
+        )
+
+    too_large_count_code = """
+    shader DispatchMeshTooLargeCount {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                DispatchMesh(65536, 1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ThreadGroupCountX.*less than 65536"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(too_large_count_code), "task"
+        )
+
+    product_too_large_code = """
+    shader DispatchMeshProductTooLarge {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                DispatchMesh(2048, 2048, 2);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="thread group count product"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(product_too_large_code), "task"
+        )
+
 
 def test_directx_dispatch_mesh_rejects_multiple_calls_per_amplification_stage():
     shader = """
@@ -5351,6 +5393,73 @@ def test_directx_dispatch_mesh_rejects_multiple_calls_per_amplification_stage():
 
     with pytest.raises(ValueError, match="DispatchMesh at most once"):
         HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "task")
+
+
+def test_directx_dispatch_mesh_rejects_non_uniform_control_flow():
+    loop_code = """
+    shader DispatchMeshInLoop {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                for (int i = 0; i < 1; i++) {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*loop control flow"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(loop_code), "task")
+
+    thread_varying_branch_code = """
+    shader DispatchMeshInThreadVaryingBranch {
+        task {
+            void main(uint groupIndex @ SV_GroupIndex) @numthreads(1, 1, 1) {
+                if (groupIndex == 0u) {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*thread-varying control flow"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(thread_varying_branch_code), "task"
+        )
+
+
+def test_directx_dispatch_mesh_payload_must_be_groupshared():
+    shader = """
+    shader DispatchMeshLocalPayload {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                MeshPayload payload;
+                payload.meshlet = 7u;
+                DispatchMesh(1, 1, 1, payload);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="payload argument.*groupshared"):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
 def test_directx_dispatch_mesh_rejects_calls_outside_amplification_stages():

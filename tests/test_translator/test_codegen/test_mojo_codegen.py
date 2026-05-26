@@ -3227,6 +3227,173 @@ def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
     )
 
 
+def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast_repr():
+    codegen = MojoCodeGen()
+    tex = VariableNode("tex", PrimitiveType("sampler2D"))
+    shadow = VariableNode("shadow", PrimitiveType("sampler2DShadow"))
+    state = VariableNode("state", PrimitiveType("sampler"))
+    uv = VariableNode("uv", VectorType(PrimitiveType("float"), 2))
+    bias = VariableNode("bias", PrimitiveType("float"))
+    lod = VariableNode("lod", PrimitiveType("float"))
+    depth = VariableNode("depth", PrimitiveType("float"))
+    offset = VariableNode("offset", VectorType(PrimitiveType("int"), 2))
+    ddx = VariableNode("ddx", VectorType(PrimitiveType("float"), 2))
+    ddy = VariableNode("ddy", VectorType(PrimitiveType("float"), 2))
+
+    codegen.register_variable_type("tex", "sampler2D")
+    codegen.register_variable_type("shadow", "sampler2DShadow")
+    codegen.register_variable_type("state", "sampler")
+    codegen.register_variable_type("uv", "vec2")
+    codegen.register_variable_type("bias", "float")
+    codegen.register_variable_type("lod", "float")
+    codegen.register_variable_type("depth", "float")
+    codegen.register_variable_type("offset", "ivec2")
+    codegen.register_variable_type("ddx", "vec2")
+    codegen.register_variable_type("ddy", "vec2")
+
+    bias_call = codegen.generate_expression(
+        TextureOpNode("SampleBias", tex, [uv, bias], sampler_expr=state)
+    )
+    bias_offset_call = codegen.generate_expression(
+        TextureOpNode("SampleBias", tex, [uv, bias, offset], sampler_expr=state)
+    )
+    compare_lod_call = codegen.generate_expression(
+        TextureOpNode("SampleCmpLevel", shadow, [uv, depth, lod], sampler_expr=state)
+    )
+    compare_lod_offset_call = codegen.generate_expression(
+        TextureOpNode(
+            "SampleCmpLevel",
+            shadow,
+            [uv, depth, lod, offset],
+            sampler_expr=state,
+        )
+    )
+    compare_grad_call = codegen.generate_expression(
+        TextureOpNode(
+            "SampleCmpGrad",
+            shadow,
+            [uv, depth, ddx, ddy],
+            sampler_expr=state,
+        )
+    )
+    compare_grad_offset_call = codegen.generate_expression(
+        TextureOpNode(
+            "SampleCmpGrad",
+            shadow,
+            [uv, depth, ddx, ddy, offset],
+            sampler_expr=state,
+        )
+    )
+    gather_offsets_call = codegen.generate_expression(
+        TextureOpNode(
+            "textureGatherOffsets",
+            tex,
+            [uv, offset, offset, offset, offset],
+            sampler_expr=state,
+        )
+    )
+    compare_proj_grad_offset_call = codegen.generate_expression(
+        TextureOpNode(
+            "textureCompareProjGradOffset",
+            shadow,
+            [uv, depth, ddx, ddy, offset],
+            sampler_expr=state,
+        )
+    )
+
+    assert bias_call.startswith("_crossgl_sample_bias_Texture2D")
+    assert bias_call.endswith("(tex, uv, bias)")
+    assert bias_offset_call.startswith("_crossgl_sample_bias_offset_Texture2D")
+    assert bias_offset_call.endswith("(tex, uv, bias, offset)")
+    assert compare_lod_call.startswith("_crossgl_texture_compare_lod_Texture2DShadow")
+    assert compare_lod_call.endswith("(shadow, uv, depth, lod)")
+    assert compare_lod_offset_call.startswith(
+        "_crossgl_texture_compare_lod_offset_Texture2DShadow"
+    )
+    assert compare_lod_offset_call.endswith("(shadow, uv, depth, lod, offset)")
+    assert compare_grad_call.startswith("_crossgl_texture_compare_grad_Texture2DShadow")
+    assert compare_grad_call.endswith("(shadow, uv, depth, ddx, ddy)")
+    assert compare_grad_offset_call.startswith(
+        "_crossgl_texture_compare_grad_offset_Texture2DShadow"
+    )
+    assert compare_grad_offset_call.endswith("(shadow, uv, depth, ddx, ddy, offset)")
+    assert gather_offsets_call.startswith("_crossgl_texture_gather_offsets_Texture2D")
+    assert gather_offsets_call.endswith("(tex, uv, offset, offset, offset, offset)")
+    assert compare_proj_grad_offset_call.startswith(
+        "_crossgl_texture_compare_proj_grad_offset_Texture2DShadow"
+    )
+    assert compare_proj_grad_offset_call.endswith(
+        "(shadow, uv, depth, ddx, ddy, offset)"
+    )
+    assert "TextureOpNode(" not in "\n".join(
+        [
+            bias_call,
+            bias_offset_call,
+            compare_lod_call,
+            compare_lod_offset_call,
+            compare_grad_call,
+            compare_grad_offset_call,
+            gather_offsets_call,
+            compare_proj_grad_offset_call,
+        ]
+    )
+    assert (
+        codegen.expression_result_type(
+            TextureOpNode("SampleBias", tex, [uv, bias], sampler_expr=state)
+        )
+        == "vec4"
+    )
+    assert (
+        codegen.expression_result_type(
+            TextureOpNode(
+                "SampleCmpLevel", shadow, [uv, depth, lod], sampler_expr=state
+            )
+        )
+        == "float"
+    )
+    assert (
+        codegen.expression_result_type(
+            TextureOpNode(
+                "SampleCmpGrad", shadow, [uv, depth, ddx, ddy], sampler_expr=state
+            )
+        )
+        == "float"
+    )
+    helper_names = {
+        helper["name"] for helper in codegen.required_resource_builtin_helpers.values()
+    }
+    assert any(
+        name.startswith("_crossgl_sample_bias_Texture2D") for name in helper_names
+    )
+    assert any(
+        name.startswith("_crossgl_sample_bias_offset_Texture2D")
+        for name in helper_names
+    )
+    assert any(
+        name.startswith("_crossgl_texture_compare_lod_Texture2DShadow")
+        for name in helper_names
+    )
+    assert any(
+        name.startswith("_crossgl_texture_compare_grad_Texture2DShadow")
+        for name in helper_names
+    )
+    assert any(
+        name.startswith("_crossgl_texture_gather_offsets_Texture2D")
+        for name in helper_names
+    )
+    assert any(
+        name.startswith("_crossgl_texture_compare_proj_grad_offset_Texture2DShadow")
+        for name in helper_names
+    )
+
+    with pytest.raises(
+        ValueError, match="texture_compare_grad.*shadow texture required"
+    ):
+        codegen.generate_expression(
+            TextureOpNode("SampleCmpGrad", tex, [uv, depth, ddx, ddy])
+        )
+
+
 def test_direct_texture_op_nodes_reject_unknown_operations():
     codegen = MojoCodeGen()
     tex = VariableNode("tex", PrimitiveType("sampler2D"))
@@ -3236,9 +3403,9 @@ def test_direct_texture_op_nodes_reject_unknown_operations():
     codegen.register_variable_type("uv", "vec2")
 
     with pytest.raises(
-        ValueError, match="Unsupported Mojo texture operation SampleBias"
+        ValueError, match="Unsupported Mojo texture operation SampleClamp"
     ):
-        codegen.generate_expression(TextureOpNode("SampleBias", tex, [uv]))
+        codegen.generate_expression(TextureOpNode("SampleClamp", tex, [uv]))
 
 
 def test_else_if_statement():

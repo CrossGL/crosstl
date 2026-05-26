@@ -1328,6 +1328,9 @@ class CudaToCrossGLConverter:
             "atomicMin": "atomicMin",
             "atomicExch": "atomicExchange",
             "atomicCAS": "atomicCompareExchange",
+            "atomicAnd": "atomicAnd",
+            "atomicOr": "atomicOr",
+            "atomicXor": "atomicXor",
         }
 
         crossgl_func = atomic_map.get(node.operation, node.operation)

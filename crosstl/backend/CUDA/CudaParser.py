@@ -54,6 +54,9 @@ class CudaParser:
         "ATOMICMIN",
         "ATOMICEXCH",
         "ATOMICCAS",
+        "ATOMICAND",
+        "ATOMICOR",
+        "ATOMICXOR",
     }
     ATOMIC_FUNCTION_NAMES = {
         "atomicAdd",
@@ -62,6 +65,9 @@ class CudaParser:
         "atomicMin",
         "atomicExch",
         "atomicCAS",
+        "atomicAnd",
+        "atomicOr",
+        "atomicXor",
     }
     FUNCTION_NAME_TOKENS = {"IDENTIFIER", *ATOMIC_FUNCTION_TOKENS}
     LAMBDA_SPECIFIER_TOKENS = {
