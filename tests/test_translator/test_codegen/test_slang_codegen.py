@@ -4004,6 +4004,86 @@ def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic():
     assert "buffer_store(values" not in generated_code
 
 
+def test_append_consume_structured_buffers_emit_slang_methods_and_uav_bindings():
+    code = """
+    shader SlangAppendConsumeStructuredBuffers {
+        struct Particle {
+            vec4 position;
+            float mass;
+        };
+
+        AppendStructuredBuffer<Particle> appended @binding(3);
+        ConsumeStructuredBuffer<Particle> consumed @binding(4);
+        AppendStructuredBuffer<vec4> vectors;
+        ConsumeStructuredBuffer<uint> indices[2];
+
+        compute {
+            void main() {
+                Particle particle = buffer_consume(consumed);
+                buffer_append(appended, particle);
+                buffer_append(vectors, vec4(particle.mass));
+                uint index = buffer_consume(indices[1]);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(3, 0)]] AppendStructuredBuffer<Particle> appended "
+        ": register(u3);" in generated_code
+    )
+    assert (
+        "[[vk::binding(4, 0)]] ConsumeStructuredBuffer<Particle> consumed "
+        ": register(u4);" in generated_code
+    )
+    assert (
+        "[[vk::binding(5, 0)]] AppendStructuredBuffer<float4> vectors "
+        ": register(u5);" in generated_code
+    )
+    assert (
+        "[[vk::binding(6, 0)]] ConsumeStructuredBuffer<uint> indices[2] "
+        ": register(u6);" in generated_code
+    )
+    assert "Particle particle = consumed.Consume();" in generated_code
+    assert "appended.Append(particle);" in generated_code
+    assert "vectors.Append(float4(particle.mass));" in generated_code
+    assert "uint index = indices[1].Consume();" in generated_code
+    assert "buffer_append(" not in generated_code
+    assert "buffer_consume(" not in generated_code
+    assert "AppendStructuredBuffer<vec4>" not in generated_code
+
+
+def test_append_consume_wrong_structured_buffer_kinds_emit_slang_diagnostics():
+    code = """
+    shader SlangInvalidAppendConsumeStructuredBuffers {
+        RWStructuredBuffer<int> writableValues;
+        StructuredBuffer<int> readOnlyValues;
+
+        compute {
+            void main() {
+                buffer_append(writableValues, 1);
+                int value = buffer_consume(readOnlyValues);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "/* unsupported Slang structured buffer: buffer_append requires "
+        "AppendStructuredBuffer resource */;" in generated_code
+    )
+    assert (
+        "int value = /* unsupported Slang structured buffer: buffer_consume "
+        "requires ConsumeStructuredBuffer resource */ 0;" in generated_code
+    )
+    assert "buffer_append(" not in generated_code
+    assert "buffer_consume(" not in generated_code
+
+
 @pytest.mark.parametrize(
     ("resource_source", "message"),
     [

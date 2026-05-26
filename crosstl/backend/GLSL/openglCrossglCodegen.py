@@ -702,8 +702,55 @@ class GLSLToCrossGLConverter:
             + self.variable_qualifier_attribute_suffix(var)
         )
 
-    def fragment_uses_direct_output_declarations(self):
-        return self.shader_type == "fragment" and len(self.outputs) > 1
+    def fragment_uses_direct_output_declarations(self, fragment_writes_depth=False):
+        return self.shader_type == "fragment" and (
+            len(self.outputs) > 1 or fragment_writes_depth
+        )
+
+    def fragment_main_writes_name(self, node, name):
+        if self.shader_type != "fragment":
+            return False
+        for function in getattr(node, "functions", []) or []:
+            if getattr(function, "name", None) != "main":
+                continue
+            return self.statements_write_name(getattr(function, "body", []) or [], name)
+        return False
+
+    def statements_write_name(self, statements, name):
+        return any(
+            self.statement_writes_name(statement, name) for statement in statements
+        )
+
+    def statement_writes_name(self, statement, name):
+        if isinstance(statement, AssignmentNode):
+            return self.expression_base_name(getattr(statement, "left", None)) == name
+
+        for child_name in (
+            "then_branch",
+            "if_body",
+            "else_branch",
+            "else_body",
+            "else_if_chain",
+            "else_if_bodies",
+            "body",
+            "statements",
+            "cases",
+            "default_case",
+            "default",
+        ):
+            child = getattr(statement, child_name, None)
+            if child is None:
+                continue
+            if self.child_writes_name(child, name):
+                return True
+        return False
+
+    def child_writes_name(self, child, name):
+        if isinstance(child, list):
+            return any(self.child_writes_name(item, name) for item in child)
+        if isinstance(child, tuple):
+            return any(self.child_writes_name(item, name) for item in child)
+        return self.statement_writes_name(child, name)
 
     def generate_stage_struct_member(self, var):
         var_type = self.convert_type(var.vtype)
@@ -826,6 +873,8 @@ class GLSLToCrossGLConverter:
                 if self._is_output_var(var):
                     self.outputs.append(var)
 
+        fragment_writes_depth = self.fragment_main_writes_name(node, "gl_FragDepth")
+
         # Ensure vertex stages include gl_Position
         if self.shader_type == "vertex":
             has_position = any(
@@ -839,11 +888,18 @@ class GLSLToCrossGLConverter:
                 self.outputs.append(builtin)
 
         # Ensure fragment outputs include gl_FragColor if no outputs declared
-        if self.shader_type == "fragment" and not self.outputs:
+        if (
+            self.shader_type == "fragment"
+            and not self.outputs
+            and not fragment_writes_depth
+        ):
             builtin = VariableNode(
                 "vec4", "gl_FragColor", qualifiers=["out"], semantic="gl_FragColor"
             )
             self.outputs.append(builtin)
+        fragment_uses_direct_outputs = self.fragment_uses_direct_output_declarations(
+            fragment_writes_depth
+        )
 
         for uniform in node.uniforms:
             self.uniform_vars.append(uniform)
@@ -945,7 +1001,7 @@ class GLSLToCrossGLConverter:
         if getattr(node, "global_variables", []):
             result += "\n"
 
-        if self.fragment_uses_direct_output_declarations():
+        if fragment_uses_direct_outputs and self.outputs:
             for output_var in self.outputs:
                 result += (
                     self.indent_str
@@ -1004,7 +1060,7 @@ class GLSLToCrossGLConverter:
                     + f"{self.stage_struct_name()}Output main({self.stage_struct_name()}Input input)"
                 )
             elif self.shader_type == "fragment":
-                if self.fragment_uses_direct_output_declarations():
+                if fragment_uses_direct_outputs:
                     result += (
                         self.indent()
                         + f"void main({self.stage_struct_name()}Input input)"
@@ -1045,7 +1101,7 @@ class GLSLToCrossGLConverter:
             if (
                 self.shader_type == "fragment"
                 and self.outputs
-                and not self.fragment_uses_direct_output_declarations()
+                and not fragment_uses_direct_outputs
             ):
                 output_type = self.convert_type(self.outputs[0].vtype)
                 output_name = self.outputs[0].name
@@ -1064,7 +1120,7 @@ class GLSLToCrossGLConverter:
             # Add implicit return for fragment shaders if not present
             if (
                 self.shader_type == "fragment"
-                and not self.fragment_uses_direct_output_declarations()
+                and not fragment_uses_direct_outputs
                 and not any(isinstance(stmt, ReturnNode) for stmt in main_function.body)
             ):
                 output_name = self.outputs[0].name if self.outputs else "gl_FragColor"

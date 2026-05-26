@@ -378,6 +378,8 @@ class RustCodeGen:
         self.swizzle_temp_counter = 0
         self.vector_arg_temp_counter = 0
         self.matrix_arg_temp_counter = 0
+        self.assignment_lhs_depth = 0
+        self.member_object_depth = 0
 
     def generate(self, ast):
         """Generate complete Rust-like shader source for a CrossGL AST."""
@@ -413,6 +415,8 @@ class RustCodeGen:
         self.swizzle_temp_counter = 0
         self.vector_arg_temp_counter = 0
         self.matrix_arg_temp_counter = 0
+        self.assignment_lhs_depth = 0
+        self.member_object_depth = 0
         code = "// Generated Rust GPU Shader Code\n"
         code += "use gpu::*;\n"
         code += "use math::*;\n\n"
@@ -3775,7 +3779,7 @@ class RustCodeGen:
         # Handle both old and new AST assignment structures
         if hasattr(node, "target") and hasattr(node, "value"):
             # New AST structure
-            lhs = self.generate_expression(node.target)
+            lhs = self.generate_assignment_target_expression(node.target)
             lhs_type = self.expression_result_type(node.target)
             rhs = self.generate_expression_with_type(node.value, lhs_type)
             rhs = self.normalize_assignment_rhs(
@@ -3784,7 +3788,7 @@ class RustCodeGen:
             op = getattr(node, "operator", "=")
         else:
             # Old AST structure
-            lhs = self.generate_expression(node.left)
+            lhs = self.generate_assignment_target_expression(node.left)
             lhs_type = self.expression_result_type(node.left)
             rhs = self.generate_expression_with_type(node.right, lhs_type)
             rhs = self.normalize_assignment_rhs(
@@ -3792,6 +3796,13 @@ class RustCodeGen:
             )
             op = getattr(node, "operator", "=")
         return f"{lhs} {op} {rhs}"
+
+    def generate_assignment_target_expression(self, target):
+        self.assignment_lhs_depth += 1
+        try:
+            return self.generate_expression(target)
+        finally:
+            self.assignment_lhs_depth -= 1
 
     def normalize_assignment_rhs(self, lhs_type, rhs_expr, generated_rhs, operator):
         if operator == "=":
@@ -4824,12 +4835,19 @@ class RustCodeGen:
     def generate_member_access_expression(self, expr):
         obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))
         member = getattr(expr, "member", "")
-        obj = self.generate_expression(obj_expr)
+        self.member_object_depth += 1
+        try:
+            obj = self.generate_expression(obj_expr)
+        finally:
+            self.member_object_depth -= 1
         obj = self.lazy_static_object_expression(obj_expr, obj)
 
         swizzle_components = self.member_swizzle_components(expr)
         if swizzle_components is None:
-            return f"{obj}.{member}"
+            access = f"{obj}.{member}"
+            if self.should_clone_member_access_value(expr):
+                return f"{access}.clone()"
+            return access
 
         if len(swizzle_components) == 1:
             return f"{obj}.{swizzle_components[0]}"
@@ -4847,6 +4865,19 @@ class RustCodeGen:
 
         args = ", ".join(f"{obj}.{component}" for component in swizzle_components)
         return f"{self.rust_constructor_path(rust_type)}::new({args})"
+
+    def should_clone_member_access_value(self, expr):
+        if self.assignment_lhs_depth > 0 or self.member_object_depth > 0:
+            return False
+
+        member_type = self.expression_result_type(expr)
+        if member_type is None:
+            return False
+
+        return not self.type_is_copy_derivable(
+            member_type,
+            self.current_generic_param_names,
+        )
 
     def swizzle_constructor_type(self, obj_expr, component_count):
         object_type = self.expression_result_type(obj_expr)

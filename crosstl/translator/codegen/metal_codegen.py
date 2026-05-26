@@ -3019,6 +3019,9 @@ class MetalCodeGen:
             if array_type and "[" in array_type and "]" in array_type:
                 base_type, _ = split_array_type_suffix(array_type)
                 return base_type
+            pointee_type = self.pointer_pointee_type_name(array_type)
+            if pointee_type is not None:
+                return pointee_type
             return array_type
         if isinstance(expr, MemberAccessNode):
             block_access = self.glsl_buffer_block_member_access(expr)
@@ -3027,6 +3030,7 @@ class MetalCodeGen:
             object_type = self.expression_result_type(
                 expr.object
             ) or self.unsupported_glsl_buffer_block_expression_type(expr.object)
+            object_type = self.pointer_pointee_type_name(object_type) or object_type
             member = str(expr.member)
             if object_type and all(ch in "xyzwrgba" for ch in member):
                 component_type = self.vector_component_type(object_type)
@@ -3941,6 +3945,8 @@ class MetalCodeGen:
             if block_load is not None:
                 return block_load
             obj = self.generate_expression_with_expected(expr.object, None)
+            if self.member_access_uses_pointer_operator(expr):
+                return f"{obj}->{expr.member}"
             return f"{obj}.{expr.member}"
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition)} ? {self.generate_expression(expr.true_expr)} : {self.generate_expression(expr.false_expr)}"
@@ -5536,6 +5542,22 @@ class MetalCodeGen:
                 and self.explicit_buffer_binding_index(node) is not None
             )
         return False
+
+    def pointer_pointee_type_name(self, vtype):
+        if isinstance(vtype, PointerType):
+            return self.type_name_string(vtype.pointee_type)
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return None
+        type_name = str(type_name).strip()
+        return type_name[:-1].strip() if type_name.endswith("*") else None
+
+    def member_access_uses_pointer_operator(self, expr):
+        if not isinstance(expr, MemberAccessNode):
+            return False
+        object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
+        object_type = self.expression_result_type(object_expr)
+        return self.pointer_pointee_type_name(object_type) is not None
 
     def metal_mesh_payload_parameter_declaration(
         self, mapped_type, name, node=None, shader_type=None

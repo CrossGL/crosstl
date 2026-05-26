@@ -3496,6 +3496,44 @@ def test_struct_and_enum_derives_track_nested_non_copy_members_and_compile(tmp_p
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_non_copy_member_access_clones_in_value_contexts_and_compile(tmp_path):
+    code = """
+    shader NonCopyMemberAccess {
+        struct Payload {
+            float weights[];
+            int count;
+        };
+
+        struct Wrapper {
+            Payload payload;
+            int id;
+        };
+
+        fn keep(wrapper: Wrapper) -> int {
+            let payload = wrapper.payload;
+            let again = wrapper;
+            payload.count + again.id
+        }
+
+        fn replace(wrapper: Wrapper, replacement: Payload) -> int {
+            let editable = wrapper;
+            editable.payload = replacement;
+            editable.payload.count
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let payload: Payload = wrapper.payload.clone();" in generated_code
+    assert "let again: Wrapper = wrapper;" in generated_code
+    assert "let mut editable: Wrapper = wrapper;" in generated_code
+    assert "editable.payload = replacement;" in generated_code
+    assert "editable.payload.clone() =" not in generated_code
+    assert "editable.payload.count" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_legacy_generic_wrappers_emit_rust_generic_params():
     code = """
     shader GenericWrappers {

@@ -1562,6 +1562,47 @@ def test_directx_typed_buffer_atomics_lift_in_struct_constructors():
     assert "atomicXor(counters" not in generated_code
 
 
+def test_directx_typed_buffer_atomics_lift_in_array_literals():
+    shader = """
+    shader TypedBufferAtomicArrayLiteralsHLSL {
+        RWBuffer<uint> counters @register(u1);
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                float weights[2] = {1.0, 2.0};
+                uint values[2] = {
+                    atomicAdd(counters[tid.x], 1u),
+                    atomicCompareExchange(counters[tid.x], 2u, 3u)
+                };
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float weights[2] = {1.0, 2.0};" in generated_code
+    assert "uint __crossgl_atomic_expr_0;" in generated_code
+    assert (
+        "InterlockedAdd(counters[tid.x], 1u, __crossgl_atomic_expr_0);"
+        in generated_code
+    )
+    assert "uint __crossgl_atomic_expr_1;" in generated_code
+    assert (
+        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, "
+        "__crossgl_atomic_expr_1);"
+    ) in generated_code
+    assert (
+        "uint values[2] = {__crossgl_atomic_expr_0, __crossgl_atomic_expr_1};"
+        in generated_code
+    )
+    assert "ArrayLiteralNode" not in generated_code
+    assert "unsupported HLSL typed buffer atomic expression" not in generated_code
+    assert "atomicAdd(counters" not in generated_code
+    assert "atomicCompareExchange(counters" not in generated_code
+
+
 def test_directx_typed_buffer_atomics_reject_non_integer_targets():
     shader = """
     shader BadTypedBufferAtomicHLSL {
@@ -10258,6 +10299,53 @@ def test_directx_integer_image_atomic_compare_swap():
         in generated_code
     )
     assert "imageAtomicCompSwap(image" not in generated_code
+
+
+def test_directx_image_atomic_result_type_drives_nested_expression_codegen():
+    shader = """
+    shader AtomicImageExpressionTyping {
+        uimage2D counters;
+
+        uint consume(uint value) {
+            return value + 1u;
+        }
+
+        uint touch(uimage2D image, ivec2 pixel, uint value, bool choose) {
+            uint2 splat = uint2(imageAtomicAdd(image, pixel, value));
+            uint callValue = consume(imageAtomicCompSwap(image, pixel, value, splat.x));
+            uint selected = choose
+                ? imageAtomicMin(image, pixel, callValue)
+                : imageAtomicMax(image, pixel, value);
+            return splat.y + callValue + selected;
+        }
+
+        compute {
+            void main() {
+                uint result = touch(counters, ivec2(0, 1), 2u, true);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert (
+        "uint2 splat = ((uint2)(imageAtomicAdd_uimage2D(image, pixel, value)));"
+        in generated_code
+    )
+    assert (
+        "uint callValue = consume(imageAtomicCompSwap_uimage2D(image, pixel, value, splat.x));"
+        in generated_code
+    )
+    assert (
+        "uint selected = (choose ? imageAtomicMin_uimage2D(image, pixel, callValue) : imageAtomicMax_uimage2D(image, pixel, value));"
+        in generated_code
+    )
+    assert "imageAtomicAdd(image" not in generated_code
+    assert "imageAtomicCompSwap(image" not in generated_code
+    assert "imageAtomicMin(image" not in generated_code
+    assert "imageAtomicMax(image" not in generated_code
 
 
 def test_directx_integer_image_dimension_atomics():

@@ -2669,6 +2669,163 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
         assert "imageStore(" not in cuda_code
 
+    def test_typed_hlsl_extended_writable_resources_emit_cuda_surfaces(self):
+        """Test CUDA maps non-2D HLSL RWTexture aliases and query metadata."""
+        source_code = """
+        shader TypedWritableExtendedCUDA {
+            RWTexture1DArray<float4> lineLayers;
+            RWTextureCube<float4> cubeImage;
+            RWTextureCubeArray<uint> cubeCounters;
+            RWTextureCube<int> signedCube;
+            RWTexture1DArray<uint> counterLines[2];
+            RWTextureCubeArray<float4> cubeLayerGrid[2];
+
+            void process(
+                RWTexture1DArray<float4> paramLines,
+                RWTextureCube<float4> paramCube,
+                RWTextureCubeArray<uint> paramCounters,
+                RWTextureCube<int> paramSigned,
+                int i,
+                ivec2 lineCoord,
+                ivec3 cubeCoord,
+                ivec3 cubeLayerCoord
+            ) {
+                vec4 line = imageLoad(paramLines, lineCoord);
+                imageStore(paramLines, lineCoord, line);
+                vec4 cube = imageLoad(paramCube, cubeCoord);
+                imageStore(paramCube, cubeCoord, cube);
+                uint count = imageLoad(paramCounters, cubeLayerCoord);
+                imageStore(paramCounters, cubeLayerCoord, count);
+                int signedValue = imageLoad(paramSigned, cubeCoord);
+                imageStore(paramSigned, cubeCoord, signedValue);
+                uint gridCount = imageLoad(counterLines[i], lineCoord);
+                imageStore(counterLines[i], lineCoord, gridCount);
+                vec4 gridCube = imageLoad(cubeLayerGrid[i], cubeLayerCoord);
+                imageStore(cubeLayerGrid[i], cubeLayerCoord, gridCube);
+                ivec2 lineSize = imageSize(paramLines);
+                ivec2 cubeSize = imageSize(paramCube);
+                ivec3 counterSize = imageSize(paramCounters);
+                ivec2 signedSize = imageSize(paramSigned);
+                ivec2 counterLineSize = imageSize(counterLines[i]);
+                ivec3 cubeLayerSize = imageSize(cubeLayerGrid[i]);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "struct CglResourceQueryInfo" in cuda_code
+        assert "cudaSurfaceObject_t lineLayers;" in cuda_code
+        assert "cudaSurfaceObject_t cubeImage;" in cuda_code
+        assert "cudaSurfaceObject_t cubeCounters;" in cuda_code
+        assert "cudaSurfaceObject_t signedCube;" in cuda_code
+        assert "cudaSurfaceObject_t counterLines[2];" in cuda_code
+        assert "CglResourceQueryInfo counterLines_metadata[2] = {};" in cuda_code
+        assert "cudaSurfaceObject_t cubeLayerGrid[2];" in cuda_code
+        assert "CglResourceQueryInfo cubeLayerGrid_metadata[2] = {};" in cuda_code
+        assert (
+            "__device__ void process(cudaSurfaceObject_t paramLines, "
+            "CglResourceQueryInfo paramLines_metadata, "
+            "cudaSurfaceObject_t paramCube, "
+            "CglResourceQueryInfo paramCube_metadata, "
+            "cudaSurfaceObject_t paramCounters, "
+            "CglResourceQueryInfo paramCounters_metadata, "
+            "cudaSurfaceObject_t paramSigned, "
+            "CglResourceQueryInfo paramSigned_metadata, int i"
+        ) in cuda_code
+        assert (
+            "float4 line = surf1DLayeredread<float4>"
+            "(paramLines, lineCoord.x * sizeof(float4), lineCoord.y);" in cuda_code
+        )
+        assert (
+            "surf1DLayeredwrite("
+            "line, paramLines, lineCoord.x * sizeof(float4), lineCoord.y);" in cuda_code
+        )
+        assert (
+            "float4 cube = surfCubemapread<float4>"
+            "(paramCube, cubeCoord.x * sizeof(float4), cubeCoord.y, cubeCoord.z);"
+            in cuda_code
+        )
+        assert (
+            "surfCubemapwrite("
+            "cube, paramCube, cubeCoord.x * sizeof(float4), cubeCoord.y, "
+            "cubeCoord.z);" in cuda_code
+        )
+        assert (
+            "uint count = surfCubemapLayeredread<uint>"
+            "(paramCounters, cubeLayerCoord.x * sizeof(uint), "
+            "cubeLayerCoord.y, cubeLayerCoord.z);" in cuda_code
+        )
+        assert (
+            "surfCubemapLayeredwrite(count, paramCounters, "
+            "cubeLayerCoord.x * sizeof(uint), cubeLayerCoord.y, "
+            "cubeLayerCoord.z);" in cuda_code
+        )
+        assert (
+            "int signedValue = surfCubemapread<int>"
+            "(paramSigned, cubeCoord.x * sizeof(int), cubeCoord.y, cubeCoord.z);"
+            in cuda_code
+        )
+        assert (
+            "surfCubemapwrite(signedValue, paramSigned, "
+            "cubeCoord.x * sizeof(int), cubeCoord.y, cubeCoord.z);" in cuda_code
+        )
+        assert (
+            "uint gridCount = surf1DLayeredread<uint>"
+            "(counterLines[i], lineCoord.x * sizeof(uint), lineCoord.y);" in cuda_code
+        )
+        assert (
+            "surf1DLayeredwrite(gridCount, counterLines[i], "
+            "lineCoord.x * sizeof(uint), lineCoord.y);" in cuda_code
+        )
+        assert (
+            "float4 gridCube = surfCubemapLayeredread<float4>"
+            "(cubeLayerGrid[i], cubeLayerCoord.x * sizeof(float4), "
+            "cubeLayerCoord.y, cubeLayerCoord.z);" in cuda_code
+        )
+        assert (
+            "surfCubemapLayeredwrite(gridCube, cubeLayerGrid[i], "
+            "cubeLayerCoord.x * sizeof(float4), cubeLayerCoord.y, "
+            "cubeLayerCoord.z);" in cuda_code
+        )
+        assert (
+            "int2 lineSize = cgl_imageSize_image1DArray(paramLines_metadata);"
+            in cuda_code
+        )
+        assert (
+            "int2 cubeSize = cgl_imageSize_imageCube(paramCube_metadata);" in cuda_code
+        )
+        assert (
+            "int3 counterSize = cgl_imageSize_uimageCubeArray"
+            "(paramCounters_metadata);" in cuda_code
+        )
+        assert (
+            "int2 signedSize = cgl_imageSize_iimageCube(paramSigned_metadata);"
+            in cuda_code
+        )
+        assert (
+            "int2 counterLineSize = cgl_imageSize_uimage1DArray"
+            "(counterLines_metadata[i]);" in cuda_code
+        )
+        assert (
+            "int3 cubeLayerSize = cgl_imageSize_imageCubeArray"
+            "(cubeLayerGrid_metadata[i]);" in cuda_code
+        )
+        assert "RWTexture1DArray<" not in cuda_code
+        assert "RWTextureCube<" not in cuda_code
+        assert "RWTextureCubeArray<" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
     def test_typed_hlsl_sampled_resources_emit_cuda_sampler_calls(self, tmp_path):
         """Test CUDA maps typed HLSL sampled Texture resources."""
         source_code = """

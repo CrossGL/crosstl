@@ -201,11 +201,12 @@
         "rust": {"status": "unknown"},
         "slang": {
           "status": "partial",
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, read-only store diagnostics, and Slang vector alias mapping inside buffer element types. Append/consume, byte-address buffers, and GLSL buffer-block round-trips are not implemented yet.",
+          "notes": "Maps geometry blocks to Slang geometry entry points, lowers geometry system-value builtins, preserves semantic aliases, emits maxvertexcount attributes, and validates stage-attribute shapes. Full stream-output/emission semantics are still incomplete.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
-            "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_stage_builtins_emit_stage_specific_slang_parameters",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_invocation_builtin_uses_existing_semantic_parameter_alias",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics"
           ]
         }
       }
@@ -230,11 +231,12 @@
         "rust": {"status": "unknown"},
         "slang": {
           "status": "partial",
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, read-only store diagnostics, and Slang vector alias mapping inside buffer element types. Append/consume, byte-address buffers, and GLSL buffer-block round-trips are not implemented yet.",
+          "notes": "Maps tessellation_control and tessellation_evaluation to Slang hull/domain stages, lowers tessellation system values, tessellation-factor semantics, gl_in/gl_out patch rewrites, patch-constant functions, and validates hull/domain patch shapes and attributes. Full cross-stage compiler-backed tessellation coverage remains incomplete.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
-            "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_factor_semantics_map_to_slang_patch_constant_outputs",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_control_gl_out_output_patch_lowers_to_hull_return",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_domain_output_patch_matches_hull_output_shape",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics"
           ]
         }
       }
@@ -402,8 +404,11 @@
         "hip": {"status": "partial"},
         "mojo": {
           "status": "partial",
-          "notes": "Stage parameter semantics are preserved as Mojo field/parameter comments for compile-smoke output; target-native builtin ABI mapping remains incomplete.",
-          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader"]
+          "notes": "Stage parameter semantics are preserved as Mojo field/parameter comments for compile-smoke output, with duplicate parameter semantics, output-only input misuse, builtin stage misuse, and builtin parameter type mismatches rejected deterministically. Target-native builtin ABI mapping remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen"
+          ]
         },
         "rust": {"status": "partial"},
         "slang": {"status": "partial"}
@@ -519,10 +524,11 @@
         "hip": {"status": "partial"},
         "mojo": {
           "status": "partial",
-          "notes": "CrossGL cbuffers lower to Mojo value structs with scalar/vector/matrix member storage and compile-smoke coverage; target-native uniform binding ABI is not complete.",
+          "notes": "CrossGL cbuffers lower to registered Mojo value structs with scalar/vector/matrix/array member storage, deterministic resource metadata comments, and compile-smoke coverage for local values, function parameters, and returns. Target-native uniform binding ABI is not complete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_cbuffer_type_nodes_emit_mojo_storage_types",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_cbuffer_type_nodes_compile_with_mojo"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_cbuffer_type_nodes_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_cbuffer_structs_register_for_mojo_value_usage"
           ]
         },
         "rust": {"status": "partial"},
@@ -593,10 +599,12 @@
         "rust": {"status": "unknown"},
         "slang": {
           "status": "partial",
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, read-only store diagnostics, and Slang vector alias mapping inside buffer element types. Append/consume, byte-address buffers, and GLSL buffer-block round-trips are not implemented yet.",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. Byte-address buffers and GLSL buffer-block round-trips are not implemented yet.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_append_consume_structured_buffers_emit_slang_methods_and_uav_bindings",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_append_consume_wrong_structured_buffer_kinds_emit_slang_diagnostics",
             "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
           ]
         }
@@ -1617,9 +1625,11 @@
         },
         "vulkan": {
           "status": "supported",
-          "notes": "barrier/workgroupBarrier lower to OpControlBarrier; memoryBarrier lowers to OpMemoryBarrier with device and workgroup memory semantics and spirv-as/spirv-val coverage.",
+          "notes": "barrier/workgroupBarrier lower to OpControlBarrier; groupMemoryBarrier and memoryBarrierShared lower to workgroup-scoped OpMemoryBarrier, memoryBarrierBuffer and memoryBarrierImage lower to device-scoped buffer/image memory barriers, memoryBarrier/allMemoryBarrier lower to device-scoped all-memory barriers, user-defined functions with synchronization names are preserved, and spirv-as/spirv-val coverage exists.",
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_synchronization_builtins_emit_spirv_barriers",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_memory_barrier_variants_emit_scoped_spirv_barriers",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_user_defined_synchronization_names_are_not_lowered",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_synchronization_compute_validates_with_spirv_tools"
           ]
         },
@@ -1733,9 +1743,10 @@
         "hip": {"status": "partial"},
         "mojo": {
           "status": "partial",
-          "notes": "Mojo codegen validates several unsupported enum, semantic, buffer, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
+          "notes": "Mojo codegen validates several unsupported enum, parameter/return semantic, buffer, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_payload_enums_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_buffer_operations_are_rejected_for_mojo_codegen",

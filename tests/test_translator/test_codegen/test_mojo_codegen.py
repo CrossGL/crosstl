@@ -145,6 +145,64 @@ def test_cbuffer_type_nodes_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_cbuffer_structs_register_for_mojo_value_usage(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    cbuffer Camera {
+        mat2 transform;
+        vec4 tint;
+        float weights[2];
+    };
+
+    Camera makeCamera(int index) {
+        Camera camera;
+        camera.tint = vec4(1.0);
+        camera.weights[index] = 2.0;
+        return camera;
+    }
+
+    vec4 readTint(Camera camera) {
+        return camera.tint;
+    }
+
+    float readWeight(Camera camera, int index) {
+        return camera.weights[index];
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "# CrossGL resource metadata: name=Camera kind=cbuffer" in generated_code
+    assert "struct Camera:" in generated_code
+    assert "var transform: CrossGLMatrixF32C2R2" in generated_code
+    assert "var tint: SIMD[DType.float32, 4]" in generated_code
+    assert "var weights: InlineArray[Float32, 2]" in generated_code
+    assert "var camera = Camera(" in generated_code
+    assert "camera.weights[int(index)] = 2.0" in generated_code
+    assert "return camera.weights[int(index)]" in generated_code
+    assert "var camera: Camera" not in generated_code
+
+    generated_code += """
+fn main():
+    var camera = makeCamera(1)
+    print(readTint(camera))
+    print(readWeight(camera, 1))
+"""
+
+    source_path = tmp_path / "cbuffer_struct_value_usage.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1.0, 1.0, 1.0, 1.0]" in result.stdout
+    assert "2.0" in result.stdout
+
+
 def test_unit_enums_lower_to_mojo_aliases():
     code = """
     enum Mode {
@@ -506,6 +564,160 @@ def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo():
     """
     with pytest.raises(ValueError, match="gl_Position.*fragment stage"):
         generate_code(parse_code(tokenize_code(invalid_stage)))
+
+
+def test_stage_parameter_semantic_validation_for_mojo_codegen():
+    vertex_code = """
+    shader VertexParameterSemantics {
+        vertex {
+            vec4 main(
+                uint vertexId @ gl_VertexID,
+                uint instanceId @ SV_InstanceID,
+                vec3 position @ POSITION,
+                vec2 uv @ TEXCOORD0
+            ) @ gl_Position {
+                return vec4(position, 1.0);
+            }
+        }
+    }
+    """
+    vertex_output = generate_code(parse_code(tokenize_code(vertex_code)))
+
+    assert "vertexId: UInt32  # vertex_id" in vertex_output
+    assert "instanceId: UInt32  # instance_id" in vertex_output
+    assert "position: SIMD[DType.float32, 4]  # position" in vertex_output
+    assert "uv: SIMD[DType.float32, 2]  # texcoord0" in vertex_output
+
+    fragment_code = """
+    shader FragmentParameterSemantics {
+        fragment {
+            vec4 main(
+                vec4 coord @ gl_FragCoord,
+                bool front @ gl_FrontFacing,
+                vec2 point @ gl_PointCoord,
+                vec2 uv @ TEXCOORD0
+            ) @ gl_FragColor {
+                return vec4(uv, point.x, front ? 1.0 : 0.0);
+            }
+        }
+    }
+    """
+    fragment_output = generate_code(parse_code(tokenize_code(fragment_code)))
+
+    assert "coord: SIMD[DType.float32, 4]  # position" in fragment_output
+    assert "front: Bool  # front_facing" in fragment_output
+    assert "point: SIMD[DType.float32, 2]  # point_coord" in fragment_output
+    assert "uv: SIMD[DType.float32, 2]  # texcoord0" in fragment_output
+
+    fragment_position_code = """
+    shader FragmentPositionParameterSemantic {
+        fragment {
+            vec4 main(vec4 pos @ gl_Position) @ gl_FragColor {
+                return pos;
+            }
+        }
+    }
+    """
+    fragment_position_output = generate_code(
+        parse_code(tokenize_code(fragment_position_code))
+    )
+
+    assert "pos: SIMD[DType.float32, 4]  # position" in fragment_position_output
+
+    compute_code = """
+    shader ComputeParameterSemantics {
+        compute {
+            void main(
+                uvec3 globalId @ gl_GlobalInvocationID,
+                uvec3 localId @ SV_GroupThreadID,
+                uint groupIndex @ SV_GroupIndex
+            ) {
+            }
+        }
+    }
+    """
+    compute_output = generate_code(parse_code(tokenize_code(compute_code)))
+
+    assert "globalId: SIMD[DType.uint32, 4]  # global_invocation_id" in compute_output
+    assert "localId: SIMD[DType.uint32, 4]  # local_invocation_id" in compute_output
+    assert "groupIndex: UInt32  # group_index" in compute_output
+
+    invalid_cases = [
+        (
+            """
+            shader DuplicateParameterSemantic {
+                fragment {
+                    vec4 main(vec2 uv @ TEXCOORD0, vec2 uv2 @ TEXCOORD0) @ gl_FragColor {
+                        return vec4(uv + uv2, 0.0, 1.0);
+                    }
+                }
+            }
+            """,
+            "Conflicting Mojo fragment parameter semantic.*uv2.*texcoord0.*uv",
+        ),
+        (
+            """
+            shader OutputOnlyParameterSemantic {
+                fragment {
+                    vec4 main(vec4 color @ gl_FragColor) @ gl_FragColor {
+                        return color;
+                    }
+                }
+            }
+            """,
+            "gl_FragColor.*output-only",
+        ),
+        (
+            """
+            shader BadParameterStage {
+                fragment {
+                    vec4 main(uint vertexId @ gl_VertexID) @ gl_FragColor {
+                        return vec4(float(vertexId));
+                    }
+                }
+            }
+            """,
+            "gl_VertexID.*fragment stage.*vertex",
+        ),
+        (
+            """
+            shader BadFrontFacingType {
+                fragment {
+                    vec4 main(float front @ gl_FrontFacing) @ gl_FragColor {
+                        return vec4(front);
+                    }
+                }
+            }
+            """,
+            "gl_FrontFacing.*bool",
+        ),
+        (
+            """
+            shader BadComputeVectorType {
+                compute {
+                    void main(vec3 globalId @ gl_GlobalInvocationID) {
+                    }
+                }
+            }
+            """,
+            "gl_GlobalInvocationID.*integer vec3",
+        ),
+        (
+            """
+            shader BadComputeVarying {
+                compute {
+                    void main(vec2 uv @ TEXCOORD0) {
+                    }
+                }
+            }
+            """,
+            "TEXCOORD0.*compute stage.*fragment, vertex",
+        ),
+    ]
+
+    for shader, message in invalid_cases:
+        with pytest.raises(ValueError, match=message):
+            generate_code(parse_code(tokenize_code(shader)))
 
 
 def test_compute_stage_local_helper_functions_emit_before_entry_point():

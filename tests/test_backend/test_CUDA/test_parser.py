@@ -4,6 +4,7 @@ import pytest
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
 from crosstl.backend.CUDA.CudaAst import (
+    ArrayAccessNode,
     AssignmentNode,
     AtomicOperationNode,
     BinaryOpNode,
@@ -690,6 +691,84 @@ class TestCudaParser:
         assert body[9].vtype == "surface<void, cudaSurfaceTypeCubemapLayered>"
         assert body[10].vtype == "cudaArray_t"
         assert body[11].vtype == "cudaArray *"
+
+    def test_resource_object_pointer_and_legacy_texture_template_parsing(self):
+        """Test CUDA resource object pointers and three-argument textures parse."""
+        code = """
+        texture<float4, cudaTextureType2D, cudaReadModeElementType> texRef;
+        surface<void, cudaSurfaceType2D> surfaceRef;
+
+        void resourcePointerOps(
+            cudaTextureObject_t* textureObjects,
+            cudaSurfaceObject_t* surfaceObjects,
+            texture<float4, cudaTextureType2D, cudaReadModeElementType> legacyTex,
+            surface<void, cudaSurfaceType2D> legacySurface,
+            int index,
+            int2 pixel,
+            float2 uv
+        ) {
+            float4 fromPointer = tex2D<float4>(
+                textureObjects[index],
+                uv.x,
+                uv.y
+            );
+            float4 fromLegacy = tex2D<float4>(legacyTex, uv);
+            float4 loadedPointer = surf2Dread<float4>(
+                surfaceObjects[index],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                loadedPointer,
+                surfaceObjects[index],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 loadedLegacy = surf2Dread<float4>(
+                legacySurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.global_variables[0].vtype == (
+            "texture<float4, cudaTextureType2D, cudaReadModeElementType>"
+        )
+        assert ast.global_variables[0].name == "texRef"
+        assert ast.global_variables[1].vtype == "surface<void, cudaSurfaceType2D>"
+        assert ast.global_variables[1].name == "surfaceRef"
+
+        params = ast.functions[0].params
+        assert params[0].vtype == "cudaTextureObject_t *"
+        assert params[0].name == "textureObjects"
+        assert params[1].vtype == "cudaSurfaceObject_t *"
+        assert params[1].name == "surfaceObjects"
+        assert params[2].vtype == (
+            "texture<float4, cudaTextureType2D, cudaReadModeElementType>"
+        )
+        assert params[2].name == "legacyTex"
+        assert params[3].vtype == "surface<void, cudaSurfaceType2D>"
+        assert params[3].name == "legacySurface"
+
+        body = ast.functions[0].body
+        assert body[0].vtype == "float4"
+        assert body[0].value.name == "tex2D<float4>"
+        assert isinstance(body[0].value.args[0], ArrayAccessNode)
+        assert body[0].value.args[0].array == "textureObjects"
+        assert body[1].value.name == "tex2D<float4>"
+        assert body[1].value.args[0] == "legacyTex"
+        assert body[2].value.name == "surf2Dread<float4>"
+        assert isinstance(body[2].value.args[0], ArrayAccessNode)
+        assert body[2].value.args[0].array == "surfaceObjects"
+        assert body[3].name == "surf2Dwrite"
+        assert isinstance(body[3].args[1], ArrayAccessNode)
+        assert body[4].value.name == "surf2Dread<float4>"
+        assert body[4].value.args[0] == "legacySurface"
 
     def test_nested_template_argument_parsing(self):
         """Test nested template arguments that close with >>"""

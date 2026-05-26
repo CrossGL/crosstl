@@ -103,6 +103,130 @@ def test_parse_fragment_multiple_outputs_roundtrip():
     assert "\n    vec4 accum;" not in glsl
 
 
+def test_parse_fragment_color_and_depth_outputs_roundtrip():
+    code = """
+    #version 450 core
+    layout(location = 0) in vec2 uv;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        color = vec4(uv, 0.0, 1.0);
+        gl_FragDepth = uv.x;
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "out vec4 color @location(0);" in crossgl
+    assert "void main(FragmentInput input)" in crossgl
+    assert "color = vec4(input.uv, 0.0, 1.0);" in crossgl
+    assert "gl_FragDepth = input.uv.x;" in crossgl
+    assert "return color;" not in crossgl
+    assert "\n        vec4 color;" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "layout(location = 0) in vec2 uv;" in glsl
+    assert "layout(location = 0) out vec4 color;" in glsl
+    assert "color = vec4(uv, 0.0, 1.0);" in glsl
+    assert "gl_FragDepth = uv.x;" in glsl
+    assert "fragColor" not in glsl
+    assert "\n    vec4 color;" not in glsl
+
+
+def test_parse_fragment_depth_only_output_roundtrip():
+    code = """
+    #version 450 core
+    layout(location = 0) in vec2 uv;
+
+    void main() {
+        gl_FragDepth = uv.x;
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "void main(FragmentInput input)" in crossgl
+    assert "gl_FragDepth = input.uv.x;" in crossgl
+    assert "gl_FragColor" not in crossgl
+    assert "fragColor" not in crossgl
+    assert "@ gl_FragColor" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "layout(location = 0) in vec2 uv;" in glsl
+    assert "gl_FragDepth = uv.x;" in glsl
+    assert "gl_FragColor" not in glsl
+    assert "fragColor" not in glsl
+
+
+def test_parse_fragment_else_if_depth_output_roundtrip():
+    code = """
+    #version 450 core
+    layout(location = 0) in vec2 uv;
+
+    void main() {
+        if (uv.x < 0.25) {
+            discard;
+        } else if (uv.x < 0.5) {
+            gl_FragDepth = uv.y;
+        } else {
+            discard;
+        }
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "void main(FragmentInput input)" in crossgl
+    assert "else if ((input.uv.x < 0.5))" in crossgl
+    assert "gl_FragDepth = input.uv.y;" in crossgl
+    assert "gl_FragColor" not in crossgl
+    assert "fragColor" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "layout(location = 0) in vec2 uv;" in glsl
+    assert "if ((uv.x < 0.5))" in glsl
+    assert "gl_FragDepth = uv.y;" in glsl
+    assert "gl_FragColor" not in glsl
+    assert "fragColor" not in glsl
+
+
+def test_parse_fragment_switch_default_depth_output_roundtrip():
+    code = """
+    #version 450 core
+    flat in int mode;
+
+    void main() {
+        switch (mode) {
+            case 0:
+                discard;
+            default:
+                gl_FragDepth = 0.5;
+        }
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "void main(FragmentInput input)" in crossgl
+    assert "switch (input.mode)" in crossgl
+    assert "default:" in crossgl
+    assert "gl_FragDepth = 0.5;" in crossgl
+    assert "gl_FragColor" not in crossgl
+    assert "fragColor" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "flat in int mode;" in glsl
+    assert "switch (mode)" in glsl
+    assert "default:" in glsl
+    assert "gl_FragDepth = 0.5;" in glsl
+    assert "gl_FragColor" not in glsl
+    assert "fragColor" not in glsl
+
+
 def test_parse_vertex_struct_layout_qualifiers_roundtrip():
     code = """
     #version 450 core

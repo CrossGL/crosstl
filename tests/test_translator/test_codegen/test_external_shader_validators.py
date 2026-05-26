@@ -232,6 +232,18 @@ void main() {
 """
 
 
+MIXED_GLSL_FRAGMENT_COLOR_DEPTH_SHADER = """
+#version 450 core
+layout(location = 0) in vec2 uv;
+layout(location = 0) out vec4 color;
+
+void main() {
+    color = vec4(uv, 0.0, 1.0);
+    gl_FragDepth = uv.x;
+}
+"""
+
+
 GLSL_GEOMETRY_INTERFACE_BLOCK_VALIDATOR_SHADER = """
 shader GLSLGeometryInterfaceBlockValidator {
     @glsl_interface_block(in) @glsl_interface_instance(vertexIn) @glsl_interface_array
@@ -977,6 +989,27 @@ def test_mixed_glsl_fragment_multiple_outputs_validate_with_glslangvalidator(
     assert "fragColor" not in code
     assert "return accum" not in code
     assert "\n    vec4 accum;" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "frag", str(shader_path)])
+
+
+def test_mixed_glsl_fragment_color_depth_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "mixed_glsl_fragment_color_depth.frag"
+
+    code = GLSLCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_FRAGMENT_COLOR_DEPTH_SHADER, "fragment")
+    )
+    assert "layout(location = 0) in vec2 uv;" in code
+    assert "layout(location = 0) out vec4 color;" in code
+    assert "color = vec4(uv, 0.0, 1.0);" in code
+    assert "gl_FragDepth = uv.x;" in code
+    assert "fragColor" not in code
+    assert "return color" not in code
+    assert "\n    vec4 color;" not in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "frag", str(shader_path)])

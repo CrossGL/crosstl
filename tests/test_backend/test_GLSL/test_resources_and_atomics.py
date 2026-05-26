@@ -14431,9 +14431,10 @@ def test_codegen_allows_explicit_image_atomic_result_casts():
 
 
 @pytest.mark.parametrize(
-    "crossgl",
+    "crossgl, expected_error",
     [
-        """
+        pytest.param(
+            """
         shader HiddenAtomicBinaryFloatResult {
             uimage2D counters @r32ui;
             struct VSOutput { vec2 uv; };
@@ -14445,7 +14446,11 @@ def test_codegen_allows_explicit_image_atomic_result_casts():
             }
         }
         """,
-        """
+            "requires uint result context for r32ui images: expected float",
+            id="binary",
+        ),
+        pytest.param(
+            """
         shader HiddenAtomicTernaryFloatResult {
             uimage2D counters @r32ui;
             struct VSOutput { vec2 uv; };
@@ -14459,7 +14464,11 @@ def test_codegen_allows_explicit_image_atomic_result_casts():
             }
         }
         """,
-        """
+            "requires uint result context for r32ui images: expected float",
+            id="ternary",
+        ),
+        pytest.param(
+            """
         shader HiddenAtomicImageStoreFloatResult {
             uimage2D counters @r32ui;
             image2D target @r32f;
@@ -14476,17 +14485,20 @@ def test_codegen_allows_explicit_image_atomic_result_casts():
             }
         }
         """,
+            (
+                "requires uint result context for r32ui images: expected float|"
+                "requires float value for r32f images"
+            ),
+            id="image-store",
+        ),
     ],
 )
-def test_codegen_rejects_hidden_image_atomic_result_contexts(crossgl):
+def test_codegen_rejects_hidden_image_atomic_result_contexts(crossgl, expected_error):
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
     for generator in (HLSLCodeGen(), MetalCodeGen(), GLSLCodeGen()):
-        with pytest.raises(
-            ValueError,
-            match="requires uint result context for r32ui images: expected float",
-        ):
+        with pytest.raises(ValueError, match=expected_error):
             generator.generate(shader_ast)
 
 

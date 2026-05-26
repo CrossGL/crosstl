@@ -31,6 +31,7 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
     ArrayAccessNode,
+    ArrayLiteralNode,
     ArrayNode,
 )
 from .array_utils import (
@@ -2538,6 +2539,8 @@ class HLSLCodeGen:
             )
             if func_name in unsupported_functions:
                 return unsupported_functions[func_name].get("return_type")
+            if is_image_atomic_operation(func_name) and args:
+                return self.image_atomic_result_type(func_name, args[0])
             if func_name == "imageLoad" and args:
                 return self.image_load_result_type(args[0])
             if func_name in {
@@ -3007,6 +3010,8 @@ class HLSLCodeGen:
             return "true" if expr else "false"
         elif isinstance(expr, (int, float)):
             return str(expr)
+        elif isinstance(expr, ArrayLiteralNode):
+            return self.hlsl_array_literal_expression(expr)
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             if hasattr(expr, "value"):
                 value = expr.value
@@ -8726,6 +8731,17 @@ class HLSLCodeGen:
         image_type = self.texture_argument_resource_type(image_arg)
         return self.hlsl_storage_image_component_type(image_type)
 
+    def image_atomic_result_type(self, func_name, image_arg):
+        image_format = self.image_resource_format(image_arg)
+        if image_format:
+            return image_format_component_type(image_format)
+        image_type = self.texture_argument_resource_type(image_arg)
+        component_type = self.hlsl_storage_image_component_type(image_type)
+        component_kind = self.vector_component_type(component_type)
+        if component_kind in {"float", "int", "uint"}:
+            return component_kind
+        return component_type
+
     def image_load_component_kind(self, image_type, image_format):
         if image_format:
             return image_format_component_kind(image_format)
@@ -10298,6 +10314,46 @@ class HLSLCodeGen:
             format_struct_constructor_expression(self, mapped_type, rendered_args),
         )
 
+    def hlsl_array_literal_element_expected_type(self, expected_type):
+        type_name = self.type_name_string(expected_type)
+        if not type_name:
+            return None
+        base_type, array_suffix = split_array_type_suffix(type_name)
+        if array_suffix:
+            return base_type
+        return None
+
+    def hlsl_array_literal_expression(self, expr, expected_type=None):
+        if expected_type is None:
+            expected_type = self.current_expression_expected_type
+        element_type = self.hlsl_array_literal_element_expected_type(expected_type)
+        elements = [
+            self.generate_expression_with_expected(element, element_type)
+            for element in getattr(expr, "elements", []) or []
+        ]
+        return "{" + ", ".join(elements) + "}"
+
+    def render_hlsl_typed_buffer_atomic_array_literal(
+        self, expr, expected_type, indent
+    ):
+        element_type = self.hlsl_array_literal_element_expected_type(expected_type)
+        code = ""
+        rendered_elements = []
+        changed = False
+        for element in getattr(expr, "elements", []) or []:
+            element_code, rendered_element = (
+                self.render_hlsl_typed_buffer_atomic_value_expression(
+                    element, element_type, indent
+                )
+            )
+            code += element_code
+            rendered_elements.append(rendered_element)
+            changed = changed or bool(element_code)
+
+        if not changed:
+            return None
+        return code, "{" + ", ".join(rendered_elements) + "}"
+
     def render_hlsl_typed_buffer_atomic_embedded_expression(
         self, expr, expected_type, indent
     ):
@@ -10317,6 +10373,11 @@ class HLSLCodeGen:
                 expr, temp_name, "=", temp_type, indent
             )
             return code, temp_name
+
+        if isinstance(expr, ArrayLiteralNode):
+            return self.render_hlsl_typed_buffer_atomic_array_literal(
+                expr, expected_type, indent
+            )
 
         if isinstance(expr, ConstructorNode):
             constructor_type = (

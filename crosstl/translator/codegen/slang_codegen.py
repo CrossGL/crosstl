@@ -4687,6 +4687,18 @@ class SlangCodeGen:
             "RWStructuredBuffer<"
         )
 
+    def is_append_structured_buffer_resource_type(self, buffer_type):
+        buffer_type = self.resource_base_type(buffer_type)
+        return isinstance(buffer_type, str) and buffer_type.startswith(
+            "AppendStructuredBuffer<"
+        )
+
+    def is_consume_structured_buffer_resource_type(self, buffer_type):
+        buffer_type = self.resource_base_type(buffer_type)
+        return isinstance(buffer_type, str) and buffer_type.startswith(
+            "ConsumeStructuredBuffer<"
+        )
+
     def structured_buffer_element_type(self, buffer_type):
         buffer_type = self.resource_base_type(buffer_type)
         if (
@@ -4758,6 +4770,40 @@ class SlangCodeGen:
         index = self.generate_expression(args[1])
         value = self.generate_expression(args[2])
         return f"{buffer}.Store({index}, {value})"
+
+    def buffer_append_expression(self, args):
+        if len(args) < 2:
+            return self.unsupported_structured_buffer_call(
+                "buffer_append", "requires buffer and value arguments"
+            )
+
+        buffer_type = self.structured_buffer_resource_type(args[0])
+        if not self.is_append_structured_buffer_resource_type(buffer_type):
+            return self.unsupported_structured_buffer_call(
+                "buffer_append", "requires AppendStructuredBuffer resource"
+            )
+
+        buffer = self.generate_expression(args[0])
+        value = self.generate_expression(args[1])
+        return f"{buffer}.Append({value})"
+
+    def buffer_consume_expression(self, args):
+        if not args:
+            return self.unsupported_structured_buffer_call(
+                "buffer_consume", "requires a buffer argument", "uint"
+            )
+
+        buffer_type = self.structured_buffer_resource_type(args[0])
+        element_type = self.structured_buffer_element_type(buffer_type) or "uint"
+        if not self.is_consume_structured_buffer_resource_type(buffer_type):
+            return self.unsupported_structured_buffer_call(
+                "buffer_consume",
+                "requires ConsumeStructuredBuffer resource",
+                element_type,
+            )
+
+        buffer = self.generate_expression(args[0])
+        return f"{buffer}.Consume()"
 
     def buffer_dimensions_expression(self, args):
         if not args:
@@ -4975,6 +5021,12 @@ class SlangCodeGen:
 
         if func_name == "buffer_store":
             return self.buffer_store_expression(args)
+
+        if func_name == "buffer_append":
+            return self.buffer_append_expression(args)
+
+        if func_name == "buffer_consume":
+            return self.buffer_consume_expression(args)
 
         if func_name == "buffer_dimensions":
             return self.buffer_dimensions_expression(args)

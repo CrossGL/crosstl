@@ -1,21 +1,45 @@
 """Test HIP Code Generation from CrossGL"""
 
+import shutil
+import subprocess
+
 import pytest
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from crosstl.translator.ast import (
     AssignmentNode,
+    ArrayAccessNode,
     BlockNode,
     ExecutionModel,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
     LiteralNode,
+    MemberAccessNode,
+    ParameterNode,
     PrimitiveType,
     ShaderNode,
     VariableNode,
 )
 from crosstl.translator.codegen.hip_codegen import HipCodeGen
+
+
+def compile_hip_if_hipcc_available(hip_code, tmp_path):
+    """Compile generated HIP when hipcc is available in the local environment."""
+    hipcc = shutil.which("hipcc")
+    if hipcc is None:
+        pytest.skip("hipcc is not installed")
+
+    source_path = tmp_path / "generated.hip"
+    object_path = tmp_path / "generated.o"
+    source_path.write_text(hip_code, encoding="utf-8")
+
+    result = subprocess.run(
+        [hipcc, "-std=c++17", "-c", str(source_path), "-o", str(object_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr + "\n\n" + hip_code
 
 
 class TestHipCodeGen:
@@ -62,6 +86,167 @@ class TestHipCodeGen:
         hip_code = codegen.generate(ast)
 
         assert "__global__ void main()" in hip_code
+
+    def test_generated_basic_compute_kernel_smoke_compiles_with_hipcc(self, tmp_path):
+        """Smoke compile a generated HIP kernel when hipcc is available."""
+        smoke_ast = ShaderNode(
+            "HipCompileSmoke",
+            ExecutionModel.COMPUTE_KERNEL,
+            functions=[
+                FunctionNode(
+                    "compileSmoke",
+                    PrimitiveType("void"),
+                    [ParameterNode("out", "float *")],
+                    [
+                        AssignmentNode(
+                            ArrayAccessNode(
+                                IdentifierNode("out"),
+                                LiteralNode(0, PrimitiveType("int")),
+                            ),
+                            LiteralNode(1.0, PrimitiveType("float")),
+                        )
+                    ],
+                    qualifiers=["compute"],
+                )
+            ],
+        )
+
+        hip_code = HipCodeGen().generate(smoke_ast)
+
+        assert "__global__ void compileSmoke(float * out)" in hip_code
+        assert "out[0] = 1.0;" in hip_code
+        compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    def test_generated_atomic_barrier_kernel_smoke_compiles_with_hipcc(self, tmp_path):
+        """Smoke compile generated HIP atomics, barriers, fences, and builtins."""
+        smoke_ast = ShaderNode(
+            "HipAtomicBarrierSmoke",
+            ExecutionModel.COMPUTE_KERNEL,
+            functions=[
+                FunctionNode(
+                    "atomicBarrierSmoke",
+                    PrimitiveType("void"),
+                    [
+                        ParameterNode("counter", "int *"),
+                        ParameterNode("out", "int *"),
+                    ],
+                    [
+                        VariableNode(
+                            "lane",
+                            PrimitiveType("int"),
+                            IdentifierNode("gl_LocalInvocationID.x"),
+                        ),
+                        VariableNode(
+                            "global",
+                            PrimitiveType("int"),
+                            IdentifierNode("gl_GlobalInvocationID.x"),
+                        ),
+                        VariableNode(
+                            "old",
+                            PrimitiveType("int"),
+                            FunctionCallNode(
+                                IdentifierNode("atomicAdd"),
+                                [
+                                    IdentifierNode("counter"),
+                                    LiteralNode(1, PrimitiveType("int")),
+                                ],
+                            ),
+                        ),
+                        FunctionCallNode(IdentifierNode("barrier"), []),
+                        FunctionCallNode(IdentifierNode("memoryBarrier"), []),
+                        AssignmentNode(
+                            ArrayAccessNode(
+                                IdentifierNode("out"),
+                                LiteralNode(0, PrimitiveType("int")),
+                            ),
+                            FunctionCallNode(
+                                IdentifierNode("atomicCAS"),
+                                [
+                                    IdentifierNode("counter"),
+                                    IdentifierNode("old"),
+                                    IdentifierNode("global"),
+                                ],
+                            ),
+                        ),
+                        AssignmentNode(
+                            ArrayAccessNode(
+                                IdentifierNode("out"),
+                                LiteralNode(1, PrimitiveType("int")),
+                            ),
+                            IdentifierNode("lane"),
+                        ),
+                    ],
+                    qualifiers=["compute"],
+                )
+            ],
+        )
+
+        hip_code = HipCodeGen().generate(smoke_ast)
+
+        assert "int lane = threadIdx.x;" in hip_code
+        assert "int global = (blockIdx.x * blockDim.x + threadIdx.x);" in hip_code
+        assert "int old = atomicAdd(counter, 1);" in hip_code
+        assert "__syncthreads();" in hip_code
+        assert "__threadfence();" in hip_code
+        assert "out[0] = atomicCAS(counter, old, global);" in hip_code
+        compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    def test_generated_vector_constructor_kernel_smoke_compiles_with_hipcc(
+        self, tmp_path
+    ):
+        """Smoke compile generated HIP vector constructors and member access."""
+        smoke_ast = ShaderNode(
+            "HipVectorSmoke",
+            ExecutionModel.COMPUTE_KERNEL,
+            functions=[
+                FunctionNode(
+                    "vectorSmoke",
+                    PrimitiveType("void"),
+                    [ParameterNode("out", "float *")],
+                    [
+                        VariableNode(
+                            "uv",
+                            PrimitiveType("vec2"),
+                            FunctionCallNode(
+                                IdentifierNode("vec2"),
+                                [
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    LiteralNode(2.0, PrimitiveType("float")),
+                                ],
+                            ),
+                        ),
+                        VariableNode(
+                            "color",
+                            PrimitiveType("vec4"),
+                            FunctionCallNode(
+                                IdentifierNode("vec4"),
+                                [
+                                    MemberAccessNode(IdentifierNode("uv"), "x"),
+                                    MemberAccessNode(IdentifierNode("uv"), "y"),
+                                    LiteralNode(3.0, PrimitiveType("float")),
+                                    LiteralNode(4.0, PrimitiveType("float")),
+                                ],
+                            ),
+                        ),
+                        AssignmentNode(
+                            ArrayAccessNode(
+                                IdentifierNode("out"),
+                                LiteralNode(0, PrimitiveType("int")),
+                            ),
+                            MemberAccessNode(IdentifierNode("color"), "w"),
+                        ),
+                    ],
+                    qualifiers=["compute"],
+                )
+            ],
+        )
+
+        hip_code = HipCodeGen().generate(smoke_ast)
+
+        assert "float2 uv = make_float2(1.0, 2.0);" in hip_code
+        assert "float4 color = make_float4(uv.x, uv.y, 3.0, 4.0);" in hip_code
+        assert "out[0] = color.w;" in hip_code
+        compile_hip_if_hipcc_available(hip_code, tmp_path)
 
     def test_compute_stage_local_helper_functions_emit_before_kernel(self):
         """Test compute-stage helper functions are emitted before kernel calls."""

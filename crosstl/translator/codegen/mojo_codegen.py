@@ -746,6 +746,9 @@ class MojoCodeGen:
             "gl_Position": "position",
             "gl_PointSize": "point_size",
             "gl_ClipDistance": "clip_distance",
+            "gl_GlobalInvocationID": "global_invocation_id",
+            "gl_LocalInvocationID": "local_invocation_id",
+            "gl_WorkGroupID": "workgroup_id",
             # Fragment attributes
             "gl_FragColor": "color(0)",
             "gl_FragColor0": "color(0)",
@@ -771,11 +774,18 @@ class MojoCodeGen:
             "COLOR1": "color1",
             "SV_Position": "position",
             "SV_Depth": "depth(any)",
+            "SV_DispatchThreadID": "global_invocation_id",
+            "SV_GroupID": "workgroup_id",
+            "SV_GroupIndex": "group_index",
+            "SV_GroupThreadID": "local_invocation_id",
+            "SV_InstanceID": "instance_id",
+            "SV_IsFrontFace": "front_facing",
             "SV_Target": "color(0)",
             "SV_Target0": "color(0)",
             "SV_Target1": "color(1)",
             "SV_Target2": "color(2)",
             "SV_Target3": "color(3)",
+            "SV_VertexID": "vertex_id",
         }
 
         # Function mapping for common shader functions
@@ -1592,6 +1602,131 @@ class MojoCodeGen:
             f"semantic={mapped_semantic} source={semantic}\n"
         )
 
+    def semantic_parameter_kind(self, semantic):
+        lower = str(semantic).lower()
+        upper = str(semantic).upper()
+
+        if (
+            lower == "gl_position"
+            or lower == "gl_fragdepth"
+            or re.fullmatch(r"gl_fragcolor\d*", lower)
+            or upper == "SV_DEPTH"
+            or re.fullmatch(r"SV_TARGET\d*", upper)
+        ):
+            return "output_only"
+
+        if lower == "gl_fragcoord" or upper == "SV_POSITION":
+            return ("fragment", "float_vec4")
+        if lower == "gl_frontfacing" or upper == "SV_ISFRONTFACE":
+            return ("fragment", "bool_scalar")
+        if lower == "gl_pointcoord":
+            return ("fragment", "float_vec2")
+
+        if lower in {"gl_vertexid"} or upper == "SV_VERTEXID":
+            return ("vertex", "integer_scalar")
+        if lower in {"gl_instanceid"} or upper == "SV_INSTANCEID":
+            return ("vertex", "integer_scalar")
+
+        if lower in {"gl_globalinvocationid"} or upper == "SV_DISPATCHTHREADID":
+            return ("compute", "integer_vec3")
+        if lower in {"gl_localinvocationid"} or upper == "SV_GROUPTHREADID":
+            return ("compute", "integer_vec3")
+        if lower in {"gl_workgroupid"} or upper == "SV_GROUPID":
+            return ("compute", "integer_vec3")
+        if upper == "SV_GROUPINDEX":
+            return ("compute", "integer_scalar")
+
+        if re.fullmatch(r"(COLOR|TEXCOORD|NORMAL|TANGENT|BINORMAL)\d*", upper):
+            return ("vertex_fragment", None)
+        if upper == "POSITION":
+            return ("vertex_fragment", None)
+        return None
+
+    def validate_parameter_semantic(
+        self, shader_type, param_name, param_type, semantic, used_semantics
+    ):
+        if semantic is None:
+            return
+
+        semantic_key = self.normalized_semantic_key(semantic)
+        previous_param = used_semantics.get(semantic_key)
+        if previous_param is not None:
+            raise ValueError(
+                f"Conflicting Mojo {shader_type or 'function'} parameter semantic "
+                f"for '{param_name}': {self.map_semantic(semantic)} overlaps "
+                f"'{previous_param}'"
+            )
+        used_semantics[semantic_key] = param_name
+
+        kind = self.semantic_parameter_kind(semantic)
+        if kind == "output_only" and shader_type == "fragment":
+            semantic_name = str(semantic).lower()
+            if semantic_name == "gl_position":
+                kind = ("fragment", "float_vec4")
+        if kind is None:
+            return
+        if kind == "output_only":
+            raise ValueError(
+                f"Unsupported {semantic} parameter semantic for Mojo codegen; "
+                "output-only builtin semantics cannot be used as parameters"
+            )
+
+        stage_kind, expected_type = kind
+        allowed_stages = (
+            {"vertex", "fragment"} if stage_kind == "vertex_fragment" else {stage_kind}
+        )
+        if shader_type is not None and shader_type not in allowed_stages:
+            allowed = ", ".join(sorted(allowed_stages))
+            raise ValueError(
+                f"Unsupported {semantic} parameter semantic for Mojo {shader_type} "
+                f"stage; valid stage is {allowed}"
+            )
+
+        if not self.parameter_semantic_type_matches(expected_type, param_type):
+            expected = self.parameter_semantic_expected_type(expected_type)
+            raise ValueError(
+                f"Unsupported {semantic} parameter semantic for Mojo codegen; "
+                f"expected {expected}"
+            )
+
+    def normalized_semantic_key(self, semantic):
+        return self.map_semantic(semantic).lower()
+
+    def parameter_semantic_type_matches(self, expected_type, param_type):
+        if expected_type is None:
+            return True
+        if expected_type == "bool_scalar":
+            return self.is_bool_scalar_type(param_type)
+        if expected_type == "float_vec2":
+            return self.is_float_vector_width(param_type, 2)
+        if expected_type == "float_vec4":
+            return self.is_float_vector_width(param_type, 4)
+        if expected_type == "integer_scalar":
+            return self.is_scalar_integer_type(param_type)
+        if expected_type == "integer_vec3":
+            return self.is_integer_vector_width(param_type, 3)
+        return True
+
+    def parameter_semantic_expected_type(self, expected_type):
+        return {
+            "bool_scalar": "bool",
+            "float_vec2": "vec2-compatible type",
+            "float_vec4": "vec4-compatible type",
+            "integer_scalar": "integer scalar type",
+            "integer_vec3": "integer vec3-compatible type",
+        }.get(expected_type, "compatible type")
+
+    def is_bool_scalar_type(self, type_name):
+        return MOJO_SCALAR_DTYPES.get(self.type_name(type_name)) == "DType.bool"
+
+    def is_integer_vector_width(self, type_name, width):
+        vector_info = self.vector_type_info(type_name)
+        return (
+            vector_info is not None
+            and vector_info[0] in MOJO_INTEGER_DTYPES
+            and vector_info[1] == width
+        )
+
     def generate_enum(self, node):
         """Lower a unit/numeric CrossGL enum to Mojo type and value aliases."""
         enum_type = self.map_enum_underlying_type(
@@ -1797,38 +1932,7 @@ class MojoCodeGen:
                 node, getattr(node, "name", None), kind="cbuffer"
             )
             if isinstance(node, StructNode):
-                code += f"@value\nstruct {node.name}:\n"
-                members = getattr(node, "members", [])
-                for member in members:
-                    if isinstance(member, ArrayNode):
-                        element_type = getattr(
-                            member, "element_type", getattr(member, "vtype", "float")
-                        )
-                        size = get_array_size_from_node(member)
-                        code += (
-                            f"    var {member.name}: "
-                            f"{self.array_storage_type(element_type, size)}\n"
-                        )
-                    else:
-                        member_type = self.variable_declared_type(member) or "float"
-                        code += f"    var {member.name}: {self.map_type(member_type)}\n"
-                code += "\n"
-            elif hasattr(node, "name") and hasattr(node, "members"):  # CbufferNode
-                code += f"@value\nstruct {node.name}:\n"
-                for member in node.members:
-                    if isinstance(member, ArrayNode):
-                        element_type = getattr(
-                            member, "element_type", getattr(member, "vtype", "float")
-                        )
-                        size = get_array_size_from_node(member)
-                        code += (
-                            f"    var {member.name}: "
-                            f"{self.array_storage_type(element_type, size)}\n"
-                        )
-                    else:
-                        member_type = self.variable_declared_type(member) or "float"
-                        code += f"    var {member.name}: {self.map_type(member_type)}\n"
-                code += "\n"
+                code += self.generate_struct(node)
         return code
 
     def generate_function(self, func, indent=0, shader_type=None):
@@ -1845,6 +1949,7 @@ class MojoCodeGen:
             getattr(func, "body", []), param_names
         )
         params = []
+        used_parameter_semantics = {}
         for p in param_list:
             if hasattr(p, "param_type"):
                 param_type = self.convert_type_node_to_string(p.param_type)
@@ -1854,6 +1959,13 @@ class MojoCodeGen:
                 param_type = "float"
 
             semantic = self.node_semantic(p)
+            self.validate_parameter_semantic(
+                shader_type,
+                p.name,
+                param_type,
+                semantic,
+                used_parameter_semantics,
+            )
 
             self.register_variable_type(p.name, param_type)
             self.register_resource_access_metadata(p, param_type)

@@ -181,6 +181,58 @@ def test_metal_raw_address_space_stage_buffers_lower_to_bindable_pointers():
     assert "device float values[] [[buffer(0)]]" not in generated_code
 
 
+def test_metal_pointer_typed_member_access_uses_arrow_operator():
+    shader = """
+    shader MetalPointerMemberAccess {
+        struct Payload {
+            float value;
+        };
+
+        compute {
+            void main(device Payload* payload @buffer(0), device float values[] @buffer(1)) {
+                payload.value = values[0];
+                float value = payload.value;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "device Payload* payload [[buffer(0)]]" in generated_code
+    assert "payload->value = values[0];" in generated_code
+    assert "float value = payload->value;" in generated_code
+    assert "payload.value" not in generated_code
+
+
+def test_metal_indexed_pointer_member_access_uses_element_dot_operator():
+    shader = """
+    shader MetalIndexedPointerMemberAccess {
+        struct Payload {
+            float value;
+        };
+
+        compute {
+            void main(device Payload* payloads @buffer(0), device float values[] @buffer(1)) {
+                payloads[0].value = values[0];
+                float value = payloads[0].value;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "device Payload* payloads [[buffer(0)]]" in generated_code
+    assert "payloads[0].value = values[0];" in generated_code
+    assert "float value = payloads[0].value;" in generated_code
+    assert "payloads[0]->value" not in generated_code
+
+
 def test_metal_parameter_address_space_qualifiers_reject_conflicts():
     shader = """
     shader MetalConflictingAddressSpaceParameters {

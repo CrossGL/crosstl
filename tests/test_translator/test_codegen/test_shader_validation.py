@@ -278,6 +278,11 @@ shader SpirvSynchronizationValidation {
         void main() {
             barrier();
             workgroupBarrier();
+            groupMemoryBarrier();
+            memoryBarrierShared();
+            memoryBarrierBuffer();
+            memoryBarrierImage();
+            allMemoryBarrier();
             memoryBarrier();
         }
     }
@@ -1625,6 +1630,38 @@ shader MetalAddressSpaceParameterValidation {
         void main(device float values[] @buffer(0), constant uint& count @buffer(1)) {
             threadgroup Payload scratch;
             update(scratch, values, count);
+        }
+    }
+}
+"""
+
+
+METAL_POINTER_MEMBER_ACCESS_SHADER = """
+shader MetalPointerMemberAccessValidation {
+    struct Payload {
+        float value;
+    };
+
+    compute {
+        void main(device Payload* payload @buffer(0), device float values[] @buffer(1)) {
+            payload.value = values[0];
+            float value = payload.value;
+        }
+    }
+}
+"""
+
+
+METAL_INDEXED_POINTER_MEMBER_ACCESS_SHADER = """
+shader MetalIndexedPointerMemberAccessValidation {
+    struct Payload {
+        float value;
+    };
+
+    compute {
+        void main(device Payload* payloads @buffer(0), device float values[] @buffer(1)) {
+            payloads[0].value = values[0];
+            float value = payloads[0].value;
         }
     }
 }
@@ -4101,6 +4138,41 @@ def test_generated_metal_address_space_parameters_compile_with_metal(tmp_path):
     output = tmp_path / "address_space_parameters.air"
     code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(METAL_ADDRESS_SPACE_PARAMETER_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_pointer_member_access_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "pointer_member_access.metal"
+    output = tmp_path / "pointer_member_access.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_POINTER_MEMBER_ACCESS_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_indexed_pointer_member_access_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "indexed_pointer_member_access.metal"
+    output = tmp_path / "indexed_pointer_member_access.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_INDEXED_POINTER_MEMBER_ACCESS_SHADER),
+        "compute",
     )
     source.write_text(code, encoding="utf-8")
 

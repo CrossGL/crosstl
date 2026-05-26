@@ -1685,6 +1685,104 @@ class TestCudaCodeGen:
         assert "unsignedint" not in result
         assert "constunsigned" not in result
 
+    def test_resource_object_pointer_and_legacy_texture_template_conversion(self):
+        """Test CUDA resource object pointers and legacy texture refs convert."""
+        code = """
+        texture<float4, cudaTextureType2D, cudaReadModeElementType> texRef;
+        surface<void, cudaSurfaceType2D> surfaceRef;
+
+        void resourcePointerOps(
+            cudaTextureObject_t* textureObjects,
+            cudaSurfaceObject_t* surfaceObjects,
+            texture<float4, cudaTextureType2D, cudaReadModeElementType> legacyTex,
+            surface<void, cudaSurfaceType2D> legacySurface,
+            int index,
+            int2 pixel,
+            float2 uv
+        ) {
+            float4 fromPointer = tex2D<float4>(
+                textureObjects[index],
+                uv.x,
+                uv.y
+            );
+            float4 fromLegacy = tex2D<float4>(legacyTex, uv);
+            float4 fromGlobal = tex2D<float4>(texRef, uv);
+            float4 loadedPointer = surf2Dread<float4>(
+                surfaceObjects[index],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                loadedPointer,
+                surfaceObjects[index],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 loadedLegacy = surf2Dread<float4>(
+                legacySurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                loadedLegacy,
+                legacySurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 loadedGlobal = surf2Dread<float4>(
+                surfaceRef,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "var texRef: sampler2D;" in result
+        assert "var surfaceRef: image2D;" in result
+        assert (
+            "void resourcePointerOps("
+            "ptr<sampler2D> textureObjects, ptr<image2D> surfaceObjects, "
+            "sampler2D legacyTex, image2D legacySurface, i32 index"
+        ) in result
+        assert (
+            "var fromPointer: vec4<f32> = texture("
+            "textureObjects[index], vec2<f32>(uv.x, uv.y));" in result
+        )
+        assert "var fromLegacy: vec4<f32> = texture(legacyTex, uv);" in result
+        assert "var fromGlobal: vec4<f32> = texture(texRef, uv);" in result
+        assert (
+            "var loadedPointer: vec4<f32> = imageLoad("
+            "surfaceObjects[index], vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(surfaceObjects[index], vec2<i32>(pixel.x, pixel.y), "
+            "loadedPointer);" in result
+        )
+        assert (
+            "var loadedLegacy: vec4<f32> = imageLoad("
+            "legacySurface, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(legacySurface, vec2<i32>(pixel.x, pixel.y), "
+            "loadedLegacy);" in result
+        )
+        assert (
+            "var loadedGlobal: vec4<f32> = imageLoad("
+            "surfaceRef, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert "cudaReadModeElementType" not in result
+        assert "cudaTextureObject_t" not in result
+        assert "cudaSurfaceObject_t" not in result
+        assert "tex2D" not in result
+        assert "surf2Dread" not in result
+        assert "surf2Dwrite" not in result
+
     def test_nested_template_argument_conversion(self):
         """Test nested template and pointer-qualified unique_ptr conversion"""
         code = """

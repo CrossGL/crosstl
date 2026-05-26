@@ -2529,6 +2529,108 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFunctionCall" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_compute_memory_barrier_variants_emit_scoped_spirv_barriers(self):
+        source_code = """
+        shader ComputeSynchronization {
+            compute {
+                void main() {
+                    groupMemoryBarrier();
+                    memoryBarrierShared();
+                    memoryBarrierBuffer();
+                    memoryBarrierImage();
+                    allMemoryBarrier();
+                    memoryBarrier();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", spv_code)
+        assert uint_type is not None
+        workgroup_scope = re.search(
+            rf"(%\d+) = OpConstant {re.escape(uint_type.group(1))} 2", spv_code
+        )
+        device_scope = re.search(
+            rf"(%\d+) = OpConstant {re.escape(uint_type.group(1))} 1", spv_code
+        )
+        shared_semantics = re.search(
+            rf"(%\d+) = OpConstant {re.escape(uint_type.group(1))} 264", spv_code
+        )
+        buffer_semantics = re.search(
+            rf"(%\d+) = OpConstant {re.escape(uint_type.group(1))} 72", spv_code
+        )
+        image_semantics = re.search(
+            rf"(%\d+) = OpConstant {re.escape(uint_type.group(1))} 2056", spv_code
+        )
+        all_semantics = re.search(
+            rf"(%\d+) = OpConstant {re.escape(uint_type.group(1))} 2376", spv_code
+        )
+
+        assert workgroup_scope is not None
+        assert device_scope is not None
+        assert shared_semantics is not None
+        assert buffer_semantics is not None
+        assert image_semantics is not None
+        assert all_semantics is not None
+        assert (
+            f"OpMemoryBarrier {workgroup_scope.group(1)} {shared_semantics.group(1)}"
+            in spv_code
+        )
+        assert (
+            spv_code.count(
+                f"OpMemoryBarrier {workgroup_scope.group(1)} "
+                f"{shared_semantics.group(1)}"
+            )
+            == 2
+        )
+        assert (
+            f"OpMemoryBarrier {device_scope.group(1)} {buffer_semantics.group(1)}"
+            in spv_code
+        )
+        assert (
+            f"OpMemoryBarrier {device_scope.group(1)} {image_semantics.group(1)}"
+            in spv_code
+        )
+        assert (
+            spv_code.count(
+                f"OpMemoryBarrier {device_scope.group(1)} {all_semantics.group(1)}"
+            )
+            == 2
+        )
+        assert spv_code.count("OpMemoryBarrier") == 6
+        assert "OpControlBarrier" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_compute_user_defined_synchronization_names_are_not_lowered(self):
+        source_code = """
+        shader ComputeSynchronization {
+            void groupMemoryBarrier() {
+            }
+
+            void memoryBarrierBuffer() {
+            }
+
+            compute {
+                void main() {
+                    groupMemoryBarrier();
+                    memoryBarrierBuffer();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "OpMemoryBarrier" not in spv_code
+        assert "OpControlBarrier" not in spv_code
+        assert spv_code.count("OpFunctionCall") == 2
+        assert "WARNING" not in spv_code
+
     def test_integer_image_atomics_emit_spirv_atomic_operations(self):
         source_code = """
         shader ImageAtomics {
@@ -9804,7 +9906,7 @@ class TestVulkanSPIRVCodeGen:
         assert (
             len(
                 re.findall(
-                    r"\bOpImageSampleImplicitLod\b.*\bBias\|ConstOffset\b", spv_code
+                    r"\bOpImageSampleImplicitLod\b.*\bConstOffset\|Bias\b", spv_code
                 )
             )
             == 2
