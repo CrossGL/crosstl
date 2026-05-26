@@ -35,7 +35,7 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "34", "7", "0", "0", "0", "0"
+   "DirectX / HLSL", "35", "6", "0", "0", "0", "0"
    "OpenGL / GLSL", "35", "6", "0", "0", "0", "0"
    "Metal", "32", "7", "0", "0", "2", "0"
    "Vulkan SPIR-V", "6", "12", "0", "0", "0", "23"
@@ -54,7 +54,7 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "34", "7", "0", "0", "0", "0"
+   "DirectX / HLSL", "35", "6", "0", "0", "0", "0"
    "OpenGL / GLSL", "35", "6", "0", "0", "0", "0"
    "Metal", "32", "7", "0", "0", "2", "0"
 
@@ -69,9 +69,8 @@ scope for graphics backend completion work.
    "DirectX / HLSL", "stages", "Ray tracing stages", "partial", ""
    "OpenGL / GLSL", "stages", "Ray tracing stages", "partial", "Entry points and combined-stage names lower, but target-specific GLSL ray tracing layout and extension semantics are not complete."
    "Metal", "stages", "Ray tracing stages", "partial", ""
-   "DirectX / HLSL", "resources", "Structured/storage buffers", "partial", ""
-   "OpenGL / GLSL", "resources", "Structured/storage buffers", "partial", ""
-   "Metal", "resources", "Structured/storage buffers", "partial", ""
+   "OpenGL / GLSL", "resources", "Structured/storage buffers", "partial", "Covers StructuredBuffer/RWStructuredBuffer as SSBOs, fixed and inferred resource arrays, and load/store/dimensions helpers. Append/consume structured buffers remain deterministic diagnostics because GLSL needs explicit counter storage."
+   "Metal", "resources", "Structured/storage buffers", "partial", "Covers StructuredBuffer/RWStructuredBuffer as device pointers, fixed and inferred resource arrays, and load/store helpers. Buffer dimensions and append/consume remain deterministic diagnostics because plain Metal device buffers do not carry hidden length/counter state."
    "DirectX / HLSL", "resources", "GLSL buffer block lowering", "partial", ""
    "Metal", "resources", "GLSL buffer block lowering", "partial", ""
    "DirectX / HLSL", "textures", "Projected texture operations", "partial", "Covers planar projected texture and shadow compare forms plus non-offset cube color and cube-shadow projection. Cube-array projection and target-invalid offset forms remain deterministic diagnostics."
@@ -124,7 +123,7 @@ Each category below uses the status codes from the legend.
 
    "Explicit and automatic resource bindings", "Y", "Y", "Y", "P", "P", "P", "?", "?", "P"
    "Constant/uniform buffers", "Y", "Y", "Y", "P", "P", "P", "P", "P", "P"
-   "Structured/storage buffers", "P", "P", "P", "?", "P", "P", "?", "?", "?"
+   "Structured/storage buffers", "Y", "P", "P", "?", "P", "P", "?", "?", "?"
    "Resource arrays", "Y", "Y", "Y", "?", "?", "?", "?", "?", "?"
    "Texture and sampler object model", "Y", "Y", "Y", "?", "?", "?", "?", "?", "P"
    "GLSL buffer block lowering", "P", "Y", "P", "?", "?", "?", "?", "?", "?"
@@ -251,9 +250,8 @@ need an audit before implementation work can be scoped accurately.
    "Mojo", "resources", "Constant/uniform buffers", "partial", ""
    "Rust", "resources", "Constant/uniform buffers", "partial", ""
    "Slang", "resources", "Constant/uniform buffers", "partial", ""
-   "DirectX / HLSL", "resources", "Structured/storage buffers", "partial", ""
-   "OpenGL / GLSL", "resources", "Structured/storage buffers", "partial", ""
-   "Metal", "resources", "Structured/storage buffers", "partial", ""
+   "OpenGL / GLSL", "resources", "Structured/storage buffers", "partial", "Covers StructuredBuffer/RWStructuredBuffer as SSBOs, fixed and inferred resource arrays, and load/store/dimensions helpers. Append/consume structured buffers remain deterministic diagnostics because GLSL needs explicit counter storage."
+   "Metal", "resources", "Structured/storage buffers", "partial", "Covers StructuredBuffer/RWStructuredBuffer as device pointers, fixed and inferred resource arrays, and load/store helpers. Buffer dimensions and append/consume remain deterministic diagnostics because plain Metal device buffers do not carry hidden length/counter state."
    "Vulkan SPIR-V", "resources", "Structured/storage buffers", "unknown", ""
    "CUDA", "resources", "Structured/storage buffers", "partial", ""
    "HIP", "resources", "Structured/storage buffers", "partial", ""

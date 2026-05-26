@@ -53,6 +53,21 @@ RESOURCE_MEMORY_QUALIFIER_CASES = (
 )
 
 
+@dataclass(frozen=True)
+class StructuredBufferCase:
+    source_type: str
+    hlsl_type: str
+    glsl_type: str
+    metal_type: str
+
+
+STRUCTURED_BUFFER_CASES = (
+    StructuredBufferCase("float", "float", "float", "float"),
+    StructuredBufferCase("int", "int", "int", "int"),
+    StructuredBufferCase("uint", "uint", "uint", "uint"),
+)
+
+
 def _assert_codegen_output_is_usable(backend, generated):
     assert isinstance(generated, str)
     assert generated.strip(), f"{backend} generated empty output"
@@ -373,3 +388,82 @@ def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_support
         f"{image_name} [[texture(0)]]" in metal
     )
     assert f"[[{qualifier_case.attribute}]]" not in metal
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    suffix=IDENTIFIER_SUFFIXES,
+    buffer_case=st.sampled_from(STRUCTURED_BUFFER_CASES),
+)
+def test_primary_graphics_structured_buffer_access_contracts_are_preserved(
+    suffix, buffer_case
+):
+    source_name = f"source_{suffix}"
+    target_name = f"target_{suffix}"
+    shader = f"""
+    shader StructuredBufferProperty_{suffix} {{
+        StructuredBuffer<{buffer_case.source_type}> {source_name} @binding(1);
+        RWStructuredBuffer<{buffer_case.source_type}> {target_name} @binding(2);
+
+        compute {{
+            void main(uint3 tid @ gl_GlobalInvocationID) {{
+                uint len;
+                {buffer_case.source_type} value = buffer_load({source_name}, tid.x);
+                buffer_dimensions({target_name}, len);
+                buffer_store({target_name}, tid.x, value);
+            }}
+        }}
+    }}
+    """
+
+    ast = crosstl.translator.parse(shader)
+
+    hlsl = HLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    metal = MetalCodeGen().generate(ast)
+
+    for backend, generated in (
+        ("directx", hlsl),
+        ("opengl", glsl),
+        ("metal", metal),
+    ):
+        _assert_codegen_output_is_usable(backend, generated)
+
+    assert (
+        f"StructuredBuffer<{buffer_case.hlsl_type}> {source_name} : register(t1);"
+        in hlsl
+    )
+    assert (
+        f"RWStructuredBuffer<{buffer_case.hlsl_type}> {target_name} : register(u2);"
+        in hlsl
+    )
+    assert f"{buffer_case.hlsl_type} value = {source_name}.Load(tid.x);" in hlsl
+    assert f"{target_name}.GetDimensions(len);" in hlsl
+    assert f"{target_name}.Store(tid.x, value);" in hlsl
+    assert "buffer_load" not in hlsl
+    assert "buffer_store" not in hlsl
+    assert "buffer_dimensions" not in hlsl
+
+    assert (
+        f"layout(std430, binding = 1) readonly buffer {source_name}Buffer "
+        f"{{ {buffer_case.glsl_type} {source_name}[]; }};" in glsl
+    )
+    assert (
+        f"layout(std430, binding = 2) buffer {target_name}Buffer "
+        f"{{ {buffer_case.glsl_type} {target_name}[]; }};" in glsl
+    )
+    assert (
+        f"{buffer_case.glsl_type} value = {source_name}[gl_GlobalInvocationID.x];"
+        in glsl
+    )
+    assert f"len = {target_name}.length();" in glsl
+    assert f"{target_name}[gl_GlobalInvocationID.x] = value;" in glsl
+
+    assert f"const device {buffer_case.metal_type}* {source_name}" in metal
+    assert f"device {buffer_case.metal_type}* {target_name}" in metal
+    assert f"{buffer_case.metal_type} value = {source_name}[tid.x];" in metal
+    assert (
+        "len = 0 /* unsupported Metal buffer dimensions: device buffers do not "
+        "carry length */;" in metal
+    )
+    assert f"{target_name}[tid.x] = value;" in metal
