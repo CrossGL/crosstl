@@ -1176,7 +1176,6 @@ def test_codegen_mixed_ssbo_directx_metal_fixed_vec3_snapshot():
     assert shader_ast is not None
 
     expected_hlsl = """
-    #version 450 core
     RWByteAddressBuffer snapshotBlock : register(u60);
     // Compute Shader
     [numthreads(1, 1, 1)]
@@ -1188,7 +1187,6 @@ def test_codegen_mixed_ssbo_directx_metal_fixed_vec3_snapshot():
     }
     """
     expected_metal = """
-    #version 450 core
     #include <metal_stdlib>
     using namespace metal;
 
@@ -1250,7 +1248,6 @@ def test_codegen_mixed_ssbo_directx_metal_readonly_mat2_snapshot():
     assert shader_ast is not None
 
     expected_hlsl = """
-    #version 450 core
     ByteAddressBuffer snapshotMatrixBlock : register(t61);
     // Compute Shader
     [numthreads(1, 1, 1)]
@@ -1260,7 +1257,6 @@ def test_codegen_mixed_ssbo_directx_metal_readonly_mat2_snapshot():
     }
     """
     expected_metal = """
-    #version 450 core
     #include <metal_stdlib>
     using namespace metal;
 
@@ -1319,7 +1315,6 @@ def test_codegen_mixed_ssbo_block_arrays_lower_to_byte_address_arrays():
     assert shader_ast is not None
 
     expected_hlsl = """
-    #version 450 core
     globallycoherent RWByteAddressBuffer mixedBlocks[2] : register(u72);
     // Compute Shader
     [numthreads(1, 1, 1)]
@@ -1330,7 +1325,6 @@ def test_codegen_mixed_ssbo_block_arrays_lower_to_byte_address_arrays():
     }
     """
     expected_metal = """
-    #version 450 core
     #include <metal_stdlib>
     using namespace metal;
 
@@ -1392,7 +1386,6 @@ def test_codegen_mixed_ssbo_readonly_block_arrays_lower_const_readers():
     assert shader_ast is not None
 
     expected_hlsl = """
-    #version 450 core
     ByteAddressBuffer readMixedBlocks[2] : register(t73);
     // Compute Shader
     [numthreads(1, 1, 1)]
@@ -1402,7 +1395,6 @@ def test_codegen_mixed_ssbo_readonly_block_arrays_lower_const_readers():
     }
     """
     expected_metal = """
-    #version 450 core
     #include <metal_stdlib>
     using namespace metal;
 
@@ -1458,7 +1450,6 @@ def test_codegen_mixed_ssbo_unsized_block_arrays_infer_literal_size():
     assert shader_ast is not None
 
     expected_hlsl = """
-    #version 450 core
     RWByteAddressBuffer unsizedMixed[3] : register(u74);
     // Compute Shader
     [numthreads(1, 1, 1)]
@@ -1468,7 +1459,6 @@ def test_codegen_mixed_ssbo_unsized_block_arrays_infer_literal_size():
     }
     """
     expected_metal = """
-    #version 450 core
     #include <metal_stdlib>
     using namespace metal;
 
@@ -15693,6 +15683,40 @@ def test_codegen_mixed_ssbo_uint_atomics_lower_to_byteaddress_and_device_atomics
     assert "uint xorBin = atomicXor(atomicBlock.bins[2], orBin);" in glsl
     assert "uint casBin = atomicCompSwap(atomicBlock.bins[3], xorBin, 7u);" in glsl
     assert "atomicAdd(atomicBlock.bins[1], casBin);" in glsl
+
+
+def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets():
+    code = """
+    #version 300 es
+    #extension GL_ARB_separate_shader_objects : enable
+    precision highp float;
+
+    void main() { }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    assert "#version 300 es" in crossgl
+    assert "#extension GL_ARB_separate_shader_objects : enable" in crossgl
+    assert "precision highp float;" in crossgl
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "#version" not in hlsl
+    assert "#extension" not in hlsl
+    assert "precision highp float" not in hlsl
+
+    assert "#version" not in metal
+    assert "#extension" not in metal
+    assert "precision highp float" not in metal
+    assert "#include <metal_stdlib>" in metal
+
+    assert "#version 300 es" in glsl
+    assert "#extension GL_ARB_separate_shader_objects : enable" in glsl
+    assert "precision highp float;" in glsl
 
 
 def test_codegen_mixed_ssbo_fixed_only_blocks_lower_to_explicit_offsets():

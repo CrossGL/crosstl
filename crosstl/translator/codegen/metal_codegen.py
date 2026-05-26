@@ -887,10 +887,7 @@ class MetalCodeGen:
         preprocessors = getattr(ast, "preprocessors", []) or []
         pre_lines = []
         for directive in preprocessors:
-            if isinstance(directive, PreprocessorNode):
-                line = f"#{directive.directive} {directive.content}".strip()
-            else:
-                line = str(directive).strip()
+            line = self.generate_preprocessor_directive(directive)
             if line:
                 pre_lines.append(line)
         if pre_lines:
@@ -1270,6 +1267,23 @@ class MetalCodeGen:
         code += self.generate_buffer_atomic_compare_helpers()
         code += functions_code
         return code
+
+    def generate_preprocessor_directive(self, directive):
+        if isinstance(directive, PreprocessorNode):
+            directive_name = (directive.directive or "").strip()
+            if directive_name.lower() in {"version", "extension", "precision"}:
+                return None
+            return f"#{directive_name} {directive.content}".strip()
+
+        line = str(directive).strip()
+        lowered = line.lower()
+        if (
+            lowered.startswith("#version")
+            or lowered.startswith("#extension")
+            or lowered.startswith("precision ")
+        ):
+            return None
+        return line
 
     def generate_constants(self, ast):
         code = ""

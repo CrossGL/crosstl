@@ -271,7 +271,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 666
+        "test_count": 667
       },
       "translator_codegen": {
         "exists": true,
@@ -3216,7 +3216,8 @@
         },
         "directx": {
           "evidence": [
-            "tests/test_backend/test_directx/test_preprocessor.py::def test_"
+            "tests/test_backend/test_directx/test_preprocessor.py::def test_",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets"
           ],
           "notes": "",
           "status": "supported"
@@ -3229,7 +3230,8 @@
         "metal": {
           "evidence": [
             "tests/test_backend/test_metal/test_preprocessor.py::def test_",
-            "tests/test_backend/test_metal/test_codegen.py::def test_codegen_expands_preprocessor_define"
+            "tests/test_backend/test_metal/test_codegen.py::def test_codegen_expands_preprocessor_define",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets"
           ],
           "notes": "",
           "status": "supported"
@@ -3241,7 +3243,8 @@
         },
         "opengl": {
           "evidence": [
-            "tests/test_backend/test_GLSL/test_preprocessor.py::def test_"
+            "tests/test_backend/test_GLSL/test_preprocessor.py::def test_",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets"
           ],
           "notes": "",
           "status": "supported"
