@@ -22,105 +22,85 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 394,
+        "unsupported_marker_count": 277,
         "unsupported_marker_samples": [
           {
-            "line": 263,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_image_atomic_expression,"
           },
           {
-            "line": 264,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_image_atomic_expression,"
           },
           {
-            "line": 265,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_image_store_expression,"
           },
           {
-            "line": 266,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_cube_texel_fetch_expression,"
           },
           {
-            "line": 267,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texture_call_vector_expression,"
           },
           {
-            "line": 268,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texture_compare_scalar_expression,"
           },
           {
-            "line": 269,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texture_gather_compare_vector_expression,"
           },
           {
-            "line": 270,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texture_query_lod_expression,"
           },
           {
-            "line": 271,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_multisample_texel_fetch_offset_expression,"
           },
           {
-            "line": 272,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_projected_texture_call_expression,"
           },
           {
-            "line": 273,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_storage_image_texture_comparison_scalar_expression,"
           },
           {
-            "line": 274,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_storage_image_texture_operation_vector_expression,"
           },
           {
-            "line": 275,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_gather_compare_call_expression,"
           },
           {
-            "line": 276,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_gather_call_expression,"
           },
           {
-            "line": 277,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_compare_scalar_expression,"
           },
           {
-            "line": 278,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_compare_operation_error,"
           },
           {
-            "line": 279,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_offset_call_expression,"
           },
           {
-            "line": 280,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_offset_operation_error,"
           },
           {
-            "line": 281,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_projected_texture_operation_error,"
           },
           {
-            "line": 282,
             "path": "crosstl/translator/codegen/directx_codegen.py",
             "text": "unsupported_texture_query_levels_expression,"
           }
@@ -161,105 +141,85 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 999,
+        "unsupported_marker_count": 146,
         "unsupported_marker_samples": [
           {
-            "line": 246,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_multisample_texture_call_vector_expression,"
           },
           {
-            "line": 247,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_multisample_texture_compare_scalar_expression,"
           },
           {
-            "line": 248,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_multisample_texture_gather_compare_vector_expression,"
           },
           {
-            "line": 249,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_multisample_texture_query_lod_expression,"
           },
           {
-            "line": 250,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_multisample_texel_fetch_offset_expression,"
           },
           {
-            "line": 251,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_projected_texture_call_expression,"
           },
           {
-            "line": 252,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_projected_texture_operation_error,"
           },
           {
-            "line": 253,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_image_atomic_expression as image_atomic_diagnostic_expression,"
           },
           {
-            "line": 254,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_cube_texel_fetch_expression,"
           },
           {
-            "line": 255,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_storage_image_texture_comparison_scalar_expression,"
           },
           {
-            "line": 256,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_storage_image_texture_operation_vector_expression,"
           },
           {
-            "line": 257,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_gather_compare_call_expression,"
           },
           {
-            "line": 258,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_gather_call_expression,"
           },
           {
-            "line": 259,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_compare_scalar_expression,"
           },
           {
-            "line": 260,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_compare_operation_error,"
           },
           {
-            "line": 261,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_offset_call_expression,"
           },
           {
-            "line": 262,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_query_levels_expression,"
           },
           {
-            "line": 263,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_query_lod_expression,"
           },
           {
-            "line": 264,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_samples_query_call_expression,"
           },
           {
-            "line": 300,
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "self.unsupported_structured_buffer_array_functions = {}"
           }
@@ -300,105 +260,85 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 413,
+        "unsupported_marker_count": 301,
         "unsupported_marker_samples": [
           {
-            "line": 264,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_image_atomic_expression,"
           },
           {
-            "line": 265,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_cube_texel_fetch_expression,"
           },
           {
-            "line": 266,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_image_atomic_expression,"
           },
           {
-            "line": 267,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_image_store_expression,"
           },
           {
-            "line": 268,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_call_vector_expression,"
           },
           {
-            "line": 269,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_compare_scalar_expression,"
           },
           {
-            "line": 270,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_gather_compare_vector_expression,"
           },
           {
-            "line": 271,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texture_query_lod_expression,"
           },
           {
-            "line": 272,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_multisample_texel_fetch_offset_expression,"
           },
           {
-            "line": 273,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_projected_texture_call_expression,"
           },
           {
-            "line": 274,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_storage_image_texture_comparison_scalar_expression,"
           },
           {
-            "line": 275,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_storage_image_texture_operation_vector_expression,"
           },
           {
-            "line": 276,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_gather_compare_call_expression,"
           },
           {
-            "line": 277,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_gather_call_expression,"
           },
           {
-            "line": 278,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_compare_scalar_expression,"
           },
           {
-            "line": 279,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_compare_operation_error,"
           },
           {
-            "line": 280,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_offset_call_expression,"
           },
           {
-            "line": 281,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_offset_operation_error,"
           },
           {
-            "line": 282,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_projected_texture_operation_error,"
           },
           {
-            "line": 283,
             "path": "crosstl/translator/codegen/metal_codegen.py",
             "text": "unsupported_texture_query_levels_expression,"
           }
@@ -410,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 426
+        "test_count": 428
       },
       "translator_codegen": {
         "exists": true,
@@ -439,102 +379,51 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 19,
+        "unsupported_marker_count": 11,
         "unsupported_marker_samples": [
           {
-            "line": 2132,
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "def unsupported_lambda_default_value("
           },
           {
-            "line": 2136,
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "\"; WARNING: SPIR-V backend does not support CrossGL \""
           },
           {
-            "line": 4686,
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "f\"; WARNING: Unsupported LHS type in assignment: {type(target).__name__}\""
           },
           {
-            "line": 4694,
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "self.emit(f\"; WARNING: Unsupported compound assignment operator {operator}\")"
           },
           {
-            "line": 4697,
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "self.emit(\"; WARNING: Compound array literal assignment is unsupported\")"
           },
           {
-            "line": 4732,
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "f\"; WARNING: Unsupported LHS type in assignment: {type(target).__name__}\""
           },
           {
-            "line": 5234,
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "\"Unsupported match arm for SPIR-V codegen; only unguarded \""
           },
           {
-            "line": 5730,
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "return self.unsupported_lambda_default_value(\"lambda expression\")"
           },
           {
-            "line": 5736,
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "return self.unsupported_lambda_default_value("
           },
           {
-            "line": 5773,
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "# Non-identifier callee (e.g., function table call) not supported in SPIR-V path"
           },
           {
-            "line": 5774,
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "self.emit(\"; WARNING: Unsupported callee expression in SPIR-V backend\")"
-          },
-          {
-            "line": 1231,
-            "path": "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
-            "text": "def test_lambda_call_emits_explicit_unsupported_spirv_fallback(self):"
-          },
-          {
-            "line": 1233,
-            "path": "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
-            "text": "shader UnsupportedLambda {"
-          },
-          {
-            "line": 1248,
-            "path": "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
-            "text": "\"SPIR-V backend does not support CrossGL lambda expressions \""
-          },
-          {
-            "line": 1252,
-            "path": "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
-            "text": "\"SPIR-V backend does not support CrossGL lambda expressions \""
-          },
-          {
-            "line": 1266,
-            "path": "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
-            "text": "shader UnsupportedTypedLambda {"
-          },
-          {
-            "line": 1286,
-            "path": "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
-            "text": "\"SPIR-V backend does not support CrossGL lambda expressions \""
-          },
-          {
-            "line": 1841,
-            "path": "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
-            "text": "assert \"Unsupported LHS type in assignment: MemberAccessNode\" not in spv_code"
-          },
-          {
-            "line": 5215,
-            "path": "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
-            "text": "with pytest.raises(ValueError, match=\"Unsupported match arm for SPIR-V\"):"
           }
         ]
       },
@@ -568,107 +457,43 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 56,
+        "unsupported_marker_count": 9,
         "unsupported_marker_samples": [
           {
-            "line": 1336,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "\"Unsupported match arm for CUDA codegen; only unguarded \""
           },
           {
-            "line": 1735,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_resource_query_call("
           },
           {
-            "line": 1759,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_shadow_resource_call("
           },
           {
-            "line": 1776,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_sampled_resource_call("
           },
           {
-            "line": 1795,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_image_atomic_resource_call("
           },
           {
-            "line": 1804,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
           },
           {
-            "line": 1902,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
           },
           {
-            "line": 1934,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
           },
           {
-            "line": 1961,
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
-          },
-          {
-            "line": 2758,
-            "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
-            "text": "\"\"\"Test CUDA makes unsupported shadow sampler calls explicit.\"\"\""
-          },
-          {
-            "line": 2811,
-            "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
-            "text": "\"float paramValue = /* unsupported CUDA shadow resource call: \""
-          },
-          {
-            "line": 2815,
-            "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
-            "text": "\"float shadow = /* unsupported CUDA shadow resource call: \""
-          },
-          {
-            "line": 2819,
-            "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
-            "text": "\"float cascade = /* unsupported CUDA shadow resource call: \""
-          },
-          {
-            "line": 2823,
-            "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
-            "text": "\"float cube = /* unsupported CUDA shadow resource call: \""
-          },
-          {
-            "line": 2827,
-            "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
-            "text": "\"float cubeArray = /* unsupported CUDA shadow resource call: \""
-          },
-          {
-            "line": 2831,
-            "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
-            "text": "\"float compared = /* unsupported CUDA shadow resource call: \""
-          },
-          {
-            "line": 2835,
-            "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
-            "text": "\"float comparedLod = /* unsupported CUDA shadow resource call: \""
-          },
-          {
-            "line": 2839,
-            "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
-            "text": "\"float comparedGrad = /* unsupported CUDA shadow resource call: \""
-          },
-          {
-            "line": 2843,
-            "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
-            "text": "\"float comparedOffset = /* unsupported CUDA shadow resource call: \""
-          },
-          {
-            "line": 2847,
-            "path": "tests/test_translator/test_codegen/test_CUDA_codegen.py",
-            "text": "\"float4 gathered = /* unsupported CUDA shadow resource call: \""
           }
         ]
       },
@@ -702,107 +527,51 @@
         "path": "crosstl/backend/HIP"
       },
       "signals": {
-        "unsupported_marker_count": 60,
+        "unsupported_marker_count": 11,
         "unsupported_marker_samples": [
           {
-            "line": 367,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "\"\"\"Raise a clear error for unsupported AST nodes.\"\"\""
           },
           {
-            "line": 368,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "raise NotImplementedError("
           },
           {
-            "line": 754,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "\"Unsupported match arm for HIP codegen; only unguarded \""
           },
           {
-            "line": 1612,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_resource_query_call("
           },
           {
-            "line": 1636,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_shadow_resource_call("
           },
           {
-            "line": 1653,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_sampled_resource_call("
           },
           {
-            "line": 1672,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_image_atomic_resource_call("
           },
           {
-            "line": 1681,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
           },
           {
-            "line": 1763,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
           },
           {
-            "line": 1795,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
           },
           {
-            "line": 1825,
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
-          },
-          {
-            "line": 2563,
-            "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
-            "text": "\"\"\"Test HIP makes unsupported shadow sampler calls explicit.\"\"\""
-          },
-          {
-            "line": 2616,
-            "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
-            "text": "\"float paramValue = /* unsupported HIP shadow resource call: \""
-          },
-          {
-            "line": 2620,
-            "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
-            "text": "\"float shadow = /* unsupported HIP shadow resource call: \""
-          },
-          {
-            "line": 2624,
-            "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
-            "text": "\"float cascade = /* unsupported HIP shadow resource call: \""
-          },
-          {
-            "line": 2628,
-            "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
-            "text": "\"float cube = /* unsupported HIP shadow resource call: \""
-          },
-          {
-            "line": 2632,
-            "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
-            "text": "\"float cubeArray = /* unsupported HIP shadow resource call: \""
-          },
-          {
-            "line": 2636,
-            "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
-            "text": "\"float compared = /* unsupported HIP shadow resource call: \""
-          },
-          {
-            "line": 2640,
-            "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
-            "text": "\"float comparedLod = /* unsupported HIP shadow resource call: \""
-          },
-          {
-            "line": 2644,
-            "path": "tests/test_translator/test_codegen/test_hip_codegen.py",
-            "text": "\"float comparedGrad = /* unsupported HIP shadow resource call: \""
           }
         ]
       },
@@ -836,27 +605,11 @@
         "path": "crosstl/backend/Mojo"
       },
       "signals": {
-        "unsupported_marker_count": 4,
+        "unsupported_marker_count": 1,
         "unsupported_marker_samples": [
           {
-            "line": 981,
             "path": "crosstl/translator/codegen/mojo_codegen.py",
             "text": "\"Unsupported match arm for Mojo codegen; only unguarded \""
-          },
-          {
-            "line": 761,
-            "path": "tests/test_translator/test_codegen/test_mojo_codegen.py",
-            "text": "def test_lambda_call_preserves_unsupported_mojo_lambda_shapes():"
-          },
-          {
-            "line": 1317,
-            "path": "tests/test_translator/test_codegen/test_mojo_codegen.py",
-            "text": "pytest.fail(\"Double data type not supported.\")"
-          },
-          {
-            "line": 4094,
-            "path": "tests/test_translator/test_codegen/test_mojo_codegen.py",
-            "text": "with pytest.raises(ValueError, match=\"Unsupported match arm for Mojo\"):"
           }
         ]
       },
@@ -890,105 +643,85 @@
         "path": "crosstl/backend/Rust"
       },
       "signals": {
-        "unsupported_marker_count": 36,
+        "unsupported_marker_count": 35,
         "unsupported_marker_samples": [
           {
-            "line": 2378,
             "path": "crosstl/translator/codegen/rust_codegen.py",
             "text": "raise ValueError(\"Unsupported match arm for Rust codegen\")"
           },
           {
-            "line": 2934,
             "path": "crosstl/translator/codegen/rust_codegen.py",
             "text": "raise ValueError(f\"Unsupported match pattern for Rust codegen: {pattern!r}\")"
           },
           {
-            "line": 6094,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "if self.closure_body_contains_unsupported_helper_node(closure.body):"
           },
           {
-            "line": 6144,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "def closure_body_contains_unsupported_helper_node(self, node):"
           },
           {
-            "line": 6145,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "unsupported_types = ("
           },
           {
-            "line": 6160,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "if isinstance(node, unsupported_types):"
           },
           {
-            "line": 6166,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "self.closure_body_contains_unsupported_helper_node(item)"
           },
           {
-            "line": 6171,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "return self.closure_body_contains_unsupported_helper_node("
           },
           {
-            "line": 6173,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": ") or self.closure_body_contains_unsupported_helper_node("
           },
           {
-            "line": 6177,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "return self.closure_body_contains_unsupported_helper_node(node.value)"
           },
           {
-            "line": 6179,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "return self.closure_body_contains_unsupported_helper_node(node.value)"
           },
           {
-            "line": 6182,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "self.closure_body_contains_unsupported_helper_node(node.condition)"
           },
           {
-            "line": 6183,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "or self.closure_body_contains_unsupported_helper_node(node.if_body)"
           },
           {
-            "line": 6184,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "or self.closure_body_contains_unsupported_helper_node(node.else_body)"
           },
           {
-            "line": 6187,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "return self.closure_body_contains_unsupported_helper_node("
           },
           {
-            "line": 6189,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": ") or self.closure_body_contains_unsupported_helper_node(node.right)"
           },
           {
-            "line": 6191,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "return self.closure_body_contains_unsupported_helper_node(node.operand)"
           },
           {
-            "line": 6193,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "return self.closure_body_contains_unsupported_helper_node(node.name) or any("
           },
           {
-            "line": 6194,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "self.closure_body_contains_unsupported_helper_node(arg)"
           },
           {
-            "line": 6198,
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "return self.closure_body_contains_unsupported_helper_node(node.object)"
           }
@@ -1024,105 +757,85 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 84,
+        "unsupported_marker_count": 42,
         "unsupported_marker_samples": [
           {
-            "line": 1255,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "\"Unsupported match arm for Slang codegen; only unguarded \""
           },
           {
-            "line": 1745,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "def unsupported_image_atomic_call(self, operation, reason, image_type=None):"
           },
           {
-            "line": 1747,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "f\"/* unsupported Slang image atomic: {operation} {reason} */ \""
           },
           {
-            "line": 1762,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_image_atomic_call("
           },
           {
-            "line": 1773,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_image_atomic_call("
           },
           {
-            "line": 2010,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_offset_call("
           },
           {
-            "line": 2018,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_offset_call("
           },
           {
-            "line": 2026,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_offset_call("
           },
           {
-            "line": 2034,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_offset_call("
           },
           {
-            "line": 2042,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "def unsupported_texture_offset_call(self, func_name, reason):"
           },
           {
-            "line": 2044,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "f\"/* unsupported Slang texture offset: {func_name} {reason} */ float4(0.0)\""
           },
           {
-            "line": 2050,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_projected_call("
           },
           {
-            "line": 2058,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_projected_call("
           },
           {
-            "line": 2068,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_projected_call("
           },
           {
-            "line": 2080,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_projected_call("
           },
           {
-            "line": 2086,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_projected_call("
           },
           {
-            "line": 2094,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_projected_call("
           },
           {
-            "line": 2103,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_projected_call("
           },
           {
-            "line": 2111,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_projected_call("
           },
           {
-            "line": 2149,
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "def unsupported_texture_projected_call(self, func_name, reason):"
           }

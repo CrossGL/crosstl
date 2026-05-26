@@ -47,6 +47,13 @@ def test_support_matrix_covers_all_cataloged_backends():
         assert set(counts) == statuses
         assert sum(counts.values()) == matrix["summary"]["feature_count"]
 
+    for backend in matrix["backends"]:
+        for sample in backend["signals"]["unsupported_marker_samples"]:
+            assert set(sample) == {"path", "text"}
+            assert sample["path"].endswith(".py")
+            assert not sample["path"].startswith("tests/")
+            assert sample["text"]
+
 
 def test_support_backend_catalog_matches_codegen_registry():
     backends_path = ROOT / "support" / "backends.json"
