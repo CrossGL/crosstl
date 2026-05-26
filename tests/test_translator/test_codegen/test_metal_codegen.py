@@ -913,16 +913,15 @@ def test_structured_buffer_operations_lower_to_device_buffer():
     generated = generate_code(ast)
 
     assert "device int* values [[buffer(3)]]" in generated
+    assert "constant uint* valuesLength [[buffer(4)]]" in generated
     assert "int v = values[tid.x];" in generated
-    assert (
-        "len = 0 /* unsupported Metal buffer dimensions: device buffers do not carry length */;"
-        in generated
-    )
+    assert "len = valuesLength[0];" in generated
     assert "values[tid.x] = v + 1;" in generated
     assert "RWStructuredBuffer" not in generated
     assert "buffer_load" not in generated
     assert "buffer_store" not in generated
     assert "buffer_dimensions" not in generated
+    assert "unsupported Metal buffer dimensions" not in generated
 
 
 def test_readonly_structured_buffer_uses_const_device_pointer():
@@ -943,6 +942,49 @@ def test_readonly_structured_buffer_uses_const_device_pointer():
 
     assert "const device int* values [[buffer(1)]]" in generated
     assert "int v = values[tid.x];" in generated
+
+
+def test_structured_buffer_dimensions_helpers_thread_length_sidecars():
+    code = """
+    shader StructuredBufferDimensionsHelperMetal {
+        RWStructuredBuffer<int> values @ binding(1);
+
+        uint countValuesInner(RWStructuredBuffer<int> localValues) {
+            uint len;
+            buffer_dimensions(localValues, len);
+            return len;
+        }
+
+        uint countValues(RWStructuredBuffer<int> localValues) {
+            return countValuesInner(localValues);
+        }
+
+        compute {
+            void main() {
+                uint len = countValues(values);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "device int* values [[buffer(1)]]" in generated
+    assert "constant uint* valuesLength [[buffer(2)]]" in generated
+    assert (
+        "uint countValuesInner(device int* localValues, constant uint* localValuesLength)"
+        in generated
+    )
+    assert (
+        "uint countValues(device int* localValues, constant uint* localValuesLength)"
+        in generated
+    )
+    assert "len = localValuesLength[0];" in generated
+    assert "return countValuesInner(localValues, localValuesLength);" in generated
+    assert "uint len = countValues(values, valuesLength);" in generated
+    assert "unsupported Metal buffer dimensions" not in generated
+    assert "buffer_dimensions" not in generated
 
 
 def test_append_consume_structured_buffers_use_sidecar_counters():
@@ -1049,12 +1091,11 @@ def test_structured_buffer_arrays_lower_to_device_pointer_arrays():
     generated = generate_code(ast)
 
     assert "array<device int*, 2> buffers [[buffer(3)]]" in generated
+    assert "array<constant uint*, 2> buffersLength [[buffer(5)]]" in generated
     assert "int v = buffers[index][tid.x];" in generated
-    assert (
-        "len = 0 /* unsupported Metal buffer dimensions: device buffers do not carry length */;"
-        in generated
-    )
+    assert "len = buffersLength[index][0];" in generated
     assert "buffers[index][tid.x] = v + 1;" in generated
+    assert "unsupported Metal buffer dimensions" not in generated
 
 
 def test_append_structured_buffer_arrays_use_sidecar_counter_arrays():

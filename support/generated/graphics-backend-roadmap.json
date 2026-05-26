@@ -73,15 +73,6 @@
       "status": "partial"
     },
     {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "resources",
-      "feature": "Structured/storage buffers",
-      "feature_id": "resources.structured_buffers",
-      "notes": "Covers StructuredBuffer/RWStructuredBuffer as device pointers, fixed and inferred resource arrays, load/store helpers, and AppendStructuredBuffer/ConsumeStructuredBuffer lowering through generated sidecar atomic counter buffers. Buffer dimensions remain deterministic diagnostics because plain Metal device buffers do not carry hidden length state.",
-      "status": "partial"
-    },
-    {
       "backend": "DirectX / HLSL",
       "backend_id": "directx",
       "category": "resources",
@@ -580,13 +571,14 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_structured_buffer_access_contracts_are_preserved",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_structured_buffer_operations_lower_to_device_buffer",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_structured_buffer_dimensions_helpers_thread_length_sidecars",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_append_consume_structured_buffers_use_sidecar_counters",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_append_consume_structured_buffer_helpers_thread_sidecar_counters",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_append_structured_buffer_arrays_use_sidecar_counter_arrays",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract"
           ],
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer as device pointers, fixed and inferred resource arrays, load/store helpers, and AppendStructuredBuffer/ConsumeStructuredBuffer lowering through generated sidecar atomic counter buffers. Buffer dimensions remain deterministic diagnostics because plain Metal device buffers do not carry hidden length state.",
-          "status": "partial"
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer as device pointers, fixed and inferred resource arrays, load/store helpers, buffer_dimensions through generated sidecar length buffers, and AppendStructuredBuffer/ConsumeStructuredBuffer through generated sidecar atomic counter buffers.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
@@ -1442,20 +1434,20 @@
   "summary": {
     "backend_count": 3,
     "backlog": {
-      "backlog_count": 17,
+      "backlog_count": 16,
       "by_backend": {
         "directx": 5,
-        "metal": 8,
+        "metal": 7,
         "opengl": 4
       },
       "by_category": {
-        "resources": 3,
+        "resources": 2,
         "stages": 8,
         "textures": 6
       },
       "by_status": {
         "diagnostic": 0,
-        "partial": 15,
+        "partial": 14,
         "supported": 0,
         "unknown": 0,
         "unsupported": 2,
@@ -1474,8 +1466,8 @@
       },
       "metal": {
         "diagnostic": 0,
-        "partial": 6,
-        "supported": 34,
+        "partial": 5,
+        "supported": 35,
         "unknown": 0,
         "unsupported": 2,
         "validated_rejection": 0

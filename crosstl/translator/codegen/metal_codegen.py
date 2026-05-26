@@ -324,6 +324,7 @@ class MetalCodeGen:
         self.texture_variables = []
         self.sampler_variables = []
         self.structured_buffer_variables = []
+        self.structured_buffer_length_variables = []
         self.structured_buffer_counter_variables = []
         self.cbuffer_variables = []
         self.cbuffer_binding_indices = {}
@@ -345,7 +346,10 @@ class MetalCodeGen:
         self.current_texture_parameters = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
+        self.current_structured_buffer_length_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
+        self.function_structured_buffer_length_dependencies = {}
+        self.global_structured_buffer_length_dependencies = set()
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
         self.literal_int_constants = {}
@@ -371,6 +375,7 @@ class MetalCodeGen:
         self.unsupported_glsl_buffer_block_variables = set()
         self.unsupported_glsl_buffer_block_variable_types = {}
         self.current_glsl_buffer_block_parameters = {}
+        self.current_structured_buffer_length_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
         self.current_unsupported_glsl_buffer_block_parameters = set()
         self.current_unsupported_glsl_buffer_block_local_variables = set()
@@ -682,6 +687,7 @@ class MetalCodeGen:
         self.texture_variables = []
         self.sampler_variables = []
         self.structured_buffer_variables = []
+        self.structured_buffer_length_variables = []
         self.structured_buffer_counter_variables = []
         self.glsl_buffer_block_variables = []
         self.lowered_glsl_buffer_blocks = {}
@@ -735,7 +741,10 @@ class MetalCodeGen:
         self.current_texture_parameters = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
+        self.current_structured_buffer_length_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
+        self.function_structured_buffer_length_dependencies = {}
+        self.global_structured_buffer_length_dependencies = set()
         self.function_global_resource_dependencies = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
@@ -820,6 +829,14 @@ class MetalCodeGen:
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
         ) = self.collect_resource_array_size_hints(ast)
+        self.function_structured_buffer_length_dependencies = (
+            self.collect_function_structured_buffer_length_dependencies(all_functions)
+        )
+        self.global_structured_buffer_length_dependencies = (
+            self.collect_global_structured_buffer_length_dependencies(
+                all_functions, global_vars
+            )
+        )
         self.validate_global_resource_shadows(ast)
         self.current_function_name = None
         self.current_function_return_type = None
@@ -1106,6 +1123,28 @@ class MetalCodeGen:
                     (node, binding, vtype, array_size)
                 )
                 buffer_register = max(buffer_register, binding + resource_count)
+                if self.structured_buffer_requires_length(var_name):
+                    length_binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "buffer",
+                        buffer_register,
+                        resource_count,
+                    )
+                    length_name = self.structured_buffer_length_resource_name(var_name)
+                    self.reserve_resource_binding_range(
+                        used_resource_bindings,
+                        "Metal",
+                        "buffer",
+                        length_binding,
+                        resource_count,
+                        length_name,
+                    )
+                    self.structured_buffer_length_variables.append(
+                        (node, length_binding, vtype, array_size)
+                    )
+                    buffer_register = max(
+                        buffer_register, length_binding + resource_count
+                    )
                 if self.structured_buffer_requires_counter(vtype):
                     counter_binding = self.next_available_resource_binding(
                         used_resource_bindings,
@@ -1467,6 +1506,9 @@ class MetalCodeGen:
         previous_glsl_buffer_block_parameter_struct_failures = (
             self.current_glsl_buffer_block_parameter_struct_failures
         )
+        previous_structured_buffer_length_parameters = (
+            self.current_structured_buffer_length_parameters
+        )
         previous_structured_buffer_counter_parameters = (
             self.current_structured_buffer_counter_parameters
         )
@@ -1492,6 +1534,7 @@ class MetalCodeGen:
             self.collect_unsupported_glsl_buffer_block_parameter_names(param_list)
         )
         self.current_unsupported_glsl_buffer_block_local_variables = set()
+        self.current_structured_buffer_length_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
         self.local_variable_types = {}
         for p in param_list:
@@ -1530,6 +1573,17 @@ class MetalCodeGen:
                 raw_param_type, param_type, p.name, p
             )
             params.append(f"{declaration}{param_attr}")
+            if self.structured_buffer_parameter_requires_length(
+                self.current_function_name, p.name
+            ):
+                length_name = self.structured_buffer_length_parameter_name(p.name)
+                self.current_structured_buffer_length_parameters[p.name] = length_name
+                array_size = self.structured_buffer_parameter_array_size(
+                    raw_param_type, p
+                )
+                params.append(
+                    self.format_structured_buffer_length_parameter(p.name, array_size)
+                )
             if self.structured_buffer_requires_counter(raw_param_type):
                 counter_name = self.structured_buffer_counter_parameter_name(p.name)
                 self.current_structured_buffer_counter_parameters[p.name] = counter_name
@@ -1620,6 +1674,9 @@ class MetalCodeGen:
             self.current_glsl_buffer_block_parameter_struct_failures = (
                 previous_glsl_buffer_block_parameter_struct_failures
             )
+            self.current_structured_buffer_length_parameters = (
+                previous_structured_buffer_length_parameters
+            )
             self.current_structured_buffer_counter_parameters = (
                 previous_structured_buffer_counter_parameters
             )
@@ -1709,6 +1766,9 @@ class MetalCodeGen:
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
         self.current_image_format_parameters = previous_image_format_parameters
+        self.current_structured_buffer_length_parameters = (
+            previous_structured_buffer_length_parameters
+        )
         self.current_structured_buffer_counter_parameters = (
             previous_structured_buffer_counter_parameters
         )
@@ -2069,6 +2129,18 @@ class MetalCodeGen:
                     buffer_type, buffer_name, array_size
                 )
                 resource_params.append(f"{declaration} [[buffer({i})]]")
+        if self.structured_buffer_length_variables:
+            for (
+                buffer_variable,
+                i,
+                _buffer_type,
+                array_size,
+            ) in self.structured_buffer_length_variables:
+                buffer_name = getattr(buffer_variable, "name", None)
+                declaration = self.format_structured_buffer_length_parameter(
+                    buffer_name, array_size
+                )
+                resource_params.append(f"{declaration} [[buffer({i})]]")
         if self.structured_buffer_counter_variables:
             for (
                 buffer_variable,
@@ -2116,6 +2188,11 @@ class MetalCodeGen:
         for buffer_variable, _, _, _ in self.structured_buffer_variables:
             if getattr(buffer_variable, "name", None):
                 names.add(buffer_variable.name)
+        for buffer_variable, _, _, _ in self.structured_buffer_length_variables:
+            if getattr(buffer_variable, "name", None):
+                names.add(
+                    self.structured_buffer_length_parameter_name(buffer_variable.name)
+                )
         for buffer_variable, _, _, _ in self.structured_buffer_counter_variables:
             if getattr(buffer_variable, "name", None):
                 names.add(
@@ -2166,6 +2243,12 @@ class MetalCodeGen:
                         buffer_type, buffer_name, array_size
                     )
                 )
+                if self.structured_buffer_requires_length(buffer_name):
+                    resource_params.append(
+                        self.format_structured_buffer_length_parameter(
+                            buffer_name, array_size
+                        )
+                    )
                 if self.structured_buffer_requires_counter(buffer_type):
                     resource_params.append(
                         self.format_structured_buffer_counter_parameter(
@@ -3486,14 +3569,51 @@ class MetalCodeGen:
             )
             return f"{buffer}[{index}]"
         if func_name == "buffer_dimensions" and args:
-            diagnostic = (
-                "0 /* unsupported Metal buffer dimensions: device buffers do not "
-                "carry length */"
-            )
+            length_expr = self.structured_buffer_length_reference(args[0])
+            if length_expr is None:
+                length_expr = (
+                    "0 /* unsupported Metal buffer dimensions: requires explicit "
+                    "length sidecar buffer */"
+                )
             if len(args) >= 2:
                 target = self.generate_expression(args[1])
-                return f"{target} = {diagnostic}"
-            return diagnostic
+                return f"{target} = {length_expr}"
+            return length_expr
+        return None
+
+    def structured_buffer_length_reference(self, buffer_arg):
+        length = self.structured_buffer_length_data_argument(buffer_arg)
+        if length is None:
+            return None
+        return f"{length}[0]"
+
+    def structured_buffer_length_data_argument(self, arg):
+        if isinstance(arg, ArrayAccessNode) or (
+            hasattr(arg, "__class__") and "ArrayAccess" in str(arg.__class__)
+        ):
+            array_expr = getattr(arg, "array", getattr(arg, "array_expr", None))
+            index_expr = getattr(arg, "index", getattr(arg, "index_expr", None))
+            array_name = self.expression_name(array_expr)
+            length_parameter = self.current_structured_buffer_length_parameters.get(
+                array_name
+            )
+            if length_parameter is not None:
+                index = self.generate_expression(index_expr)
+                return f"{length_parameter}[{index}]"
+            if self.structured_buffer_requires_length(array_name):
+                index = self.generate_expression(index_expr)
+                length_name = self.structured_buffer_length_parameter_name(array_name)
+                return f"{length_name}[{index}]"
+
+        arg_name = self.expression_name(arg)
+        length_parameter = self.current_structured_buffer_length_parameters.get(
+            arg_name
+        )
+        if length_parameter is not None:
+            return length_parameter
+
+        if self.structured_buffer_requires_length(arg_name):
+            return self.structured_buffer_length_parameter_name(arg_name)
         return None
 
     def structured_buffer_counter_reference(self, buffer_arg):
@@ -3576,6 +3696,20 @@ class MetalCodeGen:
             array_size = array_size or "1"
             return f"array<{pointer_type}, {array_size}> {name}"
         return f"{pointer_type} {name}"
+
+    def structured_buffer_length_resource_name(self, name):
+        return f"{name}Length"
+
+    def structured_buffer_length_parameter_name(self, name):
+        return f"{name}Length"
+
+    def format_structured_buffer_length_parameter(self, name, array_size=None):
+        length_name = self.structured_buffer_length_parameter_name(name)
+        pointer_type = "constant uint*"
+        if array_size is not None:
+            array_size = array_size or "1"
+            return f"array<{pointer_type}, {array_size}> {length_name}"
+        return f"{pointer_type} {length_name}"
 
     def structured_buffer_counter_resource_name(self, name):
         return f"{name}Counter"
@@ -3882,6 +4016,17 @@ class MetalCodeGen:
                 binding,
                 self.global_resource_shape(buffer_variable)[1],
                 getattr(buffer_variable, "name", "<anonymous>"),
+            )
+        for buffer_variable, binding, _, _ in self.structured_buffer_length_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                self.global_resource_shape(buffer_variable)[1],
+                self.structured_buffer_length_resource_name(
+                    getattr(buffer_variable, "name", "<anonymous>")
+                ),
             )
         for buffer_variable, binding, _, _ in self.structured_buffer_counter_variables:
             self.reserve_resource_binding_range(
@@ -4248,6 +4393,132 @@ class MetalCodeGen:
             parameter_infos[func_name] = infos
         return parameter_infos
 
+    def structured_buffer_parameter_type_map(self, func):
+        parameter_types = {}
+        for param in getattr(func, "parameters", getattr(func, "params", [])):
+            name = getattr(param, "name", None)
+            raw_type = getattr(param, "param_type", getattr(param, "vtype", None))
+            type_name = self.type_name_string(raw_type)
+            if name and self.is_structured_buffer_type(type_name):
+                parameter_types[name] = type_name
+        return parameter_types
+
+    def function_call_arguments(self, call):
+        return getattr(call, "arguments", getattr(call, "args", []))
+
+    def collect_function_structured_buffer_length_dependencies(self, functions):
+        parameter_types = {
+            getattr(func, "name", None): self.structured_buffer_parameter_type_map(func)
+            for func in functions or []
+            if getattr(func, "name", None)
+        }
+        dependencies = {func_name: set() for func_name in parameter_types}
+
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            for node in self.iter_ast_nodes(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                if self.function_call_name(node) != "buffer_dimensions":
+                    continue
+                args = self.function_call_arguments(node)
+                if not args:
+                    continue
+                buffer_name = self.expression_name(args[0])
+                if buffer_name in parameter_types.get(func_name, {}):
+                    dependencies[func_name].add(buffer_name)
+
+        changed = True
+        while changed:
+            changed = False
+            for func in functions or []:
+                func_name = getattr(func, "name", None)
+                if not func_name:
+                    continue
+                current_dependencies = dependencies.setdefault(func_name, set())
+                before = set(current_dependencies)
+                for node in self.iter_ast_nodes(getattr(func, "body", [])):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    called_name = self.function_call_name(node)
+                    if called_name not in self.user_function_names:
+                        continue
+                    called_dependencies = dependencies.get(called_name, set())
+                    if not called_dependencies:
+                        continue
+                    called_parameters = self.function_parameter_infos.get(
+                        called_name, []
+                    )
+                    for index, arg in enumerate(self.function_call_arguments(node)):
+                        if index >= len(called_parameters):
+                            continue
+                        called_param_name, _called_param_type = called_parameters[index]
+                        if called_param_name not in called_dependencies:
+                            continue
+                        arg_name = self.expression_name(arg)
+                        if arg_name in parameter_types.get(func_name, {}):
+                            current_dependencies.add(arg_name)
+                if current_dependencies != before:
+                    changed = True
+        return dependencies
+
+    def collect_global_structured_buffer_length_dependencies(
+        self, functions, global_vars
+    ):
+        global_buffer_names = set()
+        for node in global_vars or []:
+            name = getattr(node, "name", getattr(node, "variable_name", None))
+            raw_type = getattr(node, "var_type", getattr(node, "vtype", None))
+            if name and self.is_structured_buffer_type(raw_type):
+                global_buffer_names.add(name)
+
+        dependencies = set()
+        for func in functions or []:
+            local_names = {
+                getattr(param, "name", None)
+                for param in getattr(func, "parameters", getattr(func, "params", []))
+                if getattr(param, "name", None)
+            }
+            for node in self.iter_ast_nodes(getattr(func, "body", [])):
+                if isinstance(node, VariableNode) and getattr(node, "name", None):
+                    local_names.add(node.name)
+
+            for node in self.iter_ast_nodes(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                func_name = self.function_call_name(node)
+                args = self.function_call_arguments(node)
+                if func_name == "buffer_dimensions" and args:
+                    buffer_name = self.expression_name(args[0])
+                    if (
+                        buffer_name in global_buffer_names
+                        and buffer_name not in local_names
+                    ):
+                        dependencies.add(buffer_name)
+                    continue
+                if func_name not in self.user_function_names:
+                    continue
+                called_dependencies = (
+                    self.function_structured_buffer_length_dependencies.get(
+                        func_name, set()
+                    )
+                )
+                if not called_dependencies:
+                    continue
+                called_parameters = self.function_parameter_infos.get(func_name, [])
+                for index, arg in enumerate(args):
+                    if index >= len(called_parameters):
+                        continue
+                    called_param_name, _called_param_type = called_parameters[index]
+                    if called_param_name not in called_dependencies:
+                        continue
+                    arg_name = self.expression_name(arg)
+                    if arg_name in global_buffer_names and arg_name not in local_names:
+                        dependencies.add(arg_name)
+        return dependencies
+
     def collect_global_resource_names(self, root):
         resource_names = set()
         for node in getattr(root, "global_variables", []) or []:
@@ -4532,6 +4803,17 @@ class MetalCodeGen:
             if getattr(buffer_variable, "name", None)
         }
 
+    def structured_buffer_requires_length(self, name):
+        return bool(name and name in self.global_structured_buffer_length_dependencies)
+
+    def structured_buffer_parameter_requires_length(self, func_name, name):
+        return bool(
+            func_name
+            and name
+            and name
+            in self.function_structured_buffer_length_dependencies.get(func_name, set())
+        )
+
     def global_structured_buffer_requires_counter(self, name):
         if not name:
             return False
@@ -4600,10 +4882,14 @@ class MetalCodeGen:
         parameter_infos = self.function_parameter_infos.get(func_name, [])
         args = []
         for index, arg in enumerate(call_args):
-            param_type = (
-                parameter_infos[index][1] if index < len(parameter_infos) else None
+            param_name, param_type = (
+                parameter_infos[index] if index < len(parameter_infos) else (None, None)
             )
             args.append(self.generate_expression(arg))
+            if self.structured_buffer_parameter_requires_length(func_name, param_name):
+                length = self.structured_buffer_length_data_argument(arg)
+                if length is not None:
+                    args.append(length)
             if param_type is not None and self.structured_buffer_requires_counter(
                 param_type
             ):
@@ -4626,6 +4912,8 @@ class MetalCodeGen:
             if not buffer_name:
                 continue
             names.append(buffer_name)
+            if self.structured_buffer_requires_length(buffer_name):
+                names.append(self.structured_buffer_length_parameter_name(buffer_name))
             if self.structured_buffer_requires_counter(buffer_type):
                 names.append(self.structured_buffer_counter_parameter_name(buffer_name))
         names.extend(

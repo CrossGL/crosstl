@@ -373,14 +373,11 @@ def test_codegen_ssbo_length_uses_buffer_dimensions_contract():
     assert "layers[1].GetDimensions(layerLen);" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
-    assert (
-        "len = 0 /* unsupported Metal buffer dimensions: device buffers do not carry length */;"
-        in metal
-    )
-    assert (
-        "layerLen = 0 /* unsupported Metal buffer dimensions: device buffers do not carry length */;"
-        in metal
-    )
+    assert "constant uint* valuesBlockLength [[buffer(3)]]" in metal
+    assert "array<constant uint*, 2> layersLength [[buffer(4)]]" in metal
+    assert "len = valuesBlockLength[0];" in metal
+    assert "layerLen = layersLength[1][0];" in metal
+    assert "unsupported Metal buffer dimensions" not in metal
 
     glsl = GLSLCodeGen().generate(shader_ast)
     assert "len = valuesBlock.length();" in glsl
@@ -424,10 +421,9 @@ def test_codegen_unsized_ssbo_instance_arrays_preserve_dynamic_receivers():
     metal = MetalCodeGen().generate(shader_ast)
     assert "int value = buffers[dynamicIndex][2];" in metal
     assert "buffers[dynamicIndex][3] = value + 1;" in metal
-    assert (
-        "len = 0 /* unsupported Metal buffer dimensions: device buffers do not carry length */;"
-        in metal
-    )
+    assert "array<constant uint*, 2> buffersLength [[buffer(3)]]" in metal
+    assert "len = buffersLength[dynamicIndex][0];" in metal
+    assert "unsupported Metal buffer dimensions" not in metal
 
     glsl = GLSLCodeGen().generate(shader_ast)
     assert (

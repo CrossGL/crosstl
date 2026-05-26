@@ -462,8 +462,6 @@ def test_primary_graphics_structured_buffer_access_contracts_are_preserved(
     assert f"const device {buffer_case.metal_type}* {source_name}" in metal
     assert f"device {buffer_case.metal_type}* {target_name}" in metal
     assert f"{buffer_case.metal_type} value = {source_name}[tid.x];" in metal
-    assert (
-        "len = 0 /* unsupported Metal buffer dimensions: device buffers do not "
-        "carry length */;" in metal
-    )
+    assert f"constant uint* {target_name}Length" in metal
+    assert f"len = {target_name}Length[0];" in metal
     assert f"{target_name}[tid.x] = value;" in metal

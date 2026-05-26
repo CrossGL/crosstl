@@ -23,8 +23,8 @@ implicitly supported.
    :header: "Backend", "Ext", "Target generator", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
    "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "465", "394", "Microsoft Learn HLSL reference; HLSL specification project"
-   "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "685", "1000", "GLSL 4.60 specification; OpenGL registry"
-   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "421", "382", "Apple Metal resources; Metal Shading Language specification"
+   "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "685", "999", "GLSL 4.60 specification; OpenGL registry"
+   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "422", "383", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "327", "19", "SPIR-V unified specification; Khronos SPIR-V registry"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "240", "56", "CUDA C++ programming guide"
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "271", "60", "ROCm HIP documentation"
@@ -37,7 +37,7 @@ implicitly supported.
 
    "DirectX / HLSL", "37", "5", "0", "0", "0", "0"
    "OpenGL / GLSL", "38", "4", "0", "0", "0", "0"
-   "Metal", "34", "6", "0", "0", "2", "0"
+   "Metal", "35", "5", "0", "0", "2", "0"
    "Vulkan SPIR-V", "6", "12", "0", "0", "0", "24"
    "CUDA", "11", "11", "0", "0", "3", "17"
    "HIP", "10", "12", "0", "0", "3", "17"
@@ -56,7 +56,7 @@ scope for graphics backend completion work.
 
    "DirectX / HLSL", "37", "5", "0", "0", "0", "0"
    "OpenGL / GLSL", "38", "4", "0", "0", "0", "0"
-   "Metal", "34", "6", "0", "0", "2", "0"
+   "Metal", "35", "5", "0", "0", "2", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
@@ -69,7 +69,6 @@ scope for graphics backend completion work.
    "DirectX / HLSL", "stages", "Ray tracing stages", "partial", ""
    "OpenGL / GLSL", "stages", "Ray tracing stages", "partial", "Entry points and combined-stage names lower, but target-specific GLSL ray tracing layout and extension semantics are not complete."
    "Metal", "stages", "Ray tracing stages", "partial", ""
-   "Metal", "resources", "Structured/storage buffers", "partial", "Covers StructuredBuffer/RWStructuredBuffer as device pointers, fixed and inferred resource arrays, load/store helpers, and AppendStructuredBuffer/ConsumeStructuredBuffer lowering through generated sidecar atomic counter buffers. Buffer dimensions remain deterministic diagnostics because plain Metal device buffers do not carry hidden length state."
    "DirectX / HLSL", "resources", "GLSL buffer block lowering", "partial", "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, struct arrays, layout-distinct aggregate helpers, readonly aggregate helpers, nested aggregate leaf compound stores, aggregate struct load/store with fixed array fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types."
    "Metal", "resources", "GLSL buffer block lowering", "partial", "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, struct arrays, layout-distinct aggregate helpers, readonly aggregate helpers, nested aggregate leaf compound stores, aggregate struct load/store with fixed array fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types."
    "DirectX / HLSL", "textures", "Projected texture operations", "partial", "Covers planar projected texture and shadow compare forms plus non-offset cube color and cube-shadow projection. Cube-array projection and target-invalid offset forms remain deterministic diagnostics."
@@ -119,7 +118,7 @@ Each category below uses the status codes from the legend.
 
    "Explicit and automatic resource bindings", "Y", "Y", "Y", "P", "P", "P", "?", "?", "P"
    "Constant/uniform buffers", "Y", "Y", "Y", "P", "P", "P", "P", "P", "P"
-   "Structured/storage buffers", "Y", "Y", "P", "?", "P", "P", "?", "?", "?"
+   "Structured/storage buffers", "Y", "Y", "Y", "?", "P", "P", "?", "?", "?"
    "Resource arrays", "Y", "Y", "Y", "?", "?", "?", "?", "?", "?"
    "Texture and sampler object model", "Y", "Y", "Y", "?", "?", "?", "?", "?", "P"
    "GLSL buffer block lowering", "P", "Y", "P", "?", "?", "?", "?", "?", "?"
@@ -247,7 +246,6 @@ need an audit before implementation work can be scoped accurately.
    "Mojo", "resources", "Constant/uniform buffers", "partial", ""
    "Rust", "resources", "Constant/uniform buffers", "partial", ""
    "Slang", "resources", "Constant/uniform buffers", "partial", ""
-   "Metal", "resources", "Structured/storage buffers", "partial", "Covers StructuredBuffer/RWStructuredBuffer as device pointers, fixed and inferred resource arrays, load/store helpers, and AppendStructuredBuffer/ConsumeStructuredBuffer lowering through generated sidecar atomic counter buffers. Buffer dimensions remain deterministic diagnostics because plain Metal device buffers do not carry hidden length state."
    "Vulkan SPIR-V", "resources", "Structured/storage buffers", "unknown", ""
    "CUDA", "resources", "Structured/storage buffers", "partial", ""
    "HIP", "resources", "Structured/storage buffers", "partial", ""
