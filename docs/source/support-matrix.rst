@@ -43,7 +43,7 @@ implicitly supported.
    "HIP", "10", "12", "0", "0", "3", "18"
    "Mojo", "10", "27", "0", "0", "5", "1"
    "Rust", "11", "6", "0", "0", "0", "26"
-   "Slang", "14", "15", "0", "0", "0", "14"
+   "Slang", "14", "18", "0", "0", "0", "11"
 
 Graphics Backend Focus
 ----------------------
@@ -136,15 +136,15 @@ Each category below uses the status codes from the legend.
    "Texture gather operations", "Y", "Y", "Y", "Y", "?", "?", "P", "?", "?"
    "Shadow compare texture operations", "Y", "Y", "Y", "Y", "?", "?", "P", "?", "?"
    "Texture query operations", "Y", "Y", "Y", "Y", "?", "?", "P", "?", "P"
-   "Texel fetch operations", "Y", "Y", "Y", "Y", "?", "?", "P", "?", "?"
+   "Texel fetch operations", "Y", "Y", "Y", "Y", "?", "?", "P", "?", "P"
    "Multisample texture operations", "Y", "Y", "Y", "P", "?", "?", "P", "?", "?"
    "Advanced texture operations", "P", "P", "P", "P", "?", "?", "P", "?", "?"
 
 .. csv-table:: images
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Storage image load/store", "Y", "Y", "Y", "Y", "?", "?", "P", "?", "?"
-   "Image atomics", "Y", "Y", "Y", "Y", "?", "?", "P", "?", "?"
+   "Storage image load/store", "Y", "Y", "Y", "Y", "?", "?", "P", "?", "P"
+   "Image atomics", "Y", "Y", "Y", "Y", "?", "?", "P", "?", "P"
    "Multisample storage images", "Y", "Y", "Y", "?", "?", "?", "P", "?", "?"
 
 .. csv-table:: language
@@ -317,7 +317,7 @@ need an audit before implementation work can be scoped accurately.
    "HIP", "textures", "Texel fetch operations", "unknown", ""
    "Mojo", "textures", "Texel fetch operations", "partial", "Texel fetch forms lower to compile-smoke Mojo placeholder helpers for regular and multisample resources; detailed target-invalid fetch diagnostics are incomplete."
    "Rust", "textures", "Texel fetch operations", "unknown", ""
-   "Slang", "textures", "Texel fetch operations", "unknown", ""
+   "Slang", "textures", "Texel fetch operations", "partial", "Covers 1D, 1D-array, 2D, 2D-array, and multisample texelFetch lowering to Slang Load or multisample subscript forms, plus explicit sampler fetches and resource-array fetch paths. Cube/cube-array and some target-invalid offset diagnostics remain incomplete."
    "Vulkan SPIR-V", "textures", "Multisample texture operations", "partial", "Covers multisample texture fetches and sample-count/size queries for 2D and 2D-array resources with spirv-as/spirv-val coverage. Unsupported multisample compare/gather diagnostics are not complete."
    "CUDA", "textures", "Multisample texture operations", "unknown", ""
    "HIP", "textures", "Multisample texture operations", "unknown", ""
@@ -337,12 +337,12 @@ need an audit before implementation work can be scoped accurately.
    "HIP", "images", "Storage image load/store", "unknown", ""
    "Mojo", "images", "Storage image load/store", "partial", "Storage image load/store and size operations lower to compile-smoke Mojo placeholder helpers for float, signed, unsigned, and multisample images; access qualifiers and native image memory semantics are incomplete."
    "Rust", "images", "Storage image load/store", "unknown", ""
-   "Slang", "images", "Storage image load/store", "unknown", ""
+   "Slang", "images", "Storage image load/store", "partial", "Covers RWTexture load/store for scalar, vector, explicit-format, array, formatted-image, and multisample storage images using Slang subscript access, plus typed helper generation for formatted image queries. Access-qualifier enforcement and compiler-backed coverage remain incomplete."
    "CUDA", "images", "Image atomics", "unknown", ""
    "HIP", "images", "Image atomics", "unknown", ""
    "Mojo", "images", "Image atomics", "partial", "Integer image atomic add/min/max/bitwise/exchange/compare-exchange forms lower to compile-smoke Mojo placeholder helpers, float-image atomics are rejected, and readonly/writeonly image atomics emit deterministic diagnostics. Native atomic memory semantics are not implemented."
    "Rust", "images", "Image atomics", "unknown", ""
-   "Slang", "images", "Image atomics", "unknown", ""
+   "Slang", "images", "Image atomics", "partial", "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, image arrays, and deterministic diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete."
    "Vulkan SPIR-V", "images", "Multisample storage images", "unknown", ""
    "CUDA", "images", "Multisample storage images", "unknown", ""
    "HIP", "images", "Multisample storage images", "unknown", ""

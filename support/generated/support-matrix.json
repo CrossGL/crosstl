@@ -2277,8 +2277,8 @@
       "category": "textures",
       "feature": "Texel fetch operations",
       "feature_id": "texture.texel_fetch",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Covers 1D, 1D-array, 2D, 2D-array, and multisample texelFetch lowering to Slang Load or multisample subscript forms, plus explicit sampler fetches and resource-array fetch paths. Cube/cube-array and some target-invalid offset diagnostics remain incomplete.",
+      "status": "partial"
     },
     {
       "backend": "Vulkan SPIR-V",
@@ -2457,8 +2457,8 @@
       "category": "images",
       "feature": "Storage image load/store",
       "feature_id": "image.storage",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Covers RWTexture load/store for scalar, vector, explicit-format, array, formatted-image, and multisample storage images using Slang subscript access, plus typed helper generation for formatted image queries. Access-qualifier enforcement and compiler-backed coverage remain incomplete.",
+      "status": "partial"
     },
     {
       "backend": "CUDA",
@@ -2502,8 +2502,8 @@
       "category": "images",
       "feature": "Image atomics",
       "feature_id": "image.atomics",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, image arrays, and deterministic diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete.",
+      "status": "partial"
     },
     {
       "backend": "Vulkan SPIR-V",
@@ -4852,9 +4852,15 @@
           "status": "unknown"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_one_dimensional_resources_emit_slang_methods_and_helpers",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_explicit_sampler_texel_fetch_emits_combined_slang_methods",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_nested_resource_arrays_emit_slang_queries_and_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_calls_in_control_flow_emit_slang_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_calls_in_loops_emit_slang_operations"
+          ],
+          "notes": "Covers 1D, 1D-array, 2D, 2D-array, and multisample texelFetch lowering to Slang Load or multisample subscript forms, plus explicit sampler fetches and resource-array fetch paths. Cube/cube-array and some target-invalid offset diagnostics remain incomplete.",
+          "status": "partial"
         },
         "vulkan": {
           "evidence": [
@@ -5063,9 +5069,14 @@
           "status": "unknown"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_load_store_emit_slang_subscript_access",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_explicit_image_formats_emit_slang_storage_element_types",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_arrays_preserve_expression_sizes",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_queries_emit_typed_slang_helpers"
+          ],
+          "notes": "Covers RWTexture load/store for scalar, vector, explicit-format, array, formatted-image, and multisample storage images using Slang subscript access, plus typed helper generation for formatted image queries. Access-qualifier enforcement and compiler-backed coverage remain incomplete.",
+          "status": "partial"
         },
         "vulkan": {
           "evidence": [
@@ -5136,9 +5147,13 @@
           "status": "unknown"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_integer_image_atomics_emit_slang_interlocked_helpers",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_integer_image_array_atomics_preserve_expression_indices",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_unsupported_image_atomics_emit_slang_diagnostic_stubs"
+          ],
+          "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, image arrays, and deterministic diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete.",
+          "status": "partial"
         },
         "vulkan": {
           "evidence": [
@@ -5888,9 +5903,9 @@
       },
       "slang": {
         "diagnostic": 0,
-        "partial": 15,
+        "partial": 18,
         "supported": 14,
-        "unknown": 14,
+        "unknown": 11,
         "unsupported": 0,
         "validated_rejection": 0
       },
