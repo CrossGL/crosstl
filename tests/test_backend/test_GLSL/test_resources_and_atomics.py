@@ -3164,12 +3164,13 @@ def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types():
         "readUv(arrayBlock));" in glsl
     )
     assert (
-        "uint incrementedDirect = incrementArray(counters, arrayBlock.layer, "
-        "arrayBlock.pixel, arrayBlock.amount);" in glsl
+        "uint incrementedDirect = incrementArray__glsl_images_counters("
+        "arrayBlock.layer, arrayBlock.pixel, arrayBlock.amount);" in glsl
     )
     assert (
-        "uint incrementedCall = incrementArray(counters, readLayer(arrayBlock), "
-        "readPixel(arrayBlock), readAmount(arrayBlock));" in glsl
+        "uint incrementedCall = incrementArray__glsl_images_counters("
+        "readLayer(arrayBlock), readPixel(arrayBlock), readAmount(arrayBlock));"
+        in glsl
     )
     assert "sampler sams" not in glsl
     assert "samplers" not in glsl
@@ -4172,16 +4173,17 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
         "textureSamples(signedImage));" in glsl
     )
     assert (
-        "vec4 direct = touchImages(msColor, msLayers, counters, signedLayers, "
-        "msImageBlock.pixel, msImageBlock.pixelLayer, "
-        "msImageBlock.sampleIndex, msImageBlock.color, msImageBlock.count, "
-        "msImageBlock.signedValue);" in glsl
+        "vec4 direct = touchImages__glsl_colorImage_msColor_layerImage_msLayers_"
+        "countImage_counters_signedImage_signedLayers(msImageBlock.pixel, "
+        "msImageBlock.pixelLayer, msImageBlock.sampleIndex, msImageBlock.color, "
+        "msImageBlock.count, msImageBlock.signedValue);" in glsl
     )
     assert (
-        "vec4 call = touchImages(msColor, msLayers, counters, signedLayers, "
-        "readPixel(msImageBlock), readPixelLayer(msImageBlock), "
-        "readSample(msImageBlock), readColor(msImageBlock), "
-        "readCount(msImageBlock), readSigned(msImageBlock));" in glsl
+        "vec4 call = touchImages__glsl_colorImage_msColor_layerImage_msLayers_"
+        "countImage_counters_signedImage_signedLayers(readPixel(msImageBlock), "
+        "readPixelLayer(msImageBlock), readSample(msImageBlock), "
+        "readColor(msImageBlock), readCount(msImageBlock), "
+        "readSigned(msImageBlock));" in glsl
     )
     assert (
         "vec4 inlineColor = imageLoad(msColor, msImageBlock.pixel, msImageBlock.sampleIndex);"
@@ -4605,8 +4607,8 @@ def test_codegen_for_in_do_while_image_query_arrays_infer_size():
     assert "ivec2 mid(image2DMS images[4], int mode, int limit)" in glsl
     assert "for (int i = 0; i < 1; ++i)" in glsl
     assert "for (int j = 0; j < limit; ++j)" in glsl
-    assert glsl.count("do {") == 2
-    assert glsl.count("} while (false);") == 2
+    assert glsl.count("do {") == 4
+    assert glsl.count("} while (false);") == 4
     assert "imageSize(images[3])" in glsl
     assert "ivec2(textureSamples(images[1]))" in glsl
     assert "imageSize(afterImage)" in glsl
@@ -4769,7 +4771,7 @@ def test_codegen_cast_and_literal_swizzle_image_indices_infer_size():
     assert "vec2 readLayer(image2D images[4], ivec2 pixel)" in glsl
     assert "imageLoad(images[int((BASE + 2))], pixel).xy" in glsl
     assert "imageLoad(images[ivec2(1, 3).y], pixel).xy" in glsl
-    assert "readLayer(rgFloatImages, ivec2(0, 1))" in glsl
+    assert "readLayer__glsl_images_rgFloatImages(ivec2(0, 1))" in glsl
     assert "image2D rgFloatImages[]" not in glsl
     assert "image2D rgFloatImages[5]" not in glsl
 
@@ -7353,7 +7355,7 @@ def test_codegen_ternary_image_indices_in_function_args_infer_size():
         "combine(imageLoad(images[(choose ? 3 : 1)], pixel).xy, "
         "imageLoad(images[1], pixel).xy)" in glsl
     )
-    assert "readLayer(rgFloatImages, ivec2(0, 1), true)" in glsl
+    assert "readLayer__glsl_images_rgFloatImages(ivec2(0, 1), true)" in glsl
     assert "image2D rgFloatImages[2]" not in glsl
     assert "image2D rgFloatImages[5]" not in glsl
 
@@ -10322,7 +10324,7 @@ def test_codegen_loop_forms_image_shadowed_const_restores_after_loop():
     assert "array<texture2d<float, access::read_write>, 5> rgFloatImages" not in metal
 
     assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
-    assert glsl.count("int COUNT = 0;") == 3
+    assert glsl.count("int COUNT = 0;") == 6
     assert glsl.count("imageLoad(images[COUNT], pixel).xy") == 3
     assert "do {" in glsl
     assert "} while (false);" in glsl
@@ -10953,8 +10955,8 @@ def test_codegen_for_in_do_while_transitive_image_arrays_infer_size():
     assert "vec2 mid(image2D images[4], ivec2 pixel, int mode, int limit)" in glsl
     assert "for (int i = 0; i < 1; ++i)" in glsl
     assert "for (int j = 0; j < limit; ++j)" in glsl
-    assert glsl.count("do {") == 2
-    assert glsl.count("} while (false);") == 2
+    assert glsl.count("do {") == 4
+    assert glsl.count("} while (false);") == 4
     assert "imageLoad(images[3], pixel).xy" in glsl
     assert "imageLoad(images[1], pixel).xy" in glsl
     assert "result = leaf(images, pixel, limit);" in glsl
@@ -11259,7 +11261,7 @@ def test_codegen_do_while_transitive_shadowed_image_const_restores_after_loop():
     assert "vec2 mid(image2D images[4], ivec2 pixel)" in glsl
     assert "do {" in glsl
     assert "} while (false);" in glsl
-    assert glsl.count("int COUNT = 0;") == 1
+    assert glsl.count("int COUNT = 0;") == 2
     assert "imageLoad(images[COUNT], pixel).xy" in glsl
     assert "return leaf(images, pixel);" in glsl
     assert "DoWhileNode(" not in glsl
@@ -11658,7 +11660,7 @@ def test_codegen_switch_match_shadowed_transitive_image_arrays_infer_size():
     assert "layout(rg32f, binding = 4) uniform image2D afterImage;" in glsl
     assert "vec2 leaf(image2D images[4], ivec2 pixel)" in glsl
     assert "vec2 mid(image2D images[4], ivec2 pixel, int mode)" in glsl
-    assert glsl.count("int COUNT = 0;") == 2
+    assert glsl.count("int COUNT = 0;") == 4
     assert glsl.count("imageLoad(images[COUNT], pixel).xy") == 3
     assert glsl.count("leaf(images, pixel)") == 2
     assert "image2D rgFloatImages[]" not in glsl
@@ -12180,7 +12182,7 @@ def test_codegen_switch_match_fixed_image_arrays_shadowed_case_const_stays_dynam
 
     assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
     assert "vec2 imageCases(image2D images[4], ivec2 pixel, int mode)" in glsl
-    assert glsl.count("int COUNT = 0;") == 2
+    assert glsl.count("int COUNT = 0;") == 4
     assert "imageLoad(images[COUNT], pixel).xy" in glsl
     assert "image2D rgFloatImages[5]" not in glsl
 

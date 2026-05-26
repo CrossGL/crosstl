@@ -1,5 +1,7 @@
 """CrossGL-to-GLSL code generator."""
 
+from copy import deepcopy
+
 from ..ast import (
     AssignmentNode,
     ArrayNode,
@@ -96,6 +98,7 @@ from .enum_utils import (
     generate_enum_structs,
     generic_enum_specialized_type_name,
     infer_enum_constructor_type,
+    sanitize_type_name,
 )
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
@@ -278,6 +281,7 @@ class GLSLCodeGen:
         self.current_sampler_parameters = set()
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
+        self.current_resource_aliases = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
         self.image_variable_accesses = {}
@@ -288,6 +292,11 @@ class GLSLCodeGen:
         self.function_parameter_infos = {}
         self.function_return_types = {}
         self.function_image_access_requirements = {}
+        self.function_definitions = {}
+        self.glsl_resource_function_specializations = {}
+        self.glsl_resource_function_call_names = {}
+        self.glsl_resource_specialized_source_names = set()
+        self.emitted_glsl_resource_specialization_names = set()
         self.unsupported_structured_buffer_array_functions = {}
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
@@ -713,6 +722,7 @@ class GLSLCodeGen:
         self.current_sampler_parameters = set()
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
+        self.current_resource_aliases = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
         self.image_variable_accesses = {}
@@ -729,6 +739,13 @@ class GLSLCodeGen:
         self.function_parameter_names = collect_function_parameter_names(functions)
         self.function_parameter_types = self.collect_function_parameter_types(functions)
         self.function_parameter_infos = self.collect_function_parameter_infos(functions)
+        self.function_definitions = {
+            func.name: func for func in functions if getattr(func, "name", None)
+        }
+        self.glsl_resource_function_specializations = {}
+        self.glsl_resource_function_call_names = {}
+        self.glsl_resource_specialized_source_names = set()
+        self.emitted_glsl_resource_specialization_names = set()
         self.function_image_access_requirements = (
             collect_function_image_access_requirements(
                 functions,
@@ -807,6 +824,13 @@ class GLSLCodeGen:
             }
         )
         if generic_function_specializations:
+            self.function_definitions.update(
+                {
+                    func.name: func
+                    for func in generic_function_specializations.values()
+                    if getattr(func, "name", None)
+                }
+            )
             self.function_parameter_names.update(
                 collect_function_parameter_names(
                     generic_function_specializations.values()
@@ -1180,6 +1204,7 @@ class GLSLCodeGen:
             code += self.generate_cbuffers(ast)
 
         combined_stage_entry_names = self.combined_stage_entry_names(ast, target_stage)
+        self.prepare_glsl_resource_function_specializations(ast)
 
         functions = getattr(ast, "functions", [])
         for func in functions:
@@ -1192,6 +1217,30 @@ class GLSLCodeGen:
 
             if not should_emit_qualified_function(target_stage, qualifier_name):
                 continue
+
+            resource_specializations = self.glsl_resource_function_emission_list(
+                getattr(func, "name", None)
+            )
+            if resource_specializations and qualifier_name not in {
+                "vertex",
+                "fragment",
+                "compute",
+                "geometry",
+                "tessellation_control",
+                "tessellation_evaluation",
+                "mesh",
+                "task",
+                "amplification",
+                "object",
+                "ray_generation",
+                "ray_intersection",
+                "ray_closest_hit",
+                "ray_any_hit",
+                "ray_miss",
+                "ray_callable",
+            }:
+                for specialized_func in resource_specializations:
+                    code += self.generate_function(specialized_func)
 
             if generic_function_parameters(func):
                 for specialized_func in generic_function_emission_list(self, func):
@@ -1236,6 +1285,15 @@ class GLSLCodeGen:
                     self.function_call_name,
                     FunctionCallNode,
                 ):
+                    resource_specializations = (
+                        self.glsl_resource_function_emission_list(
+                            getattr(func, "name", None)
+                        )
+                    )
+                    if resource_specializations:
+                        for specialized_func in resource_specializations:
+                            stage_code += self.generate_function(specialized_func)
+
                     if generic_function_parameters(func):
                         for specialized_func in generic_function_emission_list(
                             self,
@@ -1260,6 +1318,236 @@ class GLSLCodeGen:
                     code += stage_code
 
         return code
+
+    def prepare_glsl_resource_function_specializations(self, ast):
+        """Create GLSL helper variants for concrete storage image arguments."""
+        self.glsl_resource_function_specializations = {}
+        self.glsl_resource_function_call_names = {}
+        self.glsl_resource_specialized_source_names = set()
+        pending = []
+
+        def scan_function(func, aliases):
+            before = set(self.glsl_resource_function_specializations)
+            self.collect_glsl_resource_specializations_from_body(
+                getattr(func, "body", []),
+                aliases,
+            )
+            after = set(self.glsl_resource_function_specializations)
+            pending.extend(after - before)
+
+        for func in self.collect_functions(ast):
+            scan_function(func, {})
+
+        seen = set()
+        while pending:
+            key = pending.pop(0)
+            if key in seen:
+                continue
+            seen.add(key)
+            specialized_func = self.glsl_resource_function_specializations.get(key)
+            if specialized_func is None:
+                continue
+            scan_function(
+                specialized_func,
+                getattr(specialized_func, "_glsl_resource_aliases", {}) or {},
+            )
+
+        if not self.glsl_resource_function_specializations:
+            return
+
+        specialized_functions = list(self.glsl_resource_function_specializations.values())
+        self.function_definitions.update(
+            {
+                func.name: func
+                for func in specialized_functions
+                if getattr(func, "name", None)
+            }
+        )
+        self.function_return_types.update(
+            {
+                func.name: self.type_name_string(getattr(func, "return_type", "void"))
+                for func in specialized_functions
+                if getattr(func, "name", None)
+            }
+        )
+        self.function_parameter_names.update(
+            collect_function_parameter_names(specialized_functions)
+        )
+        self.function_parameter_types.update(
+            self.collect_function_parameter_types(specialized_functions)
+        )
+        self.function_parameter_infos.update(
+            self.collect_function_parameter_infos(specialized_functions)
+        )
+        self.function_sampler_parameter_indices.update(
+            self.collect_function_sampler_parameter_indices(specialized_functions)
+        )
+
+    def collect_glsl_resource_specializations_from_body(self, body, aliases):
+        for node in self.walk_ast(body):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            func_name = self.function_call_name(node)
+            if not func_name:
+                continue
+            args = list(getattr(node, "arguments", getattr(node, "args", [])) or [])
+            self.ensure_glsl_resource_function_specialization(
+                func_name,
+                args,
+                aliases,
+            )
+
+    def glsl_resource_function_emission_list(self, source_name):
+        if not source_name:
+            return []
+        functions = [
+            func
+            for func in self.glsl_resource_function_specializations.values()
+            if getattr(func, "_glsl_resource_source_name", None) == source_name
+        ]
+        functions.sort(key=lambda func: getattr(func, "name", ""))
+        result = []
+        for func in functions:
+            name = getattr(func, "name", None)
+            if name in self.emitted_glsl_resource_specialization_names:
+                continue
+            self.emitted_glsl_resource_specialization_names.add(name)
+            result.append(func)
+        return result
+
+    def glsl_resource_binding_info(self, arg, aliases):
+        arg_name = self.expression_name(arg)
+        if arg_name in aliases:
+            return aliases[arg_name]
+
+        resource_type = self.texture_argument_resource_type(arg)
+        if not self.is_storage_image_type(resource_type):
+            return None
+
+        expression = self.glsl_resource_argument_expression(arg, aliases)
+        if expression is None:
+            return None
+
+        return {
+            "expression": expression,
+            "type": resource_type,
+            "format": self.image_resource_format(arg),
+            "access": self.image_resource_access(arg),
+        }
+
+    def glsl_resource_argument_expression(self, arg, aliases):
+        arg_name = self.expression_name(arg)
+        if arg_name in aliases:
+            return aliases[arg_name]["expression"]
+        if isinstance(arg, str):
+            return arg
+        if hasattr(arg, "name") and isinstance(arg.name, str):
+            return arg.name
+        if isinstance(arg, ArrayAccessNode) or (
+            hasattr(arg, "__class__") and "ArrayAccess" in str(arg.__class__)
+        ):
+            array_expr = getattr(arg, "array", getattr(arg, "array_expr", None))
+            index_expr = getattr(arg, "index", getattr(arg, "index_expr", None))
+            array_code = self.glsl_resource_argument_expression(array_expr, aliases)
+            if array_code is None:
+                return None
+            return f"{array_code}[{self.generate_expression(index_expr)}]"
+        return None
+
+    def glsl_resource_function_specialization_key(self, func_name, args, aliases):
+        callee = self.function_definitions.get(func_name)
+        if callee is None:
+            return None, None
+
+        params = list(getattr(callee, "parameters", getattr(callee, "params", [])))
+        access_requirements = self.function_image_access_requirements.get(func_name, {})
+        bindings = {}
+        key_parts = []
+        for index, (param, arg) in enumerate(zip(params, args or [])):
+            param_type = self.type_name_string(
+                getattr(param, "param_type", getattr(param, "vtype", None))
+            )
+            if not self.is_storage_image_type(param_type):
+                continue
+            binding = self.glsl_resource_binding_info(arg, aliases)
+            if binding is None:
+                continue
+            param_name = getattr(param, "name", None)
+            if not param_name:
+                continue
+            required_access = access_requirements.get(param_name)
+            if required_access is not None and not image_access_satisfies_requirement(
+                required_access,
+                binding.get("access"),
+            ):
+                return None, None
+            bindings[index] = (param_name, binding)
+            key_parts.append((index, binding["expression"]))
+
+        if not bindings:
+            return None, None
+        return (func_name, tuple(key_parts)), bindings
+
+    def ensure_glsl_resource_function_specialization(self, func_name, args, aliases):
+        key, bindings = self.glsl_resource_function_specialization_key(
+            func_name,
+            args,
+            aliases,
+        )
+        if key is None:
+            return None
+        if key in self.glsl_resource_function_specializations:
+            return self.glsl_resource_function_specializations[key]
+
+        source_func = self.function_definitions.get(func_name)
+        if source_func is None:
+            return None
+
+        clone = deepcopy(source_func)
+        clone.name = self.glsl_resource_specialization_name(func_name, bindings)
+        clone.parameters = [
+            param
+            for index, param in enumerate(
+                getattr(clone, "parameters", getattr(clone, "params", []))
+            )
+            if index not in bindings
+        ]
+        clone._glsl_resource_source_name = func_name
+        clone._glsl_resource_bound_indices = set(bindings)
+        clone._glsl_resource_aliases = {
+            param_name: binding for param_name, binding in bindings.values()
+        }
+
+        self.glsl_resource_function_specializations[key] = clone
+        self.glsl_resource_function_call_names[key] = clone.name
+        self.glsl_resource_specialized_source_names.add(func_name)
+        return clone
+
+    def glsl_resource_specialization_name(self, func_name, bindings):
+        suffix_parts = []
+        for _, (param_name, binding) in sorted(bindings.items()):
+            suffix_parts.append(
+                "{}_{}".format(
+                    sanitize_type_name(param_name),
+                    sanitize_type_name(binding["expression"]),
+                )
+            )
+        suffix = "_".join(suffix_parts)
+        return "{}__glsl_{}".format(sanitize_type_name(func_name), suffix)
+
+    def glsl_resource_function_call_specialization(self, func_name, args):
+        key, _ = self.glsl_resource_function_specialization_key(
+            func_name,
+            args,
+            self.current_resource_aliases,
+        )
+        if key is None:
+            return None
+        return self.glsl_resource_function_specializations.get(key)
+
+    def glsl_resource_specialized_call_arguments(self, specialized_func, args):
+        bound_indices = getattr(specialized_func, "_glsl_resource_bound_indices", set())
+        return [arg for index, arg in enumerate(args or []) if index not in bound_indices]
 
     def generate_constants(self, ast):
         code = ""
@@ -1498,6 +1786,7 @@ class GLSLCodeGen:
         texture_parameters = {}
         image_format_parameters = {}
         image_access_parameters = {}
+        resource_aliases = getattr(func, "_glsl_resource_aliases", {}) or {}
         unsupported_buffer_array_info = (
             self.unsupported_structured_buffer_array_functions.get(func.name, {})
         )
@@ -1517,6 +1806,8 @@ class GLSLCodeGen:
             getattr(func, "_generic_substitutions", {}) or {}
         )
         self.current_structured_buffer_array_parameters = {}
+        for alias_name, binding in resource_aliases.items():
+            self.local_variable_types[alias_name] = binding.get("type")
         for index, p in enumerate(param_list):
             if hasattr(p, "param_type"):
                 raw_param_type = (
@@ -1638,6 +1929,7 @@ class GLSLCodeGen:
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
+        previous_resource_aliases = self.current_resource_aliases
         previous_image_format_parameters = self.current_image_format_parameters
         previous_image_access_parameters = self.current_image_access_parameters
         previous_stage_output = self.current_stage_output
@@ -1648,9 +1940,30 @@ class GLSLCodeGen:
         previous_flattened_stage_variables = self.flattened_stage_variables
         previous_stage_return_type = self.current_stage_return_type
         self.current_sampler_parameters = sampler_parameters
-        self.current_texture_parameters = texture_parameters
-        self.current_image_format_parameters = image_format_parameters
-        self.current_image_access_parameters = image_access_parameters
+        self.current_texture_parameters = {
+            **texture_parameters,
+            **{
+                alias_name: binding.get("type")
+                for alias_name, binding in resource_aliases.items()
+            },
+        }
+        self.current_resource_aliases = resource_aliases
+        self.current_image_format_parameters = {
+            **image_format_parameters,
+            **{
+                alias_name: binding.get("format")
+                for alias_name, binding in resource_aliases.items()
+                if binding.get("format") is not None
+            },
+        }
+        self.current_image_access_parameters = {
+            **image_access_parameters,
+            **{
+                alias_name: binding.get("access")
+                for alias_name, binding in resource_aliases.items()
+                if binding.get("access") is not None
+            },
+        }
         self.current_stage_output = stage_output
         self.current_stage_inputs = self.stage_input_member_maps(func, shader_type)
         self.current_stage_output_member_map = self.stage_output_member_map(
@@ -1677,6 +1990,7 @@ class GLSLCodeGen:
                 code += self.generate_statement(stmt, 1)
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
+        self.current_resource_aliases = previous_resource_aliases
         self.current_image_format_parameters = previous_image_format_parameters
         self.current_image_access_parameters = previous_image_access_parameters
         self.current_stage_output = previous_stage_output
@@ -3360,12 +3674,16 @@ class GLSLCodeGen:
             return str(expr)
         elif hasattr(expr, "__class__") and "VariableNode" in str(type(expr)):
             if hasattr(expr, "name"):
+                if expr.name in self.current_resource_aliases:
+                    return self.current_resource_aliases[expr.name]["expression"]
                 if expr.name in getattr(self, "enum_variant_constants", {}):
                     return enum_value_expression(self, expr.name)
                 return self.current_stage_parameter_aliases.get(expr.name, expr.name)
             else:
                 return str(expr)
         elif hasattr(expr, "__class__") and "IdentifierNode" in str(type(expr)):
+            if expr.name in self.current_resource_aliases:
+                return self.current_resource_aliases[expr.name]["expression"]
             if expr.name in getattr(self, "enum_variant_constants", {}):
                 return enum_value_expression(self, expr.name)
             return self.current_stage_parameter_aliases.get(expr.name, expr.name)
@@ -3482,9 +3800,24 @@ class GLSLCodeGen:
                 return f"{constructor}({args})"
 
             self.validate_function_image_access_arguments(func_name, expr.args)
-            call_args = self.filter_sampler_arguments(original_func_name, expr.args)
+            resource_specialization = self.glsl_resource_function_call_specialization(
+                func_name,
+                expr.args,
+            )
+            argument_func_name = original_func_name
+            if resource_specialization is not None:
+                func_name = resource_specialization.name
+                callee = resource_specialization.name
+                argument_func_name = func_name
+                call_args = self.glsl_resource_specialized_call_arguments(
+                    resource_specialization,
+                    expr.args,
+                )
+                call_args = self.filter_sampler_arguments(func_name, call_args)
+            else:
+                call_args = self.filter_sampler_arguments(original_func_name, expr.args)
             args = ", ".join(
-                self.generate_function_call_arguments(original_func_name, call_args)
+                self.generate_function_call_arguments(argument_func_name, call_args)
             )
             return f"{func_name or callee}({args})"
         elif hasattr(expr, "__class__") and "MemberAccessNode" in str(type(expr)):
@@ -3768,6 +4101,9 @@ class GLSLCodeGen:
         texture_name = self.expression_name(texture_arg)
         if not texture_name:
             return None
+        alias = self.current_resource_aliases.get(texture_name)
+        if alias is not None:
+            return alias.get("type")
         return self.current_texture_parameters.get(
             texture_name, self.texture_variable_types.get(texture_name)
         )
@@ -5328,6 +5664,8 @@ class GLSLCodeGen:
     def image_atomic_parameter_requires_diagnostic(self, texture_arg):
         texture_name = self.expression_name(texture_arg)
         if texture_name is None:
+            return False
+        if texture_name in self.current_resource_aliases:
             return False
         return (
             texture_name in self.current_texture_parameters

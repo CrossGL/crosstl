@@ -156,7 +156,7 @@ def test_generated_glsl_multisample_storage_validates_with_glslangvalidator(
     _run_validator([glslang, "-S", "comp", str(shader_path)])
 
 
-def test_generated_glsl_parameter_image_atomic_diagnostic_validates_with_glslangvalidator(
+def test_generated_glsl_parameter_image_atomic_specialization_validates_with_glslangvalidator(
     tmp_path,
 ):
     glslang = _require_tool("glslangValidator")
@@ -167,6 +167,8 @@ def test_generated_glsl_parameter_image_atomic_diagnostic_validates_with_glslang
         "compute",
     )
     assert "imageAtomicAdd(image, pixel, value)" not in code
+    assert "imageAtomicAdd(counters, pixel, value)" in code
+    assert "addCounter__glsl_image_counters(ivec2(0, 1), 2u)" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])

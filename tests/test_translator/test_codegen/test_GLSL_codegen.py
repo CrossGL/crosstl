@@ -12914,7 +12914,7 @@ def test_opengl_fixed_rg_image_array_shadowed_const_index_stays_dynamic():
     )
 
     assert "const int COUNT = 4;" in generated_code
-    assert generated_code.count("int COUNT = 0;") == 2
+    assert generated_code.count("int COUNT = 0;") == 3
     assert (
         "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in generated_code
     )
@@ -12955,7 +12955,7 @@ def test_opengl_transitive_rg_image_array_shadowed_const_index_stays_dynamic():
     )
 
     assert "const int COUNT = 4;" in generated_code
-    assert generated_code.count("int COUNT = 0;") == 2
+    assert generated_code.count("int COUNT = 0;") == 4
     assert (
         "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in generated_code
     )
@@ -13115,8 +13115,14 @@ def test_opengl_formatted_image_arrays_preserve_expression_sizes():
         "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0));"
         in generated_code
     )
-    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in generated_code
-    assert "vec2 b = touchPairs(rgPairs, ivec2(2, 3), vec2(0.5));" in generated_code
+    assert (
+        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
+        in generated_code
+    )
+    assert (
+        "vec2 b = touchPairs__glsl_images_rgPairs(ivec2(2, 3), vec2(0.5));"
+        in generated_code
+    )
     assert (
         "layout(r32ui, binding = 4) uniform uimage2D afterCounters;"
         not in generated_code
@@ -13231,8 +13237,14 @@ def test_opengl_formatted_image_arrays_infer_named_constant_size():
         "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0));"
         in generated_code
     )
-    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in generated_code
-    assert "vec2 b = touchPairs(rgPairs, ivec2(2, 3), vec2(0.5));" in generated_code
+    assert (
+        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
+        in generated_code
+    )
+    assert (
+        "vec2 b = touchPairs__glsl_images_rgPairs(ivec2(2, 3), vec2(0.5));"
+        in generated_code
+    )
     assert "layout(rg16f, binding = 3) uniform image2D rgPairs[];" not in generated_code
     assert (
         "layout(r32ui, binding = 2) uniform uimage2D afterCounters;"
@@ -13280,7 +13292,10 @@ def test_opengl_formatted_image_arrays_ignore_shadowed_local_constant():
     assert "int LAYER = 0;" in generated_code
     assert "uint oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
-    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in generated_code
+    assert (
+        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
+        in generated_code
+    )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[4];" not in generated_code
     )
@@ -13359,8 +13374,14 @@ def test_opengl_formatted_image_arrays_infer_transitive_helper_size():
     )
     assert "return touchCountersDeep(images, pixel, value);" in generated_code
     assert "return touchPairsDeep(images, pixel, value);" in generated_code
-    assert "uint a = touchCountersMid(counters, ivec2(1, 2), 3);" in generated_code
-    assert "vec2 b = touchPairsMid(rgPairs, ivec2(2, 3), vec2(0.5));" in generated_code
+    assert (
+        "uint a = touchCountersMid__glsl_images_counters(ivec2(1, 2), 3);"
+        in generated_code
+    )
+    assert (
+        "vec2 b = touchPairsMid__glsl_images_rgPairs(ivec2(2, 3), vec2(0.5));"
+        in generated_code
+    )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[];" not in generated_code
     )
@@ -13422,7 +13443,10 @@ def test_opengl_formatted_image_arrays_ignore_unsupported_indices():
     )
     assert "uint oldValue = imageLoad(images[layer], pixel).x;" in dynamic_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in dynamic_code
-    assert "uint a = touchCounters(counters, 0, ivec2(1, 2), 3);" in dynamic_code
+    assert (
+        "uint a = touchCounters__glsl_images_counters(0, ivec2(1, 2), 3);"
+        in dynamic_code
+    )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[2];" not in dynamic_code
     )
@@ -13439,7 +13463,10 @@ def test_opengl_formatted_image_arrays_ignore_unsupported_indices():
     )
     assert "uint oldValue = imageLoad(images[(-1)], pixel).x;" in negative_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in negative_code
-    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in negative_code
+    assert (
+        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
+        in negative_code
+    )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[0];" not in negative_code
     )
@@ -13487,7 +13514,10 @@ def test_opengl_formatted_image_arrays_ignore_function_call_indices():
     )
     assert "uint oldValue = imageLoad(images[getLayer()], pixel).x;" in generated_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
-    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in generated_code
+    assert (
+        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
+        in generated_code
+    )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[1];" not in generated_code
     )
@@ -13534,7 +13564,10 @@ def test_opengl_formatted_image_arrays_infer_local_constant_alias_size():
     assert "const int LOCAL = (GLOBAL + 1);" in generated_code
     assert "uint oldValue = imageLoad(images[LOCAL], pixel).x;" in generated_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
-    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in generated_code
+    assert (
+        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
+        in generated_code
+    )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[];" not in generated_code
     )
@@ -14302,13 +14335,13 @@ def test_opengl_storage_image_levels_and_lod_queries_emit_diagnostics():
         generated_code.count(
             "/* unsupported GLSL texture query: textureQueryLod on image2D */ vec2(0.0)"
         )
-        == 2
+        == 3
     )
     assert (
         generated_code.count(
             "/* unsupported GLSL texture query: textureQueryLod on image3D */ vec2(0.0)"
         )
-        == 2
+        == 3
     )
     assert "textureQueryLevels(" not in generated_code
     assert "textureQueryLod(" not in generated_code
@@ -14610,7 +14643,7 @@ def test_opengl_storage_image_samples_queries_emit_diagnostics():
     )
     assert "layout(r32ui, binding = 3) uniform uimage2D uintImage;" in generated_code
     assert "layout(r32i, binding = 4) uniform iimage3D intVolume;" in generated_code
-    assert generated_code.count(diagnostic) == 13
+    assert generated_code.count(diagnostic) == 19
     assert "imageSamples(" not in generated_code
     assert "textureSamples(" not in generated_code
     assert "input." not in generated_code
@@ -14685,7 +14718,7 @@ def test_opengl_storage_image_sampling_and_fetch_emit_diagnostics():
         "layout(rgba32f, binding = 2) uniform image2DArray layerImage;"
         in generated_code
     )
-    assert generated_code.count(diagnostic) == 20
+    assert generated_code.count(diagnostic) == 35
     for operation in {
         "texture",
         "textureLod",
@@ -14771,8 +14804,8 @@ def test_opengl_storage_image_compare_calls_emit_diagnostics():
         "layout(rgba32f, binding = 2) uniform image2DArray layerImage;"
         in generated_code
     )
-    assert generated_code.count(comparison_diagnostic) == 14
-    assert generated_code.count(gather_diagnostic) == 4
+    assert generated_code.count(comparison_diagnostic) == 26
+    assert generated_code.count(gather_diagnostic) == 6
     assert "textureCompare(" not in generated_code
     assert "textureGatherCompare(" not in generated_code
     assert "textureGatherCompareOffset(" not in generated_code
@@ -17384,8 +17417,8 @@ def test_glsl_storage_image_access_allows_compatible_helper_calls():
     ast = crosstl.translator.parse(shader)
     generated_code = GLSLCodeGen().generate(ast)
 
-    assert "float value = readPixel(source, ivec2(0, 0));" in generated_code
-    assert "writePixel(target, ivec2(0, 0), vec4(value));" in generated_code
+    assert "float value = readPixel__glsl_image_source(ivec2(0, 0));" in generated_code
+    assert "writePixel__glsl_image_target(ivec2(0, 0), vec4(value));" in generated_code
 
 
 @pytest.mark.parametrize(
