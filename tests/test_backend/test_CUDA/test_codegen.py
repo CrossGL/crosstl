@@ -2037,7 +2037,9 @@ class TestCudaCodeGen:
 
         result = translate(str(source_path), backend="rust", format_output=False)
 
-        assert "pub fn kernel(data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
+        assert (
+            "pub fn kernel(mut data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
+        )
         assert "data[indices[0] as usize] = value;" in result
 
     def test_qualified_declaration_conversion(self):
