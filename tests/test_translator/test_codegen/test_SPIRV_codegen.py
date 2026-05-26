@@ -2509,6 +2509,80 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFunctionCall" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_integer_image_atomics_emit_spirv_atomic_operations(self):
+        source_code = """
+        shader ImageAtomics {
+            uimage2D counters @r32ui;
+            iimage2D signedCounters @r32i;
+
+            uint touchUnsigned(
+                uimage2D image @r32ui,
+                ivec2 pixel,
+                uint value,
+                uint replacement
+            ) {
+                uint added = imageAtomicAdd(image, pixel, value);
+                uint minValue = imageAtomicMin(image, pixel, value);
+                uint maxValue = imageAtomicMax(image, pixel, value);
+                uint andValue = imageAtomicAnd(image, pixel, value);
+                uint orValue = imageAtomicOr(image, pixel, value);
+                uint xorValue = imageAtomicXor(image, pixel, value);
+                uint exchanged = imageAtomicExchange(image, pixel, replacement);
+                uint swapped = imageAtomicCompSwap(image, pixel, exchanged, value);
+                return added
+                    + minValue
+                    + maxValue
+                    + andValue
+                    + orValue
+                    + xorValue
+                    + exchanged
+                    + swapped;
+            }
+
+            int touchSigned(
+                iimage2D image @r32i,
+                ivec2 pixel,
+                int value,
+                int replacement
+            ) {
+                int minValue = imageAtomicMin(image, pixel, value);
+                int maxValue = imageAtomicMax(image, pixel, value);
+                int swapped = imageAtomicCompSwap(image, pixel, minValue, replacement);
+                return minValue + maxValue + swapped;
+            }
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(1, 2);
+                    uint a = touchUnsigned(counters, pixel, 3u, 4u);
+                    int b = touchSigned(signedCounters, pixel, -3, 4);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpTypePointer Image" in spv_code
+        assert spv_code.count("OpImageTexelPointer") == 11
+        for operation in (
+            "OpAtomicIAdd",
+            "OpAtomicUMin",
+            "OpAtomicUMax",
+            "OpAtomicAnd",
+            "OpAtomicOr",
+            "OpAtomicXor",
+            "OpAtomicExchange",
+            "OpAtomicCompareExchange",
+            "OpAtomicSMin",
+            "OpAtomicSMax",
+        ):
+            assert operation in spv_code
+        assert "imageAtomic" not in spv_code
+        assert "WARNING" not in spv_code
+
     def test_vector_member_access_extracts_spirv_component(self):
         source_code = """
         shader VectorMemberAccess {

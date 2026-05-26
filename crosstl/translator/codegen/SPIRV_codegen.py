@@ -111,6 +111,7 @@ class VulkanSPIRVCodeGen:
         self.function_signatures = {}
         self.function_resource_array_params = {}
         self.function_resource_array_type_hints = {}
+        self.function_storage_image_pointer_params = {}
         self.function_execution_models = {}
         self.current_execution_model = None
         self.current_stage = None
@@ -1294,6 +1295,14 @@ class VulkanSPIRVCodeGen:
         return {
             "imageLoad",
             "imageStore",
+            "imageAtomicAdd",
+            "imageAtomicMin",
+            "imageAtomicMax",
+            "imageAtomicAnd",
+            "imageAtomicOr",
+            "imageAtomicXor",
+            "imageAtomicExchange",
+            "imageAtomicCompSwap",
             "texture",
             "texture2D",
             "textureCube",
@@ -1316,6 +1325,18 @@ class VulkanSPIRVCodeGen:
             "imageSamples",
             "textureQueryLevels",
             "textureQueryLod",
+        }
+
+    def image_atomic_function_names(self):
+        return {
+            "imageAtomicAdd",
+            "imageAtomicMin",
+            "imageAtomicMax",
+            "imageAtomicAnd",
+            "imageAtomicOr",
+            "imageAtomicXor",
+            "imageAtomicExchange",
+            "imageAtomicCompSwap",
         }
 
     def resource_query_size_result_type(self, metadata) -> SpirvId:
@@ -1559,9 +1580,115 @@ class VulkanSPIRVCodeGen:
         lod_id = self.register_constant(0.0, self.register_primitive_type("float"))
         return f"Lod %{lod_id.id}"
 
+    def call_image_atomic_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        if len(args) < 3:
+            self.emit(
+                f"; WARNING: {function_name} requires image, coordinate, "
+                "and value operands"
+            )
+            return self.register_constant(0, self.register_primitive_type("uint"))
+
+        image_pointer = args[0]
+        coord_id = args[1]
+        metadata = self.resource_metadata_for_pointer(image_pointer)
+        if not metadata or metadata.get("kind") != "storage_image":
+            self.emit(
+                f"; WARNING: {function_name} requires a storage image pointer operand"
+            )
+            return self.register_constant(0, self.register_primitive_type("uint"))
+
+        component_type_name = metadata.get("component_type", "uint")
+        if component_type_name not in {"int", "uint"}:
+            self.emit(f"; WARNING: {function_name} requires an integer storage image")
+            return self.register_constant(0, self.register_primitive_type("uint"))
+
+        if int(metadata.get("component_count", 1)) != 1:
+            self.emit(
+                f"; WARNING: {function_name} requires a scalar storage image format"
+            )
+            return self.register_constant(0, self.register_primitive_type("uint"))
+
+        value_arg_index = 2
+        if metadata.get("multisampled"):
+            if len(args) < 4:
+                self.emit(f"; WARNING: {function_name} requires a sample operand")
+                return self.register_constant(
+                    0, self.register_primitive_type(component_type_name)
+                )
+            sample_id = args[2]
+            value_arg_index = 3
+        else:
+            sample_id = self.register_constant(0, self.register_primitive_type("uint"))
+
+        if function_name == "imageAtomicCompSwap":
+            if len(args) <= value_arg_index + 1:
+                self.emit(
+                    f"; WARNING: {function_name} requires compare and value operands"
+                )
+                return self.register_constant(
+                    0, self.register_primitive_type(component_type_name)
+                )
+            comparator_id = args[value_arg_index]
+            value_id = args[value_arg_index + 1]
+        else:
+            value_id = args[value_arg_index]
+            comparator_id = None
+
+        result_type = self.register_primitive_type(component_type_name)
+        value_id = self.convert_value_to_type(value_id, result_type)
+        if comparator_id is not None:
+            comparator_id = self.convert_value_to_type(comparator_id, result_type)
+
+        pointer_type = self.register_pointer_type(result_type, "Image")
+        texel_pointer_id = self.get_id()
+        self.emit(
+            f"%{texel_pointer_id} = OpImageTexelPointer %{pointer_type.id} "
+            f"%{image_pointer.id} %{coord_id.id} %{sample_id.id}"
+        )
+        self.variable_value_types[texel_pointer_id] = result_type
+
+        atomic_operation = {
+            "imageAtomicAdd": "OpAtomicIAdd",
+            "imageAtomicAnd": "OpAtomicAnd",
+            "imageAtomicOr": "OpAtomicOr",
+            "imageAtomicXor": "OpAtomicXor",
+            "imageAtomicExchange": "OpAtomicExchange",
+        }.get(function_name)
+        if atomic_operation is None and function_name == "imageAtomicMin":
+            atomic_operation = (
+                "OpAtomicSMin" if component_type_name == "int" else "OpAtomicUMin"
+            )
+        if atomic_operation is None and function_name == "imageAtomicMax":
+            atomic_operation = (
+                "OpAtomicSMax" if component_type_name == "int" else "OpAtomicUMax"
+            )
+
+        scope = self.spirv_scope_constant("Device")
+        semantics = self.spirv_memory_semantics_constant()
+        id_value = self.get_id()
+        if function_name == "imageAtomicCompSwap":
+            self.emit(
+                f"%{id_value} = OpAtomicCompareExchange %{result_type.id} "
+                f"%{texel_pointer_id} %{scope.id} %{semantics.id} %{semantics.id} "
+                f"%{value_id.id} %{comparator_id.id}"
+            )
+        else:
+            self.emit(
+                f"%{id_value} = {atomic_operation} %{result_type.id} "
+                f"%{texel_pointer_id} %{scope.id} %{semantics.id} %{value_id.id}"
+            )
+
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
+
     def call_resource_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
+        if function_name in self.image_atomic_function_names():
+            return self.call_image_atomic_function(function_name, args)
+
         if function_name == "imageLoad":
             if len(args) < 2:
                 self.emit("; WARNING: imageLoad requires image and coordinate operands")
@@ -2084,6 +2211,11 @@ class VulkanSPIRVCodeGen:
             offset_constant = self.literal_integer_vector_constant(arg)
             if offset_constant is not None:
                 return offset_constant
+
+        if function_name in self.image_atomic_function_names() and arg_index == 0:
+            pointer_arg = self.variable_pointer_from_expression(arg)
+            if pointer_arg is not None:
+                return pointer_arg
 
         resource_array_params = self.function_resource_array_params.get(
             function_name, set()
@@ -3174,6 +3306,15 @@ class VulkanSPIRVCodeGen:
 
         return self.resource_type_metadata.get(value_id.id)
 
+    def resource_metadata_for_pointer(self, pointer_id: SpirvId):
+        pointee_type = self.variable_value_types.get(pointer_id.id)
+        if pointee_type is not None:
+            metadata = self.resource_type_metadata.get(pointee_type.id)
+            if metadata is not None:
+                return metadata
+
+        return self.resource_metadata_for_value(pointer_id)
+
     def attribute_value_to_string(self, value):
         if value is None:
             return None
@@ -3433,6 +3574,9 @@ class VulkanSPIRVCodeGen:
         param_type_hints = self.function_resource_array_type_hints.get(
             function_node.name, {}
         )
+        storage_image_pointer_params = self.function_storage_image_pointer_params.get(
+            function_node.name, set()
+        )
         for param in getattr(
             function_node, "parameters", getattr(function_node, "params", [])
         ):
@@ -3450,7 +3594,14 @@ class VulkanSPIRVCodeGen:
                 param_type = self.map_crossgl_type("float")
 
             param_value_types.append(param_type)
-            if self.is_resource_array_type(param_type):
+            param_resource_metadata = self.resource_type_metadata.get(param_type.id)
+            is_storage_image_param = (
+                param_resource_metadata is not None
+                and param_resource_metadata.get("kind") == "storage_image"
+            )
+            if self.is_resource_array_type(param_type) or (
+                is_storage_image_param and param_name in storage_image_pointer_params
+            ):
                 resource_array_param_indices.add(len(param_types))
                 param_type = self.register_pointer_type(param_type, "UniformConstant")
 
@@ -4206,6 +4357,72 @@ class VulkanSPIRVCodeGen:
             func_name: param_hints
             for func_name, param_hints in hints.items()
             if param_hints
+        }
+
+    def collect_storage_image_pointer_params(self, ast):
+        functions = {
+            getattr(func, "name", None): func
+            for func in self.collect_ast_functions(ast)
+        }
+        functions = {name: func for name, func in functions.items() if name}
+
+        param_names_by_function = {}
+        storage_image_params = {}
+        for function_name, func in functions.items():
+            param_names = []
+            storage_params = set()
+            for param in getattr(func, "parameters", getattr(func, "params", [])):
+                param_name = getattr(param, "name", None)
+                param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+                param_names.append(param_name)
+                if not param_name or param_type is None:
+                    continue
+                resource_info = self.resource_type_info(
+                    self.type_name_from_value(param_type)
+                )
+                if resource_info and resource_info.get("kind") == "storage_image":
+                    storage_params.add(param_name)
+            param_names_by_function[function_name] = param_names
+            storage_image_params[function_name] = storage_params
+
+        pointer_params = {function_name: set() for function_name in functions}
+        changed = True
+        while changed:
+            changed = False
+            for function_name, func in functions.items():
+                for call in self.walk_ast_nodes(getattr(func, "body", [])):
+                    if not isinstance(call, FunctionCallNode):
+                        continue
+
+                    call_name = self.function_call_name(call)
+                    args = getattr(call, "arguments", getattr(call, "args", []))
+                    if not args:
+                        continue
+
+                    arg_name = self.expression_name(args[0])
+                    if arg_name not in storage_image_params.get(function_name, set()):
+                        continue
+
+                    needs_pointer = call_name in self.image_atomic_function_names()
+                    callee_pointer_params = pointer_params.get(call_name, set())
+                    if callee_pointer_params:
+                        for index, param_name in enumerate(
+                            param_names_by_function.get(call_name, [])
+                        ):
+                            if param_name in callee_pointer_params and index < len(
+                                args
+                            ):
+                                needs_pointer = True
+                                break
+
+                    if needs_pointer and arg_name not in pointer_params[function_name]:
+                        pointer_params[function_name].add(arg_name)
+                        changed = True
+
+        return {
+            function_name: params
+            for function_name, params in pointer_params.items()
+            if params
         }
 
     def split_outer_array_type(self, type_name: str):
@@ -6329,6 +6546,9 @@ class VulkanSPIRVCodeGen:
 
         self.function_resource_array_type_hints = (
             self.collect_resource_array_parameter_type_hints(ast)
+        )
+        self.function_storage_image_pointer_params = (
+            self.collect_storage_image_pointer_params(ast)
         )
         self.function_execution_models = self.collect_function_execution_models(ast)
         self.reserve_explicit_resource_bindings(ast)
