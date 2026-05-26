@@ -3611,6 +3611,16 @@ class MetalCodeGen:
                 f"{self.current_metal_mesh_grid_properties_parameter}"
                 f".set_threadgroups_per_grid(uint3({grid}))"
             )
+        if (
+            expr.operation == "DispatchMesh"
+            and self.current_metal_mesh_grid_properties_parameter
+            and len(expr.arguments) == 1
+        ):
+            grid = self.generate_expression(expr.arguments[0])
+            return (
+                f"{self.current_metal_mesh_grid_properties_parameter}"
+                f".set_threadgroups_per_grid({grid})"
+            )
         return None
 
     def generate_buffer_call(self, func_name, args):
@@ -4517,17 +4527,22 @@ class MetalCodeGen:
     ):
         if shader_type not in {"object", "task", "amplification"}:
             return None
-        if not self.function_contains_mesh_op(func, "DispatchMesh", argument_count=3):
+        if not self.function_contains_mesh_op(
+            func, "DispatchMesh", argument_counts={1, 3}
+        ):
             return None
         return self.unique_metal_generated_name(
             "_crossglMeshGrid", reserved_parameter_names
         )
 
-    def function_contains_mesh_op(self, func, operation, argument_count=None):
+    def function_contains_mesh_op(self, func, operation, argument_counts=None):
         for node in self.iter_ast_nodes(getattr(func, "body", None)):
             if not isinstance(node, MeshOpNode) or node.operation != operation:
                 continue
-            if argument_count is not None and len(node.arguments) != argument_count:
+            if (
+                argument_counts is not None
+                and len(node.arguments) not in argument_counts
+            ):
                 continue
             return True
         return False

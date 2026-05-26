@@ -2884,6 +2884,23 @@ def test_metal_object_stage_dispatch_mesh_grid_name_avoids_parameter_collision()
     assert "_crossglMeshGrid_1.set_threadgroups_per_grid(uint3(2, 3, 4));" in generated
 
 
+def test_metal_object_stage_dispatch_mesh_accepts_vector_grid():
+    code = """
+    shader meshpipe {
+        object {
+            void main() @max_total_threads_per_threadgroup(32) {
+                DispatchMesh(uvec3(2, 3, 4));
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "object")
+
+    assert "mesh_grid_properties _crossglMeshGrid" in generated
+    assert "_crossglMeshGrid.set_threadgroups_per_grid(uint3(2, 3, 4));" in generated
+    assert "DispatchMesh" not in generated
+
+
 def test_metal_rejects_unsupported_geometry_and_tessellation_stages():
     geometry_code = """
     shader geometry_stage {
