@@ -172,6 +172,14 @@ class RustCodeGen:
         # Function mapping for common shader functions
         self.function_map = {
             "texture": "sample",
+            "textureLod": "sample_lod",
+            "textureGrad": "sample_grad",
+            "textureOffset": "sample_offset",
+            "texelFetch": "texel_fetch",
+            "texelFetchOffset": "texel_fetch_offset",
+            "textureQueryLevels": "texture_query_levels",
+            "textureQueryLod": "texture_query_lod",
+            "textureSamples": "texture_samples",
             "normalize": "normalize",
             "dot": "dot",
             "cross": "cross",
@@ -3802,7 +3810,7 @@ class RustCodeGen:
                 if bool_mix is not None:
                     return bool_mix
 
-            func_name = self.function_map.get(func_name, func_name)
+            func_name = self.mapped_function_name(func_name, len(args))
             if func_name == "saturate" and len(args) == 1:
                 arg = self.generate_expression(args[0])
                 return f"clamp({arg}, 0.0, 1.0)"
@@ -3868,6 +3876,13 @@ class RustCodeGen:
 
         self.required_generic_math_traits.add("CglSqrt")
         return f"CglSqrt::cgl_sqrt({self.generate_expression(args[0])})"
+
+    def mapped_function_name(self, func_name, arg_count=None):
+        if not isinstance(func_name, str):
+            return func_name
+        if func_name == "textureSize":
+            return "texture_size" if arg_count == 1 else "texture_size_lod"
+        return self.function_map.get(func_name, func_name)
 
     def generate_qualified_generic_trait_method_call(self, func_expr, args):
         if not isinstance(func_expr, MemberAccessNode):
@@ -5091,11 +5106,27 @@ class RustCodeGen:
         if not isinstance(func_name, str):
             return None
 
-        mapped_name = self.function_map.get(func_name, func_name)
+        mapped_name = self.mapped_function_name(func_name, len(arguments))
         arg_types = [self.expression_result_type(arg) for arg in arguments]
 
-        if func_name == "texture" or mapped_name == "sample":
+        if mapped_name in {
+            "sample",
+            "sample_lod",
+            "sample_grad",
+            "sample_offset",
+            "texel_fetch",
+            "texel_fetch_offset",
+        }:
             return "vec4"
+
+        if mapped_name in {"texture_size", "texture_size_lod"} and arg_types:
+            return self.texture_size_result_type(arg_types[0])
+
+        if mapped_name in {"texture_query_levels", "texture_samples"}:
+            return "int"
+
+        if mapped_name == "texture_query_lod":
+            return "vec2"
 
         if mapped_name in {"normalize", "reflect", "refract"} and arg_types:
             return arg_types[0]
@@ -5139,6 +5170,30 @@ class RustCodeGen:
             return arg_types[1]
 
         return None
+
+    def texture_size_result_type(self, texture_type):
+        texture_name = str(texture_type or "")
+        if texture_name in {"sampler1D", "Texture1D<f32>"}:
+            return "int"
+        if texture_name in {
+            "sampler1DArray",
+            "sampler2D",
+            "samplerCube",
+            "Texture1DArray<f32>",
+            "Texture2D<f32>",
+            "TextureCube<f32>",
+        }:
+            return "ivec2"
+        if texture_name in {
+            "sampler2DArray",
+            "sampler3D",
+            "samplerCubeArray",
+            "Texture2DArray<f32>",
+            "Texture3D<f32>",
+            "TextureCubeArray<f32>",
+        }:
+            return "ivec3"
+        return "ivec2"
 
     def vector_or_scalar_component_type(self, type_name):
         vector_info = self.vector_type_info(type_name)

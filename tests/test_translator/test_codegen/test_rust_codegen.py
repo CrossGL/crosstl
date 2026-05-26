@@ -363,6 +363,43 @@ mod gpu {
     {
         Vec4::default()
     }
+
+    pub fn sample_lod<Texture, Coord, Lod>(
+        _texture: Texture,
+        _coord: Coord,
+        _lod: Lod,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn sample_grad<Texture, Coord, Grad>(
+        _texture: Texture,
+        _coord: Coord,
+        _ddx: Grad,
+        _ddy: Grad,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn sample_offset<Texture, Coord, Offset>(
+        _texture: Texture,
+        _coord: Coord,
+        _offset: Offset,
+    ) -> Vec4<f32>
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
 }
 """
 
@@ -1527,6 +1564,42 @@ def test_sampler_array_and_cube_families_map_to_rust_textures_and_compile(tmp_pa
     assert "let layer: Vec4<f32> = sample(*ARRAY_MAP, uvw);" in generated_code
     assert "let env: Vec4<f32> = sample(*ENV_MAP, dir);" in generated_code
     assert "let probe: Vec4<f32> = sample(*PROBE_MAP, probeCoord);" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_texture_lod_grad_offset_calls_map_to_rust_helpers_and_compile(tmp_path):
+    code = """
+    shader TextureAdvancedSamplingProbe {
+        sampler2D mainTexture;
+
+        fragment {
+            vec4 main(vec2 uv, vec2 ddx, vec2 ddy, ivec2 offset) @ gl_FragColor {
+                let lodColor = textureLod(mainTexture, uv, 2.0);
+                let gradColor = textureGrad(mainTexture, uv, ddx, ddy);
+                let offsetColor = textureOffset(mainTexture, uv, offset);
+                return lodColor + gradColor + offsetColor;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "let lodColor: Vec4<f32> = sample_lod(*MAIN_TEXTURE, uv, 2.0);"
+        in generated_code
+    )
+    assert (
+        "let gradColor: Vec4<f32> = sample_grad(*MAIN_TEXTURE, uv, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "let offsetColor: Vec4<f32> = sample_offset(*MAIN_TEXTURE, uv, offset);"
+        in generated_code
+    )
+    assert "textureLod" not in generated_code
+    assert "textureGrad" not in generated_code
+    assert "textureOffset" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
