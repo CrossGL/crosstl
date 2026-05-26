@@ -4,6 +4,9 @@ import subprocess
 import pytest
 
 import crosstl.translator
+from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
+from crosstl.backend.GLSL.OpenglParser import GLSLParser
+from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
@@ -64,8 +67,45 @@ shader GLSLParameterImageAtomicValidator {
 """
 
 
+MIXED_GLSL_PREPROCESSOR_COMPUTE_SHADER = """
+#version 300 es
+#extension GL_ARB_separate_shader_objects : enable
+precision highp float;
+
+void main() { }
+"""
+
+
+MIXED_GLSL_SSBO_UINT_ATOMICS_COMPUTE_SHADER = """
+#version 450 core
+layout(std430, binding = 17) buffer AtomicBlock {
+    uint counter;
+    uint bins[4];
+} atomicBlock;
+
+void main() {
+    uint oldCounter = atomicAdd(atomicBlock.counter, 1u);
+    uint oldBin = atomicExchange(atomicBlock.bins[2], oldCounter);
+    uint minBin = atomicMin(atomicBlock.bins[0], 2u);
+    uint maxBin = atomicMax(atomicBlock.bins[0], minBin);
+    uint andBin = atomicAnd(atomicBlock.bins[1], 15u);
+    uint orBin = atomicOr(atomicBlock.bins[1], andBin);
+    uint xorBin = atomicXor(atomicBlock.bins[2], orBin);
+    uint casBin = atomicCompSwap(atomicBlock.bins[3], xorBin, 7u);
+    atomicAdd(atomicBlock.bins[1], casBin);
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
+
+
+def _mixed_glsl_ast(source, shader_type):
+    tokens = GLSLLexer(source).tokenize()
+    glsl_ast = GLSLParser(tokens, shader_type).parse()
+    crossgl = GLSLToCrossGLConverter(shader_type=shader_type).generate(glsl_ast)
+    return crosstl.translator.parse(crossgl)
 
 
 def _require_tool(name):
@@ -183,6 +223,64 @@ def test_generated_metal_fragment_compiles_with_xcrun_metal(tmp_path):
         MetalCodeGen().generate_stage(_fragment_ast(), "fragment"),
         encoding="utf-8",
     )
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_preprocessor_metal_output_compiles_with_xcrun_metal(tmp_path):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "mixed_glsl_preprocessor.metal"
+    output_path = tmp_path / "mixed_glsl_preprocessor.air"
+
+    code = MetalCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_PREPROCESSOR_COMPUTE_SHADER, "compute")
+    )
+    assert "#version" not in code
+    assert "#extension" not in code
+    assert "precision highp float" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_ssbo_uint_atomics_metal_output_compiles_with_xcrun_metal(
+    tmp_path,
+):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "mixed_glsl_ssbo_uint_atomics.metal"
+    output_path = tmp_path / "mixed_glsl_ssbo_uint_atomics.air"
+
+    code = MetalCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_SSBO_UINT_ATOMICS_COMPUTE_SHADER, "compute")
+    )
+    assert "#version" not in code
+    assert "atomic_fetch_add_explicit" in code
+    assert "__crossgl_buffer_atomic_compare_exchange_uint" in code
+    shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(
         [

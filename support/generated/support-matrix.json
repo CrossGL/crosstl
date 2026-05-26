@@ -3231,7 +3231,8 @@
           "evidence": [
             "tests/test_backend/test_metal/test_preprocessor.py::def test_",
             "tests/test_backend/test_metal/test_codegen.py::def test_codegen_expands_preprocessor_define",
-            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets"
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_preprocessor_metal_output_compiles_with_xcrun_metal"
           ],
           "notes": "",
           "status": "supported"
@@ -4150,7 +4151,8 @@
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_only_blocks_lower_to_explicit_offsets",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_member_arrays_accept_global_const_size",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_metal_runtime_matrix_arrays_use_column_offsets",
-            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic"
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_uint_atomics_metal_output_compiles_with_xcrun_metal"
           ],
           "notes": "Covers std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including vectors, matrices, fixed arrays, uint scalar atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
           "status": "partial"
