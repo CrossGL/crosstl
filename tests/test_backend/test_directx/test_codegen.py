@@ -1164,6 +1164,38 @@ def test_codegen_interlocked_compare_exchange_mapping():
     assert "atomicCompareExchange(buf" not in regenerated_hlsl
 
 
+def test_codegen_interlocked_typed_buffer_resource_array_roundtrip():
+    code = textwrap.dedent("""
+        RWBuffer<uint> counterBuffers[2] : register(u4);
+        RWStructuredBuffer<int> signedValues : register(u6);
+
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 dtid : SV_DispatchThreadID) {
+            uint original;
+            InterlockedAdd(counterBuffers[1][dtid.x], 1u, original);
+            int oldSigned;
+            InterlockedMax(signedValues[dtid.x], -1, oldSigned);
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    assert "RWBuffer<uint> counterBuffers[2];" in output
+    assert "RWStructuredBuffer<int> signedValues;" in output
+    assert "original = atomicAdd(counterBuffers[1][dtid.x], 1u);" in output
+    assert "oldSigned = atomicMax(signedValues[dtid.x], -1);" in output
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
+    assert "RWBuffer<uint> counterBuffers[2] : register(u4);" in regenerated_hlsl
+    assert "RWStructuredBuffer<int> signedValues : register(u6);" in regenerated_hlsl
+    assert (
+        "InterlockedAdd(counterBuffers[1][dtid.x], 1u, original);" in regenerated_hlsl
+    )
+    assert "InterlockedMax(signedValues[dtid.x], -1, oldSigned);" in regenerated_hlsl
+    assert "atomicAdd(counterBuffers" not in regenerated_hlsl
+    assert "atomicMax(signedValues" not in regenerated_hlsl
+
+
 def test_codegen_invalid_hlsl_raises():
     code = "float4 main() : SV_Target0 { float x = 1.0 return float4(x, 0, 0, 1); }"
     with pytest.raises(SyntaxError):
