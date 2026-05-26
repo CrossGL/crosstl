@@ -4620,6 +4620,28 @@ def test_rayquery_method_parses_to_node():
     assert isinstance(var_decl.initial_value, RayQueryOpNode)
 
 
+def test_trace_ray_inline_method_parses_to_rayquery_node():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int ignored = rayQuery.TraceRayInline(accel, 0, 0xFF, ray);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    stage = ast.stages[ShaderStage.COMPUTE]
+    body = stage.entry_point.body.statements
+    var_decl = next(stmt for stmt in body if isinstance(stmt, VariableNode))
+
+    assert isinstance(var_decl.initial_value, RayQueryOpNode)
+    assert var_decl.initial_value.operation == "TraceRayInline"
+    assert var_decl.initial_value.query_expr.name == "rayQuery"
+    assert len(var_decl.initial_value.arguments) == 4
+
+
 def test_unsigned_integer_literals_parse_as_uint_nodes():
     code = """
     shader main {

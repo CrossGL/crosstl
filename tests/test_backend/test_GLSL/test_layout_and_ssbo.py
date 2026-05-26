@@ -783,6 +783,60 @@ def test_parse_ray_query_type_and_functions_roundtrip():
     assert ".CommittedType(" not in glsl
 
 
+def test_parse_ray_query_transform_matrices_roundtrip_with_glsl_orientation():
+    code = """
+    #version 460 core
+    #extension GL_EXT_ray_query : require
+
+    void main() {
+        rayQueryEXT rq;
+        bool active = rayQueryProceedEXT(rq);
+        mat4x3 committedObjectToWorld =
+            rayQueryGetIntersectionObjectToWorldEXT(rq, true);
+        mat4x3 candidateObjectToWorld =
+            rayQueryGetIntersectionObjectToWorldEXT(rq, false);
+        mat4x3 committedWorldToObject =
+            rayQueryGetIntersectionWorldToObjectEXT(rq, true);
+        mat4x3 candidateWorldToObject =
+            rayQueryGetIntersectionWorldToObjectEXT(rq, false);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "bool active = rq.Proceed();" in crossgl
+    assert "mat3x4 committedObjectToWorld = rq.CommittedObjectToWorld();" in crossgl
+    assert "mat3x4 candidateObjectToWorld = rq.CandidateObjectToWorld();" in crossgl
+    assert "mat3x4 committedWorldToObject = rq.CommittedWorldToObject();" in crossgl
+    assert "mat3x4 candidateWorldToObject = rq.CandidateWorldToObject();" in crossgl
+    assert "mat4x3 committedObjectToWorld" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "#extension GL_EXT_ray_query : require" in glsl
+    assert "bool active_ = rayQueryProceedEXT(rq);" in glsl
+    assert (
+        "mat4x3 committedObjectToWorld = "
+        "rayQueryGetIntersectionObjectToWorldEXT(rq, true);" in glsl
+    )
+    assert (
+        "mat4x3 candidateObjectToWorld = "
+        "rayQueryGetIntersectionObjectToWorldEXT(rq, false);" in glsl
+    )
+    assert (
+        "mat4x3 committedWorldToObject = "
+        "rayQueryGetIntersectionWorldToObjectEXT(rq, true);" in glsl
+    )
+    assert (
+        "mat4x3 candidateWorldToObject = "
+        "rayQueryGetIntersectionWorldToObjectEXT(rq, false);" in glsl
+    )
+    assert (
+        "mat3x4 committedObjectToWorld = "
+        "rayQueryGetIntersectionObjectToWorldEXT" not in glsl
+    )
+
+
 def test_parse_compute_layout_roundtrips_as_stage_layout():
     code = """
     #version 450 core

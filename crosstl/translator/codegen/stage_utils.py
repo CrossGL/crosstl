@@ -1,55 +1,6 @@
 """Utilities for normalizing and matching shader stage qualifiers."""
 
-STAGE_QUALIFIER_NAMES = frozenset(
-    {
-        "vertex",
-        "fragment",
-        "compute",
-        "geometry",
-        "tessellation_control",
-        "tessellation_evaluation",
-        "mesh",
-        "task",
-        "amplification",
-        "object",
-        "ray_generation",
-        "ray_intersection",
-        "ray_any_hit",
-        "ray_closest_hit",
-        "ray_miss",
-        "ray_callable",
-        "intersection",
-        "anyhit",
-        "closesthit",
-        "miss",
-        "callable",
-    }
-)
-
-STAGE_NAME_ALIASES = {
-    "anyhit": "ray_any_hit",
-    "callable": "ray_callable",
-    "closesthit": "ray_closest_hit",
-    "domain": "tessellation_evaluation",
-    "hull": "tessellation_control",
-    "intersection": "ray_intersection",
-    "miss": "ray_miss",
-    "pixel": "fragment",
-    "pixel_shader": "fragment",
-    "raygen": "ray_generation",
-    "raygeneration": "ray_generation",
-    "tesscontrol": "tessellation_control",
-    "tesseval": "tessellation_evaluation",
-}
-
-
-def normalize_stage_name(stage):
-    """Normalize a shader stage enum or string into a lowercase name."""
-    if stage is None:
-        return None
-    name = str(stage).split(".")[-1].strip().lower()
-    name = name.replace("-", "_").replace(" ", "_")
-    return STAGE_NAME_ALIASES.get(name, name)
+from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 
 def stage_matches(target_stage, stage):

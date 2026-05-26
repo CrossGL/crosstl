@@ -151,6 +151,10 @@ class GLSLToCrossGLConverter:
             "CommittedWorldToObject",
         ),
     }
+    RAY_QUERY_TRANSFORM_FUNCTIONS = {
+        "rayQueryGetIntersectionObjectToWorldEXT",
+        "rayQueryGetIntersectionWorldToObjectEXT",
+    }
 
     def __init__(self, shader_type="vertex"):
         """Initialize GLSL-to-CrossGL mappings for a shader stage."""
@@ -1731,6 +1735,23 @@ class GLSLToCrossGLConverter:
         """
         return self.type_map.get(type_name, type_name)
 
+    def variable_declaration_type(self, node):
+        """Return CrossGL type text for a GLSL variable declaration."""
+        var_type = self.convert_type(node.vtype)
+        if var_type == "mat4x3" and self.is_ray_query_transform_call(
+            getattr(node, "value", None)
+        ):
+            return "mat3x4"
+        return var_type
+
+    def is_ray_query_transform_call(self, node):
+        if not isinstance(node, FunctionCallNode):
+            return False
+        name = node.name
+        if isinstance(name, VariableNode):
+            name = name.name
+        return name in self.RAY_QUERY_TRANSFORM_FUNCTIONS
+
     def generate_variable_declaration(self, node):
         """Generate CrossGL code for a variable declaration
 
@@ -1740,7 +1761,7 @@ class GLSLToCrossGLConverter:
         Returns:
             str: The CrossGL variable declaration
         """
-        var_type = self.convert_type(node.vtype)
+        var_type = self.variable_declaration_type(node)
         var_name = node.name
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", None) or []}
         prefix_parts = []

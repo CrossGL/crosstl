@@ -3241,11 +3241,13 @@ class VulkanSPIRVCodeGen:
 
         return self.convert_value_to_type(value, self.register_primitive_type("uint"))
 
-    def ray_query_float_operand(self, expr, role: str) -> Optional[SpirvId]:
+    def ray_query_float_operand(
+        self, expr, role: str, operation: str = "TraceRayInline"
+    ) -> Optional[SpirvId]:
         value = self.process_expression(expr)
         if value is None:
             self.emit(
-                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                f"; WARNING: SPIR-V RayQuery.{operation} {role} argument "
                 "could not be evaluated"
             )
             return None
@@ -3255,7 +3257,7 @@ class VulkanSPIRVCodeGen:
         )
         if self.vector_component_type_and_count(value_type.type.base_type) is not None:
             self.emit(
-                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                f"; WARNING: SPIR-V RayQuery.{operation} {role} argument "
                 "must be a 32-bit floating-point scalar"
             )
             return None
@@ -3263,7 +3265,7 @@ class VulkanSPIRVCodeGen:
         component_type = self.normalize_primitive_name(value_type.type.base_type)
         if component_type not in {"float", "double", "int", "uint"}:
             self.emit(
-                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                f"; WARNING: SPIR-V RayQuery.{operation} {role} argument "
                 f"must be a 32-bit floating-point scalar, got {component_type}"
             )
             return None
@@ -3377,9 +3379,15 @@ class VulkanSPIRVCodeGen:
 
     def ray_query_method_names(self):
         return {
+            "Abort",
+            "CommitNonOpaqueTriangleHit",
+            "CommitProceduralPrimitiveHit",
+            "ConfirmIntersection",
             "Proceed",
             "CandidateRayT",
             "CommittedRayT",
+            "GenerateIntersection",
+            "Terminate",
             "TraceRayInline",
         }
 
@@ -3407,6 +3415,12 @@ class VulkanSPIRVCodeGen:
 
         supported_argument_counts = {
             "Proceed": 0,
+            "Abort": 0,
+            "Terminate": 0,
+            "ConfirmIntersection": 0,
+            "CommitNonOpaqueTriangleHit": 0,
+            "GenerateIntersection": 1,
+            "CommitProceduralPrimitiveHit": 1,
             "CandidateRayT": 0,
             "CommittedRayT": 0,
             "TraceRayInline": {4, 7},
@@ -3437,6 +3451,25 @@ class VulkanSPIRVCodeGen:
 
         if operation == "TraceRayInline":
             return self.process_ray_query_initialize(query_pointer, arguments)
+
+        if operation in {"Abort", "Terminate"}:
+            self.emit(f"OpRayQueryTerminateKHR %{query_pointer.id}")
+            return None
+
+        if operation in {"ConfirmIntersection", "CommitNonOpaqueTriangleHit"}:
+            self.emit(f"OpRayQueryConfirmIntersectionKHR %{query_pointer.id}")
+            return None
+
+        if operation in {"GenerateIntersection", "CommitProceduralPrimitiveHit"}:
+            hit_t = self.ray_query_float_operand(
+                arguments[0], "hit distance", operation=operation
+            )
+            if hit_t is None:
+                return None
+            self.emit(
+                f"OpRayQueryGenerateIntersectionKHR %{query_pointer.id} %{hit_t.id}"
+            )
+            return None
 
         if operation == "Proceed":
             result_type = self.register_primitive_type("bool")

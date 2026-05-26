@@ -225,6 +225,7 @@ RAYQUERY_METHODS = {
     "CommittedObjectRayDirection",
     "CommittedRayT",
     "CandidateRayT",
+    "TraceRayInline",
 }
 
 SHADER_STAGE_TOKEN_TYPES = frozenset(

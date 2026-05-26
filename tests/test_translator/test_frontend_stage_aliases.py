@@ -51,6 +51,27 @@ def test_shader_stage_from_name_canonicalizes_backend_aliases(alias, expected_st
     assert shader_stage_from_name(alias) is expected_stage
 
 
+def test_shader_stage_attribute_aliases_validate_through_shared_normalizer():
+    ast = parse_code("""
+        shader AttributeAliases {
+            fragment {
+                [shader("pixel-shader")]
+                void main() { return; }
+            }
+
+            ray_generation {
+                void main() @shader(raygen) { return; }
+            }
+        }
+        """)
+
+    assert ast.stages[ShaderStage.FRAGMENT].entry_point.attributes[0].name == "shader"
+    assert (
+        ast.stages[ShaderStage.RAY_GENERATION].entry_point.attributes[0].name
+        == "shader"
+    )
+
+
 def test_backend_stage_alias_names_remain_available_as_type_names():
     ast = parse_code("""
         shader AliasTypeNames {

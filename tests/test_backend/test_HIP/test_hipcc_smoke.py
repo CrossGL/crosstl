@@ -498,6 +498,62 @@ def test_native_hip_graph_dependency_queries_parse_and_compile_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_graph_memory_nodes_parse_and_compile_if_available(
+    tmp_path,
+):
+    """Smoke native HIP graph memory allocation and free node APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void graph_memory_nodes() {
+        hipGraph_t graph;
+        hipGraphNode_t alloc_node;
+        hipGraphNode_t free_node;
+        hipMemAllocNodeParams alloc_params;
+        hipMemAllocNodeParams fetched_alloc_params;
+        void* device_ptr = NULL;
+
+        hipGraphCreate(&graph, 0);
+        hipGraphAddMemAllocNode(&alloc_node, graph, NULL, 0, &alloc_params);
+        hipGraphMemAllocNodeGetParams(alloc_node, &fetched_alloc_params);
+        hipGraphAddMemFreeNode(&free_node, graph, NULL, 0, device_ptr);
+        hipGraphMemFreeNodeGetParams(free_node, &device_ptr);
+        hipGraphDestroy(graph);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: graph_memory_nodes" in crossgl
+    assert "void graph_memory_nodes()" in crossgl
+    assert "var graph: hipGraph_t;" in crossgl
+    assert "var alloc_node: hipGraphNode_t;" in crossgl
+    assert "var free_node: hipGraphNode_t;" in crossgl
+    assert "var alloc_params: hipMemAllocNodeParams;" in crossgl
+    assert "var fetched_alloc_params: hipMemAllocNodeParams;" in crossgl
+    assert "var device_ptr: ptr<void> = NULL;" in crossgl
+    assert "// HIP graph create: output: graph, flags: 0" in crossgl
+    assert (
+        "// HIP graph add memory alloc node: output: alloc_node, "
+        "graph: graph, dependencies: NULL, count: 0, params: (&alloc_params)"
+    ) in crossgl
+    assert (
+        "// HIP graph memory alloc node get params: node: alloc_node, "
+        "params output: fetched_alloc_params"
+    ) in crossgl
+    assert (
+        "// HIP graph add memory free node: output: free_node, graph: graph, "
+        "dependencies: NULL, count: 0, pointer: device_ptr"
+    ) in crossgl
+    assert (
+        "// HIP graph memory free node get params: node: free_node, "
+        "pointer output: device_ptr"
+    ) in crossgl
+    assert "// HIP graph destroy: graph" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_device_error_runtime_parses_and_compiles_if_available(
     tmp_path,
 ):

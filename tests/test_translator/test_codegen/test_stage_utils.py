@@ -1,5 +1,6 @@
 from enum import Enum
 
+from crosstl.translator import stage_utils as shared_stage_utils
 from crosstl.translator.codegen.stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -116,6 +117,11 @@ def test_normalize_stage_name_accepts_strings_and_enums():
     assert normalize_stage_name("fragment") == "fragment"
     assert normalize_stage_name("ShaderStage.VERTEX") == "vertex"
     assert normalize_stage_name(DummyStage.FRAGMENT) == "fragment"
+
+
+def test_codegen_stage_utils_uses_shared_stage_normalizer():
+    assert normalize_stage_name is shared_stage_utils.normalize_stage_name
+    assert shared_stage_utils.shader_stage_from_name("pixel-shader").value == "fragment"
 
 
 def test_normalize_stage_name_canonicalizes_backend_aliases():

@@ -3183,6 +3183,78 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING: SPIR-V RayQuery.TraceRayInline" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_ray_query_commit_and_abort_operations_emit_khr_instructions(
+        self, tmp_path
+    ):
+        source_code = """
+        shader RayQueryCommitAndAbort {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    rq.Abort();
+                    rq.Terminate();
+                    rq.GenerateIntersection(1.0);
+                    rq.CommitProceduralPrimitiveHit(2.0);
+                    rq.ConfirmIntersection();
+                    rq.CommitNonOpaqueTriangleHit();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert spv_code.count("OpRayQueryTerminateKHR") == 2
+        assert spv_code.count("OpRayQueryGenerateIntersectionKHR") == 2
+        assert spv_code.count("OpRayQueryConfirmIntersectionKHR") == 2
+        assert "RayQuery.Abort yet; using a default" not in spv_code
+        assert "RayQuery.GenerateIntersection yet; using a default" not in spv_code
+        assert (
+            "RayQuery.CommitProceduralPrimitiveHit yet; using a default" not in spv_code
+        )
+        assert (
+            "RayQuery.CommitNonOpaqueTriangleHit yet; using a default" not in spv_code
+        )
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_ray_query_commit_operations_reject_bad_arguments(self):
+        source_code = """
+        shader RayQueryCommitBadArgs {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    rq.Abort(1);
+                    rq.CommitNonOpaqueTriangleHit(1.0);
+                    rq.GenerateIntersection(vec3(0.0, 1.0, 2.0));
+                    rq.CommitProceduralPrimitiveHit(vec3(0.0, 1.0, 2.0));
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "WARNING: SPIR-V RayQuery.Abort requires 0 arguments" in spv_code
+        assert (
+            "WARNING: SPIR-V RayQuery.CommitNonOpaqueTriangleHit requires 0 "
+            "arguments"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V RayQuery.GenerateIntersection hit distance argument "
+            "must be a 32-bit floating-point scalar"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V RayQuery.CommitProceduralPrimitiveHit hit distance "
+            "argument must be a 32-bit floating-point scalar"
+        ) in spv_code
+        assert "OpRayQueryTerminateKHR" not in spv_code
+        assert "OpRayQueryGenerateIntersectionKHR" not in spv_code
+        assert "OpRayQueryConfirmIntersectionKHR" not in spv_code
+
     def test_ray_query_supported_operations_reject_unexpected_arguments(self):
         source_code = """
         shader RayQueryBadArgs {

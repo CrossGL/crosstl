@@ -4746,6 +4746,72 @@ def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics(
     assert "buffer_store(" not in generated_code
 
 
+def test_byte_address_interlocked_member_calls_respect_access_qualifiers():
+    code = """
+    shader SlangByteAddressInterlockedMembers {
+        struct Helper {
+            uint value;
+        };
+
+        RWByteAddressBuffer rawOutput @binding(20);
+        ByteAddressBuffer readOnlyRaw @binding(21);
+        RWByteAddressBuffer attrReadOnlyRaw @access(read) @binding(22);
+        ByteAddressBuffer attrWriteOnlyRaw @access(write) @binding(23);
+        Helper helper;
+
+        void main(uint offset, uint value) {
+            uint oldValue;
+            rawOutput.InterlockedAdd(offset, value, oldValue);
+            rawOutput.InterlockedCompareExchange(offset + 4u, 1u, value, oldValue);
+            attrWriteOnlyRaw.InterlockedExchange(offset + 8u, value, oldValue);
+            readOnlyRaw.InterlockedOr(offset, value, oldValue);
+            attrReadOnlyRaw.InterlockedXor(offset, value, oldValue);
+            helper.InterlockedAdd(value);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(20, 0)]] RWByteAddressBuffer rawOutput "
+        ": register(u20);" in generated_code
+    )
+    assert (
+        "[[vk::binding(21, 0)]] ByteAddressBuffer readOnlyRaw "
+        ": register(t21);" in generated_code
+    )
+    assert (
+        "[[vk::binding(22, 0)]] ByteAddressBuffer attrReadOnlyRaw "
+        ": register(t22);" in generated_code
+    )
+    assert (
+        "[[vk::binding(23, 0)]] RWByteAddressBuffer attrWriteOnlyRaw "
+        ": register(u23);" in generated_code
+    )
+    assert "rawOutput.InterlockedAdd(offset, value, oldValue);" in generated_code
+    assert (
+        "rawOutput.InterlockedCompareExchange(offset + 4u, 1u, value, oldValue);"
+        in generated_code
+    )
+    assert (
+        "attrWriteOnlyRaw.InterlockedExchange(offset + 8u, value, oldValue);"
+        in generated_code
+    )
+    assert (
+        "/* unsupported Slang byte-address buffer: InterlockedOr requires "
+        "RWByteAddressBuffer receiver */;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang byte-address buffer: InterlockedXor requires "
+        "writable byte-address buffer receiver */;" in generated_code
+    )
+    assert "helper.InterlockedAdd(value);" in generated_code
+    assert "readOnlyRaw.InterlockedOr" not in generated_code
+    assert "attrReadOnlyRaw.InterlockedXor" not in generated_code
+    assert "None(" not in generated_code
+
+
 @pytest.mark.parametrize(
     ("resource_source", "message"),
     [

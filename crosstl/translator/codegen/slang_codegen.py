@@ -5311,6 +5311,19 @@ class SlangCodeGen:
             "Load4": "uint4",
         }.get(member)
 
+    def byte_address_interlocked_members(self):
+        return {
+            "InterlockedAdd",
+            "InterlockedAnd",
+            "InterlockedCompareExchange",
+            "InterlockedCompareStore",
+            "InterlockedExchange",
+            "InterlockedMax",
+            "InterlockedMin",
+            "InterlockedOr",
+            "InterlockedXor",
+        }
+
     def structured_buffer_member_call_result_type(self, func_expr):
         if not isinstance(func_expr, MemberAccessNode):
             return None
@@ -5355,6 +5368,22 @@ class SlangCodeGen:
             "Store3",
             "Store4",
         }:
+            if self.buffer_resource_access(receiver) == "readonly":
+                return self.unsupported_byte_address_buffer_call(
+                    member, "requires writable byte-address buffer receiver"
+                )
+            if not self.is_writable_byte_address_buffer_resource_type(receiver_type):
+                return self.unsupported_byte_address_buffer_call(
+                    member, "requires RWByteAddressBuffer receiver"
+                )
+            receiver_expr = self.generate_expression(receiver)
+            args_expr = ", ".join(self.generate_expression(arg) for arg in args)
+            return f"{receiver_expr}.{member}({args_expr})"
+
+        if (
+            self.is_byte_address_buffer_resource_type(receiver_type)
+            and member in self.byte_address_interlocked_members()
+        ):
             if self.buffer_resource_access(receiver) == "readonly":
                 return self.unsupported_byte_address_buffer_call(
                     member, "requires writable byte-address buffer receiver"

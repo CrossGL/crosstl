@@ -12,13 +12,17 @@ from crosstl.translator.ast import (
     BuiltinVariableNode,
     CastNode,
     LiteralNode,
+    MeshOpNode,
     PrimitiveType,
+    RayQueryOpNode,
+    RayTracingOpNode,
     SwizzleNode,
     SyncNode,
     TextureNode,
     TextureOpNode,
     VariableNode,
     VectorType,
+    WaveOpNode,
 )
 from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
 
@@ -2308,6 +2312,63 @@ def test_ray_query_methods_are_rejected_for_mojo_codegen():
 
     with pytest.raises(ValueError, match="Unsupported Mojo ray query method Proceed"):
         generate_code(parse_code(tokenize_code(code)))
+
+
+def test_direct_pipeline_ir_nodes_are_rejected_for_mojo_codegen_without_ast_repr():
+    codegen = MojoCodeGen()
+    query = VariableNode("query", PrimitiveType("RayQuery"))
+    scene = VariableNode("scene", PrimitiveType("RaytracingAccelerationStructure"))
+    ray = VariableNode("ray", PrimitiveType("RayDesc"))
+
+    cases = [
+        (
+            WaveOpNode("WaveActiveSum", [LiteralNode(1, PrimitiveType("uint"))]),
+            "Unsupported Mojo wave intrinsic WaveActiveSum",
+            "WaveOpNode(",
+        ),
+        (
+            RayTracingOpNode(
+                "TraceRay",
+                [
+                    scene,
+                    LiteralNode(0, PrimitiveType("uint")),
+                    LiteralNode(255, PrimitiveType("uint")),
+                    LiteralNode(0, PrimitiveType("uint")),
+                    LiteralNode(0, PrimitiveType("uint")),
+                    LiteralNode(0, PrimitiveType("uint")),
+                    ray,
+                    LiteralNode(0, PrimitiveType("uint")),
+                ],
+            ),
+            "Unsupported Mojo ray tracing intrinsic TraceRay",
+            "RayTracingOpNode(",
+        ),
+        (
+            RayQueryOpNode("TraceRayInline", query, [scene, 0, 255, ray]),
+            "Unsupported Mojo ray query method TraceRayInline",
+            "RayQueryOpNode(",
+        ),
+        (
+            RayQueryOpNode("CandidateRayT", query, []),
+            "Unsupported Mojo ray query method CandidateRayT",
+            "RayQueryOpNode(",
+        ),
+        (
+            MeshOpNode("SetMeshOutputCounts", [1, 1]),
+            "Unsupported Mojo mesh intrinsic SetMeshOutputCounts",
+            "MeshOpNode(",
+        ),
+        (
+            MeshOpNode("DispatchMesh", [1, 1, 1]),
+            "Unsupported Mojo mesh intrinsic DispatchMesh",
+            "MeshOpNode(",
+        ),
+    ]
+
+    for expr, message, repr_marker in cases:
+        with pytest.raises(ValueError, match=message) as excinfo:
+            codegen.generate_expression(expr)
+        assert repr_marker not in str(excinfo.value)
 
 
 def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen():

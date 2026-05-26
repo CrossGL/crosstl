@@ -1,5 +1,11 @@
 """Shared AST validation helpers for the CrossGL translator."""
 
+from .stage_utils import (
+    SHADER_STAGE_NAMES,
+    STAGE_NAME_ALIASES,
+    normalize_stage_name,
+)
+
 TEXTURE_INTRINSIC_MIN_ARGUMENTS = {
     "texture": 2,
     "textureLod": 3,
@@ -448,42 +454,8 @@ FUNCTION_STAGE_ATTRIBUTE_NAMES = {
     "workgroup_size": "threadgroup_size",
 }
 
-SHADER_STAGE_ATTRIBUTE_ALIASES = {
-    "anyhit": "ray_any_hit",
-    "callable": "ray_callable",
-    "closesthit": "ray_closest_hit",
-    "domain": "tessellation_evaluation",
-    "hull": "tessellation_control",
-    "intersection": "ray_intersection",
-    "miss": "ray_miss",
-    "pixel": "fragment",
-    "pixel_shader": "fragment",
-    "raygen": "ray_generation",
-    "raygeneration": "ray_generation",
-    "tesscontrol": "tessellation_control",
-    "tesseval": "tessellation_evaluation",
-}
-
-SHADER_STAGE_ATTRIBUTE_NAMES = frozenset(
-    {
-        "amplification",
-        "compute",
-        "fragment",
-        "geometry",
-        "mesh",
-        "object",
-        "ray_any_hit",
-        "ray_callable",
-        "ray_closest_hit",
-        "ray_generation",
-        "ray_intersection",
-        "ray_miss",
-        "task",
-        "tessellation_control",
-        "tessellation_evaluation",
-        "vertex",
-    }
-)
+SHADER_STAGE_ATTRIBUTE_ALIASES = STAGE_NAME_ALIASES
+SHADER_STAGE_ATTRIBUTE_NAMES = SHADER_STAGE_NAMES
 
 STAGE_LAYOUT_DIRECTION_REQUIREMENTS = {
     "local_size_x": "in",
@@ -2368,13 +2340,7 @@ def _stage_function_context(stage, function):
 
 
 def _canonical_shader_stage_attribute_name(name):
-    if name is None:
-        return None
-    if hasattr(name, "value"):
-        name = getattr(name, "value")
-    normalized = str(name).split(".")[-1].strip().strip("\"'").lower()
-    normalized = normalized.replace("-", "_").replace(" ", "_")
-    return SHADER_STAGE_ATTRIBUTE_ALIASES.get(normalized, normalized)
+    return normalize_stage_name(name)
 
 
 def _shader_attribute_display(attr):
