@@ -536,7 +536,10 @@ class TestHipCodeGen:
     def test_constructor_style_vector_declaration_conversion(self):
         """Test HIP constructor-style vector declarations convert"""
         code = """
-        void launch() {
+        hipTextureObject_t globalTex;
+        hipSurfaceObject_t globalSurf;
+
+        void launch(hipTextureObject_t paramTex, hipSurfaceObject_t paramVolume) {
             dim3 grid(16, 8, 1);
             dim3 block(32);
             float3 v(1.0f, 2.0f, 3.0f);
@@ -544,12 +547,25 @@ class TestHipCodeGen:
             uint4 ids = make_uint4(1u, 2u, 3u, 4u);
             uchar2 bytes(1, 2);
             hipTextureObject_t tex;
+            hipTextureObject_t textures[2];
+            hipTextureObject_t ambiguous;
             hipSurfaceObject_t surf;
             texture<float4, 2> legacyTex;
             surface<void, 2> legacySurf;
             float2 uv = make_float2(0.25f, 0.75f);
+            float3 uvw = make_float3(0.25f, 0.75f, 0.5f);
             int2 pixel = make_int2(1, 2);
             float4 sampled = tex2D<float4>(tex, uv.x, uv.y);
+            float4 arraySample = tex2D<float4>(textures[1], uv);
+            float4 paramSample = tex2D<float4>(paramTex, uv);
+            float4 globalSample = tex2D<float4>(globalTex, uv);
+            float4 ambiguous2D = tex2D<float4>(ambiguous, uv);
+            float4 ambiguous3D = tex3D<float4>(
+                ambiguous,
+                uvw.x,
+                uvw.y,
+                uvw.z
+            );
             float4 sampledCoord = tex2D<float4>(tex, uv);
             float4 sampledLod = tex2DLod<float4>(tex, uv.x, uv.y, 1.0f);
             float4 sampledGrad = tex2DGrad<float4>(tex, uv, uv, uv);
@@ -564,7 +580,14 @@ class TestHipCodeGen:
                 pixel.x * sizeof(float4),
                 pixel.y
             );
+            float4 paramLoaded = surf3Dread<float4>(
+                paramVolume,
+                pixel.x * sizeof(float4),
+                pixel.y,
+                0
+            );
             surf2Dwrite(loaded, surf, pixel.x * sizeof(float4), pixel.y);
+            surf2Dwrite(loaded, globalSurf, pixel.x * sizeof(float4), pixel.y);
             surf2Dwrite(
                 legacyLoaded,
                 legacySurf,
@@ -581,17 +604,30 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
+        assert "var globalTex: sampler2D;" in result
+        assert "var globalSurf: image2D;" in result
+        assert "void launch(sampler2D paramTex, image3D paramVolume)" in result
         assert "var grid: vec3<u32> = vec3<u32>(16, 8, 1);" in result
         assert "var block: vec3<u32> = vec3<u32>(32);" in result
         assert "var v: vec3<f32> = vec3<f32>(1.0f, 2.0f, 3.0f);" in result
         assert "var d: vec2<f64> = vec2<f64>(1.0, 2.0);" in result
         assert "var ids: vec4<u32> = vec4<u32>(1u, 2u, 3u, 4u);" in result
         assert "var bytes: vec2<u8> = vec2<u8>(1, 2);" in result
-        assert "var tex: sampler;" in result
+        assert "var tex: sampler2D;" in result
+        assert "var textures: array<sampler2D, 2>;" in result
+        assert "var ambiguous: sampler;" in result
         assert "var surf: image2D;" in result
         assert "var legacyTex: sampler2D;" in result
         assert "var legacySurf: image2D;" in result
         assert "var sampled: vec4<f32> = texture(tex, vec2<f32>(uv.x, uv.y));" in result
+        assert "var arraySample: vec4<f32> = texture(textures[1], uv);" in result
+        assert "var paramSample: vec4<f32> = texture(paramTex, uv);" in result
+        assert "var globalSample: vec4<f32> = texture(globalTex, uv);" in result
+        assert "var ambiguous2D: vec4<f32> = texture(ambiguous, uv);" in result
+        assert (
+            "var ambiguous3D: vec4<f32> = texture("
+            "ambiguous, vec3<f32>(uvw.x, uvw.y, uvw.z));" in result
+        )
         assert "var sampledCoord: vec4<f32> = texture(tex, uv);" in result
         assert (
             "var sampledLod: vec4<f32> = textureLod("
@@ -604,10 +640,15 @@ class TestHipCodeGen:
             in result
         )
         assert (
+            "var paramLoaded: vec4<f32> = imageLoad("
+            "paramVolume, vec3<i32>(pixel.x, pixel.y, 0));" in result
+        )
+        assert (
             "var legacyLoaded: vec4<f32> = imageLoad("
             "legacySurf, vec2<i32>(pixel.x, pixel.y));" in result
         )
         assert "imageStore(surf, vec2<i32>(pixel.x, pixel.y), loaded);" in result
+        assert "imageStore(globalSurf, vec2<i32>(pixel.x, pixel.y), loaded);" in result
         assert (
             "imageStore(legacySurf, vec2<i32>(pixel.x, pixel.y), legacyLoaded);"
             in result

@@ -3820,7 +3820,12 @@ def test_glsl_ray_stage_entries_use_distinct_names():
             vec4 value;
         };
 
+        struct ShaderRecordData {
+            uint materialIndex;
+        };
+
         accelerationStructureEXT topLevelAS @binding(0);
+        ShaderRecordData shaderRecord @glsl_buffer_block(shaderRecordEXT);
 
         ray_generation {
             layout(location = 0) @rayPayloadEXT RayPayload rayPayload;
@@ -3840,6 +3845,7 @@ def test_glsl_ray_stage_entries_use_distinct_names():
                     1000.0,
                     0
                 );
+                callableData.value = vec4(float(shaderRecord.materialIndex));
                 CallShader(0, 1);
             }
         }
@@ -3899,10 +3905,17 @@ def test_glsl_ray_stage_entries_use_distinct_names():
     assert "void ray_intersection_main()" in combined_code
     assert "void ray_callable_main()" in combined_code
     assert "void main()" not in combined_code
+    assert combined_code.lstrip().startswith("#version 460 core")
     assert "#extension GL_EXT_ray_tracing : require" in combined_code
     assert (
         "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;"
         in combined_code
+    )
+    assert "layout(shaderRecordEXT) buffer ShaderRecordData" in combined_code
+    assert "layout(shaderRecordEXT, binding" not in combined_code
+    assert "uint materialIndex;" in combined_code
+    assert (
+        "callableData.value = vec4(float(shaderRecord.materialIndex));" in combined_code
     )
     assert "layout(location = 0) rayPayloadEXT RayPayload rayPayload;" in combined_code
     assert (
@@ -3939,6 +3952,7 @@ def test_glsl_ray_stage_entries_use_distinct_names():
 
     assert "void main()" in ray_miss_code
     assert "void ray_miss_main()" not in ray_miss_code
+    assert ray_miss_code.lstrip().startswith("#version 460 core")
     assert "#extension GL_EXT_ray_tracing : require" in ray_miss_code
     assert (
         "layout(location = 0) rayPayloadInEXT RayPayload missPayload;" in ray_miss_code

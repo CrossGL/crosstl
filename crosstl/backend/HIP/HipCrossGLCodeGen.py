@@ -111,6 +111,39 @@ class HipToCrossGLConverter:
         "cudaSurfaceType3D": "image3D",
         "cudaSurfaceTypeCubemap": "imageCube",
     }
+    HIP_TEXTURE_CALL_TYPE_HINTS = {
+        "tex1D": "sampler1D",
+        "tex1DLod": "sampler1D",
+        "tex1DGrad": "sampler1D",
+        "tex2D": "sampler2D",
+        "tex2DLod": "sampler2D",
+        "tex2DGrad": "sampler2D",
+        "tex3D": "sampler3D",
+        "tex3DLod": "sampler3D",
+        "tex3DGrad": "sampler3D",
+        "texCubemap": "samplerCube",
+        "texCubemapLod": "samplerCube",
+        "texCubemapGrad": "samplerCube",
+        "tex1DLayered": "sampler1DArray",
+        "tex1DLayeredLod": "sampler1DArray",
+        "tex1DLayeredGrad": "sampler1DArray",
+        "tex2DLayered": "sampler2DArray",
+        "tex2DLayeredLod": "sampler2DArray",
+        "tex2DLayeredGrad": "sampler2DArray",
+        "texCubemapLayered": "samplerCubeArray",
+        "texCubemapLayeredLod": "samplerCubeArray",
+        "texCubemapLayeredGrad": "samplerCubeArray",
+    }
+    HIP_SURFACE_CALL_TYPE_HINTS = {
+        "surf2Dread": "image2D",
+        "surf2Dwrite": "image2D",
+        "surf3Dread": "image3D",
+        "surf3Dwrite": "image3D",
+        "surf2DLayeredread": "image2DArray",
+        "surf2DLayeredwrite": "image2DArray",
+        "surfCubemapread": "imageCube",
+        "surfCubemapwrite": "imageCube",
+    }
 
     def __init__(self):
         """Initialize HIP-to-CrossGL visitor state."""
@@ -120,6 +153,8 @@ class HipToCrossGLConverter:
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
         self.user_function_names = set()
+        self.global_resource_object_type_hints = {}
+        self.resource_object_hint_scopes = []
 
     def generate(self, ast_node):
         """Generate complete CrossGL source from a parsed HIP AST."""
@@ -129,6 +164,10 @@ class HipToCrossGLConverter:
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
         self.user_function_names = self.collect_user_function_names(ast_node)
+        self.global_resource_object_type_hints = (
+            self.collect_global_resource_object_type_hints(ast_node)
+        )
+        self.resource_object_hint_scopes = []
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -183,6 +222,181 @@ class HipToCrossGLConverter:
 
     def is_user_defined_function(self, func_name):
         return isinstance(func_name, str) and func_name in self.user_function_names
+
+    def add_resource_object_type_hint(self, hints, name, resource_type):
+        if not name or not resource_type:
+            return
+        if name in hints and hints[name] != resource_type:
+            hints[name] = None
+            return
+        hints[name] = resource_type
+
+    def collect_resource_object_type_hints(self, node, declared_names=None):
+        hints = {}
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, (list, tuple)):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, dict):
+                for item in current.values():
+                    collect(item)
+                return
+            if isinstance(current, (str, int, float, bool)):
+                return
+            if not hasattr(current, "__dict__"):
+                return
+
+            if isinstance(current, FunctionCallNode):
+                hint = self.get_resource_object_call_hint(current.name)
+                if hint is not None:
+                    arg_index, resource_type = hint
+                    if len(current.args) > arg_index:
+                        self.add_resource_object_type_hint(
+                            hints,
+                            self.get_resource_object_expression_name(
+                                current.args[arg_index]
+                            ),
+                            resource_type,
+                        )
+
+            for value in vars(current).values():
+                collect(value)
+
+        collect(node)
+        for name in declared_names or []:
+            hints.setdefault(name, None)
+        return hints
+
+    def collect_global_resource_object_type_hints(self, node):
+        hints = {}
+        global_names = self.collect_global_declared_variable_names(node)
+        for stmt in getattr(node, "statements", []):
+            if isinstance(stmt, FunctionNode):
+                self.collect_global_resource_object_type_hints_from_function(
+                    stmt, global_names, hints
+                )
+        return hints
+
+    def collect_global_resource_object_type_hints_from_function(
+        self, node, global_names, hints
+    ):
+        local_names = self.collect_declared_variable_names(node)
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, (list, tuple)):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, dict):
+                for item in current.values():
+                    collect(item)
+                return
+            if isinstance(current, (str, int, float, bool)):
+                return
+            if not hasattr(current, "__dict__"):
+                return
+
+            if isinstance(current, FunctionCallNode):
+                hint = self.get_resource_object_call_hint(current.name)
+                if hint is not None:
+                    arg_index, resource_type = hint
+                    if len(current.args) > arg_index:
+                        name = self.get_resource_object_expression_name(
+                            current.args[arg_index]
+                        )
+                        if name in global_names and name not in local_names:
+                            self.add_resource_object_type_hint(
+                                hints, name, resource_type
+                            )
+
+            for value in vars(current).values():
+                collect(value)
+
+        collect(getattr(node, "body", []))
+
+    def collect_global_declared_variable_names(self, node):
+        return {
+            stmt.name
+            for stmt in getattr(node, "statements", [])
+            if isinstance(stmt, VariableNode)
+        }
+
+    def collect_declared_variable_names(self, node):
+        names = set()
+        for param in getattr(node, "params", []) or []:
+            if isinstance(param, dict):
+                name = param.get("name")
+            else:
+                name = getattr(param, "name", None)
+            if name:
+                names.add(name)
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, (list, tuple)):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, dict):
+                for item in current.values():
+                    collect(item)
+                return
+            if isinstance(current, (str, int, float, bool)):
+                return
+            if not hasattr(current, "__dict__"):
+                return
+
+            if isinstance(current, VariableNode):
+                names.add(current.name)
+
+            for value in vars(current).values():
+                collect(value)
+
+        collect(getattr(node, "body", []))
+        return names
+
+    def get_resource_object_call_hint(self, function_name):
+        base_name, _ = self.parse_cpp_template(function_name)
+        if self.is_user_defined_function(base_name):
+            return None
+        if base_name in self.HIP_TEXTURE_CALL_TYPE_HINTS:
+            return 0, self.HIP_TEXTURE_CALL_TYPE_HINTS[base_name]
+        if base_name in self.HIP_SURFACE_CALL_TYPE_HINTS:
+            if base_name.endswith("write"):
+                return 1, self.HIP_SURFACE_CALL_TYPE_HINTS[base_name]
+            return 0, self.HIP_SURFACE_CALL_TYPE_HINTS[base_name]
+        return None
+
+    def get_resource_object_expression_name(self, expression):
+        if isinstance(expression, str):
+            return expression
+        if isinstance(expression, ArrayAccessNode):
+            return self.get_resource_object_expression_name(expression.array)
+        if isinstance(expression, CastNode):
+            return self.get_resource_object_expression_name(expression.expression)
+        if isinstance(expression, UnaryOpNode):
+            return self.get_resource_object_expression_name(expression.operand)
+        return None
+
+    def push_resource_object_hint_scope(self, hints):
+        self.resource_object_hint_scopes.append(hints)
+
+    def pop_resource_object_hint_scope(self):
+        if self.resource_object_hint_scopes:
+            self.resource_object_hint_scopes.pop()
+
+    def lookup_resource_object_type_hint(self, name):
+        for scope in reversed(self.resource_object_hint_scopes):
+            if name in scope:
+                return scope[name]
+        return self.global_resource_object_type_hints.get(name)
 
     def emit_statement(self, stmt):
         """Render and append one converted statement."""
@@ -340,7 +554,9 @@ class HipToCrossGLConverter:
         if isinstance(stmt, list):
             return ", ".join(self.format_statement_fragment(item) for item in stmt)
         if isinstance(stmt, VariableNode):
-            var_type = self.convert_hip_type_to_crossgl(getattr(stmt, "vtype", "int"))
+            var_type = self.convert_hip_variable_type_to_crossgl(
+                getattr(stmt, "vtype", "int"), stmt.name
+            )
             if hasattr(stmt, "value") and stmt.value:
                 value = self.visit(stmt.value)
                 return f"var {stmt.name}: {var_type} = {value}"
@@ -407,50 +623,61 @@ class HipToCrossGLConverter:
         return_type = self.convert_hip_type_to_crossgl(
             node.return_type if hasattr(node, "return_type") else "void"
         )
-        params = []
 
-        if hasattr(node, "params") and node.params:
-            for param in node.params:
-                if isinstance(param, dict):
-                    param_type = self.convert_hip_type_to_crossgl(
+        self.push_resource_object_hint_scope(
+            self.collect_resource_object_type_hints(
+                node, self.collect_declared_variable_names(node)
+            )
+        )
+        try:
+            params = []
+
+            if hasattr(node, "params") and node.params:
+                for param in node.params:
+                    param_name = (
+                        param.get("name", "param")
+                        if isinstance(param, dict)
+                        else getattr(param, "name", "param")
+                    )
+                    raw_type = (
                         param.get("type", "int")
+                        if isinstance(param, dict)
+                        else getattr(param, "vtype", "int")
                     )
-                    param_name = param.get("name", "param")
-                    params.append(f"{param_type} {param_name}")
-                else:
-                    param_type = self.convert_hip_type_to_crossgl(
-                        getattr(param, "vtype", "int")
+                    param_type = self.convert_hip_variable_type_to_crossgl(
+                        raw_type, param_name
                     )
-                    param_name = getattr(param, "name", "param")
                     params.append(f"{param_type} {param_name}")
 
-        param_str = ", ".join(params)
-        self.emit(f"{return_type} {node.name}({param_str}) {{")
+            param_str = ", ".join(params)
+            self.emit(f"{return_type} {node.name}({param_str}) {{")
 
-        self.indent_level += 1
-        self.push_packed_argument_scope()
-        self.push_type_alias_scope()
-        self.push_unique_ptr_scope()
-        if hasattr(node, "params") and node.params:
-            for param in node.params:
-                self.register_unique_ptr_parameter(param)
-        if hasattr(node, "body") and node.body:
-            try:
-                if isinstance(node.body, list):
-                    for stmt in node.body:
-                        self.emit_statement(stmt)
-                else:
-                    self.emit_statement(node.body)
-            finally:
+            self.indent_level += 1
+            self.push_packed_argument_scope()
+            self.push_type_alias_scope()
+            self.push_unique_ptr_scope()
+            if hasattr(node, "params") and node.params:
+                for param in node.params:
+                    self.register_unique_ptr_parameter(param)
+            if hasattr(node, "body") and node.body:
+                try:
+                    if isinstance(node.body, list):
+                        for stmt in node.body:
+                            self.emit_statement(stmt)
+                    else:
+                        self.emit_statement(node.body)
+                finally:
+                    self.pop_unique_ptr_scope()
+                    self.pop_type_alias_scope()
+                    self.pop_packed_argument_scope()
+                    self.indent_level -= 1
+            else:
                 self.pop_unique_ptr_scope()
                 self.pop_type_alias_scope()
                 self.pop_packed_argument_scope()
                 self.indent_level -= 1
-        else:
-            self.pop_unique_ptr_scope()
-            self.pop_type_alias_scope()
-            self.pop_packed_argument_scope()
-            self.indent_level -= 1
+        finally:
+            self.pop_resource_object_hint_scope()
 
         self.emit("}")
 
@@ -460,70 +687,72 @@ class HipToCrossGLConverter:
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 
         params = []
-        if hasattr(kernel, "params") and kernel.params:
-            for param in kernel.params:
-                if isinstance(param, dict):
-                    raw_type = param.get("type", "int")
-                    param_name = param.get("name", "param")
-                    # Add storage buffer qualifiers for pointer parameters
-                    if "*" in raw_type:
-                        element_type = self.convert_hip_pointer_element_type(raw_type)
-                        params.append(
-                            f"@group(0) @binding({len(params)}) var<storage, read_write> {param_name}: array<{element_type}>"
-                        )
-                    else:
-                        param_type = self.convert_hip_type_to_crossgl(raw_type)
-                        params.append(f"{param_type} {param_name}")
-                else:
-                    raw_type = getattr(param, "vtype", "int")
-                    param_name = getattr(param, "name", "param")
-                    if "*" in raw_type:
-                        element_type = self.convert_hip_pointer_element_type(raw_type)
-                        params.append(
-                            f"@group(0) @binding({len(params)}) var<storage, read_write> {param_name}: array<{element_type}>"
-                        )
-                    else:
-                        param_type = self.convert_hip_type_to_crossgl(raw_type)
-                        params.append(f"{param_type} {param_name}")
-
-        self.emit(f"fn {kernel.name}(")
-        self.indent_level += 1
-        for i, param in enumerate(params):
-            if i == len(params) - 1:
-                self.emit(f"{param}")
-            else:
-                self.emit(f"{param},")
-        self.indent_level -= 1
-        self.emit(") {")
-
-        # Add built-in variable declarations
-        self.indent_level += 1
-        self.emit("let thread_id = gl_GlobalInvocationID;")
-        self.emit("let block_id = gl_WorkGroupID;")
-        self.emit("let thread_local_id = gl_LocalInvocationID;")
-        self.emit("let block_dim = gl_WorkGroupSize;")
-        self.emit("")
-
-        if hasattr(kernel, "body") and kernel.body:
-            self.push_packed_argument_scope()
-            self.push_type_alias_scope()
-            self.push_unique_ptr_scope()
+        self.push_resource_object_hint_scope(
+            self.collect_resource_object_type_hints(
+                kernel, self.collect_declared_variable_names(kernel)
+            )
+        )
+        try:
             if hasattr(kernel, "params") and kernel.params:
                 for param in kernel.params:
-                    self.register_unique_ptr_parameter(param)
-            try:
-                if isinstance(kernel.body, list):
-                    for stmt in kernel.body:
-                        self.emit_statement(stmt)
-                else:
-                    self.emit_statement(kernel.body)
-            finally:
-                self.pop_unique_ptr_scope()
-                self.pop_type_alias_scope()
-                self.pop_packed_argument_scope()
+                    if isinstance(param, dict):
+                        raw_type = param.get("type", "int")
+                        param_name = param.get("name", "param")
+                    else:
+                        raw_type = getattr(param, "vtype", "int")
+                        param_name = getattr(param, "name", "param")
 
-        self.indent_level -= 1
-        self.emit("}")
+                    if "*" in raw_type:
+                        element_type = self.convert_hip_pointer_element_type(raw_type)
+                        params.append(
+                            f"@group(0) @binding({len(params)}) var<storage, read_write> {param_name}: array<{element_type}>"
+                        )
+                    else:
+                        param_type = self.convert_hip_variable_type_to_crossgl(
+                            raw_type, param_name
+                        )
+                        params.append(f"{param_type} {param_name}")
+
+            self.emit(f"fn {kernel.name}(")
+            self.indent_level += 1
+            for i, param in enumerate(params):
+                if i == len(params) - 1:
+                    self.emit(f"{param}")
+                else:
+                    self.emit(f"{param},")
+            self.indent_level -= 1
+            self.emit(") {")
+
+            # Add built-in variable declarations
+            self.indent_level += 1
+            self.emit("let thread_id = gl_GlobalInvocationID;")
+            self.emit("let block_id = gl_WorkGroupID;")
+            self.emit("let thread_local_id = gl_LocalInvocationID;")
+            self.emit("let block_dim = gl_WorkGroupSize;")
+            self.emit("")
+
+            if hasattr(kernel, "body") and kernel.body:
+                self.push_packed_argument_scope()
+                self.push_type_alias_scope()
+                self.push_unique_ptr_scope()
+                if hasattr(kernel, "params") and kernel.params:
+                    for param in kernel.params:
+                        self.register_unique_ptr_parameter(param)
+                try:
+                    if isinstance(kernel.body, list):
+                        for stmt in kernel.body:
+                            self.emit_statement(stmt)
+                    else:
+                        self.emit_statement(kernel.body)
+                finally:
+                    self.pop_unique_ptr_scope()
+                    self.pop_type_alias_scope()
+                    self.pop_packed_argument_scope()
+
+            self.indent_level -= 1
+            self.emit("}")
+        finally:
+            self.pop_resource_object_hint_scope()
 
     def visit_StructNode(self, node):
         self.emit(f"struct {node.name} {{")
@@ -541,7 +770,9 @@ class HipToCrossGLConverter:
         self.emit("};")
 
     def visit_VariableNode(self, node):
-        var_type = self.convert_hip_type_to_crossgl(getattr(node, "vtype", "int"))
+        var_type = self.convert_hip_variable_type_to_crossgl(
+            getattr(node, "vtype", "int"), node.name
+        )
 
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, getattr(node, "vtype", "int"))
@@ -1192,6 +1423,71 @@ class HipToCrossGLConverter:
         target_type = self.convert_hip_type_to_crossgl(node.target_type)
         expression = self.visit(node.expression)
         return f"{target_type}({expression})"
+
+    def convert_hip_variable_type_to_crossgl(self, hip_type, name):
+        """Convert HIP variable types, using call-site hints for resource handles."""
+        resource_type = self.convert_hip_resource_object_type(hip_type, name)
+        if resource_type is not None:
+            return resource_type
+        return self.convert_hip_type_to_crossgl(hip_type)
+
+    def convert_hip_resource_object_type(self, hip_type, name):
+        hint = self.lookup_resource_object_type_hint(name)
+        if hint is None:
+            return None
+        return self.convert_hip_resource_object_type_with_hint(hip_type, hint)
+
+    def convert_hip_resource_object_type_with_hint(self, hip_type, hint):
+        hip_type = self.strip_type_qualifiers(hip_type)
+
+        if self.has_array_suffix(hip_type):
+            base_type = hip_type.split("[", 1)[0].strip()
+            mapped_type = self.convert_hip_resource_object_type_with_hint(
+                base_type, hint
+            )
+            if mapped_type is None:
+                return None
+            return self.wrap_mapped_hip_array_type(hip_type, mapped_type)
+
+        if "*" in hip_type:
+            pointer_depth = hip_type.count("*")
+            base_type = hip_type.replace("*", "").strip()
+            mapped_type = self.convert_hip_resource_object_base_type(base_type, hint)
+            if mapped_type is None:
+                return None
+            for _ in range(pointer_depth):
+                mapped_type = f"ptr<{mapped_type}>"
+            return mapped_type
+
+        return self.convert_hip_resource_object_base_type(hip_type, hint)
+
+    def convert_hip_resource_object_base_type(self, hip_type, hint):
+        hip_type = self.strip_type_qualifiers(hip_type)
+        if hip_type == "hipTextureObject_t" and hint.startswith("sampler"):
+            return hint
+        if hip_type == "hipSurfaceObject_t" and "image" in hint:
+            return hint
+        return None
+
+    def wrap_mapped_hip_array_type(self, hip_type, mapped_type):
+        base_type = hip_type.split("[", 1)[0].strip()
+        dimensions = []
+        remainder = hip_type[len(base_type) :].strip()
+
+        while remainder.startswith("["):
+            close_index = remainder.find("]")
+            if close_index == -1:
+                break
+            dimensions.append(remainder[1:close_index].strip())
+            remainder = remainder[close_index + 1 :].strip()
+
+        for size in reversed(dimensions):
+            if size:
+                mapped_type = f"array<{mapped_type}, {size}>"
+            else:
+                mapped_type = f"array<{mapped_type}>"
+
+        return mapped_type
 
     def convert_hip_type_to_crossgl(self, hip_type):
         """Map a HIP type name to the closest CrossGL type name."""

@@ -341,6 +341,45 @@ mod gpu {
         }
     }
 
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct Sampler;
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct DepthTexture2D<T>(PhantomData<T>);
+
+    impl<T> Default for DepthTexture2D<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct DepthTexture2DArray<T>(PhantomData<T>);
+
+    impl<T> Default for DepthTexture2DArray<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct DepthTextureCube<T>(PhantomData<T>);
+
+    impl<T> Default for DepthTextureCube<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct DepthTextureCubeArray<T>(PhantomData<T>);
+
+    impl<T> Default for DepthTextureCubeArray<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
     #[derive(Debug, Clone, Copy)]
     pub struct Image1D<T>(PhantomData<T>);
 
@@ -463,6 +502,16 @@ mod gpu {
     impl<T> TextureLike for Texture3D<T> {}
     impl<T> TextureLike for TextureCube<T> {}
     impl<T> TextureLike for TextureCubeArray<T> {}
+    impl<T> TextureLike for DepthTexture2D<T> {}
+    impl<T> TextureLike for DepthTexture2DArray<T> {}
+    impl<T> TextureLike for DepthTextureCube<T> {}
+    impl<T> TextureLike for DepthTextureCubeArray<T> {}
+
+    pub trait ShadowTextureLike {}
+    impl<T> ShadowTextureLike for DepthTexture2D<T> {}
+    impl<T> ShadowTextureLike for DepthTexture2DArray<T> {}
+    impl<T> ShadowTextureLike for DepthTextureCube<T> {}
+    impl<T> ShadowTextureLike for DepthTextureCubeArray<T> {}
 
     pub trait ImageLike<T> {}
     impl<T> ImageLike<T> for Image1D<T> {}
@@ -743,6 +792,394 @@ mod gpu {
     ) -> Vec4<f32>
     where
         Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn texture_compare<Texture, Coord, Compare>(
+        _texture: Texture,
+        _coord: Coord,
+        _compare: Compare,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_sampler<Texture, SamplerState, Coord, Compare>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _compare: Compare,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_offset<Texture, Coord, Compare, Offset>(
+        _texture: Texture,
+        _coord: Coord,
+        _compare: Compare,
+        _offset: Offset,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_offset_sampler<Texture, SamplerState, Coord, Compare, Offset>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _compare: Compare,
+        _offset: Offset,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_lod<Texture, Coord, Compare, Lod>(
+        _texture: Texture,
+        _coord: Coord,
+        _compare: Compare,
+        _lod: Lod,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_lod_sampler<Texture, SamplerState, Coord, Compare, Lod>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _compare: Compare,
+        _lod: Lod,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_lod_offset<Texture, Coord, Compare, Lod, Offset>(
+        _texture: Texture,
+        _coord: Coord,
+        _compare: Compare,
+        _lod: Lod,
+        _offset: Offset,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_lod_offset_sampler<Texture, SamplerState, Coord, Compare, Lod, Offset>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _compare: Compare,
+        _lod: Lod,
+        _offset: Offset,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_grad<Texture, Coord, Compare, Grad>(
+        _texture: Texture,
+        _coord: Coord,
+        _compare: Compare,
+        _ddx: Grad,
+        _ddy: Grad,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_grad_sampler<Texture, SamplerState, Coord, Compare, Grad>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _compare: Compare,
+        _ddx: Grad,
+        _ddy: Grad,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_grad_offset<Texture, Coord, Compare, Grad, Offset>(
+        _texture: Texture,
+        _coord: Coord,
+        _compare: Compare,
+        _ddx: Grad,
+        _ddy: Grad,
+        _offset: Offset,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_grad_offset_sampler<Texture, SamplerState, Coord, Compare, Grad, Offset>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _compare: Compare,
+        _ddx: Grad,
+        _ddy: Grad,
+        _offset: Offset,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_projected<Texture, Coord, Compare>(
+        _texture: Texture,
+        _coord: Coord,
+        _compare: Compare,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_projected_sampler<Texture, SamplerState, Coord, Compare>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _compare: Compare,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_projected_offset<Texture, Coord, Compare, Offset>(
+        _texture: Texture,
+        _coord: Coord,
+        _compare: Compare,
+        _offset: Offset,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_projected_offset_sampler<Texture, SamplerState, Coord, Compare, Offset>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _compare: Compare,
+        _offset: Offset,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_projected_lod<Texture, Coord, Compare, Lod>(
+        _texture: Texture,
+        _coord: Coord,
+        _compare: Compare,
+        _lod: Lod,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_projected_lod_sampler<Texture, SamplerState, Coord, Compare, Lod>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _compare: Compare,
+        _lod: Lod,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_projected_lod_offset<Texture, Coord, Compare, Lod, Offset>(
+        _texture: Texture,
+        _coord: Coord,
+        _compare: Compare,
+        _lod: Lod,
+        _offset: Offset,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_projected_lod_offset_sampler<Texture, SamplerState, Coord, Compare, Lod, Offset>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _compare: Compare,
+        _lod: Lod,
+        _offset: Offset,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_projected_grad<Texture, Coord, Compare, Grad>(
+        _texture: Texture,
+        _coord: Coord,
+        _compare: Compare,
+        _ddx: Grad,
+        _ddy: Grad,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_projected_grad_sampler<Texture, SamplerState, Coord, Compare, Grad>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _compare: Compare,
+        _ddx: Grad,
+        _ddy: Grad,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_projected_grad_offset<Texture, Coord, Compare, Grad, Offset>(
+        _texture: Texture,
+        _coord: Coord,
+        _compare: Compare,
+        _ddx: Grad,
+        _ddy: Grad,
+        _offset: Offset,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_compare_projected_grad_offset_sampler<Texture, SamplerState, Coord, Compare, Grad, Offset>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _compare: Compare,
+        _ddx: Grad,
+        _ddy: Grad,
+        _offset: Offset,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn texture_gather_compare<Texture, Coord, Compare>(
+        _texture: Texture,
+        _coord: Coord,
+        _compare: Compare,
+    ) -> Vec4<f32>
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn texture_gather_compare_sampler<Texture, SamplerState, Coord, Compare>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _compare: Compare,
+    ) -> Vec4<f32>
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn texture_gather_compare_offset<Texture, Coord, Compare, Offset>(
+        _texture: Texture,
+        _coord: Coord,
+        _compare: Compare,
+        _offset: Offset,
+    ) -> Vec4<f32>
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        Vec4::default()
+    }
+
+    pub fn texture_gather_compare_offset_sampler<Texture, SamplerState, Coord, Compare, Offset>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _compare: Compare,
+        _offset: Offset,
+    ) -> Vec4<f32>
+    where
+        Texture: ShadowTextureLike,
         Coord: SampleCoord,
     {
         Vec4::default()

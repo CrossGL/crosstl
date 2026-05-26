@@ -134,6 +134,10 @@ class RustCodeGen:
             "sampler3D": "Texture3D<f32>",
             "samplerCube": "TextureCube<f32>",
             "samplerCubeArray": "TextureCubeArray<f32>",
+            "sampler2DShadow": "DepthTexture2D<f32>",
+            "sampler2DArrayShadow": "DepthTexture2DArray<f32>",
+            "samplerCubeShadow": "DepthTextureCube<f32>",
+            "samplerCubeArrayShadow": "DepthTextureCubeArray<f32>",
             "sampler": "Sampler",
             "image1D": "Image1D<Vec4<f32>>",
             "image1DArray": "Image1DArray<Vec4<f32>>",
@@ -224,6 +228,20 @@ class RustCodeGen:
             "imageAtomicXor": "image_atomic_xor",
             "imageAtomicExchange": "image_atomic_exchange",
             "imageAtomicCompSwap": "image_atomic_comp_swap",
+            "textureCompare": "texture_compare",
+            "textureCompareOffset": "texture_compare_offset",
+            "textureCompareLod": "texture_compare_lod",
+            "textureCompareLodOffset": "texture_compare_lod_offset",
+            "textureCompareGrad": "texture_compare_grad",
+            "textureCompareGradOffset": "texture_compare_grad_offset",
+            "textureCompareProj": "texture_compare_projected",
+            "textureCompareProjOffset": "texture_compare_projected_offset",
+            "textureCompareProjLod": "texture_compare_projected_lod",
+            "textureCompareProjLodOffset": "texture_compare_projected_lod_offset",
+            "textureCompareProjGrad": "texture_compare_projected_grad",
+            "textureCompareProjGradOffset": "texture_compare_projected_grad_offset",
+            "textureGatherCompare": "texture_gather_compare",
+            "textureGatherCompareOffset": "texture_gather_compare_offset",
             "normalize": "normalize",
             "dot": "dot",
             "cross": "cross",
@@ -3956,6 +3974,33 @@ class RustCodeGen:
                 if arg_count and arg_count >= 4
                 else "texture_gather_offsets"
             )
+        compare_sampler_thresholds = {
+            "textureCompare": (4, "texture_compare_sampler"),
+            "textureCompareOffset": (5, "texture_compare_offset_sampler"),
+            "textureCompareLod": (5, "texture_compare_lod_sampler"),
+            "textureCompareLodOffset": (6, "texture_compare_lod_offset_sampler"),
+            "textureCompareGrad": (6, "texture_compare_grad_sampler"),
+            "textureCompareGradOffset": (7, "texture_compare_grad_offset_sampler"),
+            "textureCompareProj": (4, "texture_compare_projected_sampler"),
+            "textureCompareProjOffset": (5, "texture_compare_projected_offset_sampler"),
+            "textureCompareProjLod": (5, "texture_compare_projected_lod_sampler"),
+            "textureCompareProjLodOffset": (
+                6,
+                "texture_compare_projected_lod_offset_sampler",
+            ),
+            "textureCompareProjGrad": (6, "texture_compare_projected_grad_sampler"),
+            "textureCompareProjGradOffset": (
+                7,
+                "texture_compare_projected_grad_offset_sampler",
+            ),
+            "textureGatherCompare": (4, "texture_gather_compare_sampler"),
+            "textureGatherCompareOffset": (5, "texture_gather_compare_offset_sampler"),
+        }
+        sampler_mapping = compare_sampler_thresholds.get(func_name)
+        if sampler_mapping is not None:
+            threshold, sampler_name = sampler_mapping
+            if arg_count and arg_count >= threshold:
+                return sampler_name
         return self.function_map.get(func_name, func_name)
 
     def generate_qualified_generic_trait_method_call(self, func_expr, args):
@@ -5214,6 +5259,12 @@ class RustCodeGen:
         if mapped_name == "texture_query_lod":
             return "vec2"
 
+        if mapped_name.startswith("texture_compare"):
+            return "float"
+
+        if mapped_name.startswith("texture_gather_compare"):
+            return "vec4"
+
         if mapped_name == "image_load" and arg_types:
             return self.storage_image_value_result_type(arg_types[0])
 
@@ -5280,6 +5331,10 @@ class RustCodeGen:
             "Texture1DArray<f32>",
             "Texture2D<f32>",
             "TextureCube<f32>",
+            "sampler2DShadow",
+            "samplerCubeShadow",
+            "DepthTexture2D<f32>",
+            "DepthTextureCube<f32>",
         }:
             return "ivec2"
         if texture_name in {
@@ -5289,6 +5344,10 @@ class RustCodeGen:
             "Texture2DArray<f32>",
             "Texture3D<f32>",
             "TextureCubeArray<f32>",
+            "sampler2DArrayShadow",
+            "samplerCubeArrayShadow",
+            "DepthTexture2DArray<f32>",
+            "DepthTextureCubeArray<f32>",
         }:
             return "ivec3"
         return "ivec2"

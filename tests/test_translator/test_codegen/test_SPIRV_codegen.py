@@ -3552,9 +3552,22 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     vec2 uv = vec2(0.25, 0.75);
                     vec4 mip = textureLod(colorMap, uv, 2.0);
+                    vec4 mipOffset = textureLodOffset(
+                        colorMap,
+                        uv,
+                        2.0,
+                        ivec2(1, 0)
+                    );
                     vec2 ddx = vec2(0.1, 0.0);
                     vec2 ddy = vec2(0.0, 0.1);
                     vec4 grad = textureGrad(colorMap, uv, ddx, ddy);
+                    vec4 gradOffset = textureGradOffset(
+                        colorMap,
+                        uv,
+                        ddx,
+                        ddy,
+                        ivec2(-1, 0)
+                    );
                 }
             }
         }
@@ -3567,7 +3580,7 @@ class TestVulkanSPIRVCodeGen:
         vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
 
         assert vec4_type is not None
-        assert spv_code.count("OpImageSampleExplicitLod") == 2
+        assert spv_code.count("OpImageSampleExplicitLod") == 4
         assert f"OpImageSampleExplicitLod {vec4_type.group(1)}" in spv_code
         assert re.search(
             r"OpImageSampleExplicitLod %\d+ %\d+ %\d+ Lod %\d+",
@@ -3577,10 +3590,20 @@ class TestVulkanSPIRVCodeGen:
             r"OpImageSampleExplicitLod %\d+ %\d+ %\d+ Grad %\d+ %\d+",
             spv_code,
         )
+        assert re.search(
+            r"OpImageSampleExplicitLod %\d+ %\d+ %\d+ Lod\|ConstOffset %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            r"OpImageSampleExplicitLod %\d+ %\d+ %\d+ Grad\|ConstOffset %\d+ %\d+ %\d+",
+            spv_code,
+        )
         assert "OpImageSampleImplicitLod" not in spv_code
         assert "OpFunctionCall" not in spv_code
         assert "textureLod" not in spv_code
+        assert "textureLodOffset" not in spv_code
         assert "textureGrad" not in spv_code
+        assert "textureGradOffset" not in spv_code
         assert "WARNING" not in spv_code
 
     def test_texture_offset_gather_and_fetch_emit_image_operations(self):
@@ -7753,6 +7776,14 @@ class TestVulkanSPIRVCodeGen:
                     vec2 dy = vec2(0.0, 0.1);
                     ivec2 offset = ivec2(1, 0);
                     float lod = textureCompareLod(shadowMap, uv, 0.5, 2.0);
+                    float lodOffset = textureCompareLodOffset(
+                        shadowMap,
+                        compareSampler,
+                        uv,
+                        0.45,
+                        1.0,
+                        offset
+                    );
                     float grad = textureCompareGrad(
                         shadowMap,
                         compareSampler,
@@ -7760,6 +7791,15 @@ class TestVulkanSPIRVCodeGen:
                         0.4,
                         dx,
                         dy
+                    );
+                    float gradOffset = textureCompareGradOffset(
+                        shadowMap,
+                        compareSampler,
+                        uv,
+                        0.35,
+                        dx,
+                        dy,
+                        offset
                     );
                     float offsetShadow = textureCompareOffset(
                         shadowMaps[layer],
@@ -7806,14 +7846,14 @@ class TestVulkanSPIRVCodeGen:
         )
         assert vec4_type is not None
         assert array_type is not None
-        assert spv_code.count("OpImageSampleDrefExplicitLod") == 4
+        assert spv_code.count("OpImageSampleDrefExplicitLod") == 6
         assert spv_code.count("OpImageSampleDrefImplicitLod") == 0
         assert spv_code.count("OpImageDrefGather") == 2
         assert spv_code.count("OpCapability ImageGatherExtended") == 1
         assert "ConstOffset" not in spv_code
         assert (
             len(re.findall(r"\bOpImageSampleDrefExplicitLod\b.*\bOffset\b", spv_code))
-            == 1
+            == 3
         )
         assert len(re.findall(r"\bOpImageDrefGather\b.*\bOffset\b", spv_code)) == 1
         assert f"OpImageSampleDrefExplicitLod {float_type.group(1)}" in spv_code
@@ -7827,9 +7867,19 @@ class TestVulkanSPIRVCodeGen:
             r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Grad %\d+ %\d+",
             spv_code,
         )
+        assert re.search(
+            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Lod\|Offset %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Grad\|Offset %\d+ %\d+ %\d+",
+            spv_code,
+        )
         assert f"OpLoad {array_type.group(1)}" not in spv_code
         assert "textureCompareLod" not in spv_code
+        assert "textureCompareLodOffset" not in spv_code
         assert "textureCompareGrad" not in spv_code
+        assert "textureCompareGradOffset" not in spv_code
         assert "textureCompareOffset" not in spv_code
         assert "textureGatherCompare" not in spv_code
         assert "textureGatherCompareOffset" not in spv_code

@@ -1329,6 +1329,7 @@ class TestCudaCodeGen:
         cudaTextureObject_t sharedName;
         cudaTextureObject_t globalTex;
         cudaSurfaceObject_t globalSurface;
+        cudaSurfaceObject_t globalCubeLayerSurface;
         cudaTextureObject_t globalTextures[2];
         cudaTextureObject_t mixedGlobal;
 
@@ -1338,9 +1339,12 @@ class TestCudaCodeGen:
             texture<float4, 2> tex2d;
             texture<float4, cudaTextureType2DLayered> layeredTex;
             texture<float4, cudaTextureTypeCubemap> cubeTex;
+            surface<void, 1> lineSurface;
+            surface<void, cudaSurfaceType1DLayered> lineLayerSurface;
             surface<void, 2> surface2d;
             surface<void, cudaSurfaceType3D> volumeSurface;
             surface<void, cudaSurfaceTypeCubemap> cubeSurface;
+            surface<void, cudaSurfaceTypeCubemapLayered> cubeLayerSurface;
             cudaArray_t arrayRef;
             cudaArray* rawArray;
         }
@@ -1352,9 +1356,12 @@ class TestCudaCodeGen:
             texture<float4, cudaTextureType2DLayered> layeredTex,
             texture<float4, cudaTextureTypeCubemap> cubeTex,
             texture<float4, cudaTextureTypeCubemapLayered> cubeLayerTex,
+            surface<void, 1> lineSurface,
+            surface<void, cudaSurfaceType1DLayered> lineLayerSurface,
             surface<void, 2> surface2d,
             surface<void, cudaSurfaceType3D> volumeSurface,
             surface<void, cudaSurfaceTypeCubemap> cubeSurface,
+            surface<void, cudaSurfaceTypeCubemapLayered> cubeLayerSurface,
             cudaTextureObject_t objectTex,
             cudaSurfaceObject_t objectSurface,
             cudaTextureObject_t objectTextures[2],
@@ -1385,6 +1392,22 @@ class TestCudaCodeGen:
                 uvw.z,
                 pixel.x
             );
+            float4 lineRead = surf1Dread<float4>(
+                lineSurface,
+                pixel.x * sizeof(float4)
+            );
+            surf1Dwrite(lineRead, lineSurface, pixel.x * sizeof(float4));
+            float4 lineLayerRead = surf1DLayeredread<float4>(
+                lineLayerSurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf1DLayeredwrite(
+                lineLayerRead,
+                lineLayerSurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
             float4 read = surf2Dread<float4>(
                 surface2d,
                 pixel.x * sizeof(float4),
@@ -1413,6 +1436,19 @@ class TestCudaCodeGen:
             surfCubemapwrite(
                 cubeRead,
                 cubeSurface,
+                pixel.x * sizeof(float4),
+                pixel.y,
+                voxel.z
+            );
+            float4 cubeLayerRead = surfCubemapLayeredread<float4>(
+                cubeLayerSurface,
+                pixel.x * sizeof(float4),
+                pixel.y,
+                voxel.z
+            );
+            surfCubemapLayeredwrite(
+                cubeLayerRead,
+                cubeLayerSurface,
                 pixel.x * sizeof(float4),
                 pixel.y,
                 voxel.z
@@ -1471,6 +1507,12 @@ class TestCudaCodeGen:
                 pixel.x * sizeof(float4),
                 pixel.y
             );
+            float4 cubeLayerLoaded = surfCubemapLayeredread<float4>(
+                globalCubeLayerSurface,
+                pixel.x * sizeof(float4),
+                pixel.y,
+                voxel.z
+            );
             float4 mixedSample = tex2D<float4>(mixedGlobal, uv);
             float4 mixedVolume = tex3D<float4>(
                 mixedGlobal,
@@ -1507,14 +1549,18 @@ class TestCudaCodeGen:
         assert "var sharedName: cudaTextureObject_t;" in result
         assert "var globalTex: sampler2D;" in result
         assert "var globalSurface: image2D;" in result
+        assert "var globalCubeLayerSurface: imageCubeArray;" in result
         assert "var globalTextures: array<sampler2D, 2>;" in result
         assert "var mixedGlobal: cudaTextureObject_t;" in result
         assert "var tex2d: sampler2D;" in result
         assert "var layeredTex: sampler2DArray;" in result
         assert "var cubeTex: samplerCube;" in result
+        assert "var lineSurface: image1D;" in result
+        assert "var lineLayerSurface: image1DArray;" in result
         assert "var surface2d: image2D;" in result
         assert "var volumeSurface: image3D;" in result
         assert "var cubeSurface: imageCube;" in result
+        assert "var cubeLayerSurface: imageCubeArray;" in result
         assert "var arrayRef: cudaArray_t;" in result
         assert "var rawArray: ptr<cudaArray>;" in result
         assert "void resourceOps(" in result
@@ -1524,9 +1570,12 @@ class TestCudaCodeGen:
         assert "sampler2DArray layeredTex" in result
         assert "samplerCube cubeTex" in result
         assert "samplerCubeArray cubeLayerTex" in result
+        assert "image1D lineSurface" in result
+        assert "image1DArray lineLayerSurface" in result
         assert "image2D surface2d" in result
         assert "image3D volumeSurface" in result
         assert "imageCube cubeSurface" in result
+        assert "imageCubeArray cubeLayerSurface" in result
         assert "sampler2D objectTex" in result
         assert "image2D objectSurface" in result
         assert "array<sampler2D, 2> objectTextures" in result
@@ -1558,6 +1607,16 @@ class TestCudaCodeGen:
             "var cubeLayer: vec4<f32> = texture("
             "cubeLayerTex, vec4<f32>(uvw.x, uvw.y, uvw.z, pixel.x));" in result
         )
+        assert "var lineRead: vec4<f32> = imageLoad(lineSurface, pixel.x);" in result
+        assert "imageStore(lineSurface, pixel.x, lineRead);" in result
+        assert (
+            "var lineLayerRead: vec4<f32> = imageLoad("
+            "lineLayerSurface, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(lineLayerSurface, vec2<i32>(pixel.x, pixel.y), "
+            "lineLayerRead);" in result
+        )
         assert (
             "var read: vec4<f32> = imageLoad("
             "surface2d, vec2<i32>(pixel.x, pixel.y));" in result
@@ -1578,6 +1637,14 @@ class TestCudaCodeGen:
         assert (
             "imageStore(cubeSurface, vec3<i32>(pixel.x, pixel.y, voxel.z), "
             "cubeRead);" in result
+        )
+        assert (
+            "var cubeLayerRead: vec4<f32> = imageLoad("
+            "cubeLayerSurface, vec3<i32>(pixel.x, pixel.y, voxel.z));" in result
+        )
+        assert (
+            "imageStore(cubeLayerSurface, vec3<i32>(pixel.x, pixel.y, voxel.z), "
+            "cubeLayerRead);" in result
         )
         assert (
             "var objectSample: vec4<f32> = texture("
@@ -1608,6 +1675,10 @@ class TestCudaCodeGen:
         assert (
             "var loaded: vec4<f32> = imageLoad("
             "globalSurface, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "var cubeLayerLoaded: vec4<f32> = imageLoad("
+            "globalCubeLayerSurface, vec3<i32>(pixel.x, pixel.y, voxel.z));" in result
         )
         assert "void shadowGlobal(sampler3D globalTex, vec3<f32> uvw) {" in result
         assert "void shadowUnused(cudaSurfaceObject_t globalSurface) {" in result

@@ -947,6 +947,8 @@ class CudaToCrossGLConverter:
             return self.format_cuda_texture_call(base_name, args, "vec4", 4)
 
         if base_name in {
+            "surf1Dread",
+            "surf1DLayeredread",
             "surf2Dread",
             "surf3Dread",
             "surf2DLayeredread",
@@ -954,6 +956,8 @@ class CudaToCrossGLConverter:
             "surfCubemapLayeredread",
         }:
             dimensions = {
+                "surf1Dread": 1,
+                "surf1DLayeredread": 2,
                 "surf2Dread": 2,
                 "surf3Dread": 3,
                 "surf2DLayeredread": 3,
@@ -963,6 +967,8 @@ class CudaToCrossGLConverter:
             return self.format_cuda_surface_read(args, dimensions, value_type)
 
         if base_name in {
+            "surf1Dwrite",
+            "surf1DLayeredwrite",
             "surf2Dwrite",
             "surf3Dwrite",
             "surf2DLayeredwrite",
@@ -970,6 +976,8 @@ class CudaToCrossGLConverter:
             "surfCubemapLayeredwrite",
         }:
             dimensions = {
+                "surf1Dwrite": 1,
+                "surf1DLayeredwrite": 2,
                 "surf2Dwrite": 2,
                 "surf3Dwrite": 3,
                 "surf2DLayeredwrite": 3,

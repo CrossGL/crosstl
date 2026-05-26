@@ -5,6 +5,7 @@ from hypothesis import HealthCheck, given, settings, strategies as st
 
 import crosstl.translator
 import crosstl.translator.codegen as codegen
+from crosstl.translator.ast import PointerType, ShaderStage
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
@@ -61,10 +62,27 @@ class StructuredBufferCase:
     metal_type: str
 
 
+@dataclass(frozen=True)
+class FrontendResourceMetadataCase:
+    image_type: str
+    access_qualifier: str
+    format_source: str
+    format_name: str
+    format_value: str | None = None
+
+
 STRUCTURED_BUFFER_CASES = (
     StructuredBufferCase("float", "float", "float", "float"),
     StructuredBufferCase("int", "int", "int", "int"),
     StructuredBufferCase("uint", "uint", "uint", "uint"),
+)
+
+FRONTEND_RESOURCE_METADATA_CASES = (
+    FrontendResourceMetadataCase("image2D", "readonly", "rgba32f", "rgba32f"),
+    FrontendResourceMetadataCase("image3D", "readwrite", "r32f", "r32f"),
+    FrontendResourceMetadataCase(
+        "uimage2D", "writeonly", "format(r32ui)", "format", "r32ui"
+    ),
 )
 
 
@@ -74,6 +92,109 @@ def _assert_codegen_output_is_usable(backend, generated):
     assert "Traceback" not in generated
     assert "<crosstl." not in generated
     assert "NotImplemented" not in generated
+
+
+@settings(max_examples=25, deadline=None)
+@given(
+    suffix=IDENTIFIER_SUFFIXES,
+    set_index=st.integers(min_value=0, max_value=7),
+    binding=st.integers(min_value=0, max_value=31),
+    location=st.integers(min_value=0, max_value=15),
+    component=st.integers(min_value=0, max_value=3),
+    interpolation=st.sampled_from(("flat", "smooth", "noperspective")),
+    sample_qualifier=st.sampled_from(("centroid", "sample")),
+    address_space=st.sampled_from(("device", "constant", "threadgroup")),
+    resource_case=st.sampled_from(FRONTEND_RESOURCE_METADATA_CASES),
+)
+def test_frontend_metadata_ir_preserves_valid_backend_neutral_combinations(
+    suffix,
+    set_index,
+    binding,
+    location,
+    component,
+    interpolation,
+    sample_qualifier,
+    address_space,
+    resource_case,
+):
+    shader = f"""
+    shader FrontendMetadata_{suffix} {{
+        struct Payload {{
+            float value;
+        }};
+
+        struct VertexOutput {{
+            layout(location = {location}) vec3 position @{interpolation};
+        }};
+
+        layout(set = {set_index}, binding = {binding})
+        {resource_case.access_qualifier} uniform {resource_case.image_type}
+            image_{suffix} @{resource_case.format_source};
+
+        void consume(
+            {address_space} Payload* payload_{suffix} @payload,
+            {resource_case.access_qualifier} {resource_case.image_type}
+                param_image_{suffix} @{resource_case.format_source}
+        ) {{
+        }}
+
+        vertex {{
+            layout(location = {location}, component = {component})
+            {interpolation} {sample_qualifier} out vec4 color_{suffix};
+
+            void main() {{
+            }}
+        }}
+    }}
+    """
+
+    ast = crosstl.translator.parse(shader)
+
+    payload_struct, output_struct = ast.structs
+    assert payload_struct.name == "Payload"
+    output_member = output_struct.members[0]
+    assert [attribute.name for attribute in output_member.attributes] == [
+        "location",
+        interpolation,
+    ]
+    assert output_member.attributes[0].arguments[0].value == location
+
+    resource = ast.global_variables[0]
+    assert resource.name == f"image_{suffix}"
+    assert resource.qualifiers == [resource_case.access_qualifier, "uniform"]
+    assert [attribute.name for attribute in resource.attributes] == [
+        "set",
+        "binding",
+        resource_case.format_name,
+    ]
+    assert resource.attributes[0].arguments[0].value == set_index
+    assert resource.attributes[1].arguments[0].value == binding
+    if resource_case.format_value is not None:
+        assert resource.attributes[2].arguments[0].name == resource_case.format_value
+
+    pointer_param, image_param = ast.functions[0].parameters
+    assert pointer_param.name == f"payload_{suffix}"
+    assert pointer_param.qualifiers == [address_space]
+    assert isinstance(pointer_param.param_type, PointerType)
+    assert pointer_param.param_type.pointee_type.name == "Payload"
+    assert [attribute.name for attribute in pointer_param.attributes] == ["payload"]
+
+    assert image_param.name == f"param_image_{suffix}"
+    assert image_param.qualifiers == [resource_case.access_qualifier]
+    assert [attribute.name for attribute in image_param.attributes] == [
+        resource_case.format_name
+    ]
+
+    vertex_stage = ast.stages[ShaderStage.VERTEX]
+    color = vertex_stage.local_variables[0]
+    assert color.name == f"color_{suffix}"
+    assert color.qualifiers == [interpolation, sample_qualifier, "out"]
+    assert [attribute.name for attribute in color.attributes] == [
+        "location",
+        "component",
+    ]
+    assert color.attributes[0].arguments[0].value == location
+    assert color.attributes[1].arguments[0].value == component
 
 
 @settings(

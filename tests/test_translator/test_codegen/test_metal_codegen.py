@@ -2771,7 +2771,117 @@ def test_ray_payload_semantics():
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
     generated = generate_code(ast)
-    assert "[[payload]]" in generated
+
+    assert "kernel void kernel_main(device Payload& payload)" in generated
+    assert "payload.color = float3(1.0, 0.0, 0.0);" in generated
+    assert "[[payload]]" not in generated
+
+
+def test_ray_hit_and_callable_stages_lower_to_visible_functions():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+        struct HitAttrib {
+            vec2 bary;
+        };
+        ray_any_hit {
+            void main(Payload payload @ payload, HitAttrib attr @ hit_attribute) {
+                payload.color = vec3(attr.bary, 0.0);
+            }
+        }
+        ray_closest_hit {
+            void main(Payload payload @ payload, HitAttrib attr @ hit_attribute) {
+                payload.color = vec3(attr.bary, 1.0);
+            }
+        }
+        ray_miss {
+            void main(Payload payload @ payload) {
+                payload.color = vec3(0.0, 0.0, 0.0);
+            }
+        }
+        ray_callable {
+            void main(Payload payload @ payload) {
+                payload.color = vec3(1.0, 1.0, 1.0);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[visible]] void anyhit_main("
+        "ray_data Payload& payload [[payload]], HitAttrib attr)"
+    ) in generated
+    assert (
+        "[[visible]] void closesthit_main("
+        "ray_data Payload& payload [[payload]], HitAttrib attr)"
+    ) in generated
+    assert (
+        "[[visible]] void miss_main(ray_data Payload& payload [[payload]])"
+    ) in generated
+    assert (
+        "[[visible]] void callable_main(ray_data Payload& payload [[payload]])"
+    ) in generated
+    assert "anyhit void" not in generated
+    assert "closesthit void" not in generated
+    assert "miss void" not in generated
+    assert "callable void" not in generated
+    assert "[[hit_attribute]]" not in generated
+
+
+def test_ray_intersection_stage_lowers_to_metal_intersection_attribute():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+        ray_intersection {
+            bool main(Payload payload @ payload) @triangle {
+                payload.color = vec3(1.0, 0.0, 0.0);
+                return true;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[intersection(triangle)]] bool "
+        "intersection_main(ray_data Payload& payload [[payload]])"
+    ) in generated
+    assert "payload.color = float3(1.0, 0.0, 0.0);" in generated
+    assert "intersection bool" not in generated
+
+
+def test_ray_intersection_stage_accepts_bounding_box_result_struct():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+        struct BoundsHit {
+            bool accept @ accept_intersection;
+            float distance @ distance;
+        };
+        ray_intersection {
+            BoundsHit main(Payload payload @ payload) @bounding_box {
+                payload.color = vec3(1.0, 0.0, 0.0);
+                return BoundsHit { accept: true, distance: 1.0 };
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "bool accept [[accept_intersection]];" in generated
+    assert "float distance [[distance]];" in generated
+    assert (
+        "[[intersection(bounding_box)]] BoundsHit "
+        "intersection_main(ray_data Payload& payload [[payload]])"
+    ) in generated
+    assert "return BoundsHit{true, 1.0};" in generated
 
 
 def test_mesh_object_stage_codegen():
@@ -3076,7 +3186,8 @@ def test_anyhit_stage_codegen():
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
     generated = generate_code(ast)
-    assert "anyhit void anyhit_main" in generated
+    assert "[[visible]] void anyhit_main" in generated
+    assert "anyhit void anyhit_main" not in generated
 
 
 def test_generate_stage_filters_combined_vertex_fragment_units():

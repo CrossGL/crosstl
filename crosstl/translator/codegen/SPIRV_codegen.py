@@ -1308,12 +1308,16 @@ class VulkanSPIRVCodeGen:
             "textureCube",
             "textureCompare",
             "textureCompareLod",
+            "textureCompareLodOffset",
             "textureCompareGrad",
+            "textureCompareGradOffset",
             "textureCompareOffset",
             "textureGatherCompare",
             "textureGatherCompareOffset",
             "textureLod",
+            "textureLodOffset",
             "textureGrad",
+            "textureGradOffset",
             "textureOffset",
             "textureGather",
             "textureGatherOffset",
@@ -1777,13 +1781,17 @@ class VulkanSPIRVCodeGen:
         if function_name in {
             "textureCompare",
             "textureCompareLod",
+            "textureCompareLodOffset",
             "textureCompareGrad",
+            "textureCompareGradOffset",
             "textureCompareOffset",
         }:
             extra_arg_count = {
                 "textureCompare": 0,
                 "textureCompareLod": 1,
+                "textureCompareLodOffset": 2,
                 "textureCompareGrad": 2,
+                "textureCompareGradOffset": 3,
                 "textureCompareOffset": 1,
             }[function_name]
             compare_args = self.shadow_compare_operands(
@@ -1832,11 +1840,25 @@ class VulkanSPIRVCodeGen:
                     f"%{sampled_image_id.id} %{coord_id.id} %{depth_id.id} "
                     f"Lod %{extra_args[0].id}"
                 )
-            else:
+            elif function_name == "textureCompareLodOffset":
+                offset_operand = self.image_offset_operand(extra_args[1])
+                self.emit(
+                    f"%{id_value} = OpImageSampleDrefExplicitLod %{result_type.id} "
+                    f"%{sampled_image_id.id} %{coord_id.id} %{depth_id.id} "
+                    f"{self.image_operands(f'Lod %{extra_args[0].id}', offset_operand)}"
+                )
+            elif function_name == "textureCompareGrad":
                 self.emit(
                     f"%{id_value} = OpImageSampleDrefExplicitLod %{result_type.id} "
                     f"%{sampled_image_id.id} %{coord_id.id} %{depth_id.id} "
                     f"Grad %{extra_args[0].id} %{extra_args[1].id}"
+                )
+            else:
+                offset_operand = self.image_offset_operand(extra_args[2])
+                self.emit(
+                    f"%{id_value} = OpImageSampleDrefExplicitLod %{result_type.id} "
+                    f"%{sampled_image_id.id} %{coord_id.id} %{depth_id.id} "
+                    f"{self.image_operands(f'Grad %{extra_args[0].id} %{extra_args[1].id}', offset_operand)}"
                 )
 
             self.value_types[id_value] = result_type
@@ -2107,8 +2129,18 @@ class VulkanSPIRVCodeGen:
             self.value_types[id_value] = result_type
             return SpirvId(id_value, result_type.type)
 
-        if function_name in {"textureLod", "textureGrad"}:
-            required_arg_count = 3 if function_name == "textureLod" else 4
+        if function_name in {
+            "textureLod",
+            "textureLodOffset",
+            "textureGrad",
+            "textureGradOffset",
+        }:
+            required_arg_count = {
+                "textureLod": 3,
+                "textureLodOffset": 4,
+                "textureGrad": 4,
+                "textureGradOffset": 5,
+            }[function_name]
             extra_arg_count = required_arg_count - 2
             sample_args = self.sampled_texture_operands(
                 function_name, args, extra_arg_count
@@ -2121,8 +2153,18 @@ class VulkanSPIRVCodeGen:
             sampled_image_id, coord_id, extra_args, metadata = sample_args
             if function_name == "textureLod":
                 image_operands = f"Lod %{extra_args[0].id}"
-            else:
+            elif function_name == "textureLodOffset":
+                image_operands = self.image_operands(
+                    f"Lod %{extra_args[0].id}",
+                    self.image_offset_operand(extra_args[1]),
+                )
+            elif function_name == "textureGrad":
                 image_operands = f"Grad %{extra_args[0].id} %{extra_args[1].id}"
+            else:
+                image_operands = self.image_operands(
+                    f"Grad %{extra_args[0].id} %{extra_args[1].id}",
+                    self.image_offset_operand(extra_args[2]),
+                )
 
             result_type = self.resource_access_result_type(metadata)
             id_value = self.get_id()
@@ -2138,9 +2180,13 @@ class VulkanSPIRVCodeGen:
     def resource_offset_argument_indices(self, function_name: str):
         return {
             "textureOffset": {2, 3},
+            "textureLodOffset": {3, 4},
+            "textureGradOffset": {4, 5},
             "textureGatherOffset": {2, 3},
             "textureGatherOffsets": {2, 3, 4, 5, 6},
             "textureCompareOffset": {3, 4},
+            "textureCompareLodOffset": {4, 5},
+            "textureCompareGradOffset": {5, 6},
             "textureGatherCompareOffset": {3, 4},
         }.get(function_name, set())
 

@@ -3060,6 +3060,16 @@ def test_directx_mesh_stage_validates_outputtopology_values():
     with pytest.raises(ValueError, match="mesh stage outputtopology.*triangle_cw"):
         HLSLCodeGen().generate_stage(crosstl.translator.parse(invalid_code), "mesh")
 
+    point_code = """
+    shader BadPointMeshTopology {
+        mesh {
+            void main() @outputtopology(point) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="mesh stage outputtopology.*point"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(point_code), "mesh")
+
     valid_code = """
     shader ValidMeshTopology {
         mesh {
@@ -3240,6 +3250,106 @@ def test_directx_mesh_output_signature_validates_required_roles_and_counts():
         HLSLCodeGen().generate_stage(
             crosstl.translator.parse(mismatched_primitives_code), "mesh"
         )
+
+
+def test_directx_mesh_set_output_counts_validates_arguments_and_bounds():
+    missing_argument_code = """
+    shader MeshOutputCountMissingArgument {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetMeshOutputCounts requires exactly"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_argument_code), "mesh"
+        )
+
+    float_count_code = """
+    shader MeshOutputCountFloatArgument {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                float vertexCount @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(vertexCount, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="numVertices.*scalar int or uint"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(float_count_code), "mesh")
+
+    vertex_bound_code = """
+    shader MeshOutputCountVertexBound {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(4, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="numVertices.*cannot exceed vertices"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vertex_bound_code), "mesh"
+        )
+
+    primitive_bound_code = """
+    shader MeshOutputCountPrimitiveBound {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 2);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="numPrimitives.*cannot exceed indices"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(primitive_bound_code), "mesh"
+        )
+
+
+def test_directx_set_mesh_output_counts_rejects_non_mesh_stages():
+    shader = """
+    shader SetMeshOutputCountsWrongStage {
+        compute {
+            void main() {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="compute.*cannot call SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
 
 
 def test_directx_mesh_output_signature_validates_struct_semantics():

@@ -3081,27 +3081,40 @@ class TestCudaCodeGen:
         shader Resources {
             sampler2d tex;
             sampler2darray layers;
+            image1D lineImage;
+            image1DArray lineLayerImage;
             image2D colorImage;
             image3D volumeImage;
             imageCube cubeImage;
+            imageCubeArray cubeLayerImage;
             image2DArray layerImage;
+            uimage1D counterLine;
             iimage2d signedImage;
 
             void processResources(
                 sampler2d paramTex,
+                int x,
                 ivec2 pixel,
                 ivec3 pixelLayer
             ) {
                 vec4 fetched = texelFetch(paramTex, pixel, 1);
                 vec4 fetchedLayer = texelFetch(layers, pixelLayer, 1);
+                vec4 line = imageLoad(lineImage, x);
+                imageStore(lineImage, x, line);
+                vec4 lineLayer = imageLoad(lineLayerImage, pixel);
+                imageStore(lineLayerImage, pixel, lineLayer);
                 vec4 regular = imageLoad(colorImage, pixel);
                 imageStore(colorImage, pixel, regular);
                 vec4 voxel = imageLoad(volumeImage, pixelLayer);
                 imageStore(volumeImage, pixelLayer, voxel);
                 vec4 cubeFace = imageLoad(cubeImage, pixelLayer);
                 imageStore(cubeImage, pixelLayer, cubeFace);
+                vec4 cubeLayerFace = imageLoad(cubeLayerImage, pixelLayer);
+                imageStore(cubeLayerImage, pixelLayer, cubeLayerFace);
                 vec4 layered = imageLoad(layerImage, pixelLayer);
                 imageStore(layerImage, pixelLayer, layered);
+                uint counter = imageLoad(counterLine, x);
+                imageStore(counterLine, x, counter);
                 int signedValue = imageLoad(signedImage, pixel);
                 imageStore(signedImage, pixel, signedValue);
             }
@@ -3120,14 +3133,32 @@ class TestCudaCodeGen:
         cuda_code = codegen.generate(ast)
 
         assert "cudaSurfaceObject_t colorImage;" in cuda_code
+        assert "cudaSurfaceObject_t lineImage;" in cuda_code
+        assert "cudaSurfaceObject_t lineLayerImage;" in cuda_code
         assert "cudaSurfaceObject_t volumeImage;" in cuda_code
         assert "cudaSurfaceObject_t cubeImage;" in cuda_code
+        assert "cudaSurfaceObject_t cubeLayerImage;" in cuda_code
         assert "cudaSurfaceObject_t layerImage;" in cuda_code
+        assert "cudaSurfaceObject_t counterLine;" in cuda_code
         assert "cudaSurfaceObject_t signedImage;" in cuda_code
         assert "float4 fetched = tex2D(paramTex, pixel.x, pixel.y);" in cuda_code
         assert (
             "float4 fetchedLayer = tex2DLayered<float4>"
             "(layers, pixelLayer.x, pixelLayer.y, pixelLayer.z);" in cuda_code
+        )
+        assert (
+            "float4 line = surf1Dread<float4>(lineImage, x * sizeof(float4));"
+            in cuda_code
+        )
+        assert "surf1Dwrite(line, lineImage, x * sizeof(float4));" in cuda_code
+        assert (
+            "float4 lineLayer = surf1DLayeredread<float4>"
+            "(lineLayerImage, pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf1DLayeredwrite("
+            "lineLayer, lineLayerImage, pixel.x * sizeof(float4), pixel.y);"
+            in cuda_code
         )
         assert (
             "float4 regular = surf2Dread<float4>"
@@ -3141,6 +3172,16 @@ class TestCudaCodeGen:
         assert (
             "surfCubemapwrite("
             "cubeFace, cubeImage, pixelLayer.x * sizeof(float4), "
+            "pixelLayer.y, pixelLayer.z);" in cuda_code
+        )
+        assert (
+            "float4 cubeLayerFace = surfCubemapLayeredread<float4>"
+            "(cubeLayerImage, pixelLayer.x * sizeof(float4), pixelLayer.y, "
+            "pixelLayer.z);" in cuda_code
+        )
+        assert (
+            "surfCubemapLayeredwrite("
+            "cubeLayerFace, cubeLayerImage, pixelLayer.x * sizeof(float4), "
             "pixelLayer.y, pixelLayer.z);" in cuda_code
         )
         assert (
@@ -3165,6 +3206,11 @@ class TestCudaCodeGen:
             "surf2DLayeredwrite(layered, layerImage, "
             "pixelLayer.x * sizeof(float4), pixelLayer.y, pixelLayer.z);" in cuda_code
         )
+        assert (
+            "uint counter = surf1Dread<uint>(counterLine, x * sizeof(uint));"
+            in cuda_code
+        )
+        assert "surf1Dwrite(counter, counterLine, x * sizeof(uint));" in cuda_code
         assert (
             "int signedValue = surf2Dread<int>"
             "(signedImage, pixel.x * sizeof(int), pixel.y);" in cuda_code

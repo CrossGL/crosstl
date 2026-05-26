@@ -5208,6 +5208,7 @@ class HLSLCodeGen:
 
     def validate_hlsl_stage_parameter_requirements(self, func, shader_type):
         parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
+        self.validate_hlsl_set_mesh_output_count_stage_use(func, shader_type)
         self.validate_hlsl_dispatch_mesh_calls(func, shader_type)
         self.validate_hlsl_dispatch_mesh_payloads(func, shader_type)
         if not parameters:
@@ -5468,16 +5469,121 @@ class HLSLCodeGen:
     def hlsl_mesh_output_parameter_literal_count(self, parameter):
         return self.hlsl_parameter_array_count(parameter)
 
-    def hlsl_mesh_output_call_count(self, func):
-        count = 0
+    def hlsl_set_mesh_output_count_calls(self, func):
+        calls = []
         for node in self.walk_ast(getattr(func, "body", [])):
             if isinstance(node, FunctionCallNode):
                 if self.function_call_name(node) == "SetMeshOutputCounts":
-                    count += 1
+                    calls.append(getattr(node, "arguments", getattr(node, "args", [])))
             elif isinstance(node, MeshOpNode):
                 if getattr(node, "operation", None) == "SetMeshOutputCounts":
-                    count += 1
-        return count
+                    calls.append(getattr(node, "arguments", []))
+        return calls
+
+    def hlsl_mesh_output_call_count(self, func):
+        return len(self.hlsl_set_mesh_output_count_calls(func))
+
+    def hlsl_integer_constant_value(self, expr):
+        if isinstance(expr, UnaryOpNode):
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            value = self.hlsl_integer_constant_value(getattr(expr, "operand", None))
+            if value is None:
+                return None
+            if operator == "-":
+                return -value
+            if operator == "+":
+                return value
+            return None
+        return self.hlsl_int_literal_value(expr)
+
+    def validate_hlsl_scalar_int_uint_expression(self, argument, context):
+        argument_type = self.expression_result_type(argument)
+        if argument_type is None:
+            return
+
+        mapped_type = self.map_type(argument_type)
+        base_type, array_suffix = split_array_type_suffix(mapped_type)
+        if array_suffix or base_type not in {"int", "uint"}:
+            raise ValueError(f"{context} must be scalar int or uint, got {mapped_type}")
+
+    def validate_hlsl_set_mesh_output_count_stage_use(self, func, shader_type):
+        if shader_type in {"mesh", None}:
+            return
+        if not self.hlsl_set_mesh_output_count_calls(func):
+            return
+        raise ValueError(
+            f"DirectX {shader_type} stage cannot call SetMeshOutputCounts; "
+            "SetMeshOutputCounts is only valid in mesh stages"
+        )
+
+    def validate_hlsl_set_mesh_output_count_bounds(
+        self, args, role_parameters, count_parameters
+    ):
+        for index, (label, max_count) in enumerate(count_parameters):
+            literal_count = self.hlsl_integer_constant_value(args[index])
+            if literal_count is None:
+                continue
+
+            if literal_count < 0:
+                raise ValueError(
+                    f"DirectX mesh SetMeshOutputCounts {label} argument "
+                    "must be non-negative"
+                )
+            if max_count is not None and literal_count > max_count:
+                role = "vertices" if index == 0 else "indices"
+                parameter_name = role_parameters[role][0].name
+                raise ValueError(
+                    f"DirectX mesh SetMeshOutputCounts {label} argument "
+                    f"({literal_count}) cannot exceed {role} output array "
+                    f"'{parameter_name}' size ({max_count})"
+                )
+
+    def validate_hlsl_set_mesh_output_counts(self, func, role_parameters):
+        calls = self.hlsl_set_mesh_output_count_calls(func)
+        if not calls:
+            return
+
+        previous_local_variable_types = self.local_variable_types
+        self.local_variable_types = {
+            **previous_local_variable_types,
+            **self.function_scope_variable_types(func),
+        }
+        try:
+            for args in calls:
+                if len(args) != 2:
+                    raise ValueError(
+                        "DirectX mesh SetMeshOutputCounts requires exactly "
+                        "two arguments: numVertices and numPrimitives"
+                    )
+
+                self.validate_hlsl_scalar_int_uint_expression(
+                    args[0],
+                    "DirectX mesh SetMeshOutputCounts numVertices argument",
+                )
+                self.validate_hlsl_scalar_int_uint_expression(
+                    args[1],
+                    "DirectX mesh SetMeshOutputCounts numPrimitives argument",
+                )
+                self.validate_hlsl_set_mesh_output_count_bounds(
+                    args,
+                    role_parameters,
+                    (
+                        (
+                            "numVertices",
+                            self.hlsl_mesh_output_parameter_literal_count(
+                                role_parameters["vertices"][0]
+                            ),
+                        ),
+                        (
+                            "numPrimitives",
+                            self.hlsl_mesh_output_parameter_literal_count(
+                                role_parameters["indices"][0]
+                            ),
+                        ),
+                    ),
+                )
+        finally:
+            self.local_variable_types = previous_local_variable_types
 
     def validate_hlsl_mesh_output_parameters(self, func, parameters):
         role_parameters = {}
@@ -5493,6 +5599,11 @@ class HLSLCodeGen:
 
         mesh_output_roles = {"vertices", "indices", "primitives"}
         if not (set(role_parameters) & mesh_output_roles):
+            if self.hlsl_set_mesh_output_count_calls(func):
+                raise ValueError(
+                    "DirectX mesh SetMeshOutputCounts requires mesh output "
+                    "vertices and indices parameters"
+                )
             return
 
         for role, role_params in role_parameters.items():
@@ -5564,6 +5675,7 @@ class HLSLCodeGen:
                 "DirectX mesh stage output signature must call "
                 "SetMeshOutputCounts exactly once"
             )
+        self.validate_hlsl_set_mesh_output_counts(func, role_parameters)
 
     def hlsl_mesh_payload_parameters(self, parameters):
         return [
@@ -5669,17 +5781,10 @@ class HLSLCodeGen:
     def validate_hlsl_dispatch_mesh_group_count_arguments(self, args, shader_type):
         labels = ("ThreadGroupCountX", "ThreadGroupCountY", "ThreadGroupCountZ")
         for label, argument in zip(labels, args[:3]):
-            argument_type = self.expression_result_type(argument)
-            if argument_type is None:
-                continue
-
-            mapped_type = self.map_type(argument_type)
-            base_type, array_suffix = split_array_type_suffix(mapped_type)
-            if array_suffix or base_type not in {"int", "uint"}:
-                raise ValueError(
-                    f"DirectX {shader_type} DispatchMesh {label} argument "
-                    f"must be scalar int or uint, got {mapped_type}"
-                )
+            self.validate_hlsl_scalar_int_uint_expression(
+                argument,
+                f"DirectX {shader_type} DispatchMesh {label} argument",
+            )
 
     def validate_hlsl_dispatch_mesh_calls(self, func, shader_type):
         calls = self.hlsl_dispatch_mesh_calls(func)
@@ -6003,7 +6108,7 @@ class HLSLCodeGen:
         if not topology:
             return
 
-        valid_topologies = {"point", "line", "triangle"}
+        valid_topologies = {"line", "triangle"}
         if topology not in valid_topologies:
             valid_values = ", ".join(sorted(valid_topologies))
             raise ValueError(

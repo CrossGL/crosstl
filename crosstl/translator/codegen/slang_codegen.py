@@ -90,10 +90,13 @@ class SlangCodeGen:
             "gl_VertexID": "SV_VertexID",
             "gl_InstanceID": "SV_InstanceID",
             "gl_PrimitiveID": "SV_PrimitiveID",
+            "gl_Layer": "SV_RenderTargetArrayIndex",
+            "gl_ViewportIndex": "SV_ViewportArrayIndex",
             "gl_FragCoord": "SV_Position",
             "gl_FrontFacing": "SV_IsFrontFace",
             "gl_FragDepth": "SV_Depth",
             "gl_FragColor": "SV_Target",
+            "gl_SampleID": "SV_SampleIndex",
             "gl_FragColor0": "SV_Target0",
             "gl_FragColor1": "SV_Target1",
             "gl_FragColor2": "SV_Target2",
@@ -784,7 +787,12 @@ class SlangCodeGen:
     def map_semantic(self, semantic):
         if semantic is None:
             return None
-        return self.semantic_map.get(str(semantic), str(semantic))
+        semantic_name = str(semantic)
+        if semantic_name.startswith("gl_FragColor"):
+            target_index = semantic_name[len("gl_FragColor") :]
+            if target_index.isdigit():
+                return f"SV_Target{target_index}"
+        return self.semantic_map.get(semantic_name, semantic_name)
 
     def semantic_suffix(self, semantic):
         mapped_semantic = self.map_semantic(semantic)
@@ -1177,6 +1185,9 @@ class SlangCodeGen:
                 "gl_FragCoord": ("vec4", "SV_Position"),
                 "gl_FrontFacing": ("bool", "SV_IsFrontFace"),
                 "gl_PrimitiveID": ("uint", "SV_PrimitiveID"),
+                "gl_SampleID": ("uint", "SV_SampleIndex"),
+                "gl_Layer": ("uint", "SV_RenderTargetArrayIndex"),
+                "gl_ViewportIndex": ("uint", "SV_ViewportArrayIndex"),
             }
         return {}
 
@@ -1320,10 +1331,7 @@ class SlangCodeGen:
         return f"{base_name}_{suffix}"
 
     def slang_builtin_output_field_name(self, target_name):
-        target_suffix = (
-            target_name[3:] if target_name.startswith("gl_") else target_name
-        )
-        return f"cgl_{target_suffix}"
+        return f"cgl_{target_name.removeprefix('gl_')}"
 
     def slang_stage_builtin_return_aliases(self, rewrite):
         if rewrite is None:
@@ -1355,16 +1363,26 @@ class SlangCodeGen:
                 continue
 
             target = getattr(node, "left", getattr(node, "target", None))
-            target_name = self.identifier_name(target)
+            target_name = self.slang_stage_builtin_output_target_name(target)
             if self.slang_stage_builtin_return_type(shader_type, target_name):
                 assignments.append((node, target_name))
         return assignments
 
+    def slang_stage_builtin_output_target_name(self, target):
+        target_name = self.identifier_name(target)
+        if target_name is not None:
+            return target_name
+
+        if isinstance(target, ArrayAccessNode):
+            array_name = self.identifier_name(getattr(target, "array", None))
+            index = self.literal_int_value(getattr(target, "index", None))
+            if array_name == "gl_FragData" and index is not None and index >= 0:
+                return f"gl_FragColor{index}"
+
+        return None
+
     def unique_slang_builtin_output_local_name(self, target_name, body_statements):
-        target_suffix = (
-            target_name[3:] if target_name.startswith("gl_") else target_name
-        )
-        base_name = f"cgl_{target_suffix}"
+        base_name = f"cgl_{target_name.removeprefix('gl_')}"
         used_names = set()
         for node in self.walk_ast(body_statements):
             if hasattr(node, "name") and isinstance(getattr(node, "name"), str):
@@ -1378,11 +1396,15 @@ class SlangCodeGen:
         return f"{base_name}_{suffix}"
 
     def slang_stage_builtin_return_type(self, shader_type, target_name):
+        if target_name is None:
+            return None
         if shader_type == "vertex":
             if target_name == "gl_Position":
                 return "vec4"
             if target_name == "gl_PointSize":
                 return "float"
+            if target_name in {"gl_Layer", "gl_ViewportIndex"}:
+                return "uint"
         if shader_type == "fragment":
             if target_name == "gl_FragDepth":
                 return "float"
@@ -1474,13 +1496,21 @@ class SlangCodeGen:
             return self.generate_expression(node) + ";"
 
     def generate_assignment(self, node):
-        left = self.generate_expression(node.left)
+        left = self.slang_assignment_target_alias(
+            node.left
+        ) or self.generate_expression(node.left)
         right = self.generate_expression_with_expected(
             node.right, self.expression_result_type(node.left)
         )
         if node.operator == "%=" and self.modulo_requires_fmod(node.left, node.right):
             return f"{left} = fmod({left}, {right})"
         return f"{left} {node.operator} {right}"
+
+    def slang_assignment_target_alias(self, target):
+        target_name = self.slang_stage_builtin_output_target_name(target)
+        if target_name is None:
+            return None
+        return self.identifier_aliases.get(target_name)
 
     def generate_expression_with_expected(self, expr, expected_type):
         previous_expected_type = self.current_expression_expected_type

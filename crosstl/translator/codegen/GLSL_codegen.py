@@ -275,6 +275,21 @@ from .match_utils import (
 class GLSLCodeGen:
     """Emit GLSL source from the shared CrossGL translator AST."""
 
+    MESH_STAGE_NAMES = {"mesh", "task", "amplification", "object"}
+    RAY_STAGE_NAMES = {
+        "ray_generation",
+        "ray_intersection",
+        "ray_any_hit",
+        "ray_closest_hit",
+        "ray_miss",
+        "ray_callable",
+        "intersection",
+        "anyhit",
+        "closesthit",
+        "miss",
+        "callable",
+    }
+
     def __init__(self):
         """Initialize GLSL type maps and per-generation stage/resource state."""
         self.sampler_variables = set()
@@ -722,7 +737,7 @@ class GLSLCodeGen:
         """Generate GLSL source for a single requested shader stage."""
         return self.generate_program(ast, target_stage=shader_type)
 
-    def glsl_stage_extension_lines(self, ast, target_stage=None):
+    def glsl_stage_names(self, ast, target_stage=None):
         stage_names = set()
 
         for func in getattr(ast, "functions", []) or []:
@@ -740,22 +755,20 @@ class GLSLCodeGen:
             if stage_matches(target_stage, stage_name):
                 stage_names.add(stage_name)
 
+        return stage_names
+
+    def default_glsl_version_line(self, ast, target_stage=None):
+        if self.glsl_stage_names(ast, target_stage) & self.RAY_STAGE_NAMES:
+            return "#version 460 core"
+        return "#version 450 core"
+
+    def glsl_stage_extension_lines(self, ast, target_stage=None):
+        stage_names = self.glsl_stage_names(ast, target_stage)
+
         lines = []
-        if stage_names & {"mesh", "task", "amplification", "object"}:
+        if stage_names & self.MESH_STAGE_NAMES:
             lines.append("#extension GL_EXT_mesh_shader : require")
-        if stage_names & {
-            "ray_generation",
-            "ray_intersection",
-            "ray_any_hit",
-            "ray_closest_hit",
-            "ray_miss",
-            "ray_callable",
-            "intersection",
-            "anyhit",
-            "closesthit",
-            "miss",
-            "callable",
-        }:
+        if stage_names & self.RAY_STAGE_NAMES:
             lines.append("#extension GL_EXT_ray_tracing : require")
         return lines
 
@@ -952,7 +965,7 @@ class GLSLCodeGen:
             elif line:
                 extra_lines.append(line)
         if version_line is None:
-            version_line = "#version 450 core"
+            version_line = self.default_glsl_version_line(ast, target_stage)
         code += f"{version_line}\n"
         for line in self.glsl_stage_extension_lines(ast, target_stage):
             if line not in extra_lines:
@@ -1133,6 +1146,14 @@ class GLSLCodeGen:
                 var_name = f"var{index}"
 
             if self.is_glsl_buffer_block_variable(node, vtype):
+                if self.is_shader_record_buffer_block(node):
+                    declaration = self.glsl_buffer_block_declaration(
+                        node, vtype, var_name, None, array_suffix
+                    )
+                    if declaration is not None:
+                        code += declaration
+                        continue
+
                 binding_namespace = "buffer binding"
                 explicit_binding = self.explicit_resource_binding_index(node)
                 resource_binding = (
@@ -3670,7 +3691,7 @@ class GLSLCodeGen:
                 emitted.append(qualifier)
 
         for qualifier in qualifiers:
-            normalized = qualifier[5:] if qualifier.startswith("glsl_") else qualifier
+            normalized = qualifier.removeprefix("glsl_")
             normalized = normalized.replace("-", "_")
             if normalized in {"perprimitive", "perprimitiveext"}:
                 add("perprimitiveEXT")
@@ -7401,10 +7422,20 @@ class GLSLCodeGen:
         attr = self.glsl_buffer_block_attribute(node)
         arguments = getattr(attr, "arguments", []) if attr is not None else []
         if arguments:
-            layout = self.attribute_value_to_string(arguments[0])
-            if layout:
-                return layout
+            layout_parts = [
+                self.attribute_value_to_string(argument) for argument in arguments
+            ]
+            layout_parts = [part for part in layout_parts if part]
+            if layout_parts:
+                return ", ".join(layout_parts)
         return "std430"
+
+    def is_shader_record_buffer_block(self, node):
+        layout_parts = {
+            part.strip().lower().replace("_", "")
+            for part in self.glsl_buffer_block_layout(node).split(",")
+        }
+        return "shaderrecordext" in layout_parts
 
     def is_glsl_buffer_block_variable(self, node, vtype=None):
         if self.glsl_buffer_block_attribute(node) is None:
@@ -7433,10 +7464,12 @@ class GLSLCodeGen:
         layout = self.glsl_buffer_block_layout(node)
         memory_qualifiers = self.resource_memory_qualifiers(node)
         qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
-        code = (
-            f"layout({layout}, binding = {binding}) {qualifier_prefix}buffer "
-            f"{block_name} {{\n"
+        layout_prefix = (
+            f"layout({layout})"
+            if binding is None
+            else f"layout({layout}, binding = {binding})"
         )
+        code = f"{layout_prefix} {qualifier_prefix}buffer " f"{block_name} {{\n"
         for member in getattr(struct, "members", []) or []:
             code += self.generate_struct_member_declaration(member)
         code += f"}} {name}{array_suffix};\n"

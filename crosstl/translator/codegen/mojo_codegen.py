@@ -133,11 +133,15 @@ MOJO_RESOURCE_TYPE_MAPPING = {
     "sampler1DArray": "Texture1DArray",
     "sampler2D": "Texture2D",
     "sampler2DArray": "Texture2DArray",
+    "sampler2DArrayShadow": "Texture2DArrayShadow",
+    "sampler2DShadow": "Texture2DShadow",
     "sampler2DMS": "Texture2DMS",
     "sampler2DMSArray": "Texture2DMSArray",
     "sampler3D": "Texture3D",
     "samplerCube": "TextureCube",
     "samplerCubeArray": "TextureCubeArray",
+    "samplerCubeArrayShadow": "TextureCubeArrayShadow",
+    "samplerCubeShadow": "TextureCubeShadow",
     "sampler": "Sampler",
     "image1D": "Image1D",
     "image1DArray": "Image1DArray",
@@ -168,9 +172,13 @@ MOJO_RESOURCE_SAMPLE_COORDS = {
     "Texture1DArray": "SIMD[DType.float32, 2]",
     "Texture2D": "SIMD[DType.float32, 2]",
     "Texture2DArray": "SIMD[DType.float32, 4]",
+    "Texture2DArrayShadow": "SIMD[DType.float32, 4]",
+    "Texture2DShadow": "SIMD[DType.float32, 2]",
     "Texture3D": "SIMD[DType.float32, 4]",
     "TextureCube": "SIMD[DType.float32, 4]",
     "TextureCubeArray": "SIMD[DType.float32, 4]",
+    "TextureCubeArrayShadow": "SIMD[DType.float32, 4]",
+    "TextureCubeShadow": "SIMD[DType.float32, 4]",
 }
 
 MOJO_RESOURCE_TEXEL_COORDS = {
@@ -178,11 +186,15 @@ MOJO_RESOURCE_TEXEL_COORDS = {
     "Texture1DArray": "SIMD[DType.int32, 2]",
     "Texture2D": "SIMD[DType.int32, 2]",
     "Texture2DArray": "SIMD[DType.int32, 4]",
+    "Texture2DArrayShadow": "SIMD[DType.int32, 4]",
+    "Texture2DShadow": "SIMD[DType.int32, 2]",
     "Texture2DMS": "SIMD[DType.int32, 2]",
     "Texture2DMSArray": "SIMD[DType.int32, 4]",
     "Texture3D": "SIMD[DType.int32, 4]",
     "TextureCube": "SIMD[DType.int32, 4]",
     "TextureCubeArray": "SIMD[DType.int32, 4]",
+    "TextureCubeArrayShadow": "SIMD[DType.int32, 4]",
+    "TextureCubeShadow": "SIMD[DType.int32, 4]",
     "Image1D": "Int32",
     "Image1DArray": "SIMD[DType.int32, 2]",
     "Image2D": "SIMD[DType.int32, 2]",
@@ -212,11 +224,15 @@ MOJO_RESOURCE_SIZE_RETURNS = {
     "Texture1DArray": "SIMD[DType.int32, 2]",
     "Texture2D": "SIMD[DType.int32, 2]",
     "Texture2DArray": "SIMD[DType.int32, 4]",
+    "Texture2DArrayShadow": "SIMD[DType.int32, 4]",
+    "Texture2DShadow": "SIMD[DType.int32, 2]",
     "Texture2DMS": "SIMD[DType.int32, 2]",
     "Texture2DMSArray": "SIMD[DType.int32, 4]",
     "Texture3D": "SIMD[DType.int32, 4]",
     "TextureCube": "SIMD[DType.int32, 2]",
     "TextureCubeArray": "SIMD[DType.int32, 4]",
+    "TextureCubeArrayShadow": "SIMD[DType.int32, 4]",
+    "TextureCubeShadow": "SIMD[DType.int32, 2]",
     "Image1D": "Int32",
     "Image1DArray": "SIMD[DType.int32, 2]",
     "Image2D": "SIMD[DType.int32, 2]",
@@ -239,6 +255,36 @@ MOJO_RESOURCE_SIZE_RETURNS = {
     "UImage2DMS": "SIMD[DType.int32, 2]",
     "UImage2DMSArray": "SIMD[DType.int32, 4]",
     "UImage3D": "SIMD[DType.int32, 4]",
+}
+
+MOJO_GENERIC_TEXTURE_BUILTINS = {
+    "textureOffset": ("sample_offset", "vec4"),
+    "textureLodOffset": ("sample_lod_offset", "vec4"),
+    "textureGradOffset": ("sample_grad_offset", "vec4"),
+    "textureGather": ("texture_gather", "vec4"),
+    "textureGatherOffset": ("texture_gather_offset", "vec4"),
+    "textureGatherOffsets": ("texture_gather_offsets", "vec4"),
+    "textureProj": ("sample_proj", "vec4"),
+    "textureProjOffset": ("sample_proj_offset", "vec4"),
+    "textureProjLod": ("sample_proj_lod", "vec4"),
+    "textureProjLodOffset": ("sample_proj_lod_offset", "vec4"),
+    "textureProjGrad": ("sample_proj_grad", "vec4"),
+    "textureProjGradOffset": ("sample_proj_grad_offset", "vec4"),
+    "textureQueryLod": ("texture_query_lod", "vec2"),
+    "textureCompare": ("texture_compare", "float"),
+    "textureCompareOffset": ("texture_compare_offset", "float"),
+    "textureCompareLod": ("texture_compare_lod", "float"),
+    "textureCompareLodOffset": ("texture_compare_lod_offset", "float"),
+    "textureCompareGrad": ("texture_compare_grad", "float"),
+    "textureCompareGradOffset": ("texture_compare_grad_offset", "float"),
+    "textureCompareProj": ("texture_compare_proj", "float"),
+    "textureCompareProjOffset": ("texture_compare_proj_offset", "float"),
+    "textureCompareProjLod": ("texture_compare_proj_lod", "float"),
+    "textureCompareProjLodOffset": ("texture_compare_proj_lod_offset", "float"),
+    "textureCompareProjGrad": ("texture_compare_proj_grad", "float"),
+    "textureCompareProjGradOffset": ("texture_compare_proj_grad_offset", "float"),
+    "textureGatherCompare": ("texture_gather_compare", "vec4"),
+    "textureGatherCompareOffset": ("texture_gather_compare_offset", "vec4"),
 }
 
 MOJO_INTEGER_INDEX_TYPES = {"int", "uint", "short", "ushort", "long", "ulong"}
@@ -273,6 +319,7 @@ class MojoCodeGen:
         self.required_resource_texel_fetch_types = set()
         self.required_image_load_types = set()
         self.required_image_store_types = set()
+        self.required_resource_builtin_helpers = {}
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -409,6 +456,7 @@ class MojoCodeGen:
         self.required_resource_texel_fetch_types = set()
         self.required_image_load_types = set()
         self.required_image_store_types = set()
+        self.required_resource_builtin_helpers = {}
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -1858,6 +1906,11 @@ class MojoCodeGen:
                 return self.generate_image_load_call(expr.args)
             if func_name == "imageStore":
                 return self.generate_image_store_call(expr.args)
+            if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
+                helper_base, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
+                return self.generate_resource_builtin_call(
+                    expr.args, helper_base, return_kind
+                )
 
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
@@ -2119,6 +2172,7 @@ class MojoCodeGen:
         if not args:
             return f"{helper_name}()"
 
+        args = self.strip_split_sampler_arg(args)
         texture_type = self.expression_result_type(args[0])
         mapped_type = self.map_type(texture_type)
         if mapped_type in MOJO_RESOURCE_SAMPLE_COORDS:
@@ -2131,6 +2185,14 @@ class MojoCodeGen:
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"{helper_name}({generated_args})"
+
+    def strip_split_sampler_arg(self, args):
+        if len(args) < 3:
+            return args
+        sampler_type = self.map_type(self.expression_result_type(args[1]))
+        if sampler_type == "Sampler":
+            return [args[0], *args[2:]]
+        return args
 
     def generate_resource_size_call(self, args, helper_name):
         if not args:
@@ -2178,6 +2240,51 @@ class MojoCodeGen:
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"image_store({generated_args})"
+
+    def generate_resource_builtin_call(self, args, helper_base, return_kind):
+        if not args:
+            return f"{helper_base}()"
+
+        args = self.strip_split_sampler_arg(args)
+        arg_types = tuple(self.resource_builtin_arg_type(arg) for arg in args)
+        helper_name = self.resource_builtin_helper_name(helper_base, arg_types)
+        self.required_resource_builtin_helpers[(helper_name, arg_types)] = {
+            "name": helper_name,
+            "arg_types": arg_types,
+            "return_type": self.resource_builtin_return_type(return_kind),
+        }
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def resource_builtin_arg_type(self, arg):
+        type_name = self.expression_result_type(arg)
+        mapped_type = self.map_type(type_name)
+        if mapped_type not in {"Float32", None}:
+            return mapped_type
+
+        dtype = self.expression_mojo_dtype(arg)
+        if dtype is not None:
+            scalar_type = MOJO_DTYPE_INFO.get(dtype, MOJO_DTYPE_INFO["DType.float32"])[
+                0
+            ]
+            return self.map_type(scalar_type)
+
+        return "Float32"
+
+    def resource_builtin_return_type(self, return_kind):
+        if return_kind == "float":
+            return "Float32"
+        if return_kind == "vec2":
+            return "SIMD[DType.float32, 2]"
+        return "SIMD[DType.float32, 4]"
+
+    def resource_builtin_helper_name(self, helper_base, arg_types):
+        parts = [helper_base]
+        for arg_type in arg_types:
+            safe_type = re.sub(r"[^0-9A-Za-z]+", "_", arg_type).strip("_")
+            parts.append(safe_type)
+        return "_crossgl_" + "_".join(parts)
 
     def generate_bool_vector_select_expression(
         self, condition_expr, true_expr, false_expr
@@ -2428,6 +2535,7 @@ class MojoCodeGen:
             and not self.required_resource_texel_fetch_types
             and not self.required_image_load_types
             and not self.required_image_store_types
+            and not self.required_resource_builtin_helpers
         ):
             return ""
 
@@ -2442,7 +2550,11 @@ class MojoCodeGen:
             | self.required_image_load_types
             | self.required_image_store_types
         )
-        if self.required_resource_types or resource_sampled_types:
+        if (
+            self.required_resource_types
+            or resource_sampled_types
+            or self.required_resource_builtin_helpers
+        ):
             code += "# CrossGL resource placeholders\n"
             for resource_type in sorted(
                 self.required_resource_types | resource_sampled_types
@@ -2464,6 +2576,10 @@ class MojoCodeGen:
                 code += self.generate_image_load_helper(resource_type)
             for resource_type in sorted(self.required_image_store_types):
                 code += self.generate_image_store_helper(resource_type)
+            for key in sorted(self.required_resource_builtin_helpers):
+                code += self.generate_resource_builtin_helper(
+                    self.required_resource_builtin_helpers[key]
+                )
             code += "\n"
 
         if self.required_fract_helpers or self.required_saturate_helpers:
@@ -2594,6 +2710,15 @@ class MojoCodeGen:
                 f"value: {value_type}):\n"
             )
         code += "    pass\n\n"
+        return code
+
+    def generate_resource_builtin_helper(self, helper):
+        params = [
+            f"arg{index}: {arg_type}"
+            for index, arg_type in enumerate(helper["arg_types"])
+        ]
+        code = f"fn {helper['name']}({', '.join(params)}) -> {helper['return_type']}:\n"
+        code += f"    return {self.zero_mojo_value(helper['return_type'])}\n\n"
         return code
 
     def is_multisample_resource_type(self, resource_type):
@@ -3188,6 +3313,13 @@ class MojoCodeGen:
                 return "vec4"
             if func_name == "imageStore":
                 return "void"
+            if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
+                _, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
+                if return_kind == "float":
+                    return "float"
+                if return_kind == "vec2":
+                    return "vec2"
+                return "vec4"
             return self.function_return_types.get(func_name)
         if isinstance(expr, MemberAccessNode):
             swizzle_indices = self.get_swizzle_indices(expr.member)

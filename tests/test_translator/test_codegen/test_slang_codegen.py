@@ -298,6 +298,63 @@ def test_fragment_multiple_color_outputs_rewrite_to_slang_output_struct():
     assert "return cgl_Output;" in generated_code
 
 
+def test_fragment_frag_data_output_rewrites_to_slang_target_semantic():
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                gl_FragData[0] = vec4(1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 main() : SV_Target0" in generated_code
+    assert "return float4(1.0);" in generated_code
+    assert "gl_FragData" not in generated_code
+
+
+def test_fragment_multiple_frag_data_outputs_rewrite_to_slang_output_struct():
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                gl_FragData[0] = vec4(1.0);
+                gl_FragData[1] = vec4(0.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 cgl_FragColor0 : SV_Target0;" in generated_code
+    assert "float4 cgl_FragColor1 : SV_Target1;" in generated_code
+    assert "cgl_Output.cgl_FragColor0 = float4(1.0);" in generated_code
+    assert "cgl_Output.cgl_FragColor1 = float4(0.0);" in generated_code
+    assert "return cgl_Output;" in generated_code
+    assert "gl_FragData" not in generated_code
+
+
+def test_fragment_non_output_array_assignment_does_not_crash_output_scan():
+    code = """
+    shader main {
+        vec4 colors[2];
+
+        fragment {
+            void main() {
+                colors[0] = vec4(1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 colors[2];" in generated_code
+    assert "void main()" in generated_code
+    assert "colors[0] = float4(1.0);" in generated_code
+
+
 def test_vertex_position_and_point_size_outputs_rewrite_to_slang_output_struct():
     code = """
     shader main {

@@ -1773,24 +1773,20 @@ class MetalCodeGen:
                 f"{stage_attribute} {return_type} {function_name}({params_str}) {{\n"
             )
         elif shader_type in [
-            "ray_intersection",
             "ray_any_hit",
             "ray_closest_hit",
             "ray_miss",
             "ray_callable",
-            "intersection",
             "anyhit",
             "closesthit",
             "miss",
             "callable",
         ]:
             rt_stage_map = {
-                "ray_intersection": "intersection",
                 "ray_any_hit": "anyhit",
                 "ray_closest_hit": "closesthit",
                 "ray_miss": "miss",
                 "ray_callable": "callable",
-                "intersection": "intersection",
                 "anyhit": "anyhit",
                 "closesthit": "closesthit",
                 "miss": "miss",
@@ -1798,7 +1794,16 @@ class MetalCodeGen:
             }
             stage_keyword = rt_stage_map.get(shader_type, shader_type)
             function_name = entry_name or f"{stage_keyword}_{func.name}"
-            code += f"{stage_keyword} {return_type} {function_name}({params_str}) {{\n"
+            code += f"[[visible]] {return_type} {function_name}({params_str}) {{\n"
+        elif shader_type in ["ray_intersection", "intersection"]:
+            function_name = entry_name or f"intersection_{func.name}"
+            stage_attribute = self.metal_ray_intersection_stage_attribute(
+                func, raw_return_type
+            )
+            code += (
+                f"{stage_attribute} {return_type} "
+                f"{function_name}({params_str}) {{\n"
+            )
         else:
             semantic = self.semantic_from_node(func)
             function_name = entry_name or func.name
@@ -4136,6 +4141,25 @@ class MetalCodeGen:
         ]
 
     def parameter_attribute(self, raw_param_type, semantic, shader_type, node=None):
+        if shader_type == "ray_generation" and semantic == "payload":
+            return ""
+        if (
+            shader_type
+            in {
+                "ray_intersection",
+                "ray_any_hit",
+                "ray_closest_hit",
+                "ray_miss",
+                "ray_callable",
+                "intersection",
+                "anyhit",
+                "closesthit",
+                "miss",
+                "callable",
+            }
+            and semantic == "hit_attribute"
+        ):
+            return ""
         if semantic:
             return self.map_semantic(semantic)
         if shader_type in {"vertex", "fragment", "compute"}:
@@ -4318,6 +4342,12 @@ class MetalCodeGen:
     def format_parameter_declaration(
         self, raw_param_type, mapped_type, name, node=None, shader_type=None
     ):
+        ray_payload_declaration = self.metal_ray_payload_parameter_declaration(
+            mapped_type, name, node, shader_type
+        )
+        if ray_payload_declaration is not None:
+            return ray_payload_declaration
+
         mesh_payload_declaration = self.metal_mesh_payload_parameter_declaration(
             mapped_type, name, node, shader_type
         )
@@ -4354,6 +4384,31 @@ class MetalCodeGen:
             return None
 
         address_space = "const object_data" if shader_type == "mesh" else "object_data"
+        return f"{address_space} {mapped_type}& {name}"
+
+    def metal_ray_payload_parameter_declaration(
+        self, mapped_type, name, node=None, shader_type=None
+    ):
+        if shader_type == "ray_generation":
+            address_space = "device"
+        elif shader_type in {
+            "ray_intersection",
+            "ray_any_hit",
+            "ray_closest_hit",
+            "ray_miss",
+            "ray_callable",
+            "intersection",
+            "anyhit",
+            "closesthit",
+            "miss",
+            "callable",
+        }:
+            address_space = "ray_data"
+        else:
+            return None
+        if self.semantic_from_node(node) != "payload":
+            return None
+
         return f"{address_space} {mapped_type}& {name}"
 
     def structured_buffer_parameter_array_size(self, vtype, node=None):
@@ -4623,6 +4678,35 @@ class MetalCodeGen:
         if threadgroup_limit:
             attributes.append(f"max_total_threads_per_threadgroup({threadgroup_limit})")
         return f"[[{', '.join(attributes)}]]"
+
+    def metal_ray_intersection_stage_attribute(self, func, raw_return_type):
+        primitive_type = self.metal_ray_intersection_primitive_type(
+            func, raw_return_type
+        )
+        return f"[[intersection({primitive_type})]]"
+
+    def metal_ray_intersection_primitive_type(self, func, raw_return_type):
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            normalized = str(attr_name).strip().lower().replace("-", "_")
+            arguments = getattr(attr, "arguments", []) or []
+            if normalized in {"bounding_box", "boundingbox"}:
+                return "bounding_box"
+            if normalized in {"triangle", "triangles"}:
+                return "triangle"
+            if normalized in {"intersection", "primitive_type"} and arguments:
+                requested_value = self.attribute_value_to_string(arguments[0])
+                if requested_value is None:
+                    continue
+                requested = str(requested_value).strip().lower().replace("-", "_")
+                if requested in {"bounding_box", "boundingbox"}:
+                    return "bounding_box"
+                if requested in {"triangle", "triangles"}:
+                    return "triangle"
+
+        return "triangle" if raw_return_type == "bool" else "bounding_box"
 
     def metal_stage_threadgroup_limit(self, func, shader_type, execution_config=None):
         if shader_type not in {"mesh", "object", "task", "amplification"}:

@@ -472,6 +472,11 @@ def test_resource_placeholders_emit_for_sampler_types():
     vec4 sampleGrad(sampler2D tex, vec2 uv) {
         return textureGrad(tex, uv, uv, uv);
     }
+    vec4 sampleSplit(sampler2D tex, sampler state, vec2 uv) {
+        return texture(tex, state, uv) +
+            textureLod(tex, state, uv, 1.0) +
+            textureGrad(tex, state, uv, uv, uv);
+    }
     void noop() {}
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
@@ -520,6 +525,12 @@ def test_resource_placeholders_emit_for_sampler_types():
     )
     assert "return sample_lod(tex, uv, 1.0)" in generated_code
     assert "return sample_grad(tex, uv, uv, uv)" in generated_code
+    assert "sample(tex, uv)" in generated_code
+    assert "sample_lod(tex, uv, 1.0)" in generated_code
+    assert "sample_grad(tex, uv, uv, uv)" in generated_code
+    assert "sample(tex, state, uv)" not in generated_code
+    assert "sample_lod(tex, state, uv, 1.0)" not in generated_code
+    assert "sample_grad(tex, state, uv, uv, uv)" not in generated_code
     assert "fn noop() -> None:\n    pass" in generated_code
     assert "sampler1D" not in generated_code
     assert "sampler1DArray" not in generated_code
@@ -572,6 +583,11 @@ def test_resource_placeholders_compile_with_mojo(tmp_path):
     }
     vec4 sampleGrad(sampler2D tex, vec2 uv) {
         return textureGrad(tex, uv, uv, uv);
+    }
+    vec4 sampleSplit(sampler2D tex, sampler state, vec2 uv) {
+        return texture(tex, state, uv) +
+            textureLod(tex, state, uv, 1.0) +
+            textureGrad(tex, state, uv, uv, uv);
     }
     void noop() {}
     """
@@ -715,6 +731,126 @@ def test_resource_query_and_image_placeholders_compile_with_mojo(tmp_path):
     generated_code += "\nfn main():\n    pass\n"
 
     source_path = tmp_path / "resource_query_image_placeholders.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_multisample_resource_placeholders_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    sampler2DMS msTex;
+    sampler2DMSArray msLayers;
+    image2DMS msImage;
+    uimage2DMSArray msCounters;
+
+    ivec2 msTexSize(sampler2DMS tex) {
+        return textureSize(tex);
+    }
+    ivec3 msLayerSize(sampler2DMSArray tex) {
+        return textureSize(tex);
+    }
+    vec4 fetchMs(sampler2DMS tex, ivec2 pixel, int sampleIndex) {
+        return texelFetch(tex, pixel, sampleIndex);
+    }
+    vec4 fetchLayerMs(sampler2DMSArray tex, ivec3 pixelLayer, int sampleIndex) {
+        return texelFetch(tex, pixelLayer, sampleIndex);
+    }
+    vec4 readMs(image2DMS image, ivec2 pixel, int sampleIndex) {
+        return imageLoad(image, pixel, sampleIndex);
+    }
+    void writeMs(image2DMS image, ivec2 pixel, int sampleIndex, vec4 value) {
+        imageStore(image, pixel, sampleIndex, value);
+    }
+    uint readLayerMs(uimage2DMSArray image, ivec3 pixelLayer, int sampleIndex) {
+        return imageLoad(image, pixelLayer, sampleIndex);
+    }
+    void writeLayerMs(
+        uimage2DMSArray image,
+        ivec3 pixelLayer,
+        int sampleIndex,
+        uint value
+    ) {
+        imageStore(image, pixelLayer, sampleIndex, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Texture2DMS:" in generated_code
+    assert "struct Texture2DMSArray:" in generated_code
+    assert "struct Image2DMS:" in generated_code
+    assert "struct UImage2DMSArray:" in generated_code
+    assert (
+        "fn texture_size(tex: Texture2DMS) -> SIMD[DType.int32, 2]:" in generated_code
+    )
+    assert (
+        "fn texture_size(tex: Texture2DMSArray) -> SIMD[DType.int32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], lod: Int32)"
+        in generated_code
+    )
+    assert (
+        "fn texel_fetch(tex: Texture2DMSArray, coord: SIMD[DType.int32, 4], "
+        "lod: Int32)" in generated_code
+    )
+    assert (
+        "fn image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], "
+        "sample: Int32) -> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: UImage2DMSArray, coord: SIMD[DType.int32, 4], "
+        "sample: Int32, value: UInt32):" in generated_code
+    )
+    assert "return texture_size(tex)" in generated_code
+    assert "return texel_fetch(tex, pixel, sampleIndex)" in generated_code
+    assert "return image_load(image, pixel, sampleIndex)" in generated_code
+    assert "image_store(image, pixelLayer, sampleIndex, value)" in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "multisample_resource_placeholders.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_resource_arrays_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    sampler2D textures[2];
+    image2D images[2];
+
+    vec4 sampleArray(int index, vec2 uv) {
+        return texture(textures[index], uv);
+    }
+    vec4 readArray(int index, ivec2 pixel) {
+        return imageLoad(images[index], pixel);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var textures = InlineArray[Texture2D, 2]" in generated_code
+    assert "var images = InlineArray[Image2D, 2]" in generated_code
+    assert "return sample(textures[int(index)], uv)" in generated_code
+    assert "return image_load(images[int(index)], pixel)" in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "resource_arrays.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
         [mojo, "run", str(source_path)],

@@ -1484,19 +1484,30 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "samplerCubeArrayShadow": "cudaTextureObject_t",
             "sampler2DMS": "cudaTextureObject_t",
             "sampler2DMSArray": "cudaTextureObject_t",
+            "image1D": "cudaSurfaceObject_t",
+            "image1DArray": "cudaSurfaceObject_t",
             "image2D": "cudaSurfaceObject_t",
             "image3D": "cudaSurfaceObject_t",
             "imageCube": "cudaSurfaceObject_t",
+            "imageCubeArray": "cudaSurfaceObject_t",
             "image2DArray": "cudaSurfaceObject_t",
             "image2DMS": "cudaSurfaceObject_t",
             "image2DMSArray": "cudaSurfaceObject_t",
+            "iimage1D": "cudaSurfaceObject_t",
+            "iimage1DArray": "cudaSurfaceObject_t",
             "iimage2D": "cudaSurfaceObject_t",
             "iimage3D": "cudaSurfaceObject_t",
+            "iimageCube": "cudaSurfaceObject_t",
+            "iimageCubeArray": "cudaSurfaceObject_t",
             "iimage2DArray": "cudaSurfaceObject_t",
             "iimage2DMS": "cudaSurfaceObject_t",
             "iimage2DMSArray": "cudaSurfaceObject_t",
+            "uimage1D": "cudaSurfaceObject_t",
+            "uimage1DArray": "cudaSurfaceObject_t",
             "uimage2D": "cudaSurfaceObject_t",
             "uimage3D": "cudaSurfaceObject_t",
+            "uimageCube": "cudaSurfaceObject_t",
+            "uimageCubeArray": "cudaSurfaceObject_t",
             "uimage2DArray": "cudaSurfaceObject_t",
             "uimage2DMS": "cudaSurfaceObject_t",
             "uimage2DMSArray": "cudaSurfaceObject_t",
@@ -1941,18 +1952,30 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             x = self.surface_x_offset(coord, value_type)
             y = self.coord_component(coord, "y")
 
+            if "CubeArray" in image_type:
+                layer_face = self.coord_component(coord, "z")
+                return (
+                    f"surfCubemapLayeredread<{value_type}>"
+                    f"({image_name}, {x}, {y}, {layer_face})"
+                )
             if "Cube" in image_type:
                 face = self.coord_component(coord, "z")
                 return f"surfCubemapread<{value_type}>({image_name}, {x}, {y}, {face})"
             if "3D" in image_type:
                 z = self.coord_component(coord, "z")
                 return f"surf3Dread<{value_type}>({image_name}, {x}, {y}, {z})"
+            if "1DArray" in image_type:
+                layer = self.coord_component(coord, "y")
+                return f"surf1DLayeredread<{value_type}>({image_name}, {x}, {layer})"
             if "Array" in image_type:
                 layer = self.coord_component(coord, "z")
                 return (
                     f"surf2DLayeredread<{value_type}>"
                     f"({image_name}, {x}, {y}, {layer})"
                 )
+            if "1D" in image_type:
+                x = f"{coord} * sizeof({value_type})"
+                return f"surf1Dread<{value_type}>({image_name}, {x})"
             if "2D" in image_type:
                 return f"surf2Dread<{value_type}>({image_name}, {x}, {y})"
 
@@ -1972,15 +1995,27 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             x = self.surface_x_offset(coord, value_type)
             y = self.coord_component(coord, "y")
 
+            if "CubeArray" in image_type:
+                layer_face = self.coord_component(coord, "z")
+                return (
+                    f"surfCubemapLayeredwrite"
+                    f"({value}, {image_name}, {x}, {y}, {layer_face})"
+                )
             if "Cube" in image_type:
                 face = self.coord_component(coord, "z")
                 return f"surfCubemapwrite({value}, {image_name}, {x}, {y}, {face})"
             if "3D" in image_type:
                 z = self.coord_component(coord, "z")
                 return f"surf3Dwrite({value}, {image_name}, {x}, {y}, {z})"
+            if "1DArray" in image_type:
+                layer = self.coord_component(coord, "y")
+                return f"surf1DLayeredwrite({value}, {image_name}, {x}, {layer})"
             if "Array" in image_type:
                 layer = self.coord_component(coord, "z")
                 return f"surf2DLayeredwrite({value}, {image_name}, {x}, {y}, {layer})"
+            if "1D" in image_type:
+                x = f"{coord} * sizeof({value_type})"
+                return f"surf1Dwrite({value}, {image_name}, {x})"
             if "2D" in image_type:
                 return f"surf2Dwrite({value}, {image_name}, {x}, {y})"
 

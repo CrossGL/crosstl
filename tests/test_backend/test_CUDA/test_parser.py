@@ -659,8 +659,10 @@ class TestCudaParser:
             ).count();
             texture<float4, 2> tex2d;
             texture<float4, cudaTextureType2DLayered> layeredTex;
+            surface<void, cudaSurfaceType1DLayered> lineLayerSurface;
             surface<void, cudaSurfaceType3D> volumeSurface;
             surface<void, cudaSurfaceTypeCubemap> cubeSurface;
+            surface<void, cudaSurfaceTypeCubemapLayered> cubeLayerSurface;
             cudaArray_t arrayRef;
             cudaArray* rawArray;
         }
@@ -682,10 +684,12 @@ class TestCudaParser:
         )
         assert body[4].vtype == "texture<float4, 2>"
         assert body[5].vtype == "texture<float4, cudaTextureType2DLayered>"
-        assert body[6].vtype == "surface<void, cudaSurfaceType3D>"
-        assert body[7].vtype == "surface<void, cudaSurfaceTypeCubemap>"
-        assert body[8].vtype == "cudaArray_t"
-        assert body[9].vtype == "cudaArray *"
+        assert body[6].vtype == "surface<void, cudaSurfaceType1DLayered>"
+        assert body[7].vtype == "surface<void, cudaSurfaceType3D>"
+        assert body[8].vtype == "surface<void, cudaSurfaceTypeCubemap>"
+        assert body[9].vtype == "surface<void, cudaSurfaceTypeCubemapLayered>"
+        assert body[10].vtype == "cudaArray_t"
+        assert body[11].vtype == "cudaArray *"
 
     def test_nested_template_argument_parsing(self):
         """Test nested template arguments that close with >>"""
