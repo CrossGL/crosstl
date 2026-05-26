@@ -233,5 +233,42 @@ def test_parse_mesh_stage_interface_qualifiers_roundtrip():
     assert "SetMeshOutputsEXT(64, 32);" in glsl
 
 
+@pytest.mark.parametrize(
+    ("glsl_statement", "crossgl_call", "regenerated_statement"),
+    [
+        ("ignoreIntersectionEXT;", "IgnoreHit();", "ignoreIntersectionEXT;"),
+        (
+            "terminateRayEXT;",
+            "AcceptHitAndEndSearch();",
+            "terminateRayEXT;",
+        ),
+    ],
+)
+def test_parse_bare_ray_control_statements_roundtrip_canonically(
+    glsl_statement,
+    crossgl_call,
+    regenerated_statement,
+):
+    code = f"""
+    #version 460 core
+    #extension GL_EXT_ray_tracing : require
+
+    void main() {{
+        {glsl_statement}
+    }}
+    """
+
+    crossgl = generate_crossgl(code, "ray_any_hit")
+
+    assert crossgl_call in crossgl
+    assert glsl_statement not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "#extension GL_EXT_ray_tracing : require" in glsl
+    assert regenerated_statement in glsl
+    assert crossgl_call not in glsl
+
+
 if __name__ == "__main__":
     pytest.main()

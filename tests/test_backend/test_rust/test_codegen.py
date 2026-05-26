@@ -2700,6 +2700,10 @@ def test_gpu_image_and_buffer_helper_calls_convert_to_crossgl_intrinsics():
     ) -> Vec4<f32> {
         let color = image_load(color_image, pixel);
         image_store(color_image, pixel, color);
+        let color_size = image_size(color_image);
+        let ramp_size = image_size(ramp_image);
+        let volume_size = image_size(volume_image);
+        let samples = image_samples(ms_image);
         let previous = image_atomic_add(counter_image, pixel, amount);
         let min_value = image_atomic_min(counter_image, pixel, amount);
         let max_value = image_atomic_max(counter_image, pixel, amount);
@@ -2737,6 +2741,10 @@ def test_gpu_image_and_buffer_helper_calls_convert_to_crossgl_intrinsics():
     assert "RWByteAddressBuffer raw_out" in result
     assert "color = imageLoad(color_image, pixel);" in result
     assert "imageStore(color_image, pixel, color);" in result
+    assert "color_size = imageSize(color_image);" in result
+    assert "ramp_size = imageSize(ramp_image);" in result
+    assert "volume_size = imageSize(volume_image);" in result
+    assert "samples = imageSamples(ms_image);" in result
     assert "previous = imageAtomicAdd(counter_image, pixel, amount);" in result
     assert "min_value = imageAtomicMin(counter_image, pixel, amount);" in result
     assert "max_value = imageAtomicMax(counter_image, pixel, amount);" in result
@@ -2757,6 +2765,8 @@ def test_gpu_image_and_buffer_helper_calls_convert_to_crossgl_intrinsics():
     assert "RwBuffer" not in result
     assert "Buffer<f32>" not in result
     assert "image_load" not in result
+    assert "image_size" not in result
+    assert "image_samples" not in result
     assert "image_atomic_min" not in result
     assert "image_atomic_max" not in result
     assert "image_atomic_and" not in result

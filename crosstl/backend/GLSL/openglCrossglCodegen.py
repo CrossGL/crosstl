@@ -943,6 +943,9 @@ class GLSLToCrossGLConverter:
         elif isinstance(node, ReturnNode):
             return self.generate_return(node) + ";"
         elif isinstance(node, VariableNode):
+            ray_control = self.ray_control_statement(node)
+            if ray_control is not None:
+                return ray_control + ";"
             return self.generate_variable_declaration(node) + ";"
         elif isinstance(node, FunctionCallNode):
             return self.generate_function_call(node) + ";"
@@ -1007,6 +1010,17 @@ class GLSLToCrossGLConverter:
             return f"{left_expr} {op} {right_expr}"
 
         return self.generate_expression(node)
+
+    def ray_control_statement(self, node):
+        if getattr(node, "vtype", None):
+            return None
+
+        name = getattr(node, "name", None)
+        mapped_name = self.function_map.get(name)
+        if mapped_name not in {"AcceptHitAndEndSearch", "IgnoreHit"}:
+            return None
+
+        return f"{mapped_name}()"
 
     def generate_if(self, node):
         condition_node = getattr(node, "condition", None)
