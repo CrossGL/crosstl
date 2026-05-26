@@ -1427,7 +1427,10 @@ class HLSLCodeGen:
                     entry_name=stage_entry_names.get(id(func)),
                 )
             else:
-                functions_code += self.generate_function(func)
+                functions_code += self.generate_function(
+                    func,
+                    entry_name=stage_entry_names.get(id(func)),
+                )
 
         # Handle shader stages (new AST structure)
         if hasattr(ast, "stages") and ast.stages:

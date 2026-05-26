@@ -6,7 +6,11 @@ import pytest
 import crosstl.translator
 from crosstl.translator.ast import (
     ArrayNode,
+    BlockNode,
+    ExecutionModel,
+    FunctionNode,
     PrimitiveType,
+    ShaderNode,
     ShaderStage,
     StructMemberNode,
     StructNode,
@@ -5209,6 +5213,43 @@ def test_directx_stage_entry_name_avoids_local_helper_collision():
     assert "float4 PSMain(float2 uv)" in generated_code
     assert "float4 PSMain_2(float2 uv : TEXCOORD0): SV_Target" in generated_code
     assert "return PSMain(uv);" in generated_code
+
+
+def test_directx_qualified_non_graphics_entries_use_stage_specific_names():
+    ast = ShaderNode(
+        "QualifiedAdvancedEntries",
+        ExecutionModel.GRAPHICS_PIPELINE,
+        functions=[
+            FunctionNode(
+                "MSMain",
+                PrimitiveType("void"),
+                [],
+                BlockNode([]),
+            ),
+            FunctionNode(
+                "meshEntry",
+                PrimitiveType("void"),
+                [],
+                BlockNode([]),
+                qualifiers=["mesh"],
+            ),
+            FunctionNode(
+                "rayEntry",
+                PrimitiveType("void"),
+                [],
+                BlockNode([]),
+                qualifiers=["ray_generation"],
+            ),
+        ],
+    )
+
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert "void MSMain()" in generated_code
+    assert '[shader("mesh")]\nvoid MSMain_2()' in generated_code
+    assert '[shader("raygeneration")]\nvoid RayGenMain()' in generated_code
+    assert "void meshEntry()" not in generated_code
+    assert "void rayEntry()" not in generated_code
 
 
 def test_compute_stage_emits_default_numthreads_attribute():
