@@ -285,6 +285,29 @@ shader SpirvSynchronizationValidation {
 """
 
 
+SPIRV_IMAGE_ATOMIC_FORWARDING_COMPUTE_SHADER = """
+shader SpirvImageAtomicForwardingValidation {
+    uimage2D counters @r32ui;
+
+    uint atomicLeaf(uimage2D image @r32ui, ivec2 pixel, uint value) {
+        return imageAtomicAdd(image, pixel, value);
+    }
+
+    uint atomicForward(uimage2D image @r32ui, ivec2 pixel, uint value) {
+        return atomicLeaf(image, pixel, value);
+    }
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(1, 2);
+            uint previous = atomicForward(counters, pixel, 1u);
+            imageStore(counters, pixel, previous);
+        }
+    }
+}
+"""
+
+
 SAMPLED_TEXTURE_ARRAY_FRAGMENT_SHADER = """
 shader SampledTextureArrayValidation {
     sampler2D textures[4];
@@ -1969,6 +1992,25 @@ def test_generated_spirv_integer_image_atomics_validates_with_spirv_tools(
     output = tmp_path / "integer_image_atomics.spv"
     code = VulkanSPIRVCodeGen().generate(
         crosstl.translator.parse(INTEGER_IMAGE_ATOMICS_COMPUTE_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([spirv_as, str(source), "-o", str(output)])
+    run_validator([spirv_val, str(output)])
+
+
+def test_generated_spirv_forwarded_image_atomic_validates_with_spirv_tools(
+    tmp_path,
+):
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is None or spirv_val is None:
+        pytest.skip("spirv-as and spirv-val are not installed")
+
+    source = tmp_path / "forwarded_image_atomic.spvasm"
+    output = tmp_path / "forwarded_image_atomic.spv"
+    code = VulkanSPIRVCodeGen().generate(
+        crosstl.translator.parse(SPIRV_IMAGE_ATOMIC_FORWARDING_COMPUTE_SHADER)
     )
     source.write_text(code, encoding="utf-8")
 

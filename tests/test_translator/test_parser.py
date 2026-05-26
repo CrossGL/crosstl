@@ -1363,6 +1363,31 @@ def test_resource_layout_preserves_access_and_memory_qualifiers():
     assert lookup.qualifiers == ["constant"]
 
 
+def test_capitalized_type_names_are_not_mistaken_for_qualifiers():
+    code = """
+    shader CapitalizedTypeNames {
+        struct Out {
+            vec4 color;
+        };
+
+        vertex {
+            Out main() {
+                Out output;
+                return output;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    entry_point = ast.stages[ShaderStage.VERTEX].entry_point
+
+    assert entry_point.return_type.name == "Out"
+    assert len(entry_point.body.statements) == 2
+    assert entry_point.body.statements[0].name == "output"
+    assert entry_point.body.statements[0].var_type.name == "Out"
+
+
 def test_stage_layout_qualifiers_preserve_geometry_and_tessellation_metadata():
     code = """
     shader StageLayouts {
@@ -2089,6 +2114,67 @@ def test_struct_member_layout_attributes_parse_with_post_attributes():
         "centroid",
     ]
     assert [attribute.arguments[0].value for attribute in uv.attributes[:2]] == [1, 2]
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "float value @input @location(0) @flat @noperspective;",
+            "@flat and @noperspective",
+        ),
+        (
+            "float value @input @location(0) @centroid @sample;",
+            "@centroid and @sample",
+        ),
+    ],
+)
+def test_conflicting_interpolation_metadata_fails_validation(declaration, message):
+    code = f"""
+    shader ConflictingInterpolation {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "readonly image2D source @writeonly;",
+            "readonly.*writeonly|writeonly.*readonly",
+        ),
+        (
+            "writeonly image2D target @access(read);",
+            "readonly.*writeonly|writeonly.*readonly",
+        ),
+    ],
+)
+def test_conflicting_resource_access_metadata_fails_validation(declaration, message):
+    code = f"""
+    shader ConflictingResourceAccess {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_conflicting_layout_attribute_values_fail_validation():
+    code = """
+    shader ConflictingLayoutValues {
+        struct VSInput {
+            layout(location = 0) vec3 position @location(1);
+        };
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting location metadata"):
+        parse_code(tokenize_code(code))
 
 
 def test_precise_variable_attribute_parse():

@@ -137,6 +137,38 @@ TEXTURE_INTRINSIC_ALLOWED_ARGUMENT_COUNTS = {
     "textureGatherOffsets": (3, 4, 6, 7),
 }
 
+METADATA_CONFLICT_GROUPS = (
+    (frozenset({"flat", "noperspective"}), "@flat and @noperspective"),
+    (frozenset({"centroid", "sample"}), "@centroid and @sample"),
+)
+
+SINGLE_VALUE_METADATA_NAMES = frozenset(
+    {
+        "access",
+        "binding",
+        "buffer",
+        "component",
+        "format",
+        "index",
+        "location",
+        "set",
+        "texture",
+        "uav",
+    }
+)
+
+RESOURCE_ACCESS_METADATA_NAMES = {
+    "read": "readonly",
+    "readonly": "readonly",
+    "write": "writeonly",
+    "writeonly": "writeonly",
+    "read_write": "readwrite",
+    "readwrite": "readwrite",
+    "access::read": "readonly",
+    "access::write": "writeonly",
+    "access::read_write": "readwrite",
+}
+
 IMAGE_RESOURCE_INTRINSIC_NAMES = {
     "imageLoad",
     "imageStore",
@@ -626,6 +658,134 @@ def collect_non_resource_global_resource_shadows(
     return conflicts
 
 
+def validate_shader_metadata(shader):
+    """Validate backend-neutral declaration metadata for contradictions."""
+    for node, context in _shader_metadata_nodes(shader):
+        validate_node_metadata(node, context)
+    return shader
+
+
+def validate_node_metadata(node, context):
+    """Validate qualifier and attribute metadata on a declaration node."""
+    names = _node_metadata_names(node)
+    for group, description in METADATA_CONFLICT_GROUPS:
+        if group <= names:
+            raise ValueError(f"Conflicting metadata on {context}: {description}")
+
+    access_names = _node_resource_access_names(node)
+    if len(access_names) > 1:
+        access_list = ", ".join(sorted(f"@{name}" for name in access_names))
+        raise ValueError(
+            f"Conflicting resource access metadata on {context}: {access_list}"
+        )
+
+    values_by_name = {}
+    for attr in getattr(node, "attributes", []) or []:
+        attr_name = str(getattr(attr, "name", "")).lower()
+        if attr_name not in SINGLE_VALUE_METADATA_NAMES:
+            continue
+        attr_value = _attribute_metadata_value(attr)
+        if attr_value is None:
+            continue
+        previous_value = values_by_name.setdefault(attr_name, attr_value)
+        if previous_value != attr_value:
+            raise ValueError(
+                f"Conflicting {attr_name} metadata on {context}: "
+                f"{previous_value} vs {attr_value}"
+            )
+
+
+def _node_metadata_names(node):
+    names = {
+        str(qualifier).lower()
+        for qualifier in getattr(node, "qualifiers", []) or []
+        if qualifier is not None
+    }
+    names.update(
+        str(getattr(attr, "name", "")).lower()
+        for attr in getattr(node, "attributes", []) or []
+        if getattr(attr, "name", None)
+    )
+    return names
+
+
+def _node_resource_access_names(node):
+    access_names = set()
+    for qualifier in getattr(node, "qualifiers", []) or []:
+        access_name = RESOURCE_ACCESS_METADATA_NAMES.get(str(qualifier).lower())
+        if access_name:
+            access_names.add(access_name)
+
+    for attr in getattr(node, "attributes", []) or []:
+        attr_name = str(getattr(attr, "name", "")).lower()
+        if attr_name == "access":
+            access_value = _attribute_metadata_value(attr)
+            access_name = RESOURCE_ACCESS_METADATA_NAMES.get(str(access_value).lower())
+        else:
+            access_name = RESOURCE_ACCESS_METADATA_NAMES.get(attr_name)
+        if access_name:
+            access_names.add(access_name)
+
+    return access_names
+
+
+def _attribute_metadata_value(attr):
+    arguments = getattr(attr, "arguments", []) or []
+    if not arguments:
+        return None
+    return expression_debug_name(arguments[0])
+
+
+def _shader_metadata_nodes(shader):
+    for variable in getattr(shader, "global_variables", []) or []:
+        yield variable, _node_context("global variable", variable)
+
+    for struct in getattr(shader, "structs", []) or []:
+        yield from _struct_member_metadata_nodes(struct, "struct")
+
+    for cbuffer in getattr(shader, "cbuffers", []) or []:
+        yield from _struct_member_metadata_nodes(cbuffer, "cbuffer")
+
+    for function in getattr(shader, "functions", []) or []:
+        yield from _function_metadata_nodes(function)
+
+    for stage in getattr(shader, "stages", {}).values():
+        for variable in getattr(stage, "local_variables", []) or []:
+            yield variable, _node_context("stage variable", variable)
+        for struct in getattr(stage, "local_structs", []) or []:
+            yield from _struct_member_metadata_nodes(struct, "stage struct")
+        entry_point = getattr(stage, "entry_point", None)
+        if entry_point is not None:
+            yield from _function_metadata_nodes(entry_point)
+        for function in getattr(stage, "local_functions", []) or []:
+            yield from _function_metadata_nodes(function)
+
+
+def _function_metadata_nodes(function):
+    function_name = getattr(function, "name", "<anonymous>")
+    for parameter in getattr(function, "parameters", []) or []:
+        yield parameter, (
+            f"parameter '{getattr(parameter, 'name', '<anonymous>')}' "
+            f"of function '{function_name}'"
+        )
+    for node in _walk_ast(getattr(function, "body", [])):
+        if _is_variable_node(node):
+            yield node, _node_context(f"local variable in '{function_name}'", node)
+
+
+def _struct_member_metadata_nodes(struct, kind):
+    struct_name = getattr(struct, "name", "<anonymous>")
+    for member in getattr(struct, "members", []) or []:
+        yield member, (
+            f"{kind} '{struct_name}' member "
+            f"'{getattr(member, 'name', '<anonymous>')}'"
+        )
+
+
+def _node_context(kind, node):
+    return f"{kind} '{getattr(node, 'name', '<anonymous>')}'"
+
+
 def _named_node_set(nodes):
     return {
         getattr(node, "name", None) for node in nodes if getattr(node, "name", None)
@@ -703,4 +863,4 @@ def validate_shader_cbuffers(shader):
         raise SyntaxError(
             f"Cbuffer member name(s) conflict with global declaration(s): {names}"
         )
-    return shader
+    return validate_shader_metadata(shader)

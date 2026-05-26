@@ -1342,8 +1342,7 @@ class Parser:
         if token_type in PARAMETER_QUALIFIER_TOKEN_TYPES:
             return True
         return (
-            token_type == "IDENTIFIER"
-            and str(token_value).lower() in VARIABLE_QUALIFIER_NAMES
+            token_type == "IDENTIFIER" and str(token_value) in VARIABLE_QUALIFIER_NAMES
         )
 
     def is_variable_declaration(self):
