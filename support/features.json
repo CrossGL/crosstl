@@ -250,7 +250,7 @@
         },
         "metal": {
           "status": "partial",
-          "notes": "Ray generation payloads lower to device references; acceleration structures lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal visible-function-table and callable-dispatch semantics remain incomplete.",
+          "notes": "Ray generation payloads lower to device references; acceleration structures lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_payload_semantics",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_hit_and_callable_stages_lower_to_visible_functions",
@@ -260,6 +260,11 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_acceleration_structure_globals_thread_through_helpers",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_unsupported_ray_intrinsics_emit_compile_safe_diagnostics",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_callshader_lowers_to_visible_function_table_call",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_callshader_visible_function_table_threads_through_helpers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_callshader_accepts_explicit_visible_function_table_argument",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_callable_dispatch_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_stages_compile_with_metal3",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_lowers_to_metal_intersection_attribute",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_accepts_bounding_box_result_struct",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
@@ -282,7 +287,15 @@
         "directx": {"status": "supported"},
         "opengl": {"status": "supported"},
         "metal": {"status": "supported"},
-        "vulkan": {"status": "partial"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "Global sampled textures, samplers, storage images, resource arrays, and cbuffers share deterministic DescriptorSet/Binding assignment with explicit @set/@group/@binding handling and duplicate binding rejection.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_resource_globals_respect_explicit_spirv_bindings_and_sets",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_cbuffer_globals_emit_spirv_uniform_blocks_and_bindings",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_cbuffer_globals_reject_duplicate_spirv_bindings"
+          ]
+        },
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
         "mojo": {"status": "partial"},
@@ -333,7 +346,15 @@
         "directx": {"status": "supported"},
         "opengl": {"status": "supported"},
         "metal": {"status": "supported"},
-        "vulkan": {"status": "partial"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "Global sampled textures, samplers, storage images, resource arrays, and cbuffers share deterministic DescriptorSet/Binding assignment with explicit @set/@group/@binding handling and duplicate binding rejection.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_resource_globals_respect_explicit_spirv_bindings_and_sets",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_cbuffer_globals_emit_spirv_uniform_blocks_and_bindings",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_cbuffer_globals_reject_duplicate_spirv_bindings"
+          ]
+        },
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
         "mojo": {"status": "unknown"},
@@ -350,7 +371,14 @@
         "directx": {"status": "supported"},
         "opengl": {"status": "supported"},
         "metal": {"status": "supported"},
-        "vulkan": {"status": "partial"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "CrossGL cbuffers lower to SPIR-V Uniform blocks with Block, member Offset, matrix stride, array stride, descriptor set/binding decorations, bare/member access lowering, duplicate binding rejection, and spirv-as/spirv-val coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_cbuffer_globals_emit_spirv_uniform_blocks_and_bindings",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_uniform_buffer_compute_validates_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
         "mojo": {"status": "partial"},
