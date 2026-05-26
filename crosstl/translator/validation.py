@@ -204,6 +204,19 @@ ADDRESS_SPACE_METADATA_NAMES = {
     "storage": "storage",
 }
 
+DECLARATION_ROLE_METADATA_NAMES = {
+    "payload": "payload",
+    "ray_payload": "payload",
+    "raypayload": "payload",
+    "hit_attribute": "hit_attribute",
+    "hitattribute": "hit_attribute",
+    "callable_data": "callable_data",
+    "callabledata": "callable_data",
+    "vertices": "mesh_vertices",
+    "indices": "mesh_indices",
+    "primitives": "mesh_primitives",
+}
+
 STAGE_LAYOUT_DIRECTION_REQUIREMENTS = {
     "local_size_x": "in",
     "local_size_y": "in",
@@ -781,6 +794,15 @@ def validate_node_metadata(node, context):
         raise ValueError(
             f"Conflicting address space metadata on {context}: "
             f"{_metadata_name_phrase(address_spaces)}"
+        )
+
+    declaration_roles = _normalized_metadata_names(
+        names, DECLARATION_ROLE_METADATA_NAMES
+    )
+    if len(set(declaration_roles.values())) > 1:
+        raise ValueError(
+            f"Conflicting declaration role metadata on {context}: "
+            f"{_metadata_name_phrase(declaration_roles)}"
         )
 
     access_names = _node_resource_access_names(node)

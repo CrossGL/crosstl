@@ -2549,6 +2549,101 @@ def test_image_format_parameter_attributes_parse():
     assert params[2].attributes[0].arguments[0].name == "r32ui"
 
 
+def test_ray_and_mesh_role_metadata_parse():
+    code = """
+    shader RoleMetadata {
+        struct Payload {
+            float value;
+        };
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+        struct CallableData {
+            uint id;
+        };
+        struct MeshVertex {
+            vec4 position;
+        };
+        struct MeshPrimitive {
+            uint material;
+        };
+
+        ray_generation {
+            void trace(
+                Payload payload @payload,
+                HitAttributes hit @hit_attribute,
+                CallableData data @callable_data
+            ) {
+            }
+        }
+
+        mesh {
+            void emit(
+                Payload payload @payload,
+                MeshVertex vertices[] @vertices,
+                uint indices[] @indices,
+                MeshPrimitive primitives[] @primitives
+            ) {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    trace = ast.stages[ShaderStage.RAY_GENERATION].local_functions[0]
+    ray_payload, hit_attributes, callable_data = trace.parameters
+
+    assert [attr.name for attr in ray_payload.attributes] == ["payload"]
+    assert [attr.name for attr in hit_attributes.attributes] == ["hit_attribute"]
+    assert [attr.name for attr in callable_data.attributes] == ["callable_data"]
+
+    emit = ast.stages[ShaderStage.MESH].local_functions[0]
+    mesh_payload, vertices, indices, primitives = emit.parameters
+
+    assert [attr.name for attr in mesh_payload.attributes] == ["payload"]
+    assert [attr.name for attr in vertices.attributes] == ["vertices"]
+    assert [attr.name for attr in indices.attributes] == ["indices"]
+    assert [attr.name for attr in primitives.attributes] == ["primitives"]
+    assert isinstance(vertices.param_type, ArrayType)
+    assert isinstance(indices.param_type, ArrayType)
+    assert isinstance(primitives.param_type, ArrayType)
+
+
+@pytest.mark.parametrize(
+    ("parameter", "message"),
+    [
+        (
+            "Payload payload @payload @hit_attribute",
+            "Conflicting declaration role metadata.*@hit_attribute.*@payload",
+        ),
+        (
+            "Payload payload @payload @callable_data",
+            "Conflicting declaration role metadata.*@callable_data.*@payload",
+        ),
+        (
+            "Payload payload @vertices @primitives",
+            "Conflicting declaration role metadata.*@primitives.*@vertices",
+        ),
+    ],
+)
+def test_conflicting_declaration_role_metadata_fails_validation(parameter, message):
+    code = f"""
+    shader ConflictingRoleMetadata {{
+        struct Payload {{
+            float value;
+        }};
+
+        mesh {{
+            void emit({parameter}) {{
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
 def test_extended_shader_stages_parse():
     code = """
     shader main {
