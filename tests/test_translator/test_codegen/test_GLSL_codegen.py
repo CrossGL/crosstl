@@ -3910,6 +3910,65 @@ def test_glsl_task_dispatch_mesh_payload_argument_assigns_shared_payload_storage
     assert "DispatchMesh" not in task_code
 
 
+def test_glsl_task_dispatch_mesh_payload_argument_rejects_ambiguous_shared_payload_targets():
+    shader = """
+    shader MeshTaskPayloadDispatch {
+        struct TaskPayload {
+            uint meshlet;
+        };
+
+        task {
+            @taskPayloadSharedEXT TaskPayload payloadA;
+            @taskPayloadSharedEXT TaskPayload payloadB;
+            void main() @numthreads(1, 1, 1) {
+                TaskPayload localPayload;
+                localPayload.meshlet = 7u;
+                DispatchMesh(2, 3, 4, localPayload);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"Ambiguous GLSL DispatchMesh payload target for TaskPayload: "
+            r"payloadA, payloadB"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(ast, "task")
+
+
+def test_glsl_task_dispatch_mesh_payload_argument_allows_named_shared_payload_target():
+    shader = """
+    shader MeshTaskPayloadDispatch {
+        struct TaskPayload {
+            uint meshlet;
+        };
+
+        task {
+            @taskPayloadSharedEXT TaskPayload payloadA;
+            @taskPayloadSharedEXT TaskPayload payloadB;
+            void main() @numthreads(1, 1, 1) {
+                payloadA.meshlet = 7u;
+                DispatchMesh(2, 3, 4, payloadA);
+            }
+        }
+    }
+    """
+
+    task_code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "task")
+
+    assert "taskPayloadSharedEXT TaskPayload payloadA;" in task_code
+    assert "taskPayloadSharedEXT TaskPayload payloadB;" in task_code
+    assert "payloadA.meshlet = 7u;" in task_code
+    assert "EmitMeshTasksEXT(2, 3, 4);" in task_code
+    assert "payloadA = payloadA;" not in task_code
+    assert "DispatchMesh" not in task_code
+
+
 @pytest.mark.parametrize(
     (
         "topology",

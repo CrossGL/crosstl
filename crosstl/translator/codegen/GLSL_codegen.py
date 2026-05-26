@@ -2498,11 +2498,20 @@ class GLSLCodeGen:
             ]
             if len(matches) == 1:
                 return matches[0]
+            if len(matches) > 1:
+                names = ", ".join(sorted(info["name"] for info in matches))
+                raise ValueError(
+                    "Ambiguous GLSL DispatchMesh payload target for "
+                    f"{mapped_payload_type}: {names}"
+                )
 
         if len(self.task_payload_shared_variables) == 1:
             return self.task_payload_shared_variables[0]
 
-        return None
+        names = ", ".join(
+            sorted(info["name"] for info in self.task_payload_shared_variables)
+        )
+        raise ValueError(f"Ambiguous GLSL DispatchMesh payload target: {names}")
 
     def mesh_output_parameter_role(self, node):
         for attr in getattr(node, "attributes", []) or []:

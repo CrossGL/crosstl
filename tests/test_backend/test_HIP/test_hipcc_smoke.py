@@ -314,6 +314,80 @@ def test_native_hip_graph_lifecycle_parses_and_compiles_if_available(tmp_path):
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_graph_exec_update_parses_and_compiles_if_available(tmp_path):
+    """Smoke native HIP graph exec update and kernel-node parameter APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    __global__ void graph_update_kernel(float* out, float value) {
+        out[threadIdx.x] = value;
+    }
+
+    void graph_exec_update(float* device_ptr) {
+        hipGraph_t graph;
+        hipGraphExec_t exec;
+        hipGraphNode_t kernel_node;
+        hipGraphNode_t error_node;
+        hipGraphExecUpdateResult update_result;
+        hipKernelNodeParams kernel_params;
+        hipKernelNodeParams fetched_params;
+        char log[128];
+
+        hipGraphCreate(&graph, 0);
+        hipGraphAddKernelNode(&kernel_node, graph, NULL, 0, &kernel_params);
+        hipGraphKernelNodeGetParams(kernel_node, &fetched_params);
+        hipGraphKernelNodeSetParams(kernel_node, &kernel_params);
+        hipGraphInstantiate(&exec, graph, &error_node, log, 128);
+        hipGraphExecKernelNodeSetParams(exec, kernel_node, &kernel_params);
+        hipGraphExecUpdate(exec, graph, &error_node, &update_result);
+        hipGraphExecDestroy(exec);
+        hipGraphDestroy(graph);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Kernel: graph_update_kernel" in crossgl
+    assert "void graph_exec_update(ptr<f32> device_ptr)" in crossgl
+    assert "var graph: hipGraph_t;" in crossgl
+    assert "var exec: hipGraphExec_t;" in crossgl
+    assert "var kernel_node: hipGraphNode_t;" in crossgl
+    assert "var error_node: hipGraphNode_t;" in crossgl
+    assert "var update_result: hipGraphExecUpdateResult;" in crossgl
+    assert "var kernel_params: hipKernelNodeParams;" in crossgl
+    assert "var fetched_params: hipKernelNodeParams;" in crossgl
+    assert "var log: array<i8, 128>;" in crossgl
+    assert "// HIP graph create: output: graph, flags: 0" in crossgl
+    assert (
+        "// HIP graph add kernel node: output: kernel_node, graph: graph, "
+        "dependencies: NULL, count: 0, params: (&kernel_params)"
+    ) in crossgl
+    assert (
+        "// HIP graph kernel node get params: node: kernel_node, "
+        "params: (&fetched_params)"
+    ) in crossgl
+    assert (
+        "// HIP graph kernel node set params: node: kernel_node, "
+        "params: (&kernel_params)"
+    ) in crossgl
+    assert (
+        "// HIP graph instantiate: output: exec, graph: graph, "
+        "error node output: error_node, log buffer: log, log bytes: 128"
+    ) in crossgl
+    assert (
+        "// HIP graph exec set kernel node params: exec: exec, "
+        "node: kernel_node, params: (&kernel_params)"
+    ) in crossgl
+    assert (
+        "// HIP graph exec update: exec: exec, graph: graph, "
+        "error node output: error_node, result output: update_result"
+    ) in crossgl
+    assert "// HIP graph exec destroy: exec" in crossgl
+    assert "// HIP graph destroy: graph" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_device_error_runtime_parses_and_compiles_if_available(
     tmp_path,
 ):
