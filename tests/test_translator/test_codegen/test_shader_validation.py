@@ -308,6 +308,165 @@ shader SpirvImageAtomicForwardingValidation {
 """
 
 
+SPIRV_ADVANCED_TEXTURE_COMPUTE_SHADER = """
+shader SpirvAdvancedTextureComputeValidation {
+    sampler2D colorMap;
+    sampler2DArray layerMap;
+    sampler linearSampler;
+
+    compute {
+        void main() {
+            vec2 uv = vec2(0.25, 0.75);
+            vec3 uvLayer = vec3(0.25, 0.75, 1.0);
+            vec2 ddx = vec2(0.1, 0.0);
+            vec2 ddy = vec2(0.0, 0.1);
+            ivec2 pixel = ivec2(4, 8);
+            ivec2 offset = ivec2(1, 0);
+            vec4 lod = textureLod(colorMap, linearSampler, uv, 2.0);
+            vec4 lodOffset = textureLodOffset(
+                colorMap,
+                linearSampler,
+                uv,
+                2.0,
+                offset
+            );
+            vec4 grad = textureGrad(colorMap, linearSampler, uv, ddx, ddy);
+            vec4 gradOffset = textureGradOffset(
+                colorMap,
+                linearSampler,
+                uv,
+                ddx,
+                ddy,
+                offset
+            );
+            vec4 shifted = textureOffset(colorMap, linearSampler, uv, offset);
+            vec4 gathered = textureGather(colorMap, linearSampler, uv, 1);
+            vec4 gatheredOffset = textureGatherOffset(
+                colorMap,
+                linearSampler,
+                uv,
+                offset,
+                2
+            );
+            vec4 gatheredOffsets = textureGatherOffsets(
+                layerMap,
+                linearSampler,
+                uvLayer,
+                offset,
+                offset,
+                offset,
+                offset,
+                3
+            );
+            vec4 fetched = texelFetch(colorMap, linearSampler, pixel, 0);
+        }
+    }
+}
+"""
+
+
+SPIRV_TEXTURE_QUERY_COMPUTE_SHADER = """
+shader SpirvTextureQueryComputeValidation {
+    sampler2D colorMap;
+    sampler2DArray layerMap;
+    samplerCube cubeMap;
+    sampler2DMS msMap;
+    sampler2DMSArray msLayers;
+    sampler linearSampler;
+
+    compute {
+        void main() {
+            vec2 uv = vec2(0.25, 0.75);
+            vec3 uvLayer = vec3(0.25, 0.75, 1.0);
+            vec3 direction = vec3(1.0, 0.0, 0.0);
+            ivec2 texSize = textureSize(colorMap, 0);
+            ivec3 arraySize = textureSize(layerMap, 1);
+            ivec2 cubeSize = textureSize(cubeMap, 0);
+            ivec2 msSize = textureSize(msMap, 0);
+            ivec3 msLayerSize = textureSize(msLayers, 0);
+            vec2 lod = textureQueryLod(layerMap, linearSampler, uvLayer);
+            vec2 cubeLod = textureQueryLod(cubeMap, direction);
+            int levels = textureQueryLevels(colorMap);
+            int samples = textureSamples(msMap);
+        }
+    }
+}
+"""
+
+
+SPIRV_SHADOW_TEXTURE_COMPUTE_SHADER = """
+shader SpirvShadowTextureComputeValidation {
+    sampler2DShadow shadowMap;
+    sampler2DArrayShadow shadowArray;
+    sampler compareSampler;
+
+    compute {
+        void main() {
+            vec2 uv = vec2(0.25, 0.75);
+            vec3 uvLayer = vec3(0.25, 0.75, 1.0);
+            vec2 ddx = vec2(0.1, 0.0);
+            vec2 ddy = vec2(0.0, 0.1);
+            ivec2 offset = ivec2(1, 0);
+            float depth = 0.5;
+            float base = textureCompare(shadowMap, compareSampler, uv, depth);
+            float lod = textureCompareLod(
+                shadowMap,
+                compareSampler,
+                uv,
+                depth,
+                2.0
+            );
+            float lodOffset = textureCompareLodOffset(
+                shadowMap,
+                compareSampler,
+                uv,
+                depth,
+                2.0,
+                offset
+            );
+            float grad = textureCompareGrad(
+                shadowMap,
+                compareSampler,
+                uv,
+                depth,
+                ddx,
+                ddy
+            );
+            float gradOffset = textureCompareGradOffset(
+                shadowMap,
+                compareSampler,
+                uv,
+                depth,
+                ddx,
+                ddy,
+                offset
+            );
+            float shifted = textureCompareOffset(
+                shadowArray,
+                compareSampler,
+                uvLayer,
+                depth,
+                offset
+            );
+            vec4 gathered = textureGatherCompare(
+                shadowMap,
+                compareSampler,
+                uv,
+                depth
+            );
+            vec4 gatheredOffset = textureGatherCompareOffset(
+                shadowArray,
+                compareSampler,
+                uvLayer,
+                depth,
+                offset
+            );
+        }
+    }
+}
+"""
+
+
 SAMPLED_TEXTURE_ARRAY_FRAGMENT_SHADER = """
 shader SampledTextureArrayValidation {
     sampler2D textures[4];
@@ -1906,6 +2065,22 @@ def run_validator(command):
     )
 
 
+def validate_spirv_shader_source(tmp_path, stem, shader_source):
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is None or spirv_val is None:
+        pytest.skip("spirv-as and spirv-val are not installed")
+
+    source = tmp_path / f"{stem}.spvasm"
+    output = tmp_path / f"{stem}.spv"
+    code = VulkanSPIRVCodeGen().generate(crosstl.translator.parse(shader_source))
+    assert "WARNING" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([spirv_as, str(source), "-o", str(output)])
+    run_validator([spirv_val, str(output)])
+
+
 def metal_supports_mesh_object_stage_attributes(xcrun, tmp_path):
     source = tmp_path / "metal_mesh_object_probe.metal"
     output = tmp_path / "metal_mesh_object_probe.air"
@@ -2016,6 +2191,22 @@ def test_generated_spirv_forwarded_image_atomic_validates_with_spirv_tools(
 
     run_validator([spirv_as, str(source), "-o", str(output)])
     run_validator([spirv_val, str(output)])
+
+
+@pytest.mark.parametrize(
+    ("stem", "shader_source"),
+    [
+        ("advanced_texture_compute", SPIRV_ADVANCED_TEXTURE_COMPUTE_SHADER),
+        ("texture_query_compute", SPIRV_TEXTURE_QUERY_COMPUTE_SHADER),
+        ("shadow_texture_compute", SPIRV_SHADOW_TEXTURE_COMPUTE_SHADER),
+    ],
+)
+def test_generated_spirv_texture_operations_validate_with_spirv_tools(
+    tmp_path,
+    stem,
+    shader_source,
+):
+    validate_spirv_shader_source(tmp_path, stem, shader_source)
 
 
 def test_generated_spirv_codegen_examples_validate_with_spirv_tools(tmp_path):

@@ -1485,6 +1485,14 @@ class Parser:
 
             self.advance_over_type()
 
+            if (
+                self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}
+                and not self.pointer_suffix_starts_declaration()
+            ):
+                return False
+
+            self.advance_over_pointer_suffix()
+
             if self.current_token[0] != "IDENTIFIER":
                 return False
 
@@ -1545,6 +1553,31 @@ class Parser:
         finally:
             self.pos = saved_pos
             self.current_token = saved_token
+
+    def pointer_suffix_starts_declaration(self):
+        """Return whether pointer/reference suffix lookahead forms a declaration."""
+        offset = 0
+        while self.peek(offset)[0] in {"MULTIPLY", "BITWISE_AND"}:
+            token_type = self.peek(offset)[0]
+            offset += 1
+            if token_type == "BITWISE_AND" and self.peek(offset)[0] == "MUT":
+                offset += 1
+
+        if self.peek(offset)[0] != "IDENTIFIER":
+            return False
+
+        next_token = self.peek(offset + 1)[0]
+        if next_token in {"LBRACKET", "EQUALS", "SEMICOLON", "COMMA"}:
+            return True
+        return next_token == "RPAREN" and self.in_parameter_context()
+
+    def advance_over_pointer_suffix(self):
+        """Advance over pointer/reference suffix tokens in type lookahead."""
+        while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
+            token_type = self.current_token[0]
+            self.eat(token_type)
+            if token_type == "BITWISE_AND" and self.current_token[0] == "MUT":
+                self.eat("MUT")
 
     def in_parameter_context(self):
         """Check if we're currently parsing function parameters."""
@@ -1797,9 +1830,18 @@ class Parser:
             self.eat("RBRACKET")
             base_type = ArrayType(base_type, size)
 
-        if self.current_token[0] == "MULTIPLY":
-            self.eat("MULTIPLY")
-            # pointer handling deferred: PointerType not yet used by generators
+        while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
+            if self.current_token[0] == "MULTIPLY":
+                self.eat("MULTIPLY")
+                base_type = PointerType(base_type)
+                continue
+
+            self.eat("BITWISE_AND")
+            is_mutable_reference = False
+            if self.current_token[0] == "MUT":
+                self.eat("MUT")
+                is_mutable_reference = True
+            base_type = ReferenceType(base_type, is_mutable=is_mutable_reference)
 
         if is_buffer:
             if hasattr(base_type, "qualifiers"):

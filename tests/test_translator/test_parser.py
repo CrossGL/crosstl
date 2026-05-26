@@ -18,6 +18,7 @@ from crosstl.translator.ast import (
     MatrixType,
     MemberAccessNode,
     NamedType,
+    PointerType,
     PreprocessorNode,
     PrimitiveType,
     RangeNode,
@@ -1710,6 +1711,8 @@ def test_backend_parameter_address_and_access_qualifiers_parse():
 
     assert payload.qualifiers == ["threadgroup"]
     assert payload.name == "payload"
+    assert isinstance(payload.param_type, PointerType)
+    assert payload.param_type.pointee_type.name == "Payload"
     assert payload.attributes[0].name == "payload"
 
     assert values.qualifiers == ["device"]
