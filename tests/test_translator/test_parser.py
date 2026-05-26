@@ -1366,6 +1366,136 @@ def test_stage_interface_layout_qualifiers_are_preserved_on_variables():
     assert scratch.var_type.size.value == 64
 
 
+def test_cross_stage_interface_location_variables_are_validated():
+    code = """
+    shader CrossStageInterfaceLocations {
+        vertex {
+            layout(location = 0) flat out vec2 uv;
+            void main() {
+            }
+        }
+
+        fragment {
+            layout(location = 0) flat in vec2 uv;
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    assert ast.stages[ShaderStage.VERTEX].local_variables[0].name == "uv"
+    assert ast.stages[ShaderStage.FRAGMENT].local_variables[0].name == "uv"
+
+
+def test_cross_stage_interface_semantic_variables_are_validated():
+    code = """
+    shader CrossStageInterfaceSemantics {
+        vertex {
+            out vec2 uv @TEXCOORD0;
+            void main() {
+            }
+        }
+
+        fragment {
+            in vec2 uv @TEXCOORD0;
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    vertex_uv = ast.stages[ShaderStage.VERTEX].local_variables[0]
+    fragment_uv = ast.stages[ShaderStage.FRAGMENT].local_variables[0]
+    assert [attr.name for attr in vertex_uv.attributes] == ["TEXCOORD0"]
+    assert [attr.name for attr in fragment_uv.attributes] == ["TEXCOORD0"]
+
+
+def test_cross_stage_interface_struct_return_and_parameter_are_validated():
+    code = """
+    shader CrossStageInterfaceStructs {
+        struct VSOutput {
+            layout(location = 0) vec2 uv;
+        };
+
+        vertex {
+            VSOutput main() {
+                VSOutput output;
+                return output;
+            }
+        }
+
+        fragment {
+            void main(VSOutput input) {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    assert ast.stages[ShaderStage.VERTEX].entry_point.return_type.name == "VSOutput"
+    assert ast.stages[ShaderStage.FRAGMENT].entry_point.parameters[0].name == "input"
+
+
+@pytest.mark.parametrize(
+    ("vertex_output", "fragment_input", "message"),
+    [
+        (
+            "layout(location = 1) out vec2 uv;",
+            "layout(location = 0) in vec2 uv;",
+            "Missing cross-stage interface output.*location 0 component 0",
+        ),
+        (
+            "layout(location = 0) out vec3 uv;",
+            "layout(location = 0) in vec2 uv;",
+            "Conflicting cross-stage interface type.*location 0 component 0.*vec3.*vec2",
+        ),
+        (
+            "layout(location = 0) flat out vec2 uv;",
+            "layout(location = 0) noperspective in vec2 uv;",
+            "Conflicting cross-stage interface interpolation mode.*@flat.*@noperspective",
+        ),
+        (
+            "out vec2 uv @TEXCOORD1;",
+            "in vec2 uv @TEXCOORD0;",
+            "Missing cross-stage interface output.*semantic texcoord0",
+        ),
+        (
+            "layout(location = 0) out vec2 uv @TEXCOORD0;",
+            "layout(location = 0) in vec2 uv @COLOR0;",
+            "Conflicting cross-stage interface semantic metadata.*semantic texcoord0.*semantic color0",
+        ),
+        (
+            "layout(location = 1) out vec2 uv @TEXCOORD0;",
+            "layout(location = 0) in vec2 uv @TEXCOORD0;",
+            "Conflicting cross-stage interface location metadata.*location 1 component 0.*location 0 component 0",
+        ),
+    ],
+)
+def test_conflicting_cross_stage_interface_metadata_fails_validation(
+    vertex_output, fragment_input, message
+):
+    code = f"""
+    shader ConflictingCrossStageInterface {{
+        vertex {{
+            {vertex_output}
+            void main() {{
+            }}
+        }}
+
+        fragment {{
+            {fragment_input}
+            void main() {{
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
 def test_resource_layout_preserves_access_and_memory_qualifiers():
     code = """
     shader ResourceQualifierLayouts {
@@ -3508,6 +3638,14 @@ def test_conflicting_layout_attribute_values_fail_validation():
             "Conflicting set metadata",
         ),
         (
+            "layout(set = 0) image2D color @group(1);",
+            "Conflicting set metadata",
+        ),
+        (
+            "image2D color @group(0) @set(1);",
+            "Conflicting set metadata",
+        ),
+        (
             "image2D color @format(r32f) @format(rgba32f);",
             "Conflicting format metadata",
         ),
@@ -3529,7 +3667,7 @@ def test_conflicting_resource_layout_metadata_values_fail_validation(
 def test_duplicate_matching_resource_layout_metadata_values_are_allowed():
     code = """
     shader MatchingResourceLayoutMetadata {
-        layout(set = 0, binding = 1) image2D color @set(0) @binding(1);
+        layout(set = 0, binding = 1) image2D color @set(0) @group(0) @binding(1);
     }
     """
 
@@ -3540,11 +3678,13 @@ def test_duplicate_matching_resource_layout_metadata_values_are_allowed():
         "set",
         "binding",
         "set",
+        "group",
         "binding",
     ]
     assert [attribute.arguments[0].value for attribute in color.attributes] == [
         0,
         1,
+        0,
         0,
         1,
     ]

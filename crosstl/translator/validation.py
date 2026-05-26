@@ -186,6 +186,10 @@ SINGLE_VALUE_METADATA_NAMES = frozenset(
     }
 )
 
+SINGLE_VALUE_METADATA_ALIASES = {
+    "group": "set",
+}
+
 MULTI_VALUE_METADATA_NAMES = frozenset({"register"})
 
 HLSL_SEMANTIC_METADATA_BASE_NAMES = frozenset(
@@ -854,6 +858,7 @@ def validate_shader_metadata(shader):
         validate_node_metadata(node, context)
     for stage in getattr(shader, "stages", {}).values():
         validate_stage_layout_metadata(stage)
+    validate_cross_stage_interfaces(shader)
     return shader
 
 
@@ -941,15 +946,16 @@ def validate_node_metadata(node, context):
     values_by_name = {}
     for attr in getattr(node, "attributes", []) or []:
         attr_name = str(getattr(attr, "name", "")).lower()
-        if attr_name not in SINGLE_VALUE_METADATA_NAMES:
+        metadata_name = SINGLE_VALUE_METADATA_ALIASES.get(attr_name, attr_name)
+        if metadata_name not in SINGLE_VALUE_METADATA_NAMES:
             continue
         attr_value = _attribute_metadata_value(attr)
         if attr_value is None:
             continue
-        previous_value = values_by_name.setdefault(attr_name, attr_value)
+        previous_value = values_by_name.setdefault(metadata_name, attr_value)
         if previous_value != attr_value:
             raise ValueError(
-                f"Conflicting {attr_name} metadata on {context}: "
+                f"Conflicting {metadata_name} metadata on {context}: "
                 f"{previous_value} vs {attr_value}"
             )
 
@@ -1034,6 +1040,424 @@ def validate_stage_layout_metadata(stage):
                 )
 
     validate_function_stage_layout_metadata(stage)
+
+
+def validate_cross_stage_interfaces(shader):
+    """Validate explicit producer/consumer graphics-stage interfaces."""
+    stages = _shader_stages_by_name(shader)
+
+    graphics_chain = [
+        "vertex",
+        "tessellation_control",
+        "tessellation_evaluation",
+        "geometry",
+        "fragment",
+    ]
+    present_chain = [
+        stage_name for stage_name in graphics_chain if stage_name in stages
+    ]
+    for producer_name, consumer_name in zip(present_chain, present_chain[1:]):
+        _validate_stage_interface_pair(
+            shader,
+            producer_name,
+            stages[producer_name],
+            consumer_name,
+            stages[consumer_name],
+        )
+
+    if "mesh" in stages and "fragment" in stages:
+        _validate_stage_interface_pair(
+            shader, "mesh", stages["mesh"], "fragment", stages["fragment"]
+        )
+
+
+def _validate_stage_interface_pair(
+    shader, producer_name, producer_stage, consumer_name, consumer_stage
+):
+    producer_outputs = _stage_interface_entries(
+        shader, producer_stage, producer_name, "out"
+    )
+    consumer_inputs = _stage_interface_entries(
+        shader, consumer_stage, consumer_name, "in"
+    )
+
+    output_by_key = _stage_interface_entries_by_key(
+        producer_outputs, producer_name, "output"
+    )
+    _stage_interface_entries_by_key(consumer_inputs, consumer_name, "input")
+
+    if not consumer_inputs:
+        return
+
+    for consumer_entry in consumer_inputs:
+        if not consumer_entry["keys"]:
+            continue
+
+        producer_entry = _matching_stage_interface_entry(
+            output_by_key, consumer_entry["keys"]
+        )
+        if producer_entry is None:
+            raise ValueError(
+                f"Missing cross-stage interface output from {producer_name} to "
+                f"{consumer_name} for {_stage_interface_key_phrase(consumer_entry)} "
+                f"consumed by {consumer_entry['context']}"
+            )
+
+        _validate_stage_interface_key_consistency(
+            producer_name, consumer_name, producer_entry, consumer_entry
+        )
+
+        producer_type = producer_entry.get("type")
+        consumer_type = consumer_entry.get("type")
+        if (
+            producer_type
+            and consumer_type
+            and _canonical_stage_interface_type(producer_type)
+            != _canonical_stage_interface_type(consumer_type)
+        ):
+            raise ValueError(
+                f"Conflicting cross-stage interface type from {producer_name} to "
+                f"{consumer_name} for {_stage_interface_key_phrase(consumer_entry)}: "
+                f"{producer_entry['context']} is {producer_type}, "
+                f"{consumer_entry['context']} is {consumer_type}"
+            )
+
+        _validate_stage_interface_interpolation(
+            producer_name, consumer_name, producer_entry, consumer_entry
+        )
+
+
+def _stage_interface_entries_by_key(entries, stage_name, direction):
+    entries_by_key = {}
+    for entry in entries:
+        for key in entry["keys"]:
+            previous = entries_by_key.setdefault(key, entry)
+            if previous is not entry:
+                raise ValueError(
+                    f"Duplicate {direction} stage interface metadata on "
+                    f"{stage_name} stage for {_format_stage_interface_key(key)}: "
+                    f"{previous['context']} and {entry['context']}"
+                )
+    return entries_by_key
+
+
+def _matching_stage_interface_entry(entries_by_key, keys):
+    for key in keys:
+        entry = entries_by_key.get(key)
+        if entry is not None:
+            return entry
+    return None
+
+
+def _validate_stage_interface_key_consistency(
+    producer_name, consumer_name, producer_entry, consumer_entry
+):
+    for kind in ("location", "semantic"):
+        producer_keys = {
+            key for key in producer_entry.get("keys", ()) if key[0] == kind
+        }
+        consumer_keys = {
+            key for key in consumer_entry.get("keys", ()) if key[0] == kind
+        }
+        if producer_keys and consumer_keys and producer_keys.isdisjoint(consumer_keys):
+            raise ValueError(
+                f"Conflicting cross-stage interface {kind} metadata from "
+                f"{producer_name} to {consumer_name}: "
+                f"{producer_entry['context']} has "
+                f"{_format_stage_interface_key_set(producer_keys)}, "
+                f"{consumer_entry['context']} has "
+                f"{_format_stage_interface_key_set(consumer_keys)}"
+            )
+
+
+def _validate_stage_interface_interpolation(
+    producer_name, consumer_name, producer_entry, consumer_entry
+):
+    for kind, description in (
+        ("interpolation_mode", "interpolation mode"),
+        ("interpolation_sampling", "interpolation sampling"),
+    ):
+        producer_value = producer_entry.get(kind)
+        consumer_value = consumer_entry.get(kind)
+        if producer_value and consumer_value and producer_value[1] != consumer_value[1]:
+            raise ValueError(
+                f"Conflicting cross-stage interface {description} from "
+                f"{producer_name} to {consumer_name} for "
+                f"{_stage_interface_key_phrase(consumer_entry)}: "
+                f"{producer_value[0]} vs {consumer_value[0]}"
+            )
+
+
+def _stage_interface_entries(shader, stage, stage_name, direction):
+    struct_map = _stage_struct_map(shader, stage)
+    entries = []
+
+    for variable in getattr(stage, "local_variables", []) or []:
+        if _stage_interface_direction(variable) == direction:
+            entries.append(
+                _stage_interface_entry(
+                    variable,
+                    getattr(variable, "var_type", getattr(variable, "vtype", None)),
+                    f"{stage_name} stage {direction} variable "
+                    f"'{getattr(variable, 'name', '<anonymous>')}'",
+                )
+            )
+
+    entry_point = getattr(stage, "entry_point", None)
+    if entry_point is None:
+        return [entry for entry in entries if entry["keys"]]
+
+    if direction == "out":
+        entries.extend(
+            _function_return_stage_interface_entries(
+                entry_point, struct_map, stage_name
+            )
+        )
+    else:
+        entries.extend(
+            _function_parameter_stage_interface_entries(
+                entry_point, struct_map, stage_name
+            )
+        )
+
+    return [entry for entry in entries if entry["keys"]]
+
+
+def _function_return_stage_interface_entries(function, struct_map, stage_name):
+    return_type = getattr(function, "return_type", None)
+    return_struct = _resolve_stage_interface_struct(return_type, struct_map)
+    if return_struct is not None:
+        return [
+            _stage_interface_entry(
+                member,
+                getattr(member, "member_type", None),
+                f"{stage_name} stage return member "
+                f"'{return_struct.name}.{getattr(member, 'name', '<anonymous>')}'",
+            )
+            for member in getattr(return_struct, "members", []) or []
+        ]
+
+    return [
+        _stage_interface_entry(
+            function,
+            return_type,
+            f"{stage_name} stage return value of "
+            f"'{getattr(function, 'name', '<anonymous>')}'",
+        )
+    ]
+
+
+def _function_parameter_stage_interface_entries(function, struct_map, stage_name):
+    entries = []
+    for parameter in getattr(function, "parameters", []) or []:
+        parameter_type = getattr(
+            parameter, "param_type", getattr(parameter, "vtype", None)
+        )
+        parameter_struct = _resolve_stage_interface_struct(parameter_type, struct_map)
+        if parameter_struct is not None:
+            entries.extend(
+                _stage_interface_entry(
+                    member,
+                    getattr(member, "member_type", None),
+                    f"{stage_name} stage parameter "
+                    f"'{getattr(parameter, 'name', '<anonymous>')}."
+                    f"{getattr(member, 'name', '<anonymous>')}'",
+                )
+                for member in getattr(parameter_struct, "members", []) or []
+            )
+        else:
+            entries.append(
+                _stage_interface_entry(
+                    parameter,
+                    parameter_type,
+                    f"{stage_name} stage parameter "
+                    f"'{getattr(parameter, 'name', '<anonymous>')}'",
+                )
+            )
+    return entries
+
+
+def _stage_interface_entry(node, type_node, context):
+    return {
+        "node": node,
+        "type": _stage_interface_type_name(type_node),
+        "context": context,
+        "keys": _stage_interface_keys(node),
+        "interpolation_mode": _stage_interface_interpolation_mode(node),
+        "interpolation_sampling": _stage_interface_interpolation_sampling(node),
+    }
+
+
+def _stage_interface_direction(node):
+    names = _node_metadata_names(node)
+    if "out" in names or "output" in names:
+        return "out"
+    if "in" in names or "input" in names:
+        return "in"
+    return None
+
+
+def _stage_interface_keys(node):
+    attributes = getattr(node, "attributes", []) or []
+    location_value = _attribute_value_by_name(attributes, "location")
+    component_value = _attribute_value_by_name(attributes, "component")
+    keys = []
+    if location_value is not None:
+        keys.append(("location", location_value, component_value or "0"))
+
+    for attr in attributes:
+        attr_name = _normalized_metadata_name(getattr(attr, "name", None))
+        if _is_cross_stage_semantic_name(attr_name):
+            keys.append(("semantic", attr_name))
+    return tuple(keys)
+
+
+def _is_cross_stage_semantic_name(name):
+    if not name:
+        return False
+    if name.startswith("gl_") or name.startswith("sv_"):
+        return False
+    if name in {"builtin", "position"}:
+        return False
+    return _is_hlsl_semantic_metadata_name(name)
+
+
+def _attribute_value_by_name(attributes, name):
+    for attr in attributes:
+        if _normalized_metadata_name(getattr(attr, "name", None)) == name:
+            return _attribute_metadata_value(attr)
+    return None
+
+
+def _stage_interface_interpolation_mode(node):
+    names = _node_metadata_names(node)
+    matches = _normalized_metadata_names(names, INTERPOLATION_MODE_METADATA_NAMES)
+    if not matches:
+        return None
+    attr_name = sorted(matches)[0]
+    return f"@{attr_name}", matches[attr_name]
+
+
+def _stage_interface_interpolation_sampling(node):
+    names = _node_metadata_names(node)
+    matches = _normalized_metadata_names(names, INTERPOLATION_SAMPLING_METADATA_NAMES)
+    if not matches:
+        return None
+    attr_name = sorted(matches)[0]
+    return f"@{attr_name}", matches[attr_name]
+
+
+def _stage_interface_key_phrase(entry):
+    if not entry.get("keys"):
+        return "unkeyed interface"
+    return " / ".join(_format_stage_interface_key(key) for key in entry["keys"])
+
+
+def _format_stage_interface_key(key):
+    if key[0] == "location":
+        return f"location {key[1]} component {key[2]}"
+    if key[0] == "semantic":
+        return f"semantic {key[1]}"
+    return " ".join(str(part) for part in key)
+
+
+def _format_stage_interface_key_set(keys):
+    return " / ".join(_format_stage_interface_key(key) for key in sorted(keys))
+
+
+def _shader_stages_by_name(shader):
+    stages = {}
+    for stage_key, stage in getattr(shader, "stages", {}).items():
+        stage_name = _normalized_metadata_name(stage_key)
+        if stage_name:
+            stages[stage_name] = stage
+    return stages
+
+
+def _stage_struct_map(shader, stage):
+    structs = {}
+    for struct in getattr(shader, "structs", []) or []:
+        name = getattr(struct, "name", None)
+        if name:
+            structs[name] = struct
+    for struct in getattr(stage, "local_structs", []) or []:
+        name = getattr(struct, "name", None)
+        if name:
+            structs[name] = struct
+    return structs
+
+
+def _resolve_stage_interface_struct(type_node, struct_map):
+    if type_node is None:
+        return None
+    while hasattr(type_node, "element_type"):
+        type_node = type_node.element_type
+    type_name = getattr(type_node, "name", None)
+    if not type_name:
+        return None
+    return struct_map.get(type_name)
+
+
+def _stage_interface_type_name(type_node):
+    if type_node is None:
+        return None
+    if isinstance(type_node, str):
+        return type_node
+    if type_node.__class__.__name__ == "ArrayType":
+        size = (
+            expression_debug_name(type_node.size) if type_node.size is not None else ""
+        )
+        return f"{_stage_interface_type_name(type_node.element_type)}[{size}]"
+    if hasattr(type_node, "pointee_type"):
+        return f"{_stage_interface_type_name(type_node.pointee_type)}*"
+    if hasattr(type_node, "referenced_type"):
+        return f"{_stage_interface_type_name(type_node.referenced_type)}&"
+    if (
+        hasattr(type_node, "element_type")
+        and hasattr(type_node, "rows")
+        and hasattr(type_node, "cols")
+    ):
+        element_type = _stage_interface_type_name(type_node.element_type)
+        prefix = "dmat" if element_type == "double" else "mat"
+        if type_node.rows == type_node.cols:
+            return f"{prefix}{type_node.rows}"
+        return f"{prefix}{type_node.rows}x{type_node.cols}"
+    if type_node.__class__.__name__ == "VectorType":
+        element_type = _stage_interface_type_name(type_node.element_type)
+        vector_prefixes = {
+            "float": "vec",
+            "int": "ivec",
+            "uint": "uvec",
+            "double": "dvec",
+            "bool": "bvec",
+        }
+        return f"{vector_prefixes.get(element_type, element_type)}{type_node.size}"
+    if hasattr(type_node, "name"):
+        generic_args = getattr(type_node, "generic_args", []) or []
+        if generic_args:
+            args = ", ".join(_stage_interface_type_name(arg) for arg in generic_args)
+            return f"{type_node.name}<{args}>"
+        return str(type_node.name)
+    return str(type_node)
+
+
+def _canonical_stage_interface_type(type_name):
+    normalized = str(type_name)
+    aliases = {
+        "float2": "vec2",
+        "float3": "vec3",
+        "float4": "vec4",
+        "int2": "ivec2",
+        "int3": "ivec3",
+        "int4": "ivec4",
+        "uint2": "uvec2",
+        "uint3": "uvec3",
+        "uint4": "uvec4",
+        "double2": "dvec2",
+        "double3": "dvec3",
+        "double4": "dvec4",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _node_metadata_names(node):
