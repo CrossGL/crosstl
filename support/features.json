@@ -917,11 +917,13 @@
           ]
         },
         "vulkan": {
-          "status": "partial",
-          "notes": "Covers regular, array, and multisample texelFetch lowering to OpImageFetch with spirv-as/spirv-val coverage. Fetch-offset forms remain incomplete.",
+          "status": "supported",
+          "notes": "Covers regular, array, fetch-offset, and multisample texelFetch lowering to OpImageFetch with spirv-as/spirv-val coverage, plus deterministic diagnostics for multisample fetch-offset and cube/cube-array target-invalid forms.",
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_offset_gather_and_fetch_emit_image_operations",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texel_fetch_uses_sample_operand",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texel_fetch_offset_emits_diagnostic",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_cube_texel_fetches_emit_diagnostics",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
           ]
         },

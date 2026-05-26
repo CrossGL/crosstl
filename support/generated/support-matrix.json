@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 483
+        "test_count": 486
       },
       "translator_codegen": {
         "exists": true,
@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 687
+        "test_count": 689
       },
       "translator_codegen": {
         "exists": true,
@@ -260,7 +260,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 301,
+        "unsupported_marker_count": 307,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 439
+        "test_count": 442
       },
       "translator_codegen": {
         "exists": true,
@@ -433,7 +433,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 330
+        "test_count": 331
       },
       "translator_codegen": {
         "exists": true,
@@ -457,7 +457,7 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 9,
+        "unsupported_marker_count": 10,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -486,6 +486,10 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_sampled_resource_call("
           },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -627,7 +631,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 238
+        "test_count": 239
       },
       "translator_codegen": {
         "exists": true,
@@ -765,11 +769,19 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 43,
+        "unsupported_marker_count": 45,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "f\"Slang {stage_name} stage does not support \""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "unsupported_tess_factor_builtins = {"
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "if node.name not in unsupported_tess_factor_builtins:"
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -838,14 +850,6 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_texture_projected_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_texture_projected_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_texture_projected_call("
           }
         ]
       },
@@ -855,7 +859,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 245
+        "test_count": 255
       },
       "translator_codegen": {
         "exists": true,
@@ -2159,15 +2163,6 @@
       "feature_id": "texture.query",
       "notes": "",
       "status": "unknown"
-    },
-    {
-      "backend": "Vulkan SPIR-V",
-      "backend_id": "vulkan",
-      "category": "textures",
-      "feature": "Texel fetch operations",
-      "feature_id": "texture.texel_fetch",
-      "notes": "Covers regular, array, and multisample texelFetch lowering to OpImageFetch with spirv-as/spirv-val coverage. Fetch-offset forms remain incomplete.",
-      "status": "partial"
     },
     {
       "backend": "CUDA",
@@ -4474,10 +4469,12 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_offset_gather_and_fetch_emit_image_operations",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texel_fetch_uses_sample_operand",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texel_fetch_offset_emits_diagnostic",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_cube_texel_fetches_emit_diagnostics",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
           ],
-          "notes": "Covers regular, array, and multisample texelFetch lowering to OpImageFetch with spirv-as/spirv-val coverage. Fetch-offset forms remain incomplete.",
-          "status": "partial"
+          "notes": "Covers regular, array, fetch-offset, and multisample texelFetch lowering to OpImageFetch with spirv-as/spirv-val coverage, plus deterministic diagnostics for multisample fetch-offset and cube/cube-array target-invalid forms.",
+          "status": "supported"
         }
       }
     },
@@ -5337,7 +5334,7 @@
   },
   "summary": {
     "backend_count": 9,
-    "backlog_count": 201,
+    "backlog_count": 200,
     "feature_count": 42,
     "status_counts": {
       "cuda": {
@@ -5406,8 +5403,8 @@
       },
       "vulkan": {
         "diagnostic": 0,
-        "partial": 16,
-        "supported": 12,
+        "partial": 15,
+        "supported": 13,
         "unknown": 14,
         "unsupported": 0,
         "validated_rejection": 0
