@@ -601,6 +601,9 @@ class HLSLCodeGen:
         self.current_unsupported_glsl_buffer_block_local_variables = set()
         self.current_glsl_buffer_block_parameter_failures = {}
         self.current_glsl_buffer_block_parameter_struct_failures = {}
+        self.literal_int_constants = collect_literal_int_constants(
+            getattr(ast, "constants", [])
+        )
         structs = deduplicate_named_declarations(
             list(getattr(ast, "structs", []) or [])
             + collect_stage_local_structs(ast, target_stage),
@@ -747,9 +750,6 @@ class HLSLCodeGen:
                 self.function_call_name,
                 self.expression_name,
             )
-        )
-        self.literal_int_constants = collect_literal_int_constants(
-            getattr(ast, "constants", [])
         )
         (
             self.resource_array_size_hints,

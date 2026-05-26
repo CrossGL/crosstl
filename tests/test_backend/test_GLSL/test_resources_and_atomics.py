@@ -493,6 +493,57 @@ def test_codegen_mixed_ssbo_runtime_array_blocks_preserve_shape_with_diagnostic(
     assert "(*reinterpret_cast<device float*>(particles + 4)) = v + float(n);" in metal
 
 
+def test_codegen_mixed_ssbo_fixed_member_arrays_accept_global_const_size():
+    crossgl = """
+    shader ConstSizedBlock {
+        const int WIDTH = 3;
+
+        struct Block {
+            float weights[WIDTH];
+            float data[];
+        };
+
+        Block block @glsl_buffer_block(std430) @binding(7);
+
+        compute {
+            void main(uint i) {
+                float x = block.weights[2];
+                float y = block.data[i];
+                block.weights[1] = x + y;
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "static const int WIDTH = 3;" in hlsl
+    assert "RWByteAddressBuffer block : register(u7);" in hlsl
+    assert "float x = asfloat(block.Load(8));" in hlsl
+    assert "float y = asfloat(block.Load((12 + i * 4)));" in hlsl
+    assert "block.Store(4, asuint((x + y)));" in hlsl
+    assert "unsupported HLSL GLSL buffer block" not in hlsl
+
+    assert "constant int WIDTH = 3;" in metal
+    assert "device uchar* block [[buffer(7)]]" in metal
+    assert "float x = (*reinterpret_cast<const device float*>(block + 8));" in metal
+    assert (
+        "float y = (*reinterpret_cast<const device float*>" "(block + (12 + i * 4)));"
+    ) in metal
+    assert "(*reinterpret_cast<device float*>(block + 4)) = x + y;" in metal
+    assert "unsupported Metal GLSL buffer block" not in metal
+
+    assert "layout(std430, binding = 7) buffer Block" in glsl
+    assert "float weights[WIDTH];" in glsl
+    assert "float data[];" in glsl
+    assert "block.weights[1] = (x + y);" in glsl
+
+
 def test_codegen_mixed_ssbo_metal_vec3_metadata_uses_scalar_pointer_offsets():
     code = """
     #version 450 core
