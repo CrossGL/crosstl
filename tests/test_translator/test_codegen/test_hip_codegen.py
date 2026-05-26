@@ -167,6 +167,9 @@ class TestHipCodeGen:
         assert codegen.function_map.get("bool3") == "make_uchar3"
         assert codegen.function_map.get("mat3x4") == "float3x4"
         assert codegen.function_map.get("dmat2") == "double2x2"
+        assert codegen.function_map.get("atomicExchange") == "atomicExch"
+        assert codegen.function_map.get("atomicCompareExchange") == "atomicCAS"
+        assert codegen.function_map.get("atomicCompSwap") == "atomicCAS"
 
     def test_lambda_call_emits_hip_device_lambda(self):
         """Test CrossGL pseudo-lambda calls lower to HIP device lambdas."""
@@ -2122,10 +2125,11 @@ class TestHipCodeGen:
         """Test variable generation with memory qualifiers"""
         source_code = """
         shader TestShader {
+            uniform float constants;
+
             compute {
                 void main() {
-                    float shared_data;
-                    float constants;
+                    shared float shared_data;
                 }
             }
         }
@@ -2138,9 +2142,8 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        # For now, just check that basic variables are generated
-        assert "float shared_data;" in hip_code
-        assert "float constants;" in hip_code
+        assert "__shared__ float shared_data;" in hip_code
+        assert "__constant__ float constants;" in hip_code
 
     def test_for_in_statement_lowers_to_counted_hip_loops(self):
         """Test HIP lowers CrossGL for-in loops to counted integer loops."""
@@ -2187,6 +2190,9 @@ class TestHipCodeGen:
                 void main() {
                     int counter;
                     atomicAdd(counter, 1);
+                    int oldValue = atomicExchange(counter, 2);
+                    int exchanged = atomicCompareExchange(counter, 0, 3);
+                    int swapped = atomicCompSwap(counter, exchanged, 4);
                 }
             }
         }
@@ -2199,8 +2205,14 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        # Check for basic structure
         assert "__global__" in hip_code or "__device__" in hip_code
+        assert "atomicAdd(counter, 1);" in hip_code
+        assert "int oldValue = atomicExch(counter, 2);" in hip_code
+        assert "int exchanged = atomicCAS(counter, 0, 3);" in hip_code
+        assert "int swapped = atomicCAS(counter, exchanged, 4);" in hip_code
+        assert "atomicExchange(" not in hip_code
+        assert "atomicCompareExchange(" not in hip_code
+        assert "atomicCompSwap(" not in hip_code
 
     def test_synchronization_functions(self):
         """Test synchronization function generation"""
@@ -2210,6 +2222,7 @@ class TestHipCodeGen:
                 void main() {
                     barrier();
                     memoryBarrier();
+                    workgroupBarrier();
                 }
             }
         }
@@ -2222,8 +2235,12 @@ class TestHipCodeGen:
         codegen = HipCodeGen()
         hip_code = codegen.generate(ast)
 
-        # Check for basic structure
-        assert "__global__" in hip_code or "__device__" in hip_code
+        assert "__syncthreads();" in hip_code
+        assert hip_code.count("__syncthreads();") == 2
+        assert "__threadfence();" in hip_code
+        assert "barrier();" not in hip_code
+        assert "memoryBarrier();" not in hip_code
+        assert "workgroupBarrier();" not in hip_code
 
     def test_vector_operations(self):
         """Test vector operations generation"""

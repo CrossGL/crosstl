@@ -271,6 +271,17 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "dmat4x2": "double4x2",
             "dmat4x3": "double4x3",
             "dmat4x4": "double4x4",
+            # Atomic operations
+            "atomicAdd": "atomicAdd",
+            "atomicSub": "atomicSub",
+            "atomicMin": "atomicMin",
+            "atomicMax": "atomicMax",
+            "atomicAnd": "atomicAnd",
+            "atomicOr": "atomicOr",
+            "atomicXor": "atomicXor",
+            "atomicExchange": "atomicExch",
+            "atomicCompareExchange": "atomicCAS",
+            "atomicCompSwap": "atomicCAS",
             # Texture functions
             "texture": "tex2D",
             "textureLod": "tex2DLod",
@@ -537,10 +548,24 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             self.register_variable_type(node.name, var_type)
             declaration = self.format_typed_declarator(var_type, node.name)
 
+        qualifiers = self.variable_memory_qualifiers(node)
+        if qualifiers:
+            declaration = f"{' '.join(qualifiers)} {declaration}"
+
         if initial_value is not None:
             declaration += f" = {self.visit(initial_value)}"
 
         return declaration
+
+    def variable_memory_qualifiers(self, node: VariableNode):
+        qualifiers = []
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            qualifier_name = str(qualifier).lower()
+            if "workgroup" in qualifier_name or "shared" in qualifier_name:
+                qualifiers.append("__shared__")
+            elif "uniform" in qualifier_name:
+                qualifiers.append("__constant__")
+        return qualifiers
 
     def visit_CbufferNode(self, node: CbufferNode) -> str:
         self.add_line(f"struct {node.name}")
@@ -991,7 +1016,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             # Handle texture sampling
             if len(args) >= 2:
                 return f"tex2D({args[0]}, {args[1]})"
-        elif func_name == "barrier":
+        elif func_name in {"barrier", "workgroupBarrier"}:
             return "__syncthreads()"
         elif func_name == "memoryBarrier":
             return "__threadfence()"
