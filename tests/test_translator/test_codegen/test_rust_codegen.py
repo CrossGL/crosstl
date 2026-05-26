@@ -279,9 +279,36 @@ mod gpu {
     use std::marker::PhantomData;
 
     #[derive(Debug, Clone, Copy)]
+    pub struct Texture1D<T>(PhantomData<T>);
+
+    impl<T> Default for Texture1D<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Texture1DArray<T>(PhantomData<T>);
+
+    impl<T> Default for Texture1DArray<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
     pub struct Texture2D<T>(PhantomData<T>);
 
     impl<T> Default for Texture2D<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Texture2DArray<T>(PhantomData<T>);
+
+    impl<T> Default for Texture2DArray<T> {
         fn default() -> Self {
             Self(PhantomData)
         }
@@ -296,13 +323,38 @@ mod gpu {
         }
     }
 
+    #[derive(Debug, Clone, Copy)]
+    pub struct TextureCube<T>(PhantomData<T>);
+
+    impl<T> Default for TextureCube<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct TextureCubeArray<T>(PhantomData<T>);
+
+    impl<T> Default for TextureCubeArray<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
     pub trait TextureLike {}
+    impl<T> TextureLike for Texture1D<T> {}
+    impl<T> TextureLike for Texture1DArray<T> {}
     impl<T> TextureLike for Texture2D<T> {}
+    impl<T> TextureLike for Texture2DArray<T> {}
     impl<T> TextureLike for Texture3D<T> {}
+    impl<T> TextureLike for TextureCube<T> {}
+    impl<T> TextureLike for TextureCubeArray<T> {}
 
     pub trait SampleCoord {}
+    impl SampleCoord for f32 {}
     impl SampleCoord for Vec2<f32> {}
     impl SampleCoord for Vec3<f32> {}
+    impl SampleCoord for Vec4<f32> {}
 
     pub fn sample<Texture, Coord>(_texture: Texture, _coord: Coord) -> Vec4<f32>
     where
@@ -1425,6 +1477,57 @@ def test_sampler3d_maps_to_texture3d_in_rust():
     )
     assert "static VOLUME_MAP: sampler3D" not in generated_code
     assert "return sample(*VOLUME_MAP, uv);" in generated_code
+
+
+def test_sampler_array_and_cube_families_map_to_rust_textures_and_compile(tmp_path):
+    code = """
+    shader SamplerFamilyProbe {
+        sampler1D rampMap;
+        sampler1DArray rampArrayMap;
+        sampler2DArray arrayMap;
+        samplerCube envMap;
+        samplerCubeArray probeMap;
+
+        fragment {
+            vec4 main(float x, vec2 xLayer, vec3 uvw, vec3 dir, vec4 probeCoord) @ gl_FragColor {
+                let ramp = texture(rampMap, x);
+                let rampLayer = texture(rampArrayMap, xLayer);
+                let layer = texture(arrayMap, uvw);
+                let env = texture(envMap, dir);
+                let probe = texture(probeMap, probeCoord);
+                return ramp + rampLayer + layer + env + probe;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static RAMP_MAP: std::sync::LazyLock<Texture1D<f32>>" in generated_code
+    assert (
+        "static RAMP_ARRAY_MAP: std::sync::LazyLock<Texture1DArray<f32>>"
+        in generated_code
+    )
+    assert (
+        "static ARRAY_MAP: std::sync::LazyLock<Texture2DArray<f32>>" in generated_code
+    )
+    assert "static ENV_MAP: std::sync::LazyLock<TextureCube<f32>>" in generated_code
+    assert (
+        "static PROBE_MAP: std::sync::LazyLock<TextureCubeArray<f32>>" in generated_code
+    )
+    assert "sampler1D" not in generated_code
+    assert "sampler1DArray" not in generated_code
+    assert "sampler2DArray" not in generated_code
+    assert "samplerCube" not in generated_code
+    assert "samplerCubeArray" not in generated_code
+    assert "let ramp: Vec4<f32> = sample(*RAMP_MAP, x);" in generated_code
+    assert (
+        "let rampLayer: Vec4<f32> = sample(*RAMP_ARRAY_MAP, xLayer);" in generated_code
+    )
+    assert "let layer: Vec4<f32> = sample(*ARRAY_MAP, uvw);" in generated_code
+    assert "let env: Vec4<f32> = sample(*ENV_MAP, dir);" in generated_code
+    assert "let probe: Vec4<f32> = sample(*PROBE_MAP, probeCoord);" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_for_statement():

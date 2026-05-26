@@ -127,9 +127,13 @@ class RustCodeGen:
             "dmat4x3": "Mat4x3<f64>",
             "dmat4x4": "Mat4<f64>",
             # Texture Types
+            "sampler1D": "Texture1D<f32>",
+            "sampler1DArray": "Texture1DArray<f32>",
             "sampler2D": "Texture2D<f32>",
+            "sampler2DArray": "Texture2DArray<f32>",
             "sampler3D": "Texture3D<f32>",
             "samplerCube": "TextureCube<f32>",
+            "samplerCubeArray": "TextureCubeArray<f32>",
             "sampler": "Sampler",
         }
 
