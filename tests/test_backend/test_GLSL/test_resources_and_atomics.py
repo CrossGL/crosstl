@@ -14774,7 +14774,7 @@ def test_codegen_mixed_ssbo_unsupported_gather_compare_calls_infer_types():
     assert "textureGatherCompareOffset(" not in glsl
 
 
-def test_codegen_mixed_ssbo_unsupported_cube_gather_compare_calls_infer_types():
+def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
     crossgl = """
     shader CubeGatherCompareFallbacks {
         samplerCubeShadow shadowCube;
@@ -14833,18 +14833,24 @@ def test_codegen_mixed_ssbo_unsupported_cube_gather_compare_calls_infer_types():
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
+    assert "RWByteAddressBuffer cubeBlock : register(u106);" in hlsl
+    assert "float3 readDirection(RWByteAddressBuffer localBlock)" in hlsl
+    assert "float readDepth(RWByteAddressBuffer localBlock)" in hlsl
     assert (
-        "float4 cubeCall = shadowCube.GatherCmp(compareSampler, float3(0) "
-        "/* unsupported HLSL GLSL buffer block function call readDirection: "
-        "target function omitted */, 0 /* unsupported HLSL GLSL buffer block "
-        "function call readDepth: target function omitted */);" in hlsl
+        "float4 cubeDirect = shadowCube.GatherCmp(compareSampler, "
+        "asfloat(cubeBlock.Load3(0)), asfloat(cubeBlock.Load(32)));" in hlsl
+    )
+    assert (
+        "float4 cubeCall = shadowCube.GatherCmp(compareSampler, "
+        "readDirection(cubeBlock), readDepth(cubeBlock));" in hlsl
+    )
+    assert (
+        "float4 arrayDirect = shadowCubeArray.GatherCmp(compareSampler, "
+        "asfloat(cubeBlock.Load4(16)), asfloat(cubeBlock.Load(32)));" in hlsl
     )
     assert (
         "float4 arrayCall = shadowCubeArray.GatherCmp(compareSampler, "
-        "float4(0) /* unsupported HLSL GLSL buffer block function call "
-        "readCubeLayer: target function omitted */, 0 /* unsupported HLSL "
-        "GLSL buffer block function call readDepth: target function omitted */);"
-        in hlsl
+        "readCubeLayer(cubeBlock), readDepth(cubeBlock));" in hlsl
     )
     assert (
         hlsl.count(
@@ -14854,26 +14860,22 @@ def test_codegen_mixed_ssbo_unsupported_cube_gather_compare_calls_infer_types():
         )
         == 4
     )
-    assert "GatherCmp(compareSampler, 0 /* unsupported HLSL GLSL buffer" not in hlsl
-    assert "readOffset: target function omitted" not in hlsl
+    assert "unsupported HLSL GLSL buffer block" not in hlsl
     assert "cubeBlock.direction" not in hlsl
     assert "cubeBlock.cubeLayer" not in hlsl
     assert "cubeBlock.offset" not in hlsl
 
+    assert "device uchar* cubeBlock [[buffer(106)]]" in metal
+    assert "float3 readDirection(device uchar* localBlock)" in metal
+    assert "float readDepth(device uchar* localBlock)" in metal
     assert (
         "float4 cubeCall = shadowCube.gather_compare(compareSampler, "
-        "float3(0) /* unsupported Metal GLSL buffer block function call "
-        "readDirection: target function omitted */, 0 /* unsupported Metal "
-        "GLSL buffer block function call readDepth: target function omitted */);"
-        in metal
+        "readDirection(cubeBlock), readDepth(cubeBlock));" in metal
     )
     assert (
         "float4 arrayCall = shadowCubeArray.gather_compare(compareSampler, "
-        "(float4(0) /* unsupported Metal GLSL buffer block function call "
-        "readCubeLayer: target function omitted */).xyz, uint((float4(0) "
-        "/* unsupported Metal GLSL buffer block function call readCubeLayer: "
-        "target function omitted */).w), 0 /* unsupported Metal GLSL buffer "
-        "block function call readDepth: target function omitted */);" in metal
+        "(readCubeLayer(cubeBlock)).xyz, uint((readCubeLayer(cubeBlock)).w), "
+        "readDepth(cubeBlock));" in metal
     )
     assert (
         metal.count(
@@ -14883,10 +14885,7 @@ def test_codegen_mixed_ssbo_unsupported_cube_gather_compare_calls_infer_types():
         )
         == 4
     )
-    assert (
-        "gather_compare(compareSampler, 0 /* unsupported Metal GLSL buffer" not in metal
-    )
-    assert "readOffset: target function omitted" not in metal
+    assert "unsupported Metal GLSL buffer block" not in metal
     assert "cubeBlock.direction" not in metal
     assert "cubeBlock.cubeLayer" not in metal
     assert "cubeBlock.offset" not in metal
@@ -15478,6 +15477,85 @@ def test_codegen_mixed_ssbo_fixed_block_array_call_propagated_conflict_is_reject
         match="Conflicting fixed resource array sizes for 'fixedBlocks': 2 and 3",
     ):
         MetalCodeGen().generate(shader_ast)
+
+
+def test_codegen_mixed_ssbo_fixed_only_blocks_lower_to_explicit_offsets():
+    code = """
+    #version 450 core
+    layout(std430, binding = 97) buffer FixedOnlyBlock {
+        uint count;
+        vec3 axis;
+        mat2 transform;
+        float weights[3];
+    } fixedOnly;
+
+    void main() {
+        uint count = fixedOnly.count;
+        vec3 axis = fixedOnly.axis;
+        mat2 transform = fixedOnly.transform;
+        float weight = fixedOnly.weights[2];
+        fixedOnly.count = count + 1u;
+        fixedOnly.axis = axis;
+        fixedOnly.transform = transform;
+        fixedOnly.weights[1] = weight;
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer fixedOnly : register(u97);" in hlsl
+    assert "struct FixedOnlyBlock" not in hlsl
+    assert "uint count = fixedOnly.Load(0);" in hlsl
+    assert "float3 axis = asfloat(fixedOnly.Load3(16));" in hlsl
+    assert (
+        "float2x2 transform = float2x2(asfloat(fixedOnly.Load2(32)), "
+        "asfloat(fixedOnly.Load2(40)));" in hlsl
+    )
+    assert "float weight = asfloat(fixedOnly.Load(56));" in hlsl
+    assert "fixedOnly.Store(0, (count + 1u));" in hlsl
+    assert "fixedOnly.Store3(16, asuint(axis));" in hlsl
+    assert "fixedOnly.Store2(32, asuint(transform[0]));" in hlsl
+    assert "fixedOnly.Store2(40, asuint(transform[1]));" in hlsl
+    assert "fixedOnly.Store(52, asuint(weight));" in hlsl
+    assert "unsupported HLSL GLSL buffer block" not in hlsl
+
+    assert "device uchar* fixedOnly [[buffer(97)]]" in metal
+    assert "struct FixedOnlyBlock" not in metal
+    assert (
+        "uint count = (*reinterpret_cast<const device uint*>(fixedOnly + 0));" in metal
+    )
+    assert (
+        "float3 axis = float3((*reinterpret_cast<const device float*>"
+        "(fixedOnly + 16)), (*reinterpret_cast<const device float*>"
+        "(fixedOnly + 20)), (*reinterpret_cast<const device float*>"
+        "(fixedOnly + 24)));" in metal
+    )
+    assert (
+        "float2x2 transform = float2x2(float2((*reinterpret_cast<const device "
+        "float*>(fixedOnly + 32)), (*reinterpret_cast<const device float*>"
+        "(fixedOnly + 36))), float2((*reinterpret_cast<const device float*>"
+        "(fixedOnly + 40)), (*reinterpret_cast<const device float*>"
+        "(fixedOnly + 44))));" in metal
+    )
+    assert (
+        "float weight = (*reinterpret_cast<const device float*>(fixedOnly + 56));"
+        in metal
+    )
+    assert "(*reinterpret_cast<device uint*>(fixedOnly + 0)) = count + 1u;" in metal
+    assert "(*reinterpret_cast<device float*>(fixedOnly + 16))" in metal
+    assert "(*reinterpret_cast<device float*>(fixedOnly + 32))" in metal
+    assert "(*reinterpret_cast<device float*>(fixedOnly + 52)) = weight;" in metal
+    assert "unsupported Metal GLSL buffer block" not in metal
+
+    assert "layout(std430, binding = 97) buffer FixedOnlyBlock" in glsl
+    assert "} fixedOnly;" in glsl
+    assert "fixedOnly.weights[1] = weight;" in glsl
 
 
 def test_codegen_mixed_ssbo_hlsl_vector_layout_uses_byte_address_methods():

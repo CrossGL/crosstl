@@ -386,7 +386,7 @@ def collect_lowered_glsl_buffer_blocks(
             }
             offset += member_info["size"]
 
-        if runtime_array_name is None or not members:
+        if not members:
             if failure_reason:
                 record_glsl_buffer_block_lowering_failure(
                     var_failures, struct_failures, var_name, type_name, failure_reason
