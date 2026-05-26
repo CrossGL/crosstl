@@ -574,6 +574,8 @@ class Parser:
             "geometry": ShaderStage.GEOMETRY,
             "tessellation_control": ShaderStage.TESSELLATION_CONTROL,
             "tessellation_evaluation": ShaderStage.TESSELLATION_EVALUATION,
+            "hull": ShaderStage.TESSELLATION_CONTROL,
+            "domain": ShaderStage.TESSELLATION_EVALUATION,
             "task": ShaderStage.TASK,
             "amplification": ShaderStage.AMPLIFICATION,
             "object": ShaderStage.OBJECT,

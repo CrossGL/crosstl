@@ -474,6 +474,93 @@ shader SpirvShadowTextureComputeValidation {
 """
 
 
+SPIRV_PROJECTED_TEXTURE_COMPUTE_SHADER = """
+shader SpirvProjectedTextureComputeValidation {
+    sampler2D colorMap;
+    sampler2DArray layerMap;
+    sampler3D volumeMap;
+    sampler2DShadow shadowMap;
+    sampler2DArrayShadow shadowArray;
+    sampler linearSampler;
+    sampler compareSampler;
+
+    compute {
+        void main() {
+            vec3 uvq = vec3(0.25, 0.75, 2.0);
+            vec4 uvqw = vec4(0.25, 0.75, 0.0, 2.0);
+            vec4 uvLayerQ = vec4(0.25, 0.75, 1.0, 2.0);
+            vec4 xyzq = vec4(0.25, 0.5, 0.75, 2.0);
+            vec2 ddx = vec2(0.1, 0.0);
+            vec2 ddy = vec2(0.0, 0.1);
+            vec3 dxyz = vec3(0.1, 0.0, 0.0);
+            float depth = 0.5;
+            vec4 projected = textureProj(colorMap, linearSampler, uvq);
+            vec4 projectedOffset = textureProjOffset(
+                colorMap,
+                linearSampler,
+                uvq,
+                ivec2(1, 0)
+            );
+            vec4 projectedLod = textureProjLod(colorMap, uvqw, 2.0);
+            vec4 projectedLodOffset = textureProjLodOffset(
+                layerMap,
+                linearSampler,
+                uvLayerQ,
+                2.0,
+                ivec2(1, 0)
+            );
+            vec4 projectedGrad = textureProjGrad(volumeMap, xyzq, dxyz, dxyz);
+            vec4 projectedGradOffset = textureProjGradOffset(
+                colorMap,
+                uvq,
+                ddx,
+                ddy,
+                ivec2(-1, 0)
+            );
+            float shadow = textureCompareProj(
+                shadowMap,
+                compareSampler,
+                uvq,
+                depth
+            );
+            float shadowOffset = textureCompareProjOffset(
+                shadowMap,
+                compareSampler,
+                uvq,
+                depth,
+                ivec2(1, 0)
+            );
+            float shadowLod = textureCompareProjLod(shadowMap, uvq, depth, 2.0);
+            float shadowLodOffset = textureCompareProjLodOffset(
+                shadowMap,
+                uvq,
+                depth,
+                2.0,
+                ivec2(1, 0)
+            );
+            float shadowGrad = textureCompareProjGrad(
+                shadowArray,
+                compareSampler,
+                uvLayerQ,
+                depth,
+                ddx,
+                ddy
+            );
+            float shadowGradOffset = textureCompareProjGradOffset(
+                shadowArray,
+                compareSampler,
+                uvLayerQ,
+                depth,
+                ddx,
+                ddy,
+                ivec2(-1, 0)
+            );
+        }
+    }
+}
+"""
+
+
 SAMPLED_TEXTURE_ARRAY_FRAGMENT_SHADER = """
 shader SampledTextureArrayValidation {
     sampler2D textures[4];
@@ -2206,6 +2293,7 @@ def test_generated_spirv_forwarded_image_atomic_validates_with_spirv_tools(
         ("advanced_texture_compute", SPIRV_ADVANCED_TEXTURE_COMPUTE_SHADER),
         ("texture_query_compute", SPIRV_TEXTURE_QUERY_COMPUTE_SHADER),
         ("shadow_texture_compute", SPIRV_SHADOW_TEXTURE_COMPUTE_SHADER),
+        ("projected_texture_compute", SPIRV_PROJECTED_TEXTURE_COMPUTE_SHADER),
     ],
 )
 def test_generated_spirv_texture_operations_validate_with_spirv_tools(

@@ -189,6 +189,21 @@ RESOURCE_ACCESS_METADATA_NAMES = {
     "access::read_write": "readwrite",
 }
 
+ADDRESS_SPACE_METADATA_NAMES = {
+    "device": "device",
+    "global": "device",
+    "constant": "constant",
+    "thread": "thread",
+    "local": "thread",
+    "private": "thread",
+    "function": "thread",
+    "threadgroup": "workgroup",
+    "workgroup": "workgroup",
+    "shared": "workgroup",
+    "groupshared": "workgroup",
+    "storage": "storage",
+}
+
 STAGE_LAYOUT_DIRECTION_REQUIREMENTS = {
     "local_size_x": "in",
     "local_size_y": "in",
@@ -759,6 +774,13 @@ def validate_node_metadata(node, context):
         raise ValueError(
             f"Conflicting interpolation sampling metadata on {context}: "
             f"{_metadata_name_phrase(interpolation_sampling)}"
+        )
+
+    address_spaces = _normalized_metadata_names(names, ADDRESS_SPACE_METADATA_NAMES)
+    if len(set(address_spaces.values())) > 1:
+        raise ValueError(
+            f"Conflicting address space metadata on {context}: "
+            f"{_metadata_name_phrase(address_spaces)}"
         )
 
     access_names = _node_resource_access_names(node)

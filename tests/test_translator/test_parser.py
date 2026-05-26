@@ -1496,6 +1496,106 @@ def test_stage_layout_qualifiers_preserve_geometry_and_tessellation_metadata():
     assert tessellation_stage.layout_qualifiers[0].entries[0].arguments[0].value == 4
 
 
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            compute {
+                layout(local_size_x = 8) in;
+                layout(local_size_x = 16) in;
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage layout 'local_size_x'",
+        ),
+        (
+            """
+            compute {
+                layout(local_size_x = 8) out;
+                void main() {
+                }
+            }
+            """,
+            "local_size_x.*must use 'in' direction",
+        ),
+        (
+            """
+            geometry {
+                layout(triangles) in;
+                layout(lines) in;
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage layout entries.*lines.*triangles",
+        ),
+        (
+            """
+            tessellation_evaluation {
+                layout(triangles, quads) in;
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage layout entries.*quads.*triangles",
+        ),
+        (
+            """
+            tessellation_evaluation {
+                layout(equal_spacing, fractional_even_spacing) in;
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage layout entries.*equal_spacing.*fractional_even_spacing",
+        ),
+        (
+            """
+            tessellation_evaluation {
+                layout(cw, ccw) in;
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage layout entries.*ccw.*cw",
+        ),
+    ],
+)
+def test_conflicting_stage_layout_metadata_fails_validation(stage_source, message):
+    code = f"""
+    shader ConflictingStageLayouts {{
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_duplicate_matching_stage_layout_metadata_values_are_allowed():
+    code = """
+    shader MatchingStageLayouts {
+        compute {
+            layout(local_size_x = GROUP_SIZE * 2) in;
+            layout(local_size_x = GROUP_SIZE * 2, local_size_y = 4) in;
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    compute_stage = ast.stages[ShaderStage.COMPUTE]
+
+    assert compute_stage.execution_config == {
+        "local_size_x": "GROUP_SIZE * 2",
+        "local_size_y": "4",
+    }
+    assert len(compute_stage.layout_qualifiers) == 2
+
+
 def test_lambda_call_preserves_typed_parameters_and_block_body_parse():
     code = """
     shader LambdaBlocks {
@@ -1747,6 +1847,77 @@ def test_backend_parameter_address_and_access_qualifiers_parse():
 
     assert target.qualifiers == ["writeonly"]
     assert target.attributes[0].name == "rgba32f"
+
+
+def test_address_space_alias_qualifiers_are_allowed():
+    code = """
+    shader AddressSpaceAliases {
+        shared threadgroup float workgroupScratch;
+        groupshared workgroup int groupCounter;
+        global device float deviceValue;
+        local private float localValue;
+        function thread int threadValue;
+
+        void consume(global device float* data, shared threadgroup float* scratch) {
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert ast.global_variables[0].qualifiers == ["shared", "threadgroup"]
+    assert ast.global_variables[1].qualifiers == ["groupshared", "workgroup"]
+    assert ast.global_variables[2].qualifiers == ["global", "device"]
+    assert ast.global_variables[3].qualifiers == ["local", "private"]
+    assert ast.global_variables[4].qualifiers == ["function", "thread"]
+    data, scratch = ast.functions[0].parameters
+    assert data.qualifiers == ["global", "device"]
+    assert scratch.qualifiers == ["shared", "threadgroup"]
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "device threadgroup float scratch;",
+            "Conflicting address space metadata.*@device.*@threadgroup",
+        ),
+        (
+            "constant global float value;",
+            "Conflicting address space metadata.*@constant.*@global",
+        ),
+        (
+            "storage private float value;",
+            "Conflicting address space metadata.*@private.*@storage",
+        ),
+    ],
+)
+def test_conflicting_variable_address_space_metadata_fails_validation(
+    declaration, message
+):
+    code = f"""
+    shader ConflictingVariableAddressSpaces {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_conflicting_parameter_address_space_metadata_fails_validation():
+    code = """
+    shader ConflictingParameterAddressSpaces {
+        void consume(device threadgroup float* scratch) {
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting address space metadata.*@device.*@threadgroup",
+    ):
+        parse_code(tokenize_code(code))
 
 
 def test_shader_generic_struct_wrapper_parses_without_leaking_members(capsys):
@@ -2412,6 +2583,48 @@ def test_extended_shader_stages_parse():
         assert ShaderStage.RAY_ANY_HIT in ast.stages
     except SyntaxError as e:
         pytest.fail(f"Extended shader stage parsing failed: {e}")
+
+
+def test_hlsl_tessellation_and_ray_stage_aliases_parse_to_canonical_stages():
+    code = """
+    shader AliasStages {
+        hull HullMain {
+            void main() { return; }
+        }
+        domain DomainMain {
+            void main() { return; }
+        }
+        intersection IntersectionMain {
+            void main() { return; }
+        }
+        closesthit ClosestHitMain {
+            void main() { return; }
+        }
+        anyhit AnyHitMain {
+            void main() { return; }
+        }
+        miss MissMain {
+            void main() { return; }
+        }
+        callable CallableMain {
+            void main() { return; }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert ast.stages[ShaderStage.TESSELLATION_CONTROL].entry_point.name == "HullMain"
+    assert (
+        ast.stages[ShaderStage.TESSELLATION_EVALUATION].entry_point.name == "DomainMain"
+    )
+    assert (
+        ast.stages[ShaderStage.RAY_INTERSECTION].entry_point.name == "IntersectionMain"
+    )
+    assert ast.stages[ShaderStage.RAY_CLOSEST_HIT].entry_point.name == "ClosestHitMain"
+    assert ast.stages[ShaderStage.RAY_ANY_HIT].entry_point.name == "AnyHitMain"
+    assert ast.stages[ShaderStage.RAY_MISS].entry_point.name == "MissMain"
+    assert ast.stages[ShaderStage.RAY_CALLABLE].entry_point.name == "CallableMain"
 
 
 def test_wave_intrinsic_parses_to_node():
