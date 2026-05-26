@@ -3073,6 +3073,67 @@ def test_directx_mesh_stage_validates_outputtopology_values():
     assert '[outputtopology("line")]' in generated
 
 
+def test_directx_mesh_task_stage_validates_system_value_parameter_types():
+    bad_mesh_group_index_code = """
+    shader BadMeshGroupIndex {
+        mesh {
+            void main(uvec2 groupIndex @ SV_GroupIndex)
+                @numthreads(32, 1, 1)
+                @outputtopology(triangle) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="mesh.*SV_GroupIndex.*scalar uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(bad_mesh_group_index_code), "mesh"
+        )
+
+    bad_task_dispatch_id_code = """
+    shader BadTaskDispatchId {
+        task {
+            void main(ivec3 dispatchId @ SV_DispatchThreadID)
+                @numthreads(8, 1, 1) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="task.*SV_DispatchThreadID.*uint3"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(bad_task_dispatch_id_code), "task"
+        )
+
+    valid_code = """
+    shader ValidMeshTaskSystemValues {
+        task {
+            void main(
+                uvec3 groupId @ SV_GroupID,
+                uvec3 groupThreadId @ SV_GroupThreadID,
+                uvec3 dispatchId @ SV_DispatchThreadID,
+                uint groupIndex @ SV_GroupIndex
+            ) @numthreads(8, 1, 1) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            void main(
+                uvec3 groupId @ SV_GroupID,
+                uvec3 groupThreadId @ SV_GroupThreadID,
+                uvec3 dispatchId @ SV_DispatchThreadID,
+                uint groupIndex @ SV_GroupIndex
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(valid_code))
+
+    assert "uint3 groupId : SV_GroupID" in generated
+    assert "uint3 groupThreadId : SV_GroupThreadID" in generated
+    assert "uint3 dispatchId : SV_DispatchThreadID" in generated
+    assert "uint groupIndex : SV_GroupIndex" in generated
+
+
 def test_directx_advanced_stage_entries_use_stage_specific_names():
     code = """
     shader advanced {
@@ -5357,6 +5418,43 @@ def test_compute_stage_validates_system_value_parameter_types():
     assert "uint3 groupThreadId : SV_GroupThreadID" in generated
     assert "uint3 dispatchId : SV_DispatchThreadID" in generated
     assert "uint groupIndex : SV_GroupIndex" in generated
+
+
+def test_directx_thread_system_crossgl_semantics_lower_and_validate():
+    invalid_code = """
+    shader BadCrossGLThreadSemantic {
+        compute {
+            void main(vec3 dispatchId @ gl_GlobalInvocationID) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_DispatchThreadID.*uint3"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(invalid_code), "compute")
+
+    valid_code = """
+    shader CrossGLThreadSemantics {
+        compute {
+            void main(
+                uvec3 groupId @ gl_WorkGroupID,
+                uvec3 groupThreadId @ gl_LocalInvocationID,
+                uvec3 dispatchId @ gl_GlobalInvocationID,
+                uint groupIndex @ gl_LocalInvocationIndex
+            ) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "compute"
+    )
+
+    assert "uint3 groupId : SV_GroupID" in generated
+    assert "uint3 groupThreadId : SV_GroupThreadID" in generated
+    assert "uint3 dispatchId : SV_DispatchThreadID" in generated
+    assert "uint groupIndex : SV_GroupIndex" in generated
+    assert "gl_GlobalInvocationID" not in generated
+    assert "gl_LocalInvocationID" not in generated
+    assert "gl_WorkGroupID" not in generated
+    assert "gl_LocalInvocationIndex" not in generated
 
 
 def test_wave_and_rayquery_intrinsics_codegen():

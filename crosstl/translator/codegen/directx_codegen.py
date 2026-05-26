@@ -552,6 +552,10 @@ class HLSLCodeGen:
             "gl_FragColor6": "SV_TARGET6",
             "gl_FragColor7": "SV_TARGET7",
             "gl_FragDepth": "SV_DEPTH",
+            "gl_GlobalInvocationID": "SV_DispatchThreadID",
+            "gl_LocalInvocationID": "SV_GroupThreadID",
+            "gl_WorkGroupID": "SV_GroupID",
+            "gl_LocalInvocationIndex": "SV_GroupIndex",
             "payload": "payload",
             "hit_attribute": "hit_attribute",
             "callable_data": "callable_data",
@@ -4941,9 +4945,9 @@ class HLSLCodeGen:
                     f"must be {expected_description}"
                 )
 
-    def validate_hlsl_compute_system_value_types(self, parameters):
+    def validate_hlsl_thread_system_value_types(self, parameters, shader_type):
         self.validate_hlsl_exact_semantic_type(
-            parameters, "compute", "SV_GroupIndex", "uint", "scalar uint"
+            parameters, shader_type, "SV_GroupIndex", "uint", "scalar uint"
         )
         for semantic in (
             "SV_GroupID",
@@ -4951,8 +4955,11 @@ class HLSLCodeGen:
             "SV_DispatchThreadID",
         ):
             self.validate_hlsl_exact_semantic_type(
-                parameters, "compute", semantic, "uint3", "uint3"
+                parameters, shader_type, semantic, "uint3", "uint3"
             )
+
+    def validate_hlsl_compute_system_value_types(self, parameters):
+        self.validate_hlsl_thread_system_value_types(parameters, "compute")
 
     def validate_hlsl_function_return_semantic(
         self, func, shader_type, raw_return_type=None, semantic=None
@@ -5206,6 +5213,9 @@ class HLSLCodeGen:
 
         if shader_type == "compute":
             self.validate_hlsl_compute_system_value_types(parameters)
+
+        if shader_type in {"mesh", "task", "amplification", "object"}:
+            self.validate_hlsl_thread_system_value_types(parameters, shader_type)
 
     def validate_hlsl_geometry_stream_output_semantics(self, parameters):
         stream_types = {"PointStream", "LineStream", "TriangleStream"}
@@ -5525,6 +5535,7 @@ class HLSLCodeGen:
             "tessellation_evaluation": {"domain"},
         }.get(shader_type)
         if not required_attributes:
+            self.validate_hlsl_stage_parameter_requirements(func, shader_type)
             return
 
         present_attributes = self.hlsl_stage_attribute_names(func)
