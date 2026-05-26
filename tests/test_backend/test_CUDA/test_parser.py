@@ -1465,6 +1465,45 @@ class TestCudaParser:
         assert sync_call.name.object == "block"
         assert sync_call.name.member == "sync"
 
+    def test_cooperative_groups_rank_and_tile_parsing(self):
+        """Test parsing CUDA cooperative-groups rank and tile helpers."""
+        code = """
+        __global__ void kernel() {
+            cooperative_groups::thread_block block =
+                cooperative_groups::this_thread_block();
+            auto tile = cooperative_groups::tiled_partition<32>(block);
+            unsigned int rank = block.thread_rank();
+            unsigned int width = tile.size();
+            unsigned int lane = tile.thread_rank();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.kernels[0].body
+        tile = body[1]
+        rank = body[2]
+        width = body[3]
+        lane = body[4]
+
+        assert isinstance(tile, VariableNode)
+        assert isinstance(tile.value, FunctionCallNode)
+        assert tile.value.name == "cooperative_groups::tiled_partition<32>"
+        assert tile.value.args == ["block"]
+
+        for declaration, owner, member in [
+            (rank, "block", "thread_rank"),
+            (width, "tile", "size"),
+            (lane, "tile", "thread_rank"),
+        ]:
+            assert isinstance(declaration, VariableNode)
+            assert isinstance(declaration.value, FunctionCallNode)
+            assert isinstance(declaration.value.name, MemberAccessNode)
+            assert declaration.value.name.object == owner
+            assert declaration.value.name.member == member
+
     def test_fixed_arrays_and_initializer_lists_parsing(self):
         """Test fixed arrays and brace initializer lists"""
         code = """

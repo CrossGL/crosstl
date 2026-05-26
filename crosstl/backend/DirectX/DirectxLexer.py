@@ -60,6 +60,26 @@ TOKENS = tuple(
         ("RWTEXTURE3D", r"\bRWTexture3D\b"),
         ("RWTEXTURECUBE", r"\bRWTextureCube\b"),
         ("RWTEXTURECUBEARRAY", r"\bRWTextureCubeArray\b"),
+        ("RASTERIZERORDEREDTEXTURE1D", r"\bRasterizerOrderedTexture1D\b"),
+        (
+            "RASTERIZERORDEREDTEXTURE1DARRAY",
+            r"\bRasterizerOrderedTexture1DArray\b",
+        ),
+        ("RASTERIZERORDEREDTEXTURE2D", r"\bRasterizerOrderedTexture2D\b"),
+        (
+            "RASTERIZERORDEREDTEXTURE2DARRAY",
+            r"\bRasterizerOrderedTexture2DArray\b",
+        ),
+        ("RASTERIZERORDEREDTEXTURE3D", r"\bRasterizerOrderedTexture3D\b"),
+        ("RASTERIZERORDEREDBUFFER", r"\bRasterizerOrderedBuffer\b"),
+        (
+            "RASTERIZERORDEREDSTRUCTUREDBUFFER",
+            r"\bRasterizerOrderedStructuredBuffer\b",
+        ),
+        (
+            "RASTERIZERORDEREDBYTEADDRESSBUFFER",
+            r"\bRasterizerOrderedByteAddressBuffer\b",
+        ),
         ("STRUCTUREDBUFFER", r"\bStructuredBuffer\b"),
         ("RWSTRUCTUREDBUFFER", r"\bRWStructuredBuffer\b"),
         ("APPENDSTRUCTUREDBUFFER", r"\bAppendStructuredBuffer\b"),
@@ -250,6 +270,14 @@ KEYWORDS = {
     "RWTexture3D": "RWTEXTURE3D",
     "RWTextureCube": "RWTEXTURECUBE",
     "RWTextureCubeArray": "RWTEXTURECUBEARRAY",
+    "RasterizerOrderedTexture1D": "RASTERIZERORDEREDTEXTURE1D",
+    "RasterizerOrderedTexture1DArray": "RASTERIZERORDEREDTEXTURE1DARRAY",
+    "RasterizerOrderedTexture2D": "RASTERIZERORDEREDTEXTURE2D",
+    "RasterizerOrderedTexture2DArray": "RASTERIZERORDEREDTEXTURE2DARRAY",
+    "RasterizerOrderedTexture3D": "RASTERIZERORDEREDTEXTURE3D",
+    "RasterizerOrderedBuffer": "RASTERIZERORDEREDBUFFER",
+    "RasterizerOrderedStructuredBuffer": "RASTERIZERORDEREDSTRUCTUREDBUFFER",
+    "RasterizerOrderedByteAddressBuffer": "RASTERIZERORDEREDBYTEADDRESSBUFFER",
     "StructuredBuffer": "STRUCTUREDBUFFER",
     "RWStructuredBuffer": "RWSTRUCTUREDBUFFER",
     "AppendStructuredBuffer": "APPENDSTRUCTUREDBUFFER",
@@ -351,6 +379,14 @@ class TokenType(Enum):
     RWTEXTURE3D = auto()
     RWTEXTURECUBE = auto()
     RWTEXTURECUBEARRAY = auto()
+    RASTERIZERORDEREDTEXTURE1D = auto()
+    RASTERIZERORDEREDTEXTURE1DARRAY = auto()
+    RASTERIZERORDEREDTEXTURE2D = auto()
+    RASTERIZERORDEREDTEXTURE2DARRAY = auto()
+    RASTERIZERORDEREDTEXTURE3D = auto()
+    RASTERIZERORDEREDBUFFER = auto()
+    RASTERIZERORDEREDSTRUCTUREDBUFFER = auto()
+    RASTERIZERORDEREDBYTEADDRESSBUFFER = auto()
     STRUCTUREDBUFFER = auto()
     RWSTRUCTUREDBUFFER = auto()
     APPENDSTRUCTUREDBUFFER = auto()

@@ -118,6 +118,11 @@ class HLSLToCrossGLConverter:
             "RWTexture3D": "image3D",
             "RWTextureCube": "imageCube",
             "RWTextureCubeArray": "imageCubeArray",
+            "RasterizerOrderedTexture1D": "image1D",
+            "RasterizerOrderedTexture1DArray": "image1DArray",
+            "RasterizerOrderedTexture2D": "image2D",
+            "RasterizerOrderedTexture2DArray": "image2DArray",
+            "RasterizerOrderedTexture3D": "image3D",
             # Buffer Types
             "Buffer": "samplerBuffer",
             "RWBuffer": "imageBuffer",
@@ -125,6 +130,7 @@ class HLSLToCrossGLConverter:
             "RWStructuredBuffer": "buffer",
             "ByteAddressBuffer": "buffer",
             "RWByteAddressBuffer": "buffer",
+            "RasterizerOrderedByteAddressBuffer": "RWByteAddressBuffer",
             "AppendStructuredBuffer": "buffer",
             "ConsumeStructuredBuffer": "buffer",
             "RaytracingAccelerationStructure": "accelerationStructure",
@@ -480,7 +486,9 @@ class HLSLToCrossGLConverter:
         type_name = str(hlsl_type)
         if "<" in type_name:
             type_name = type_name.split("<", 1)[0]
-        return type_name.startswith(("RWTexture", "RWBuffer")) or type_name in {
+        return type_name.startswith(
+            ("RWTexture", "RWBuffer", "RasterizerOrdered")
+        ) or type_name in {
             "RWStructuredBuffer",
             "AppendStructuredBuffer",
             "ConsumeStructuredBuffer",
@@ -490,10 +498,14 @@ class HLSLToCrossGLConverter:
         if not self.is_uav_resource_type(getattr(node, "vtype", None)):
             return ""
 
+        lines = ""
+        if self.is_rasterizer_ordered_resource_type(getattr(node, "vtype", None)):
+            lines += "    " * indent + "@ rasterizer_ordered\n"
+
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         if "globallycoherent" in qualifiers:
-            return "    " * indent + "@ globallycoherent\n"
-        return ""
+            lines += "    " * indent + "@ globallycoherent\n"
+        return lines
 
     def record_variable_type(self, node, type_map=None, array_dim_map=None):
         name = getattr(node, "name", None)
@@ -542,11 +554,21 @@ class HLSLToCrossGLConverter:
             base = base.split("<", 1)[0]
         return base
 
+    def is_rasterizer_ordered_resource_type(self, type_name):
+        return self.raw_type_base(type_name).startswith("RasterizerOrdered")
+
     def is_rw_texture_type(self, type_name):
-        return self.raw_type_base(type_name).startswith("RWTexture")
+        return self.raw_type_base(type_name).startswith(
+            ("RWTexture", "RasterizerOrderedTexture")
+        )
 
     def is_rw_typed_buffer_type(self, type_name):
-        return self.raw_type_base(type_name) in {"RWBuffer", "RWStructuredBuffer"}
+        return self.raw_type_base(type_name) in {
+            "RWBuffer",
+            "RWStructuredBuffer",
+            "RasterizerOrderedBuffer",
+            "RasterizerOrderedStructuredBuffer",
+        }
 
     def array_access_depth(self, expr):
         depth = 0
@@ -1360,15 +1382,28 @@ class HLSLToCrossGLConverter:
         type_name = str(hlsl_type)
         if "<" in type_name and type_name.endswith(">"):
             base, generic_args = type_name.split("<", 1)
+            generic_type = generic_args[:-1].strip()
+            rasterizer_buffer_type = self.map_rasterizer_ordered_buffer_type(
+                base, generic_type
+            )
+            if rasterizer_buffer_type:
+                return rasterizer_buffer_type
             if base in self.structured_buffer_types:
                 return type_name
-            storage_image_type = self.map_rw_texture_type(
-                base, generic_args[:-1].strip()
-            )
+            storage_image_type = self.map_rw_texture_type(base, generic_type)
             if storage_image_type:
                 return storage_image_type
             type_name = base
         return self.type_map.get(type_name, type_name)
+
+    def map_rasterizer_ordered_buffer_type(self, base_type, element_type):
+        buffer_type = {
+            "RasterizerOrderedBuffer": "RWBuffer",
+            "RasterizerOrderedStructuredBuffer": "RWStructuredBuffer",
+        }.get(base_type)
+        if buffer_type is None:
+            return None
+        return f"{buffer_type}<{element_type}>"
 
     def map_rw_texture_type(self, base_type, element_type):
         image_type = {
@@ -1381,6 +1416,11 @@ class HLSLToCrossGLConverter:
             "RWTexture3D": "image3D",
             "RWTextureCube": "imageCube",
             "RWTextureCubeArray": "imageCubeArray",
+            "RasterizerOrderedTexture1D": "image1D",
+            "RasterizerOrderedTexture1DArray": "image1DArray",
+            "RasterizerOrderedTexture2D": "image2D",
+            "RasterizerOrderedTexture2DArray": "image2DArray",
+            "RasterizerOrderedTexture3D": "image3D",
         }.get(base_type)
         if image_type is None:
             return None

@@ -1117,7 +1117,8 @@ class HLSLCodeGen:
             if var_name in comparison_sampler_names and mapped_type == "SamplerState":
                 mapped_type = "SamplerComparisonState"
             is_hlsl_resource_global = (
-                mapped_type.startswith(("Texture", "RWTexture"))
+                mapped_type.startswith("Texture")
+                or self.is_hlsl_rw_texture_type(mapped_type)
                 or self.is_multisample_storage_image_resource_type(mapped_type)
                 or self.is_hlsl_acceleration_structure_type(mapped_type)
                 or self.is_hlsl_uav_buffer_type(mapped_type)
@@ -1170,7 +1171,7 @@ class HLSLCodeGen:
                 self.advance_resource_register(
                     texture_registers, space, binding, resource_count
                 )
-            elif mapped_type.startswith("RWTexture"):
+            elif self.is_hlsl_rw_texture_type(mapped_type):
                 self.texture_variable_types[var_name] = mapped_type
                 record_explicit_image_metadata(
                     var_name,
@@ -3751,7 +3752,10 @@ class HLSLCodeGen:
             var_type = getattr(node, "var_type", getattr(node, "vtype", "float"))
             var_name = getattr(node, "name", getattr(node, "variable_name", None))
             mapped_type = self.map_resource_type_with_format(var_type, node)
-            if var_name and mapped_type.startswith(("Texture", "RWTexture")):
+            if var_name and (
+                mapped_type.startswith("Texture")
+                or self.is_hlsl_rw_texture_type(mapped_type)
+            ):
                 texture_types[var_name] = mapped_type
         return texture_types
 
@@ -7708,6 +7712,7 @@ class HLSLCodeGen:
             or self.is_resource_binding_attribute(attr)
             or is_resource_access_attribute(attr)
             or self.is_resource_memory_attribute(attr)
+            or self.is_rasterizer_ordered_attribute(attr)
             or self.is_glsl_buffer_block_attribute(attr)
             or self.hlsl_mesh_parameter_role_attribute_name(attr)
             or self.hlsl_mesh_payload_parameter_attribute_name(attr)
@@ -7893,7 +7898,9 @@ class HLSLCodeGen:
         return self.map_type(self.resource_base_type(vtype)).startswith("Texture")
 
     def is_image_type(self, vtype):
-        return self.map_type(self.resource_base_type(vtype)).startswith("RWTexture")
+        return self.map_type(self.resource_base_type(vtype)).startswith(
+            ("RWTexture", "RasterizerOrderedTexture")
+        )
 
     def is_texture_or_image_type(self, vtype):
         return self.is_texture_type(vtype) or self.is_image_type(vtype)
@@ -7908,23 +7915,33 @@ class HLSLCodeGen:
         texture_type = self.resource_base_type(texture_type)
         sampling = self.texture_sampling_capabilities(texture_type)
         is_multisample = texture_type.startswith("Texture2DMS")
-        is_storage_image = texture_type.startswith("RWTexture")
+        is_storage_image = self.is_storage_image_resource_type(texture_type)
 
         coordinate_dimension = None
         if texture_type and "Cube" not in texture_type:
-            if texture_type.startswith("RWTexture1DArray<"):
+            if texture_type.startswith(
+                ("RWTexture1DArray<", "RasterizerOrderedTexture1DArray<")
+            ):
                 coordinate_dimension = 2
-            elif texture_type.startswith("RWTexture1D<"):
+            elif texture_type.startswith(
+                ("RWTexture1D<", "RasterizerOrderedTexture1D<")
+            ):
                 coordinate_dimension = 1
-            elif texture_type.startswith("RWTexture2DArray<"):
+            elif texture_type.startswith(
+                ("RWTexture2DArray<", "RasterizerOrderedTexture2DArray<")
+            ):
                 coordinate_dimension = 3
             elif texture_type.startswith("RWTexture2DMSArray<"):
                 coordinate_dimension = 3
-            elif texture_type.startswith("RWTexture3D<"):
+            elif texture_type.startswith(
+                ("RWTexture3D<", "RasterizerOrderedTexture3D<")
+            ):
                 coordinate_dimension = 3
             elif texture_type.startswith("RWTexture2DMS<"):
                 coordinate_dimension = 2
-            elif texture_type.startswith("RWTexture2D<"):
+            elif texture_type.startswith(
+                ("RWTexture2D<", "RasterizerOrderedTexture2D<")
+            ):
                 coordinate_dimension = 2
             elif texture_type.startswith("Texture2DMSArray"):
                 coordinate_dimension = 3
@@ -8098,7 +8115,7 @@ class HLSLCodeGen:
             ):
                 prefix = "t"
                 attribute_names = {"binding", "texture"}
-            elif mapped_type.startswith("RWTexture"):
+            elif self.is_hlsl_rw_texture_type(mapped_type):
                 prefix = "u"
                 attribute_names = {"binding", "texture", "uav"}
             elif self.is_hlsl_uav_buffer_type(mapped_type):
@@ -9226,6 +9243,11 @@ class HLSLCodeGen:
                 "RWTexture2DMS<",
                 "RWTexture2DMSArray<",
                 "RWTextureCube<",
+                "RasterizerOrderedTexture1D<",
+                "RasterizerOrderedTexture1DArray<",
+                "RasterizerOrderedTexture2D<",
+                "RasterizerOrderedTexture3D<",
+                "RasterizerOrderedTexture2DArray<",
             )
         )
 
@@ -10155,6 +10177,11 @@ class HLSLCodeGen:
                 "RWTexture2DArray": "image2DArray",
                 "RWTexture2DMS": "image2DMS",
                 "RWTexture2DMSArray": "image2DMSArray",
+                "RasterizerOrderedTexture1D": "image1D",
+                "RasterizerOrderedTexture1DArray": "image1DArray",
+                "RasterizerOrderedTexture2D": "image2D",
+                "RasterizerOrderedTexture3D": "image3D",
+                "RasterizerOrderedTexture2DArray": "image2DArray",
             },
             {
                 "RWTexture1D": "int",
@@ -10164,6 +10191,11 @@ class HLSLCodeGen:
                 "RWTexture2DArray": "int3",
                 "RWTexture2DMS": "int2",
                 "RWTexture2DMSArray": "int3",
+                "RasterizerOrderedTexture1D": "int",
+                "RasterizerOrderedTexture1DArray": "int2",
+                "RasterizerOrderedTexture2D": "int2",
+                "RasterizerOrderedTexture3D": "int3",
+                "RasterizerOrderedTexture2DArray": "int3",
             },
             sample_families={"RWTexture2DMS", "RWTexture2DMSArray"},
         )
@@ -11377,6 +11409,16 @@ class HLSLCodeGen:
             "writeonly",
         }
 
+    def is_rasterizer_ordered_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        return bool(attr_name and str(attr_name).lower() == "rasterizer_ordered")
+
+    def is_rasterizer_ordered_resource(self, node):
+        return any(
+            self.is_rasterizer_ordered_attribute(attr)
+            for attr in getattr(node, "attributes", []) or []
+        )
+
     def binding_index_value(self, value, prefixes=()):
         if hasattr(value, "value") and value.value is not None:
             raw_value = value.value
@@ -11496,7 +11538,8 @@ class HLSLCodeGen:
 
     def resource_memory_qualifier(self, mapped_type, node):
         if not (
-            str(mapped_type).startswith(("RWTexture", "RWBuffer"))
+            self.is_hlsl_rw_texture_type(mapped_type)
+            or str(mapped_type).startswith("RWBuffer")
             or self.is_hlsl_uav_buffer_type(mapped_type)
         ):
             return ""
@@ -11524,6 +11567,7 @@ class HLSLCodeGen:
                 or self.is_resource_binding_attribute(attr)
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
+                or self.is_rasterizer_ordered_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
                 or self.hlsl_mesh_parameter_role_attribute_name(attr)
                 or self.hlsl_mesh_payload_parameter_attribute_name(attr)
@@ -11548,6 +11592,7 @@ class HLSLCodeGen:
                 or self.is_resource_binding_attribute(attr)
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
+                or self.is_rasterizer_ordered_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
                 or self.hlsl_mesh_parameter_role_attribute_name(attr)
                 or self.hlsl_mesh_payload_parameter_attribute_name(attr)
@@ -11569,6 +11614,7 @@ class HLSLCodeGen:
                 or self.is_resource_binding_attribute(attr)
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
+                or self.is_rasterizer_ordered_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
                 or self.is_hlsl_resource_array_size_marker(node, attr)
             ):
@@ -11720,8 +11766,42 @@ class HLSLCodeGen:
         }
         texture_type = texture_types.get(base_type)
         if component_type and texture_type:
-            return f"{texture_type}<{component_type}>"
-        return self.map_type(vtype)
+            mapped_type = f"{texture_type}<{component_type}>"
+        else:
+            mapped_type = self.map_type(vtype)
+        return self.rasterizer_ordered_resource_type(mapped_type, node)
+
+    def rasterizer_ordered_resource_type(self, mapped_type, node=None):
+        if node is None or not self.is_rasterizer_ordered_resource(node):
+            return mapped_type
+
+        type_text = str(mapped_type)
+        if "[" in type_text and "]" in type_text:
+            base_type, array_suffix = split_array_type_suffix(type_text)
+        else:
+            base_type, array_suffix = type_text, ""
+
+        if "<" in base_type and base_type.endswith(">"):
+            resource_name, generic_args = base_type.split("<", 1)
+            generic_suffix = f"<{generic_args}"
+        else:
+            resource_name = base_type
+            generic_suffix = ""
+
+        resource_map = {
+            "RWTexture1D": "RasterizerOrderedTexture1D",
+            "RWTexture1DArray": "RasterizerOrderedTexture1DArray",
+            "RWTexture2D": "RasterizerOrderedTexture2D",
+            "RWTexture2DArray": "RasterizerOrderedTexture2DArray",
+            "RWTexture3D": "RasterizerOrderedTexture3D",
+            "RWBuffer": "RasterizerOrderedBuffer",
+            "RWStructuredBuffer": "RasterizerOrderedStructuredBuffer",
+            "RWByteAddressBuffer": "RasterizerOrderedByteAddressBuffer",
+        }
+        rasterizer_type = resource_map.get(resource_name)
+        if rasterizer_type is None:
+            return mapped_type
+        return f"{rasterizer_type}{generic_suffix}{array_suffix}"
 
     def resource_base_type(self, vtype):
         if vtype is None:
@@ -12664,6 +12744,11 @@ class HLSLCodeGen:
         base_type = self.resource_base_type(vtype)
         return str(base_type).split("<", 1)[0]
 
+    def is_hlsl_rw_texture_type(self, vtype):
+        return self.hlsl_resource_type_name(vtype).startswith(
+            ("RWTexture", "RasterizerOrderedTexture")
+        )
+
     def is_hlsl_readonly_buffer_type(self, vtype):
         return self.hlsl_resource_type_name(vtype) in {
             "Buffer",
@@ -12678,6 +12763,9 @@ class HLSLCodeGen:
             "AppendStructuredBuffer",
             "ConsumeStructuredBuffer",
             "RWByteAddressBuffer",
+            "RasterizerOrderedBuffer",
+            "RasterizerOrderedStructuredBuffer",
+            "RasterizerOrderedByteAddressBuffer",
         }
 
     def generate_texture_call(self, func_name, args):

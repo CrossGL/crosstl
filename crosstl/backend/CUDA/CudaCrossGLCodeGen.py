@@ -895,16 +895,26 @@ class CudaToCrossGLConverter:
             self.emit(f"// Arguments: {args_str}")
 
     def visit_VariableNode(self, node):
-        cooperative_group = self.cooperative_group_declaration_kind(node)
+        cooperative_group = self.cooperative_group_declaration_metadata(node)
         if cooperative_group is not None:
+            group_kind = cooperative_group["kind"]
             self.register_cooperative_group_name(node.name, cooperative_group)
-            if cooperative_group == "thread_block":
+            if group_kind == "thread_block":
                 self.emit(
                     f"// cooperative_groups thread_block {node.name} maps to the current workgroup"
                 )
+            elif (
+                group_kind == "thread_block_tile"
+                and cooperative_group.get("tile_size")
+                and cooperative_group.get("parent_kind") == "thread_block"
+            ):
+                self.emit(
+                    f"// cooperative_groups thread_block_tile<{cooperative_group['tile_size']}> "
+                    f"{node.name} maps to a tiled partition of the current workgroup"
+                )
             else:
                 self.emit(
-                    f"// cooperative_groups {cooperative_group} for {node.name} not directly supported in CrossGL"
+                    f"// cooperative_groups {group_kind} for {node.name} not directly supported in CrossGL"
                 )
             return
 
@@ -947,14 +957,21 @@ class CudaToCrossGLConverter:
         if len(self.cooperative_group_scopes) > 1:
             self.cooperative_group_scopes.pop()
 
-    def register_cooperative_group_name(self, name, group_kind):
+    def register_cooperative_group_name(self, name, group_metadata):
         if name:
-            self.cooperative_group_scopes[-1][name] = group_kind
+            self.cooperative_group_scopes[-1][name] = group_metadata
 
     def lookup_cooperative_group_name(self, name):
+        metadata = self.lookup_cooperative_group_metadata(name)
+        return metadata["kind"] if metadata is not None else None
+
+    def lookup_cooperative_group_metadata(self, name):
         for scope in reversed(self.cooperative_group_scopes):
             if name in scope:
-                return scope[name]
+                group_metadata = scope[name]
+                if isinstance(group_metadata, str):
+                    return {"kind": group_metadata}
+                return group_metadata
         return None
 
     def push_type_alias_scope(self):
@@ -1132,30 +1149,74 @@ class CudaToCrossGLConverter:
     def format_cooperative_group_call(self, node):
         if isinstance(node.name, MemberAccessNode):
             member = node.name.member
-            group_kind = self.resolve_cooperative_group_expression(node.name.object)
-            if group_kind is None:
+            group_metadata = self.resolve_cooperative_group_metadata(node.name.object)
+            if group_metadata is None:
                 return None
-            if group_kind == "thread_block" and member == "sync" and not node.args:
-                return "workgroupBarrier()"
-            return (
-                f"// cooperative_groups {group_kind}.{member} "
-                "not directly supported in CrossGL"
+            return self.format_cooperative_group_member_call(
+                group_metadata, member, node.args
             )
 
         raw_name = node.name if isinstance(node.name, str) else self.visit(node.name)
         base_name = self.cooperative_group_base_name(raw_name)
-        if base_name == "sync" and len(node.args) == 1:
+        if base_name in {"sync", "thread_rank", "size"} and len(node.args) == 1:
             group_name = self.simple_identifier(node.args[0])
-            if self.lookup_cooperative_group_name(group_name) == "thread_block":
-                return "workgroupBarrier()"
+            group_metadata = self.lookup_cooperative_group_metadata(group_name)
+            if group_metadata is not None:
+                return self.format_cooperative_group_member_call(
+                    group_metadata, base_name, []
+                )
         return None
 
-    def cooperative_group_declaration_kind(self, node):
-        declared_kind = self.cooperative_group_kind_from_type(node.vtype)
-        factory_kind = self.cooperative_group_factory_kind(node.value)
-        return factory_kind or declared_kind
+    def format_cooperative_group_member_call(self, group_metadata, member, args):
+        group_kind = group_metadata["kind"]
+        if group_kind == "thread_block" and not args:
+            if member == "sync":
+                return "workgroupBarrier()"
+            if member == "thread_rank":
+                return "gl_LocalInvocationIndex"
+            if member == "size":
+                return self.format_thread_block_size_expression()
+
+        if group_kind == "thread_block_tile" and not args:
+            tile_size = group_metadata.get("tile_size")
+            if member == "size" and tile_size:
+                return tile_size
+            if (
+                member == "thread_rank"
+                and tile_size
+                and group_metadata.get("parent_kind") == "thread_block"
+            ):
+                return f"(gl_LocalInvocationIndex % {tile_size})"
+
+        if member in {"thread_rank", "size"}:
+            return self.format_unsupported_cooperative_group_expression(
+                group_kind, member
+            )
+        return (
+            f"// cooperative_groups {group_kind}.{member} "
+            "not directly supported in CrossGL"
+        )
+
+    def format_thread_block_size_expression(self):
+        return "((gl_WorkGroupSize.x * gl_WorkGroupSize.y) * gl_WorkGroupSize.z)"
+
+    def format_unsupported_cooperative_group_expression(self, group_kind, member):
+        return (
+            f"(/* cooperative_groups {group_kind}.{member} "
+            "not directly supported in CrossGL */ 0)"
+        )
+
+    def cooperative_group_declaration_metadata(self, node):
+        declared_metadata = self.cooperative_group_metadata_from_type(node.vtype)
+        factory_metadata = self.cooperative_group_factory_metadata(node.value)
+        return factory_metadata or declared_metadata
 
     def cooperative_group_kind_from_type(self, type_name):
+        metadata = self.cooperative_group_metadata_from_type(type_name)
+        return metadata["kind"] if metadata is not None else None
+
+    def cooperative_group_metadata_from_type(self, type_name):
+        base_type, template_args = self.parse_cpp_template(type_name)
         base_name = self.cooperative_group_base_name(type_name)
         if base_name in {
             "thread_block",
@@ -1163,16 +1224,25 @@ class CudaToCrossGLConverter:
             "multi_grid_group",
             "coalesced_group",
         }:
-            return base_name
+            return {"kind": base_name}
+        base_name = self.cooperative_group_base_name(base_type)
         if base_name and base_name.startswith("thread_block_tile"):
-            return "thread_block_tile"
+            metadata = {"kind": "thread_block_tile"}
+            if template_args:
+                metadata["tile_size"] = template_args[0]
+            return metadata
         return None
 
     def cooperative_group_factory_kind(self, value):
+        metadata = self.cooperative_group_factory_metadata(value)
+        return metadata["kind"] if metadata is not None else None
+
+    def cooperative_group_factory_metadata(self, value):
         if not isinstance(value, FunctionCallNode):
             return None
         raw_name = value.name if isinstance(value.name, str) else self.visit(value.name)
-        base_name = self.cooperative_group_base_name(raw_name)
+        base_call_name, template_args = self.parse_cpp_template(raw_name)
+        base_name = self.cooperative_group_base_name(base_call_name)
         factory_mapping = {
             "this_thread_block": "thread_block",
             "this_grid": "grid_group",
@@ -1180,14 +1250,30 @@ class CudaToCrossGLConverter:
             "coalesced_threads": "coalesced_group",
             "tiled_partition": "thread_block_tile",
         }
-        return factory_mapping.get(base_name)
+        group_kind = factory_mapping.get(base_name)
+        if group_kind is None:
+            return None
+
+        metadata = {"kind": group_kind}
+        if group_kind == "thread_block_tile":
+            if template_args:
+                metadata["tile_size"] = template_args[0]
+            if value.args:
+                parent = self.resolve_cooperative_group_metadata(value.args[0])
+                if parent is not None:
+                    metadata["parent_kind"] = parent["kind"]
+        return metadata
 
     def resolve_cooperative_group_expression(self, expression):
+        metadata = self.resolve_cooperative_group_metadata(expression)
+        return metadata["kind"] if metadata is not None else None
+
+    def resolve_cooperative_group_metadata(self, expression):
         name = self.simple_identifier(expression)
-        group_kind = self.lookup_cooperative_group_name(name)
-        if group_kind is not None:
-            return group_kind
-        return self.cooperative_group_factory_kind(expression)
+        group_metadata = self.lookup_cooperative_group_metadata(name)
+        if group_metadata is not None:
+            return group_metadata
+        return self.cooperative_group_factory_metadata(expression)
 
     def simple_identifier(self, expression):
         if isinstance(expression, str):

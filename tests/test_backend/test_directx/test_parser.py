@@ -276,6 +276,37 @@ def test_parse_resource_arrays_and_register_space():
     assert_parses(code)
 
 
+def test_parse_rasterizer_ordered_resources_and_register_space():
+    code = """
+    RasterizerOrderedTexture2D<uint> counters : register(u0, space1);
+    RasterizerOrderedTexture2DArray<float4> layers[2] : register(u1, space2);
+    RasterizerOrderedBuffer<uint> bins : register(u3);
+    RasterizerOrderedStructuredBuffer<int> values : register(u4);
+    RasterizerOrderedByteAddressBuffer bytes : register(u5, space3);
+
+    float4 PSMain(uint2 pixel : TEXCOORD0, uint layer : TEXCOORD1) : SV_Target0 {
+        uint oldCount;
+        InterlockedAdd(counters[pixel], 1u, oldCount);
+        values[0] = int(oldCount);
+        bytes.Store(0, oldCount);
+        return layers[0][uint3(pixel, layer)];
+    }
+    """
+
+    ast = parse_code(code)
+    globals_by_name = {node.name: node for node in ast.global_variables}
+
+    assert globals_by_name["counters"].vtype == "RasterizerOrderedTexture2D<uint>"
+    assert globals_by_name["counters"].register == "u0, space1"
+    assert globals_by_name["layers"].vtype == "RasterizerOrderedTexture2DArray<float4>"
+    assert globals_by_name["layers"].array_sizes == [2]
+    assert globals_by_name["layers"].register == "u1, space2"
+    assert globals_by_name["bins"].vtype == "RasterizerOrderedBuffer<uint>"
+    assert globals_by_name["values"].vtype == "RasterizerOrderedStructuredBuffer<int>"
+    assert globals_by_name["bytes"].vtype == "RasterizerOrderedByteAddressBuffer"
+    assert globals_by_name["bytes"].register == "u5, space3"
+
+
 def test_parse_min_precision_vector_and_matrix_types():
     code = """
     struct MinPrecisionData {

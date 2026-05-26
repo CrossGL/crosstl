@@ -3148,15 +3148,6 @@ class VulkanSPIRVCodeGen:
             if getter_info is not None:
                 _, result_kind, _ = getter_info
                 return self.ray_query_result_type_for_kind(result_kind)
-            if operation in {
-                "CandidateObjectRayOrigin",
-                "CandidateObjectRayDirection",
-                "CommittedObjectRayOrigin",
-                "CommittedObjectRayDirection",
-            }:
-                return self.register_vector_type(
-                    self.register_primitive_type("float"), 3
-                )
             return self.register_primitive_type("uint")
 
         return self.register_primitive_type("uint")
@@ -3196,12 +3187,16 @@ class VulkanSPIRVCodeGen:
             return self.register_primitive_type("float")
         if result_kind == "vec2":
             return self.register_vector_type(self.register_primitive_type("float"), 2)
+        if result_kind == "vec3":
+            return self.register_vector_type(self.register_primitive_type("float"), 3)
         return self.register_primitive_type("uint")
 
     def ray_query_state_getter_info(self, operation: str):
         getters = {
             "RayTMin": ("OpRayQueryGetRayTMinKHR", "float"),
             "RayFlags": ("OpRayQueryGetRayFlagsKHR", "uint"),
+            "WorldRayOrigin": ("OpRayQueryGetWorldRayOriginKHR", "vec3"),
+            "WorldRayDirection": ("OpRayQueryGetWorldRayDirectionKHR", "vec3"),
         }
         return getters.get(operation)
 
@@ -3209,6 +3204,8 @@ class VulkanSPIRVCodeGen:
         return {
             "RayTMin",
             "RayFlags",
+            "WorldRayOrigin",
+            "WorldRayDirection",
         }
 
     def ray_query_intersection_getter_info(self, operation: str):
@@ -3248,6 +3245,22 @@ class VulkanSPIRVCodeGen:
             "CommittedInstanceShaderBindingTableRecordOffset": (
                 "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR",
                 "uint",
+            ),
+            "CandidateObjectRayOrigin": (
+                "OpRayQueryGetIntersectionObjectRayOriginKHR",
+                "vec3",
+            ),
+            "CommittedObjectRayOrigin": (
+                "OpRayQueryGetIntersectionObjectRayOriginKHR",
+                "vec3",
+            ),
+            "CandidateObjectRayDirection": (
+                "OpRayQueryGetIntersectionObjectRayDirectionKHR",
+                "vec3",
+            ),
+            "CommittedObjectRayDirection": (
+                "OpRayQueryGetIntersectionObjectRayDirectionKHR",
+                "vec3",
             ),
             "CandidateGeometryIndex": (
                 "OpRayQueryGetIntersectionGeometryIndexKHR",
@@ -3299,6 +3312,10 @@ class VulkanSPIRVCodeGen:
             "CommittedInstanceCustomIndex",
             "CandidateInstanceShaderBindingTableRecordOffset",
             "CommittedInstanceShaderBindingTableRecordOffset",
+            "CandidateObjectRayOrigin",
+            "CommittedObjectRayOrigin",
+            "CandidateObjectRayDirection",
+            "CommittedObjectRayDirection",
             "CandidateGeometryIndex",
             "CommittedGeometryIndex",
             "CandidateTriangleBarycentrics",

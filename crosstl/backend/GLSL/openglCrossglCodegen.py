@@ -1202,7 +1202,7 @@ class GLSLToCrossGLConverter:
                 param_type, param_name = param
                 params.append(f"{self.convert_type(param_type)} {param_name}")
             elif isinstance(param, VariableNode):
-                params.append(f"{self.convert_type(param.vtype)} {param.name}")
+                params.append(self.generate_variable_declaration(param))
 
         params_str = ", ".join(params)
 

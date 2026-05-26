@@ -2913,8 +2913,8 @@ class TestVulkanSPIRVCodeGen:
         report_result = gen.process_expression(RayTracingOpNode("ReportHit", [1.0, 0]))
         proceed_result = gen.process_expression(RayQueryOpNode("Proceed", "rq", []))
         ray_t_result = gen.process_expression(RayQueryOpNode("CommittedRayT", "rq", []))
-        origin_result = gen.process_expression(
-            RayQueryOpNode("CandidateObjectRayOrigin", "rq", [])
+        transform_result = gen.process_expression(
+            RayQueryOpNode("CandidateObjectToWorld3x4", "rq", [])
         )
         mesh_result = gen.process_expression(MeshOpNode("SetMeshOutputCounts", [3, 1]))
 
@@ -2924,10 +2924,7 @@ class TestVulkanSPIRVCodeGen:
         assert report_result.type.base_type == "bool"
         assert proceed_result.type.base_type == "bool"
         assert ray_t_result.type.base_type == "float"
-        assert gen.vector_component_type_and_count(origin_result.type.base_type) == (
-            "float",
-            3,
-        )
+        assert transform_result.type.base_type == "uint"
         assert mesh_result.type.base_type == "uint"
         assert (
             "WARNING: SPIR-V backend does not lower ray tracing operation "
@@ -2939,7 +2936,7 @@ class TestVulkanSPIRVCodeGen:
         ) in spv_code
         assert (
             "WARNING: SPIR-V backend does not lower ray query operation "
-            "CandidateObjectRayOrigin yet; using a default vec3 value"
+            "CandidateObjectToWorld3x4 yet; using a default uint value"
         ) in spv_code
         assert (
             "WARNING: SPIR-V backend does not lower mesh shader operation "
@@ -2952,7 +2949,6 @@ class TestVulkanSPIRVCodeGen:
     def test_unsupported_ray_mesh_ir_fallback_module_validates(self, tmp_path):
         bool_type = PrimitiveType("bool")
         float_type = PrimitiveType("float")
-        vec3_type = PrimitiveType("vec3")
         void_type = PrimitiveType("void")
 
         entry_point = FunctionNode(
@@ -2977,9 +2973,9 @@ class TestVulkanSPIRVCodeGen:
                         RayQueryOpNode("CandidateRayT", "rq", []),
                     ),
                     VariableNode(
-                        "origin",
-                        vec3_type,
-                        RayQueryOpNode("CandidateObjectRayOrigin", "rq", []),
+                        "transformToken",
+                        PrimitiveType("uint"),
+                        RayQueryOpNode("CandidateObjectToWorld3x4", "rq", []),
                     ),
                     ExpressionStatementNode(MeshOpNode("SetMeshOutputCounts", [3, 1])),
                     ExpressionStatementNode(
@@ -3007,7 +3003,7 @@ class TestVulkanSPIRVCodeGen:
         assert "ReportHit yet; using a default bool value" in spv_code
         assert "Proceed yet; using a default bool value" in spv_code
         assert "CandidateRayT yet; using a default float value" in spv_code
-        assert "CandidateObjectRayOrigin yet; using a default vec3 value" in spv_code
+        assert "CandidateObjectToWorld3x4 yet; using a default uint value" in spv_code
         assert "SetMeshOutputCounts yet; using a default uint value" in spv_code
         assert "TraceRay yet; using a default uint value" in spv_code
         assert "Unknown expression type" not in spv_code
@@ -3417,6 +3413,79 @@ class TestVulkanSPIRVCodeGen:
             "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR"
             not in spv_code
         )
+
+    def test_ray_query_world_and_object_ray_getters_emit_khr_instructions(
+        self, tmp_path
+    ):
+        source_code = """
+        shader RayQueryRayVectorGetters {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    vec3 worldOrigin = rq.WorldRayOrigin();
+                    vec3 worldDirection = rq.WorldRayDirection();
+                    vec3 candidateOrigin = rq.CandidateObjectRayOrigin();
+                    vec3 candidateDirection = rq.CandidateObjectRayDirection();
+                    vec3 committedOrigin = rq.CommittedObjectRayOrigin();
+                    vec3 committedDirection = rq.CommittedObjectRayDirection();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert spv_code.count("OpRayQueryGetWorldRayOriginKHR") == 1
+        assert spv_code.count("OpRayQueryGetWorldRayDirectionKHR") == 1
+        assert spv_code.count("OpRayQueryGetIntersectionObjectRayOriginKHR") == 2
+        assert spv_code.count("OpRayQueryGetIntersectionObjectRayDirectionKHR") == 2
+        assert "WorldRayOrigin yet; using a default" not in spv_code
+        assert "WorldRayDirection yet; using a default" not in spv_code
+        assert "CandidateObjectRayOrigin yet; using a default" not in spv_code
+        assert "CommittedObjectRayDirection yet; using a default" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_ray_query_world_and_object_ray_getters_reject_arguments(self):
+        source_code = """
+        shader RayQueryRayVectorGetterBadArgs {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    vec3 worldOrigin = rq.WorldRayOrigin(1);
+                    vec3 worldDirection = rq.WorldRayDirection(1);
+                    vec3 candidateOrigin = rq.CandidateObjectRayOrigin(1);
+                    vec3 committedDirection = rq.CommittedObjectRayDirection(1);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V RayQuery.WorldRayOrigin requires 0 arguments" in spv_code
+        )
+        assert (
+            "WARNING: SPIR-V RayQuery.WorldRayDirection requires 0 arguments"
+            in spv_code
+        )
+        assert (
+            "WARNING: SPIR-V RayQuery.CandidateObjectRayOrigin requires 0 arguments"
+            in spv_code
+        )
+        assert (
+            "WARNING: SPIR-V RayQuery.CommittedObjectRayDirection requires 0 "
+            "arguments"
+        ) in spv_code
+        assert "OpRayQueryGetWorldRayOriginKHR" not in spv_code
+        assert "OpRayQueryGetWorldRayDirectionKHR" not in spv_code
+        assert "OpRayQueryGetIntersectionObjectRayOriginKHR" not in spv_code
+        assert "OpRayQueryGetIntersectionObjectRayDirectionKHR" not in spv_code
 
     def test_ray_query_supported_operations_reject_unexpected_arguments(self):
         source_code = """

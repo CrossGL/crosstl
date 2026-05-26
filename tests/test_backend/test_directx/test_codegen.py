@@ -731,6 +731,70 @@ def test_codegen_preserves_uav_coherency_and_register_space():
     )
 
 
+def test_codegen_rasterizer_ordered_resources_roundtrip():
+    code = textwrap.dedent("""
+        RasterizerOrderedTexture2D<uint> pixelCounts : register(u0, space1);
+        RasterizerOrderedTexture2DArray<float4> layers : register(u1);
+        RasterizerOrderedBuffer<uint> bins : register(u2);
+        RasterizerOrderedStructuredBuffer<int> values : register(u3);
+        RasterizerOrderedByteAddressBuffer rawBytes : register(u4);
+
+        [earlydepthstencil]
+        float4 PSMain(uint2 pixel : TEXCOORD0, uint layer : TEXCOORD1) : SV_Target0 {
+            uint oldCount;
+            InterlockedAdd(pixelCounts[pixel], 1u, oldCount);
+            layers[uint3(pixel, layer)] = float4(oldCount, 0, 0, 1);
+            uint oldBin;
+            InterlockedAdd(bins[0], oldCount, oldBin);
+            int oldValue;
+            InterlockedMax(values[0], int(oldBin), oldValue);
+            rawBytes.Store(0, oldBin);
+            return layers[uint3(pixel, layer)];
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    assert output.count("@ rasterizer_ordered") == 5
+    assert "@ register(u0, space1)" in output
+    assert "uimage2D pixelCounts;" in output
+    assert "image2DArray layers;" in output
+    assert "RWBuffer<uint> bins;" in output
+    assert "RWStructuredBuffer<int> values;" in output
+    assert "RWByteAddressBuffer rawBytes;" in output
+    assert "oldCount = imageAtomicAdd(pixelCounts, pixel, 1u);" in output
+    assert "imageStore(layers, uvec3(pixel, layer), vec4(oldCount, 0, 0, 1));" in output
+    assert "oldBin = atomicAdd(bins[0], oldCount);" in output
+    assert "oldValue = atomicMax(values[0], int(oldBin));" in output
+    assert "buffer_store(rawBytes, 0, oldBin);" in output
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
+    assert (
+        "RasterizerOrderedTexture2D<uint> pixelCounts : register(u0, space1);"
+        in regenerated_hlsl
+    )
+    assert "RasterizerOrderedTexture2DArray<float4> layers : register(u1);" in (
+        regenerated_hlsl
+    )
+    assert "RasterizerOrderedBuffer<uint> bins : register(u2);" in regenerated_hlsl
+    assert (
+        "RasterizerOrderedStructuredBuffer<int> values : register(u3);"
+        in regenerated_hlsl
+    )
+    assert (
+        "RasterizerOrderedByteAddressBuffer rawBytes : register(u4);"
+        in regenerated_hlsl
+    )
+    assert (
+        "uint imageAtomicAdd_uimage2D("
+        "RasterizerOrderedTexture2D<uint> image, int2 coord, uint value)"
+        in regenerated_hlsl
+    )
+    assert "RWTexture2D<uint> pixelCounts" not in regenerated_hlsl
+    assert "RWTexture2D<uint> image" not in regenerated_hlsl
+    assert "RWBuffer<uint> bins : register(u2);" not in regenerated_hlsl
+
+
 def test_codegen_ray_shader_stages():
     output = generate_crossgl(RAY_STAGES_HLSL)
     lowered = output.lower()

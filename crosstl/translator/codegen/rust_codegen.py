@@ -3620,6 +3620,7 @@ class RustCodeGen:
 
         named_arguments = getattr(expr, "named_arguments", {}) or {}
         if named_arguments:
+            constructor_path = self.rust_constructor_path(rust_type)
             argument_values = list(named_arguments.values())
             move_counts = self.return_move_place_counts(argument_values)
             fields = []
@@ -3631,7 +3632,7 @@ class RustCodeGen:
                     move_counts,
                 )
                 fields.append(f"{name}: {field_value}")
-            return f"{rust_type} {{ {', '.join(fields)} }}"
+            return f"{constructor_path} {{ {', '.join(fields)} }}"
 
         arguments = getattr(expr, "arguments", []) or []
         member_types = self.resolve_struct_positional_member_types(type_name)
@@ -3639,16 +3640,16 @@ class RustCodeGen:
         return f"{self.rust_constructor_path(rust_type)}::new({', '.join(args)})"
 
     def generate_return_struct_new_call_with_typed_args(self, func_name, args):
-        if not func_name.endswith("::new"):
+        type_name = self.struct_new_call_type_name(func_name)
+        if type_name is None:
             return None
 
-        struct_name = func_name[: -len("::new")]
-        member_types = list((self.struct_member_types.get(struct_name) or {}).values())
+        member_types = self.resolve_struct_positional_member_types(type_name)
         if not member_types:
             return None
 
         generated_args = self.generate_return_call_args_with_types(args, member_types)
-        return f"{func_name}({', '.join(generated_args)})"
+        return f"{self.struct_new_call_path(type_name)}({', '.join(generated_args)})"
 
     def generate_return_call_args_with_types(self, args, target_types):
         move_counts = self.return_move_place_counts(args)
@@ -4220,6 +4221,7 @@ class RustCodeGen:
 
         named_arguments = getattr(expr, "named_arguments", {}) or {}
         if named_arguments:
+            constructor_path = self.rust_constructor_path(rust_type)
             fields = []
             for name, value in named_arguments.items():
                 member_type = self.resolve_struct_member_type(type_name, name)
@@ -4228,7 +4230,7 @@ class RustCodeGen:
                     member_type,
                 )
                 fields.append(f"{name}: {field_value}")
-            return f"{rust_type} {{ {', '.join(fields)} }}"
+            return f"{constructor_path} {{ {', '.join(fields)} }}"
 
         arguments = getattr(expr, "arguments", []) or []
         member_types = self.resolve_struct_positional_member_types(type_name)
@@ -5017,16 +5019,16 @@ class RustCodeGen:
         )
 
     def generate_struct_new_call_with_typed_args(self, func_name, args):
-        if not func_name.endswith("::new"):
+        type_name = self.struct_new_call_type_name(func_name)
+        if type_name is None:
             return None
 
-        struct_name = func_name[: -len("::new")]
-        member_types = self.struct_member_types.get(struct_name)
+        member_types = self.resolve_struct_positional_member_types(type_name)
         if not member_types:
             return None
 
         generated_args = []
-        for arg, member_type in zip(args, member_types.values()):
+        for arg, member_type in zip(args, member_types):
             arg_expr = self.generate_expression_with_type(arg, member_type)
             arg_expr = self.normalize_typed_expression_value(
                 arg,
@@ -5038,7 +5040,7 @@ class RustCodeGen:
         for arg in args[len(generated_args) :]:
             generated_args.append(self.generate_expression(arg))
 
-        return f"{func_name}({', '.join(generated_args)})"
+        return f"{self.struct_new_call_path(type_name)}({', '.join(generated_args)})"
 
     def vector_constructor_target_type(self, target_type, source_vector_info):
         if target_type is None:
@@ -5058,6 +5060,17 @@ class RustCodeGen:
         if self.vector_type_info(false_type) or self.vector_type_info(true_type):
             return None
         return self.promoted_scalar_type(false_type, true_type)
+
+    def struct_new_call_type_name(self, func_name):
+        if not isinstance(func_name, str) or not func_name.endswith("::new"):
+            return None
+
+        type_name = func_name[: -len("::new")]
+        return type_name.replace("::<", "<", 1)
+
+    def struct_new_call_path(self, type_name):
+        rust_type = self.map_type(type_name)
+        return f"{self.rust_constructor_path(rust_type)}::new"
 
     def generate_user_function_call_args(self, func_name, args):
         param_types = self.user_function_param_types.get(func_name, [])

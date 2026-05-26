@@ -18,6 +18,8 @@ from crosstl.translator.ast import (
     ExpressionStatementNode,
     FunctionCallNode,
     FunctionNode,
+    GenericParameterNode,
+    GenericType,
     IdentifierNode,
     LiteralPatternNode,
     LiteralNode,
@@ -4526,6 +4528,259 @@ def test_non_copy_nested_return_member_args_respect_root_conflicts_compile(
         generated_code
     )
     assert "return make_payload_outer(outer.inner.payload, outer);" not in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_non_copy_generic_return_member_args_and_new_calls_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    generic_type = GenericType("T")
+    envelope_generic_type = NamedType("Envelope", [generic_type])
+    envelope_payload_type = NamedType("Envelope", [payload_type])
+    root_payload_type = NamedType("Root", [payload_type])
+    pair_payload_type = NamedType("Pair", [payload_type])
+    root_payload_record_type = NamedType("RootPayload")
+    payload_root_record_type = NamedType("PayloadRoot")
+
+    def envelope_payload(root_name):
+        return MemberAccessNode(IdentifierNode(root_name), "payload")
+
+    def root_nested_payload(root_name):
+        return MemberAccessNode(
+            MemberAccessNode(IdentifierNode(root_name), "envelope"),
+            "payload",
+        )
+
+    ast = ShaderNode(
+        "NonCopyGenericReturnMemberArguments",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "Envelope",
+                [StructMemberNode("payload", generic_type)],
+                generic_params=[GenericParameterNode("T")],
+            ),
+            StructNode(
+                "Root",
+                [StructMemberNode("envelope", envelope_generic_type)],
+                generic_params=[GenericParameterNode("T")],
+            ),
+            StructNode(
+                "Pair",
+                [
+                    StructMemberNode("first", generic_type),
+                    StructMemberNode("second", generic_type),
+                ],
+                generic_params=[GenericParameterNode("T")],
+            ),
+            StructNode(
+                "RootPayload",
+                [
+                    StructMemberNode("root", root_payload_type),
+                    StructMemberNode("payload", payload_type),
+                ],
+            ),
+            StructNode(
+                "PayloadRoot",
+                [
+                    StructMemberNode("payload", payload_type),
+                    StructMemberNode("root", root_payload_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "make_pair",
+                pair_payload_type,
+                [
+                    ParameterNode("first", payload_type),
+                    ParameterNode("second", payload_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            pair_payload_type,
+                            [IdentifierNode("first"), IdentifierNode("second")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "make_root_payload",
+                root_payload_record_type,
+                [
+                    ParameterNode("root", root_payload_type),
+                    ParameterNode("payload", payload_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            root_payload_record_type,
+                            [IdentifierNode("root"), IdentifierNode("payload")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "make_payload_root",
+                payload_root_record_type,
+                [
+                    ParameterNode("payload", payload_type),
+                    ParameterNode("root", root_payload_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            payload_root_record_type,
+                            [IdentifierNode("payload"), IdentifierNode("root")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_generic_member_call",
+                pair_payload_type,
+                [
+                    ParameterNode("left", envelope_payload_type),
+                    ParameterNode("right", envelope_payload_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_pair"),
+                            [envelope_payload("left"), envelope_payload("right")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_generic_new_call",
+                pair_payload_type,
+                [
+                    ParameterNode("left", envelope_payload_type),
+                    ParameterNode("right", envelope_payload_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("Pair::<Payload>::new"),
+                            [envelope_payload("left"), envelope_payload("right")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_duplicate_generic_new_call",
+                pair_payload_type,
+                [ParameterNode("envelope", envelope_payload_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("Pair::<Payload>::new"),
+                            [
+                                envelope_payload("envelope"),
+                                envelope_payload("envelope"),
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_generic_positional_constructor",
+                pair_payload_type,
+                [
+                    ParameterNode("left", envelope_payload_type),
+                    ParameterNode("right", envelope_payload_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            pair_payload_type,
+                            [envelope_payload("left"), envelope_payload("right")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_generic_named_constructor",
+                pair_payload_type,
+                [
+                    ParameterNode("left", envelope_payload_type),
+                    ParameterNode("right", envelope_payload_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            pair_payload_type,
+                            [],
+                            named_arguments={
+                                "first": envelope_payload("left"),
+                                "second": envelope_payload("right"),
+                            },
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_generic_root_then_member",
+                root_payload_record_type,
+                [ParameterNode("root", root_payload_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_root_payload"),
+                            [IdentifierNode("root"), root_nested_payload("root")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_generic_member_then_root",
+                payload_root_record_type,
+                [ParameterNode("root", root_payload_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_payload_root"),
+                            [root_nested_payload("root"), IdentifierNode("root")],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "return make_pair(left.payload, right.payload);" in generated_code
+    assert (
+        generated_code.count(
+            "return Pair::<Payload>::new(left.payload, right.payload);"
+        )
+        == 2
+    )
+    assert (
+        "return Pair::<Payload>::new(envelope.payload.clone(), envelope.payload);"
+    ) in generated_code
+    assert (
+        "return Pair::<Payload> { first: left.payload, second: right.payload };"
+    ) in generated_code
+    assert "return make_root_payload(root.clone(), root.envelope.payload);" in (
+        generated_code
+    )
+    assert "return make_payload_root(root.envelope.payload.clone(), root);" in (
+        generated_code
+    )
+    assert "Pair<Payload> { first:" not in generated_code
+    assert "Pair::<Payload>::new(left.payload.clone(), right.payload.clone())" not in (
         generated_code
     )
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)

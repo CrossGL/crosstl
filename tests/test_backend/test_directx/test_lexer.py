@@ -349,6 +349,14 @@ def test_resource_types_tokenization():
     FeedbackTexture2D feedbackTex;
     FeedbackTexture2DArray feedbackTexArray;
     RWTexture1DArray rwTex1DArray;
+    RasterizerOrderedTexture1D<float4> rovTex1D;
+    RasterizerOrderedTexture1DArray<uint> rovTex1DArray;
+    RasterizerOrderedTexture2D<uint> rovTex2D;
+    RasterizerOrderedTexture2DArray<float4> rovTex2DArray;
+    RasterizerOrderedTexture3D<int> rovTex3D;
+    RasterizerOrderedBuffer<uint> rovBuffer;
+    RasterizerOrderedStructuredBuffer<int> rovStructured;
+    RasterizerOrderedByteAddressBuffer rovBytes;
     RaytracingAccelerationStructure accel;
     RayQuery rayQuery;
     InputPatch<VSInput, 3> patch;
@@ -367,6 +375,14 @@ def test_resource_types_tokenization():
         "FeedbackTexture2D",
         "FeedbackTexture2DArray",
         "RWTexture1DArray",
+        "RasterizerOrderedTexture1D",
+        "RasterizerOrderedTexture1DArray",
+        "RasterizerOrderedTexture2D",
+        "RasterizerOrderedTexture2DArray",
+        "RasterizerOrderedTexture3D",
+        "RasterizerOrderedBuffer",
+        "RasterizerOrderedStructuredBuffer",
+        "RasterizerOrderedByteAddressBuffer",
         "RaytracingAccelerationStructure",
         "RayQuery",
         "InputPatch",
@@ -378,6 +394,22 @@ def test_resource_types_tokenization():
         "ConsumeStructuredBuffer",
     ]
     assert_values_present(values, expected, case_insensitive=False)
+
+    token_types_by_value = {
+        token_value: token_type for token_type, token_value in tokens if token_value
+    }
+    assert (
+        token_types_by_value["RasterizerOrderedTexture2D"]
+        == "RASTERIZERORDEREDTEXTURE2D"
+    )
+    assert (
+        token_types_by_value["RasterizerOrderedStructuredBuffer"]
+        == "RASTERIZERORDEREDSTRUCTUREDBUFFER"
+    )
+    assert (
+        token_types_by_value["RasterizerOrderedByteAddressBuffer"]
+        == "RASTERIZERORDEREDBYTEADDRESSBUFFER"
+    )
 
 
 def test_register_and_packoffset_tokenization():

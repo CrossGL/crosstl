@@ -499,6 +499,105 @@ class TestCudaCodeGen:
         assert "cg::this_thread_block" not in result
         assert "cooperative_groups::this_thread_block" not in result
 
+    def test_cooperative_groups_thread_block_rank_and_size_converts(self):
+        """Test CUDA cooperative-groups thread-block rank helpers convert."""
+        code = """
+        __global__ void ranks(unsigned int* out) {
+            auto block = cooperative_groups::this_thread_block();
+            unsigned int rank = block.thread_rank();
+            unsigned int size = block.size();
+            unsigned int direct =
+                cooperative_groups::this_thread_block().thread_rank();
+            out[rank] = size + direct;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var rank: u32 = gl_LocalInvocationIndex;" in result
+        assert (
+            "var size: u32 = "
+            "((gl_WorkGroupSize.x * gl_WorkGroupSize.y) * gl_WorkGroupSize.z);"
+            in result
+        )
+        assert "var direct: u32 = gl_LocalInvocationIndex;" in result
+        assert "thread_rank" not in result
+        assert "block.size" not in result
+        assert "cooperative_groups::this_thread_block" not in result
+
+    def test_cooperative_groups_tiled_partition_rank_and_size_converts(self):
+        """Test tiled partitions from thread blocks lower rank and size."""
+        code = """
+        namespace cg = cooperative_groups;
+
+        __global__ void tile_ranks(unsigned int* out) {
+            auto block = cg::this_thread_block();
+            auto tile = cg::tiled_partition<32>(block);
+            unsigned int lane = tile.thread_rank();
+            unsigned int width = tile.size();
+            out[lane] = width;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// cooperative_groups thread_block_tile<32> tile maps to a "
+            "tiled partition of the current workgroup" in result
+        )
+        assert "var lane: u32 = (gl_LocalInvocationIndex % 32);" in result
+        assert "var width: u32 = 32;" in result
+        assert "tiled_partition" not in result
+        assert "thread_rank" not in result
+        assert "tile.size" not in result
+
+    def test_unsupported_cooperative_group_rank_is_expression_safe(self):
+        """Test unsupported cooperative rank helpers remain expression-safe."""
+        code = """
+        __global__ void unsupported(unsigned int* out) {
+            auto group = cooperative_groups::coalesced_threads();
+            unsigned int rank = group.thread_rank();
+            unsigned int width = group.size();
+            unsigned int direct =
+                cooperative_groups::coalesced_threads().thread_rank();
+            out[0] = rank + width + direct;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "var rank: u32 = (/* cooperative_groups "
+            "coalesced_group.thread_rank not directly supported in CrossGL */ 0);"
+            in result
+        )
+        assert (
+            "var width: u32 = (/* cooperative_groups "
+            "coalesced_group.size not directly supported in CrossGL */ 0);" in result
+        )
+        assert (
+            "var direct: u32 = (/* cooperative_groups "
+            "coalesced_group.thread_rank not directly supported in CrossGL */ 0);"
+            in result
+        )
+        assert "cooperative_groups::coalesced_threads" not in result
+        assert "None" not in result
+
     def test_unsupported_cooperative_groups_emit_diagnostics(self):
         """Test unsupported CUDA cooperative-groups collectives are explicit."""
         code = """
