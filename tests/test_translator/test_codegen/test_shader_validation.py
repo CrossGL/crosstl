@@ -1733,6 +1733,61 @@ shader MetalReadonlyRawBufferDiagnosticValidation {
 """
 
 
+METAL_READONLY_RAW_BUFFER_HELPER_SHADER = """
+shader MetalReadonlyRawBufferHelperValidation {
+    struct Payload {
+        float value;
+    };
+
+    float readPayload(
+        readonly device Payload* payload,
+        readonly device float values[],
+        constant uint& index
+    ) {
+        return payload.value + values[index];
+    }
+
+    void rejectWrite(readonly device Payload* payload, readonly device float values[]) {
+        payload.value = 1.0;
+        values[0] = 2.0;
+    }
+
+    compute {
+        void main(
+            readonly device Payload* payload @buffer(0),
+            readonly device float values[] @buffer(1),
+            constant uint& index @buffer(2)
+        ) {
+            float value = readPayload(payload, values, index);
+            rejectWrite(payload, values);
+        }
+    }
+}
+"""
+
+
+METAL_READONLY_RAW_BUFFER_MUTABLE_HELPER_CALL_SHADER = """
+shader MetalReadonlyRawBufferMutableHelperCallValidation {
+    struct Payload {
+        float value;
+    };
+
+    void mutate(device Payload* payload, device float values[]) {
+        payload.value = values[0];
+    }
+
+    compute {
+        void main(
+            readonly device Payload* payload @buffer(0),
+            readonly device float values[] @buffer(1)
+        ) {
+            mutate(payload, values);
+        }
+    }
+}
+"""
+
+
 METAL_MESH_OBJECT_SHADER = """
 shader MetalMeshObjectValidation {
     object {
@@ -4283,6 +4338,44 @@ def test_generated_metal_readonly_raw_buffer_diagnostics_compile_with_metal(tmp_
     output = tmp_path / "readonly_raw_buffer_diagnostics.air"
     code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(METAL_READONLY_RAW_BUFFER_DIAGNOSTIC_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_readonly_raw_buffer_helpers_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "readonly_raw_buffer_helpers.metal"
+    output = tmp_path / "readonly_raw_buffer_helpers.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_READONLY_RAW_BUFFER_HELPER_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_readonly_raw_buffer_mutable_helper_call_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "readonly_raw_buffer_mutable_helper_call.metal"
+    output = tmp_path / "readonly_raw_buffer_mutable_helper_call.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_READONLY_RAW_BUFFER_MUTABLE_HELPER_CALL_SHADER),
         "compute",
     )
     source.write_text(code, encoding="utf-8")

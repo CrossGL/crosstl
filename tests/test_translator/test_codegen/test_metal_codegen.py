@@ -297,6 +297,108 @@ def test_metal_readonly_raw_buffer_stores_emit_diagnostics():
     assert "values[0] = 2.0;" not in generated_code
 
 
+def test_metal_readonly_raw_buffer_qualifiers_propagate_to_helpers():
+    shader = """
+    shader MetalReadonlyRawBufferHelpers {
+        struct Payload {
+            float value;
+        };
+
+        float readPayload(
+            readonly device Payload* payload,
+            readonly device float values[],
+            constant uint& index
+        ) {
+            return payload.value + values[index];
+        }
+
+        void rejectWrite(readonly device Payload* payload, readonly device float values[]) {
+            payload.value = 1.0;
+            values[0] = 2.0;
+        }
+
+        compute {
+            void main(
+                readonly device Payload* payload @buffer(0),
+                readonly device float values[] @buffer(1),
+                constant uint& index @buffer(2)
+            ) {
+                float value = readPayload(payload, values, index);
+                rejectWrite(payload, values);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert (
+        "float readPayload(const device Payload* payload, "
+        "const device float values[], constant uint& index)"
+    ) in generated_code
+    assert (
+        "void rejectWrite(const device Payload* payload, "
+        "const device float values[])"
+    ) in generated_code
+    assert "return payload->value + values[index];" in generated_code
+    assert (
+        "kernel void kernel_main(const device Payload* payload [[buffer(0)]], "
+        "const device float* values [[buffer(1)]], "
+        "constant uint& index [[buffer(2)]])"
+    ) in generated_code
+    assert (
+        "/* unsupported Metal raw buffer store: readonly buffer 'payload' cannot be written */"
+        in generated_code
+    )
+    assert (
+        "/* unsupported Metal raw buffer store: readonly buffer 'values' cannot be written */"
+        in generated_code
+    )
+    assert "payload->value = 1.0;" not in generated_code
+    assert "values[0] = 2.0;" not in generated_code
+
+
+def test_metal_readonly_raw_buffer_calls_to_mutable_helpers_emit_diagnostic():
+    shader = """
+    shader MetalReadonlyRawBufferMutableHelperCall {
+        struct Payload {
+            float value;
+        };
+
+        void mutate(device Payload* payload, device float values[]) {
+            payload.value = values[0];
+        }
+
+        compute {
+            void main(
+                readonly device Payload* payload @buffer(0),
+                readonly device float values[] @buffer(1)
+            ) {
+                mutate(payload, values);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert (
+        "void mutate(device Payload* payload, device float values[])" in generated_code
+    )
+    assert "kernel void kernel_main(const device Payload* payload [[buffer(0)]]," in (
+        generated_code
+    )
+    assert (
+        "/* unsupported Metal raw buffer call: readonly buffer 'payload' cannot be "
+        "passed to mutable parameter 'payload' of 'mutate' */"
+    ) in generated_code
+    assert "mutate(payload, values);" not in generated_code
+
+
 def test_metal_parameter_address_space_qualifiers_reject_conflicts():
     shader = """
     shader MetalConflictingAddressSpaceParameters {

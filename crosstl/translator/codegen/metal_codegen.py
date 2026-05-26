@@ -342,6 +342,7 @@ class MetalCodeGen:
         self.user_function_names = set()
         self.function_parameter_names = {}
         self.function_parameter_infos = {}
+        self.function_parameter_nodes = {}
         self.function_return_types = {}
         self.function_image_access_requirements = {}
         self.function_cbuffer_dependencies = {}
@@ -366,6 +367,7 @@ class MetalCodeGen:
         self.current_expression_expected_type = None
         self.current_generic_function_substitutions = {}
         self.local_variable_types = {}
+        self.current_address_space_variables = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
         self.generic_struct_definitions = {}
@@ -744,6 +746,9 @@ class MetalCodeGen:
         self.function_parameter_infos = self.collect_function_parameter_infos(
             all_functions
         )
+        self.function_parameter_nodes = self.collect_function_parameter_nodes(
+            all_functions
+        )
         self.function_return_types = {
             func.name: self.type_name_string(getattr(func, "return_type", "void"))
             for func in all_functions
@@ -956,6 +961,11 @@ class MetalCodeGen:
         if generic_function_specializations:
             self.function_parameter_names.update(
                 collect_function_parameter_names(
+                    generic_function_specializations.values()
+                )
+            )
+            self.function_parameter_nodes.update(
+                self.collect_function_parameter_nodes(
                     generic_function_specializations.values()
                 )
             )
@@ -1635,6 +1645,7 @@ class MetalCodeGen:
         previous_function_return_type = self.current_function_return_type
         previous_function_return_wrapper = self.current_function_return_wrapper
         previous_local_variable_types = self.local_variable_types
+        previous_address_space_variables = self.current_address_space_variables
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
@@ -1714,6 +1725,7 @@ class MetalCodeGen:
         self.current_metal_non_thread_payload_parameters = set()
         self.current_readonly_raw_buffer_parameters = set()
         self.local_variable_types = {}
+        self.current_address_space_variables = {}
         for p in param_list:
             if hasattr(p, "param_type"):
                 raw_param_type = (
@@ -1726,6 +1738,11 @@ class MetalCodeGen:
             else:
                 raw_param_type = "float"
             self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
+            address_space = self.parameter_variable_address_space(
+                raw_param_type, p, shader_type
+            )
+            if address_space is not None:
+                self.current_address_space_variables[p.name] = address_space
             if self.is_readonly_raw_buffer_parameter(raw_param_type, p, shader_type):
                 self.current_readonly_raw_buffer_parameters.add(p.name)
 
@@ -1859,6 +1876,7 @@ class MetalCodeGen:
             self.current_function_return_type = previous_function_return_type
             self.current_function_return_wrapper = previous_function_return_wrapper
             self.local_variable_types = previous_local_variable_types
+            self.current_address_space_variables = previous_address_space_variables
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
             )
@@ -2079,6 +2097,7 @@ class MetalCodeGen:
         self.current_function_return_type = previous_function_return_type
         self.current_function_return_wrapper = previous_function_return_wrapper
         self.local_variable_types = previous_local_variable_types
+        self.current_address_space_variables = previous_address_space_variables
         self.current_generic_function_substitutions = (
             previous_generic_function_substitutions
         )
@@ -2741,6 +2760,9 @@ class MetalCodeGen:
         if isinstance(stmt, VariableNode):
             var_type = self.local_variable_declared_type(stmt)
             self.local_variable_types[stmt.name] = var_type
+            self.current_address_space_variables[stmt.name] = (
+                self.local_variable_address_space(stmt)
+            )
             is_atomic_local = self.is_metal_atomic_value_type(var_type)
             if self.is_unsupported_glsl_buffer_block_struct_type(var_type):
                 self.current_unsupported_glsl_buffer_block_local_variables.add(
@@ -3940,6 +3962,11 @@ class MetalCodeGen:
                 )
                 return f"{metal_type}({args})"
             # Standard function call
+            readonly_raw_buffer_call = self.readonly_raw_buffer_call_diagnostic(
+                argument_func_name, expr.args
+            )
+            if readonly_raw_buffer_call is not None:
+                return readonly_raw_buffer_call
             self.validate_function_image_access_arguments(func_name, expr.args)
             args = self.generate_function_call_arguments(argument_func_name, expr.args)
             if func_name in self.user_function_names:
@@ -5610,6 +5637,35 @@ class MetalCodeGen:
             )
         return False
 
+    def is_mutable_raw_buffer_parameter(self, raw_param_type, node=None):
+        if not self.is_raw_buffer_parameter_type(raw_param_type, node):
+            return False
+        return not self.is_readonly_raw_buffer_parameter(raw_param_type, node)
+
+    def readonly_raw_buffer_call_diagnostic(self, func_name, call_args):
+        if func_name not in self.user_function_names:
+            return None
+        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        for index, arg in enumerate(call_args):
+            if index >= len(parameter_nodes):
+                continue
+            arg_name = self.assignment_target_root_name(arg)
+            if arg_name not in self.current_readonly_raw_buffer_parameters:
+                continue
+            parameter = parameter_nodes[index]
+            raw_param_type = getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            if not self.is_mutable_raw_buffer_parameter(raw_param_type, parameter):
+                continue
+            parameter_name = getattr(parameter, "name", f"arg{index}")
+            return (
+                "/* unsupported Metal raw buffer call: readonly buffer "
+                f"'{arg_name}' cannot be passed to mutable parameter "
+                f"'{parameter_name}' of '{func_name}' */"
+            )
+        return None
+
     def pointer_pointee_type_name(self, vtype):
         if isinstance(vtype, PointerType):
             return self.type_name_string(vtype.pointee_type)
@@ -6893,6 +6949,17 @@ class MetalCodeGen:
                 )
             parameter_infos[func_name] = infos
         return parameter_infos
+
+    def collect_function_parameter_nodes(self, functions):
+        parameter_nodes = {}
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            parameter_nodes[func_name] = list(
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            )
+        return parameter_nodes
 
     def structured_buffer_parameter_type_map(self, func):
         parameter_types = {}
