@@ -3002,8 +3002,8 @@ class MetalCodeGen:
             else:
                 return str(expr)
         elif isinstance(expr, BinaryOpNode):
-            left = self.generate_expression(expr.left)
-            right = self.generate_expression(expr.right)
+            left = self.generate_binary_operand(expr.left)
+            right = self.generate_binary_operand(expr.right)
             return f"{left} {self.map_operator(expr.op)} {right}"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
@@ -3349,6 +3349,12 @@ class MetalCodeGen:
             return name
         else:
             return str(expr)
+
+    def generate_binary_operand(self, expr):
+        rendered = self.generate_expression(expr)
+        if isinstance(expr, TernaryOpNode):
+            return f"({rendered})"
+        return rendered
 
     def synchronization_function_call(self, func_name, args):
         if args or func_name in self.user_function_names:

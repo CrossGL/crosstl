@@ -1375,6 +1375,43 @@ def test_codegen_mixed_ssbo_bool_members_lower_as_uint_slots():
     assert "bool dynamic = readFlag(boolBlock, 1u);" in glsl
 
 
+def test_codegen_mixed_ssbo_metal_store_parenthesizes_binary_ternary_operand():
+    crossgl = """
+    shader main {
+        struct TernaryStoreBlock {
+            bool enabled;
+            float values[];
+        };
+
+        TernaryStoreBlock ternaryStoreBlock @glsl_buffer_block(std430) @binding(54);
+
+        compute {
+            void main() {
+                uint i = 1u;
+                ternaryStoreBlock.values[i] = ternaryStoreBlock.values[i] + (ternaryStoreBlock.enabled ? 1.0 : 0.0);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    metal = MetalCodeGen().generate(shader_ast)
+
+    assert (
+        "(*reinterpret_cast<device float*>(ternaryStoreBlock + (4 + i * 4))) = "
+        "(*reinterpret_cast<const device float*>"
+        "(ternaryStoreBlock + (4 + i * 4))) + "
+        "(((*reinterpret_cast<const device uint*>(ternaryStoreBlock + 0)) != 0u) "
+        "? 1.0 : 0.0);" in metal
+    )
+    assert (
+        "+ ((*reinterpret_cast<const device uint*>(ternaryStoreBlock + 0)) != 0u) "
+        "? 1.0 : 0.0;" not in metal
+    )
+
+
 def test_codegen_mixed_ssbo_block_arrays_lower_to_byte_address_arrays():
     code = """
     #version 450 core

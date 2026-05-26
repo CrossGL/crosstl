@@ -214,7 +214,7 @@ void main() {
     if (first || dynamicFlag) {
         boolBlock.flags[1] = false;
     }
-    boolBlock.values[i] = boolBlock.values[i] + 1.0;
+    boolBlock.values[i] = boolBlock.values[i] + (boolBlock.enabled ? 1.0 : 0.0);
 }
 """
 
