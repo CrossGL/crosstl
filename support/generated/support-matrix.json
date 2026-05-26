@@ -1909,33 +1909,6 @@
       "status": "unknown"
     },
     {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
-      "category": "resources",
-      "feature": "Resource arrays",
-      "feature_id": "resources.resource_arrays",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "resources",
-      "feature": "Resource arrays",
-      "feature_id": "resources.resource_arrays",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "resources",
-      "feature": "Resource arrays",
-      "feature_id": "resources.resource_arrays",
-      "notes": "",
-      "status": "partial"
-    },
-    {
       "backend": "Vulkan SPIR-V",
       "backend_id": "vulkan",
       "category": "resources",
@@ -1988,33 +1961,6 @@
       "feature_id": "resources.resource_arrays",
       "notes": "",
       "status": "unknown"
-    },
-    {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
-      "category": "resources",
-      "feature": "Texture and sampler object model",
-      "feature_id": "resources.texture_sampler_split",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "resources",
-      "feature": "Texture and sampler object model",
-      "feature_id": "resources.texture_sampler_split",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "resources",
-      "feature": "Texture and sampler object model",
-      "feature_id": "resources.texture_sampler_split",
-      "notes": "",
-      "status": "partial"
     },
     {
       "backend": "Vulkan SPIR-V",
@@ -4089,9 +4035,15 @@
           "status": "unknown"
         },
         "directx": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_unsized_texture_and_sampler_arrays_infer_helper_size",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_unsized_shadow_texture_and_sampler_arrays_infer_helper_size",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_formatted_image_arrays_preserve_format_metadata",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_storage_image_arrays_emit_srv_reads_and_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types"
+          ],
+          "notes": "Covers fixed, expression-sized, and inferred unsized texture/sampler arrays, shadow arrays, formatted image arrays, multisample image arrays, and StructuredBuffer/ByteAddressBuffer resource arrays with deterministic size-conflict diagnostics.",
+          "status": "supported"
         },
         "hip": {
           "evidence": [],
@@ -4099,9 +4051,15 @@
           "status": "unknown"
         },
         "metal": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_unsized_texture_and_sampler_arrays_infer_helper_size",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_unsized_shadow_texture_and_sampler_arrays_infer_helper_size",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_formatted_image_arrays_preserve_format_metadata",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types"
+          ],
+          "notes": "Covers fixed, expression-sized, and inferred unsized texture/sampler arrays, shadow arrays, formatted image arrays, multisample image arrays, and Metal buffer resource arrays with deterministic size-conflict diagnostics.",
+          "status": "supported"
         },
         "mojo": {
           "evidence": [],
@@ -4109,9 +4067,14 @@
           "status": "unknown"
         },
         "opengl": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_unsized_texture_array_infers_helper_size_and_filters_sampler_array",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_unsized_shadow_texture_array_infers_helper_size_and_filters_sampler_array",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_formatted_image_arrays_preserve_format_metadata",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types"
+          ],
+          "notes": "Covers fixed, expression-sized, and inferred unsized texture arrays, shadow arrays, formatted image arrays, multisample image arrays, and SSBO resource arrays with deterministic size-conflict diagnostics.",
+          "status": "supported"
         },
         "rust": {
           "evidence": [],
@@ -4142,9 +4105,14 @@
           "status": "unknown"
         },
         "directx": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_generic_bindings_are_independent_between_register_namespaces",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_implicit_sampler_inherits_global_texture_register_space",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_texture_and_sampler_parameters",
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_shadow_texture_sampler_contracts_are_preserved"
+          ],
+          "notes": "Covers separate texture and sampler declarations, implicit sampler threading, comparison sampler role separation, arrayed samplers, register-space inheritance, and collision-free binding namespaces.",
+          "status": "supported"
         },
         "hip": {
           "evidence": [],
@@ -4152,9 +4120,14 @@
           "status": "unknown"
         },
         "metal": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_sampler_and_buffer_bindings_are_independent",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_and_sampler_bindings_are_independent",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_and_sampler_parameters",
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_shadow_texture_sampler_contracts_are_preserved"
+          ],
+          "notes": "Covers separate texture and sampler declarations, implicit sampler threading, comparison sampler role separation, arrayed samplers, and collision-free texture/sampler/buffer binding namespaces.",
+          "status": "supported"
         },
         "mojo": {
           "evidence": [],
@@ -4162,9 +4135,14 @@
           "status": "unknown"
         },
         "opengl": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_texture_and_image_bindings_are_independent",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_sampler_parameter_is_dropped",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_shadow_compare_sampler_parameter_is_dropped",
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_shadow_texture_sampler_contracts_are_preserved"
+          ],
+          "notes": "Covers combined sampler emission, source sampler elision, shadow-compare coordinate construction, sampler/image binding independence, arrayed sampler filtering, and collision-free binding namespaces.",
+          "status": "supported"
         },
         "rust": {
           "evidence": [],
@@ -5503,7 +5481,7 @@
   },
   "summary": {
     "backend_count": 9,
-    "backlog_count": 218,
+    "backlog_count": 212,
     "feature_count": 41,
     "status_counts": {
       "cuda": {
@@ -5516,8 +5494,8 @@
       },
       "directx": {
         "diagnostic": 0,
-        "partial": 10,
-        "supported": 31,
+        "partial": 8,
+        "supported": 33,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -5532,8 +5510,8 @@
       },
       "metal": {
         "diagnostic": 0,
-        "partial": 10,
-        "supported": 29,
+        "partial": 8,
+        "supported": 31,
         "unknown": 0,
         "unsupported": 2,
         "validated_rejection": 0
@@ -5548,8 +5526,8 @@
       },
       "opengl": {
         "diagnostic": 0,
-        "partial": 9,
-        "supported": 32,
+        "partial": 7,
+        "supported": 34,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

@@ -198,3 +198,104 @@ def test_primary_graphics_texture_sampling_contracts_are_preserved(
     assert ".sample(" in metal
     assert re.search(r"\bsampler\b", metal)
     assert not re.search(r"(?<!\[)\btexture\s*\(", metal)
+
+
+def _shadow_texture_sampling_shader(suffix, arrayed, helper):
+    array_suffix = "[4]" if arrayed else ""
+    declarations = f"""
+        sampler2DShadow shadow_{suffix}{array_suffix};
+        sampler cmp_{suffix}{array_suffix};
+    """
+
+    if helper and arrayed:
+        helper_source = f"""
+        float sample_shadow_{suffix}(
+            sampler2DShadow shadows[],
+            sampler samplers[],
+            vec2 uv,
+            float depth
+        ) {{
+            return textureCompare(shadows[2], samplers[2], uv, depth);
+        }}
+        """
+        sample_expression = (
+            f"sample_shadow_{suffix}(shadow_{suffix}, cmp_{suffix}, "
+            "input.uv, input.depth)"
+        )
+    elif helper:
+        helper_source = f"""
+        float sample_shadow_{suffix}(
+            sampler2DShadow shadowMap,
+            sampler cmpSampler,
+            vec2 uv,
+            float depth
+        ) {{
+            return textureCompare(shadowMap, cmpSampler, uv, depth);
+        }}
+        """
+        sample_expression = (
+            f"sample_shadow_{suffix}(shadow_{suffix}, cmp_{suffix}, "
+            "input.uv, input.depth)"
+        )
+    else:
+        index = "[1]" if arrayed else ""
+        helper_source = ""
+        sample_expression = (
+            f"textureCompare(shadow_{suffix}{index}, cmp_{suffix}{index}, "
+            "input.uv, input.depth)"
+        )
+
+    return f"""
+    shader ShadowTextureProperty_{suffix} {{
+        {declarations}
+
+        struct FSInput {{
+            vec2 uv @ TEXCOORD0;
+            float depth;
+        }};
+
+        {helper_source}
+
+        fragment {{
+            float main(FSInput input) @ gl_FragDepth {{
+                return {sample_expression};
+            }}
+        }}
+    }}
+    """
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    suffix=IDENTIFIER_SUFFIXES,
+    arrayed=st.booleans(),
+    helper=st.booleans(),
+)
+def test_primary_graphics_shadow_texture_sampler_contracts_are_preserved(
+    suffix, arrayed, helper
+):
+    shader = _shadow_texture_sampling_shader(suffix, arrayed, helper)
+    ast = crosstl.translator.parse(shader)
+
+    hlsl = HLSLCodeGen().generate_stage(ast, "fragment")
+    glsl = GLSLCodeGen().generate_stage(ast, "fragment")
+    metal = MetalCodeGen().generate_stage(ast, "fragment")
+
+    for backend, generated in (
+        ("directx", hlsl),
+        ("opengl", glsl),
+        ("metal", metal),
+    ):
+        _assert_codegen_output_is_usable(backend, generated)
+
+    assert "SamplerComparisonState" in hlsl
+    assert ".SampleCmp(" in hlsl
+    assert not re.search(r"\btextureCompare\s*\(", hlsl)
+
+    assert f"sampler2DShadow shadow_{suffix}" in glsl
+    assert f"cmp_{suffix}" not in glsl
+    assert re.search(r"\btexture\s*\(", glsl)
+
+    assert "depth2d<float>" in metal
+    assert ".sample_compare(" in metal
+    assert re.search(r"\bsampler\b", metal)
