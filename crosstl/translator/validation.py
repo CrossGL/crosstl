@@ -177,6 +177,27 @@ SINGLE_VALUE_METADATA_NAMES = frozenset(
     }
 )
 
+MULTI_VALUE_METADATA_NAMES = frozenset({"register"})
+
+HLSL_SEMANTIC_METADATA_BASE_NAMES = frozenset(
+    {
+        "binormal",
+        "blendindices",
+        "blendweight",
+        "clipdistance",
+        "color",
+        "culldistance",
+        "fog",
+        "normal",
+        "position",
+        "positiont",
+        "psize",
+        "tangent",
+        "tessfactor",
+        "texcoord",
+    }
+)
+
 RESOURCE_ACCESS_METADATA_NAMES = {
     "read": "readonly",
     "readonly": "readonly",
@@ -851,6 +872,13 @@ def validate_node_metadata(node, context):
             f"Conflicting resource access metadata on {context}: {access_list}"
         )
 
+    semantic_names = _node_hlsl_semantic_metadata_names(node)
+    if len(semantic_names) > 1:
+        raise ValueError(
+            f"Conflicting semantic metadata on {context}: "
+            f"{_metadata_name_phrase(semantic_names)}"
+        )
+
     values_by_name = {}
     for attr in getattr(node, "attributes", []) or []:
         attr_name = str(getattr(attr, "name", "")).lower()
@@ -864,6 +892,20 @@ def validate_node_metadata(node, context):
             raise ValueError(
                 f"Conflicting {attr_name} metadata on {context}: "
                 f"{previous_value} vs {attr_value}"
+            )
+
+    multi_values_by_name = {}
+    for attr in getattr(node, "attributes", []) or []:
+        attr_name = _normalized_metadata_name(getattr(attr, "name", None))
+        if attr_name not in MULTI_VALUE_METADATA_NAMES:
+            continue
+        attr_value = _attribute_metadata_values(attr)
+        previous_value = multi_values_by_name.setdefault(attr_name, attr_value)
+        if previous_value != attr_value:
+            raise ValueError(
+                f"Conflicting {attr_name} metadata on {context}: "
+                f"{_metadata_value_phrase(previous_value)} vs "
+                f"{_metadata_value_phrase(attr_value)}"
             )
 
 
@@ -965,6 +1007,24 @@ def _node_resource_access_names(node):
             access_names.add(access_name)
 
     return access_names
+
+
+def _node_hlsl_semantic_metadata_names(node):
+    names = set()
+    for attr in getattr(node, "attributes", []) or []:
+        attr_name = _normalized_metadata_name(getattr(attr, "name", None))
+        if _is_hlsl_semantic_metadata_name(attr_name):
+            names.add(attr_name)
+    return names
+
+
+def _is_hlsl_semantic_metadata_name(name):
+    if not name:
+        return False
+    if name.startswith("sv_"):
+        return True
+    base_name = name.rstrip("0123456789")
+    return base_name in HLSL_SEMANTIC_METADATA_BASE_NAMES
 
 
 def _normalized_metadata_names(names, canonical_names):
@@ -1074,6 +1134,7 @@ def _shader_metadata_nodes(shader):
         yield from _struct_member_metadata_nodes(struct, "struct")
 
     for cbuffer in getattr(shader, "cbuffers", []) or []:
+        yield cbuffer, _node_context("cbuffer", cbuffer)
         yield from _struct_member_metadata_nodes(cbuffer, "cbuffer")
 
     for function in getattr(shader, "functions", []) or []:

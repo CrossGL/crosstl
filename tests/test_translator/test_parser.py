@@ -1493,6 +1493,106 @@ def test_hlsl_colon_semantics_parse_as_attributes():
     assert [attr.name for attr in entry.parameters[0].attributes] == ["POSITION"]
 
 
+def test_duplicate_matching_register_metadata_values_are_allowed():
+    code = """
+    shader MatchingRegisterMetadata {
+        cbuffer Camera : register(b0, space1) @register(b0, space1) {
+            mat4 viewProj;
+        }
+
+        Texture2D colorMap : register(t0, space1) @register(t0, space1);
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    cbuffer = ast.cbuffers[0]
+    assert [attribute.name for attribute in cbuffer.attributes] == [
+        "register",
+        "register",
+    ]
+    assert [
+        [arg.name for arg in attribute.arguments] for attribute in cbuffer.attributes
+    ] == [
+        ["b0", "space1"],
+        ["b0", "space1"],
+    ]
+
+    color_map = ast.global_variables[0]
+    assert [attribute.name for attribute in color_map.attributes] == [
+        "register",
+        "register",
+    ]
+    assert [
+        [arg.name for arg in attribute.arguments] for attribute in color_map.attributes
+    ] == [
+        ["t0", "space1"],
+        ["t0", "space1"],
+    ]
+
+
+def test_conflicting_register_metadata_values_fail_validation():
+    code = """
+    shader ConflictingRegisterMetadata {
+        Texture2D colorMap : register(t0, space1) @register(t0, space2);
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting register metadata"):
+        parse_code(tokenize_code(code))
+
+
+def test_duplicate_matching_hlsl_semantic_metadata_is_allowed():
+    code = """
+    shader MatchingSemanticMetadata {
+        struct VSOutput {
+            vec4 position : SV_Position @SV_Position;
+            vec2 uv : TEXCOORD0 @TEXCOORD0;
+        };
+
+        vertex {
+            vec4 main(vec3 position : POSITION @POSITION) : SV_Position @SV_Position {
+                return vec4(position, 1.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    output_struct = ast.structs[0]
+    entry = ast.stages[ShaderStage.VERTEX].entry_point
+
+    assert [attr.name for attr in output_struct.members[0].attributes] == [
+        "SV_Position",
+        "SV_Position",
+    ]
+    assert [attr.name for attr in output_struct.members[1].attributes] == [
+        "TEXCOORD0",
+        "TEXCOORD0",
+    ]
+    assert [attr.name for attr in entry.attributes] == [
+        "SV_Position",
+        "SV_Position",
+    ]
+    assert [attr.name for attr in entry.parameters[0].attributes] == [
+        "POSITION",
+        "POSITION",
+    ]
+
+
+def test_conflicting_hlsl_semantic_metadata_fails_validation():
+    code = """
+    shader ConflictingSemanticMetadata {
+        struct VSOutput {
+            vec4 position : SV_Position @POSITION;
+        };
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting semantic metadata"):
+        parse_code(tokenize_code(code))
+
+
 def test_glsl_layout_buffer_block_lowers_to_struct_and_resource_variable():
     code = """
     shader BufferBlockLayouts {
