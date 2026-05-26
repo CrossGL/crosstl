@@ -8131,14 +8131,99 @@ class TestVulkanSPIRVCodeGen:
             assert function_name not in spv_code
         assert "WARNING" not in spv_code
 
-    def test_texture_bias_variants_emit_spirv_bias_operands(self):
+    def test_projected_cube_texture_operations_and_diagnostics(self):
         source_code = """
+        shader Resources {
+            samplerCube cubeMap;
+            samplerCubeArray cubeArrayMap;
+            samplerCubeShadow shadowCube;
+            samplerCubeArrayShadow shadowCubeArray;
+            sampler linearSampler;
+            sampler compareSampler;
+
+            compute {
+                void main() {
+                    vec4 dirQ = vec4(1.0, 0.0, 0.0, 2.0);
+                    vec4 dirLayer = vec4(1.0, 0.0, 0.0, 1.0);
+                    vec3 ddx = vec3(0.1, 0.0, 0.0);
+                    vec3 ddy = vec3(0.0, 0.1, 0.0);
+                    vec4 color = textureProj(cubeMap, linearSampler, dirQ);
+                    vec4 grad = textureProjGrad(
+                        cubeMap,
+                        linearSampler,
+                        dirQ,
+                        ddx,
+                        ddy
+                    );
+                    float shadow = textureCompareProj(
+                        shadowCube,
+                        compareSampler,
+                        dirQ,
+                        0.5
+                    );
+                    float shadowGrad = textureCompareProjGrad(
+                        shadowCube,
+                        compareSampler,
+                        dirQ,
+                        0.4,
+                        ddx,
+                        ddy
+                    );
+                    vec4 invalidOffset = textureProjOffset(
+                        cubeMap,
+                        linearSampler,
+                        dirQ,
+                        ivec2(1, 0)
+                    );
+                    float invalidShadowOffset = textureCompareProjOffset(
+                        shadowCube,
+                        compareSampler,
+                        dirQ,
+                        0.3,
+                        ivec2(1, 0)
+                    );
+                    vec4 invalidArray = textureProj(cubeArrayMap, dirLayer);
+                    float invalidShadowArray = textureCompareProj(
+                        shadowCubeArray,
+                        compareSampler,
+                        dirLayer,
+                        0.2
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("OpImageSampleExplicitLod") == 2
+        assert spv_code.count("OpImageSampleDrefExplicitLod") == 2
+        assert spv_code.count("OpFDiv") >= 12
+        assert (
+            "WARNING: textureProjOffset offsets are not valid for cube images"
+            in spv_code
+        )
+        assert (
+            "WARNING: textureCompareProjOffset offsets are not valid for cube images"
+            in spv_code
+        )
+        assert (
+            spv_code.count(
+                "requires a projection component after the texture coordinate"
+            )
+            == 2
+        )
+
+    def test_texture_bias_variants_emit_spirv_bias_operands(self):
+        shader = """
         shader Resources {
             sampler2d colorMap;
             sampler linearSampler;
 
             fragment {
-                void main() {
+                vec4 main() @ gl_FragColor {
                     vec2 uv = vec2(0.25, 0.75);
                     vec3 uvq = vec3(0.25, 0.75, 2.0);
                     vec4 uvqw = vec4(0.25, 0.75, 0.0, 2.0);
@@ -8163,7 +8248,7 @@ class TestVulkanSPIRVCodeGen:
                         ivec2(1, 0),
                         0.25
                     );
-                    vec4 result = biased
+                    return biased
                         + offsetBiased
                         + projectedBias
                         + projectedOffsetBias;
@@ -8172,9 +8257,7 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        spv_code = VulkanSPIRVCodeGen().generate(
-            Parser(Lexer(source_code).tokens).parse()
-        )
+        spv_code = VulkanSPIRVCodeGen().generate(Parser(Lexer(shader).tokens).parse())
 
         assert spv_code.count("OpImageSampleImplicitLod") == 4
         assert len(re.findall(r"\bOpImageSampleImplicitLod\b.*\bBias\b", spv_code)) == 4

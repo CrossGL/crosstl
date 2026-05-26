@@ -1901,6 +1901,11 @@ class VulkanSPIRVCodeGen:
             function_name, coord_id, metadata
         )
         result_type = self.resource_access_result_type(metadata)
+        if "Offset" in function_name and metadata.get("dim") == "Cube":
+            self.emit(
+                f"; WARNING: {function_name} offsets are not valid for cube images"
+            )
+            return self.default_value_for_type(result_type)
         if projected_coord is None:
             return self.default_value_for_type(result_type)
 
@@ -1968,6 +1973,11 @@ class VulkanSPIRVCodeGen:
             function_name, coord_id, metadata
         )
         result_type = self.register_primitive_type("float")
+        if "Offset" in function_name and metadata.get("dim") == "Cube":
+            self.emit(
+                f"; WARNING: {function_name} offsets are not valid for cube images"
+            )
+            return self.default_value_for_type(result_type)
         if projected_coord is None:
             return self.default_value_for_type(result_type)
 

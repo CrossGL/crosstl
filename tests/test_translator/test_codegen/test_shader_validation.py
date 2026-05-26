@@ -479,8 +479,10 @@ shader SpirvProjectedTextureComputeValidation {
     sampler2D colorMap;
     sampler2DArray layerMap;
     sampler3D volumeMap;
+    samplerCube cubeMap;
     sampler2DShadow shadowMap;
     sampler2DArrayShadow shadowArray;
+    samplerCubeShadow shadowCube;
     sampler linearSampler;
     sampler compareSampler;
 
@@ -490,6 +492,7 @@ shader SpirvProjectedTextureComputeValidation {
             vec4 uvqw = vec4(0.25, 0.75, 0.0, 2.0);
             vec4 uvLayerQ = vec4(0.25, 0.75, 1.0, 2.0);
             vec4 xyzq = vec4(0.25, 0.5, 0.75, 2.0);
+            vec4 dirQ = vec4(1.0, 0.0, 0.0, 2.0);
             vec2 ddx = vec2(0.1, 0.0);
             vec2 ddy = vec2(0.0, 0.1);
             vec3 dxyz = vec3(0.1, 0.0, 0.0);
@@ -516,6 +519,14 @@ shader SpirvProjectedTextureComputeValidation {
                 ddx,
                 ddy,
                 ivec2(-1, 0)
+            );
+            vec4 cubeProjected = textureProj(cubeMap, linearSampler, dirQ);
+            vec4 cubeProjectedGrad = textureProjGrad(
+                cubeMap,
+                linearSampler,
+                dirQ,
+                dxyz,
+                dxyz
             );
             float shadow = textureCompareProj(
                 shadowMap,
@@ -554,6 +565,20 @@ shader SpirvProjectedTextureComputeValidation {
                 ddx,
                 ddy,
                 ivec2(-1, 0)
+            );
+            float cubeShadow = textureCompareProj(
+                shadowCube,
+                compareSampler,
+                dirQ,
+                depth
+            );
+            float cubeShadowGrad = textureCompareProjGrad(
+                shadowCube,
+                compareSampler,
+                dirQ,
+                depth,
+                dxyz,
+                dxyz
             );
         }
     }
@@ -1290,6 +1315,35 @@ shader MetalMeshObjectValidation {
             @outputtopology(triangle)
         {
             SetMeshOutputCounts(64, 12);
+        }
+    }
+}
+"""
+
+
+METAL_RAY_TRACING_HELPER_SHADER = """
+shader MetalRayTracingHelperValidation {
+    accelerationStructureEXT topLevelAS @binding(0);
+
+    void shoot(vec3 origin, vec3 direction) {
+        TraceRay(
+            topLevelAS,
+            0,
+            0xff,
+            0,
+            1,
+            0,
+            origin,
+            0.001,
+            direction,
+            1000.0,
+            0
+        );
+    }
+
+    ray_generation {
+        void main() {
+            shoot(vec3(0.0), vec3(0.0, 0.0, 1.0));
         }
     }
 }
@@ -2889,6 +2943,35 @@ def test_generated_metal_mesh_object_stages_compile_with_metal3(tmp_path):
     source = tmp_path / "mesh_object.metal"
     output = tmp_path / "mesh_object.air"
     code = MetalCodeGen().generate(crosstl.translator.parse(METAL_MESH_OBJECT_SHADER))
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_tracing_helper.metal"
+    output = tmp_path / "ray_tracing_helper.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_TRACING_HELPER_SHADER)
+    )
     source.write_text(code, encoding="utf-8")
 
     run_validator(
