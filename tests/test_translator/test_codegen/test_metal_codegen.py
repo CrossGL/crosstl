@@ -17478,8 +17478,7 @@ def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnosti
     assert (
         "float4 touchLayer(texture2d_ms_array<float, access::read> image, "
         "texture2d_ms_array<uint, access::read> counterImage, int3 pixelLayer, "
-        "int sampleIndex, float4 value, uint count)"
-        in generated_code
+        "int sampleIndex, float4 value, uint count)" in generated_code
     )
     assert (
         "float4 oldColor = image.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex));"
