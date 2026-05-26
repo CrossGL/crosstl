@@ -261,6 +261,26 @@ def test_enum_flag_values_compile_with_mojo(tmp_path):
     assert "7" in result.stdout
 
 
+def test_integer_enum_underlying_types_are_preserved():
+    code = """
+    enum Small : ushort {
+        Off,
+        On = 2,
+        Auto
+    };
+
+    ushort pick() {
+        return ushort(Small::Auto);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "alias Small = UInt16" in generated_code
+    assert "alias Small_Auto = 3" in generated_code
+    assert "fn pick() -> UInt16:" in generated_code
+    assert "return UInt16(Small_Auto)" in generated_code
+
+
 def test_payload_enums_are_rejected_for_mojo_codegen():
     code = """
     enum MaybeInt {

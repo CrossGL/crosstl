@@ -128,6 +128,19 @@ MOJO_SCALAR_DTYPES = {
     "bool": "DType.bool",
 }
 
+MOJO_RESOURCE_TYPE_MAPPING = {
+    "sampler2D": "Texture2D",
+    "sampler3D": "Texture3D",
+    "samplerCube": "TextureCube",
+    "sampler": "Sampler",
+}
+
+MOJO_RESOURCE_SAMPLE_COORDS = {
+    "Texture2D": "SIMD[DType.float32, 2]",
+    "Texture3D": "SIMD[DType.float32, 4]",
+    "TextureCube": "SIMD[DType.float32, 4]",
+}
+
 MOJO_INTEGER_INDEX_TYPES = {"int", "uint", "short", "ushort", "long", "ulong"}
 
 MOJO_VECTOR_ARITHMETIC_OPS = {
@@ -151,6 +164,8 @@ class MojoCodeGen:
         self.enum_variant_aliases = {}
         self.enum_variant_values = {}
         self.current_enum_value_aliases = {}
+        self.required_resource_types = set()
+        self.required_resource_sample_types = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -191,11 +206,8 @@ class MojoCodeGen:
                 name: self.matrix_type_name(dtype, columns, rows)
                 for name, (dtype, columns, rows) in MOJO_MATRIX_TYPES.items()
             },
-            # Texture Types (Mojo equivalents)
-            "sampler2D": "Texture2D",
-            "sampler3D": "Texture3D",
-            "samplerCube": "TextureCube",
-            "sampler": "Sampler",
+            # Texture/resource placeholders for Mojo compile-smoke support.
+            **MOJO_RESOURCE_TYPE_MAPPING,
         }
         self.scalar_constructor_map = {
             name: mapped
@@ -281,6 +293,8 @@ class MojoCodeGen:
         self.enum_variant_aliases = {}
         self.enum_variant_values = {}
         self.current_enum_value_aliases = {}
+        self.required_resource_types = set()
+        self.required_resource_sample_types = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -350,6 +364,12 @@ class MojoCodeGen:
                     )
                 elif self.is_struct_type_name(vtype):
                     code += f"var {node.name} = {self.zero_value_for_type(vtype)}\n"
+                elif self.is_resource_type_name(vtype):
+                    mapped_type = self.map_type(vtype)
+                    code += (
+                        f"var {node.name}: {mapped_type} = "
+                        f"{self.zero_value_for_type(vtype)}\n"
+                    )
                 else:
                     code += f"var {node.name}: {self.map_type(vtype)}\n"
 
@@ -647,7 +667,7 @@ class MojoCodeGen:
         if underlying_type is None:
             return "Int32"
         mapped = self.map_type(self.convert_type_node_to_string(underlying_type))
-        if mapped in {"Int", "Int32", "Int64", "UInt32", "UInt64"}:
+        if mapped in {"Int", "Int16", "Int32", "Int64", "UInt16", "UInt32", "UInt64"}:
             return mapped
         return "Int32"
 
@@ -795,13 +815,19 @@ class MojoCodeGen:
         code += f"fn {func.name}({params_str}) -> {self.map_type(return_type)}:\n"
 
         body = getattr(func, "body", [])
+        statements = None
         if hasattr(body, "statements"):
+            statements = body.statements
             for stmt in body.statements:
                 code += self.generate_statement(stmt, indent + 1)
         elif isinstance(body, list):
+            statements = body
             for stmt in body:
                 code += self.generate_statement(stmt, indent + 1)
         else:
+            code += "    pass\n"
+
+        if statements is not None and not statements:
             code += "    pass\n"
 
         code += "\n"
@@ -1700,6 +1726,8 @@ class MojoCodeGen:
                 bool_mix_call = self.generate_bool_mix_call(expr.args)
                 if bool_mix_call is not None:
                     return bool_mix_call
+            if func_name == "texture":
+                return self.generate_texture_call(expr.args)
 
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
@@ -1956,6 +1984,18 @@ class MojoCodeGen:
         true_value = self.generate_expression(args[1])
         false_value = self.generate_expression(args[0])
         return f"({true_value} if {condition} else {false_value})"
+
+    def generate_texture_call(self, args):
+        if not args:
+            return "sample()"
+
+        texture_type = self.expression_result_type(args[0])
+        mapped_type = self.map_type(texture_type)
+        if mapped_type in MOJO_RESOURCE_SAMPLE_COORDS:
+            self.required_resource_sample_types.add(mapped_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"sample({generated_args})"
 
     def generate_bool_vector_select_expression(
         self, condition_expr, true_expr, false_expr
@@ -2568,6 +2608,11 @@ class MojoCodeGen:
         if type_name is None:
             return False
         return self.type_name(type_name) in self.struct_types
+
+    def is_resource_type_name(self, type_name):
+        if type_name is None:
+            return False
+        return self.type_name(type_name) in MOJO_RESOURCE_TYPE_MAPPING
 
     def array_type_name(self, element_type, size):
         element_type_name = self.type_name(element_type)
