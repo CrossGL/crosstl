@@ -89,15 +89,7 @@
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_preprocessor_metal_output_compiles_with_xcrun_metal"
           ]
         },
-        "vulkan": {
-          "status": "supported",
-          "notes": "Covers OpImageRead/OpImageWrite for scalar, vector, explicit-format, array, and multisample storage images, with spirv-as/spirv-val coverage for resource-heavy compute shaders.",
-          "evidence": [
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_resource_operations_emit_spirv_image_instructions",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_formatted_image_load_uses_matching_spirv_type",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_complex_resource_compute_validates_with_spirv_tools"
-          ]
-        },
+        "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
         "mojo": {"status": "unknown"},
@@ -172,7 +164,15 @@
         "directx": {"status": "supported"},
         "opengl": {"status": "supported"},
         "metal": {"status": "unsupported", "evidence": ["crosstl/translator/codegen/metal_codegen.py::does not support stage type"]},
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "Covers OpImageRead/OpImageWrite for scalar, vector, explicit-format, array, and multisample storage images, with spirv-as/spirv-val coverage for resource-heavy compute shaders.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_resource_operations_emit_spirv_image_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_formatted_image_load_uses_matching_spirv_type",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_complex_resource_compute_validates_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unsupported"},
         "hip": {"status": "unsupported"},
         "mojo": {"status": "unknown"},

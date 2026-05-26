@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 477
+        "test_count": 480
       },
       "translator_codegen": {
         "exists": true,
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 434
+        "test_count": 435
       },
       "translator_codegen": {
         "exists": true,
@@ -623,7 +623,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 231
+        "test_count": 233
       },
       "translator_codegen": {
         "exists": true,
@@ -737,7 +737,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 437
+        "test_count": 439
       },
       "translator_codegen": {
         "exists": true,
@@ -851,7 +851,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 232
+        "test_count": 238
       },
       "translator_codegen": {
         "exists": true,
@@ -860,6 +860,15 @@
     }
   ],
   "backlog": [
+    {
+      "backend": "Vulkan SPIR-V",
+      "backend_id": "vulkan",
+      "category": "source",
+      "feature": "Native preprocessor handling",
+      "feature_id": "source.preprocessing",
+      "notes": "",
+      "status": "unknown"
+    },
     {
       "backend": "CUDA",
       "backend_id": "cuda",
@@ -985,15 +994,6 @@
       "feature_id": "stage.geometry",
       "notes": "",
       "status": "unsupported"
-    },
-    {
-      "backend": "Vulkan SPIR-V",
-      "backend_id": "vulkan",
-      "category": "stages",
-      "feature": "Geometry stage",
-      "feature_id": "stage.geometry",
-      "notes": "",
-      "status": "unknown"
     },
     {
       "backend": "CUDA",
@@ -2969,13 +2969,9 @@
           "status": "unknown"
         },
         "vulkan": {
-          "evidence": [
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_resource_operations_emit_spirv_image_instructions",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_formatted_image_load_uses_matching_spirv_type",
-            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_complex_resource_compute_validates_with_spirv_tools"
-          ],
-          "notes": "Covers OpImageRead/OpImageWrite for scalar, vector, explicit-format, array, and multisample storage images, with spirv-as/spirv-val coverage for resource-heavy compute shaders.",
-          "status": "supported"
+          "evidence": [],
+          "notes": "",
+          "status": "unknown"
         }
       }
     },
@@ -3190,9 +3186,13 @@
           "status": "unknown"
         },
         "vulkan": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_resource_operations_emit_spirv_image_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_formatted_image_load_uses_matching_spirv_type",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_complex_resource_compute_validates_with_spirv_tools"
+          ],
+          "notes": "Covers OpImageRead/OpImageWrite for scalar, vector, explicit-format, array, and multisample storage images, with spirv-as/spirv-val coverage for resource-heavy compute shaders.",
+          "status": "supported"
         }
       }
     },
