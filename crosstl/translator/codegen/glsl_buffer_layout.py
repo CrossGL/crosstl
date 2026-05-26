@@ -1,4 +1,4 @@
-"""Shared GLSL std430 buffer block layout helpers."""
+"""Shared GLSL buffer block layout helpers."""
 
 from inspect import Parameter, signature
 
@@ -136,6 +136,18 @@ def std430_matrix_type_info(columns, rows):
     }
 
 
+def std140_matrix_type_info(columns, rows):
+    column_stride = 16
+    return {
+        "size": columns * column_stride,
+        "align": 16,
+        "matrix_columns": columns,
+        "matrix_rows": rows,
+        "column_stride": column_stride,
+        "component_type": "float",
+    }
+
+
 def std430_scalar_vector_type_entries():
     entries = {
         "float": std430_scalar_type_info("float"),
@@ -155,11 +167,28 @@ def std430_scalar_vector_type_entries():
     return entries
 
 
+def std140_scalar_vector_type_entries():
+    return std430_scalar_vector_type_entries()
+
+
 def std430_matrix_type_entries():
     entries = {}
     for columns in range(2, 5):
         for rows in range(2, 5):
             info = std430_matrix_type_info(columns, rows)
+            names = {f"mat{columns}x{rows}", f"float{rows}x{columns}"}
+            if columns == rows:
+                names.add(f"mat{columns}")
+            for name in names:
+                entries[name] = info
+    return entries
+
+
+def std140_matrix_type_entries():
+    entries = {}
+    for columns in range(2, 5):
+        for rows in range(2, 5):
+            info = std140_matrix_type_info(columns, rows)
             names = {f"mat{columns}x{rows}", f"float{rows}x{columns}"}
             if columns == rows:
                 names.add(f"mat{columns}")
@@ -199,10 +228,35 @@ def std430_value_type_info(type_name):
     return None if info is None else dict(info)
 
 
+def std140_value_type_info(type_name):
+    type_info = std140_scalar_vector_type_entries()
+    type_info.update(std140_matrix_type_entries())
+    info = type_info.get(std430_layout_type_name(type_name))
+    return None if info is None else dict(info)
+
+
+def glsl_buffer_layout_value_type_info(type_name, layout):
+    if str(layout).lower() == "std140":
+        return std140_value_type_info(type_name)
+    return std430_value_type_info(type_name)
+
+
 def std430_array_stride(member_info):
     return member_info.get(
         "array_stride", align_to(member_info["size"], member_info["align"])
     )
+
+
+def glsl_buffer_array_align(member_info, layout):
+    if str(layout).lower() == "std140":
+        return max(16, member_info["align"])
+    return member_info["align"]
+
+
+def glsl_buffer_array_stride(member_info, layout):
+    if str(layout).lower() == "std140":
+        return max(16, align_to(member_info["size"], member_info["align"]))
+    return std430_array_stride(member_info)
 
 
 def glsl_buffer_block_is_readonly(node):
@@ -245,7 +299,7 @@ def glsl_buffer_block_predicate_matches(predicate, node, node_type):
 
 
 def glsl_buffer_block_member_type(
-    member, convert_type_node_to_string, map_type, target_type_key
+    member, convert_type_node_to_string, map_type, target_type_key, layout
 ):
     member_type = getattr(member, "member_type", None)
     is_array = False
@@ -267,7 +321,7 @@ def glsl_buffer_block_member_type(
 
     type_name = str(type_name)
     layout_type_name = std430_layout_type_name(type_name)
-    type_info = std430_value_type_info(layout_type_name)
+    type_info = glsl_buffer_layout_value_type_info(layout_type_name, layout)
     if type_info is None:
         return None
     return {
@@ -313,7 +367,8 @@ def collect_lowered_glsl_buffer_blocks(
         ):
             continue
         layout = glsl_buffer_block_layout(node)
-        if str(layout).lower() != "std430":
+        layout_key = str(layout).lower()
+        if layout_key not in {"std140", "std430"}:
             continue
 
         type_name = str(resource_base_type(node_type))
@@ -329,7 +384,7 @@ def collect_lowered_glsl_buffer_blocks(
         failure_reason = None
         for index, member in enumerate(struct_members):
             member_info = glsl_buffer_block_member_type(
-                member, convert_type_node_to_string, map_type, target_type_key
+                member, convert_type_node_to_string, map_type, target_type_key, layout
             )
             member_name = getattr(member, "name", None)
             if member_info is None:
@@ -339,12 +394,12 @@ def collect_lowered_glsl_buffer_blocks(
                 )
                 members = {}
                 break
-            offset = align_to(offset, member_info["align"])
             if not member_name:
                 failure_reason = "unsupported unnamed buffer block member"
                 members = {}
                 break
             if member_info["is_array"]:
+                offset = align_to(offset, glsl_buffer_array_align(member_info, layout))
                 if member_info["array_size"] is None:
                     if index != len(struct_members) - 1:
                         failure_reason = (
@@ -357,7 +412,7 @@ def collect_lowered_glsl_buffer_blocks(
                     members[member_name] = {
                         **member_info,
                         "offset": offset,
-                        "stride": std430_array_stride(member_info),
+                        "stride": glsl_buffer_array_stride(member_info, layout),
                         "runtime_array": True,
                     }
                     continue
@@ -373,12 +428,13 @@ def collect_lowered_glsl_buffer_blocks(
                 members[member_name] = {
                     **member_info,
                     "offset": offset,
-                    "stride": std430_array_stride(member_info),
+                    "stride": glsl_buffer_array_stride(member_info, layout),
                     "array_count": array_count,
                     "runtime_array": False,
                 }
                 offset += members[member_name]["stride"] * array_count
                 continue
+            offset = align_to(offset, member_info["align"])
             members[member_name] = {
                 **member_info,
                 "offset": offset,

@@ -16,7 +16,9 @@ from crosstl.translator.codegen.glsl_buffer_layout import (
     collect_lowered_glsl_buffer_blocks,
     glsl_buffer_compound_binary_operator,
     glsl_buffer_block_node_type,
+    glsl_buffer_array_stride,
     matrix_column_offsets,
+    std140_value_type_info,
     std430_array_stride,
     std430_layout_type_name,
     std430_value_type_info,
@@ -95,6 +97,20 @@ def test_std430_type_info_covers_vec3_and_non_square_matrix_strides():
 
     float3x2_alias = std430_value_type_info("float3x2")
     assert float3x2_alias == mat2x3
+
+
+def test_std140_type_info_uses_sixteen_byte_matrix_column_stride():
+    mat2 = std140_value_type_info("mat2")
+    assert mat2["matrix_columns"] == 2
+    assert mat2["matrix_rows"] == 2
+    assert mat2["align"] == 16
+    assert mat2["column_stride"] == 16
+    assert mat2["size"] == 32
+
+    scalar = std140_value_type_info("float")
+    vec2 = std140_value_type_info("vec2")
+    assert glsl_buffer_array_stride(scalar, "std140") == 16
+    assert glsl_buffer_array_stride(vec2, "std140") == 16
 
 
 def test_std430_type_info_normalizes_fixed_width_scalar_aliases():
@@ -290,12 +306,43 @@ def test_collect_lowered_glsl_buffer_blocks_rejects_non_literal_fixed_array_size
     assert struct_failures["Block"] == var_failures["block"]
 
 
-def test_collect_lowered_glsl_buffer_blocks_ignores_non_std430_layout():
+def test_collect_lowered_glsl_buffer_blocks_lays_out_std140_arrays():
+    struct = block_struct(
+        member("count", primitive("uint")),
+        member("basis", primitive("mat2")),
+        member("weights", ArrayType(primitive("float"), size=3)),
+        member("data", ArrayType(primitive("float"), size=None)),
+    )
+    var = block_var(layout="std140")
+
+    blocks, var_failures, struct_failures = collect_for(struct, var)
+
+    assert not var_failures
+    assert not struct_failures
+    block = blocks["block"]
+    assert block["layout"] == "std140"
+    assert block["members"]["count"]["offset"] == 0
+    assert block["members"]["basis"]["offset"] == 16
+    assert block["members"]["basis"]["column_stride"] == 16
+    assert block["members"]["basis"]["size"] == 32
+
+    weights = block["members"]["weights"]
+    assert weights["offset"] == 48
+    assert weights["stride"] == 16
+    assert weights["array_count"] == 3
+
+    data = block["members"]["data"]
+    assert data["offset"] == 96
+    assert data["stride"] == 16
+    assert data["runtime_array"] is True
+
+
+def test_collect_lowered_glsl_buffer_blocks_ignores_unknown_layout():
     struct = block_struct(
         member("count", primitive("uint")),
         member("data", ArrayType(primitive("float"), size=None)),
     )
-    var = block_var(layout="std140")
+    var = block_var(layout="scalar")
 
     blocks, var_failures, struct_failures = collect_for(struct, var)
 

@@ -178,6 +178,27 @@ void main() {
 """
 
 
+MIXED_GLSL_SSBO_STD140_COMPUTE_SHADER = """
+#version 450 core
+layout(std140, binding = 25) buffer Std140Block {
+    uint count;
+    mat2 basis;
+    float weights[3];
+    float values[];
+} std140Block;
+
+void main() {
+    uint i = std140Block.count;
+    mat2 basis = std140Block.basis;
+    float weight = std140Block.weights[2];
+    float value = std140Block.values[i];
+    std140Block.basis = basis;
+    std140Block.weights[1] = weight;
+    std140Block.values[i] = value;
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
 
@@ -355,6 +376,37 @@ def test_mixed_glsl_ssbo_atomics_hlsl_output_compiles_with_dxc(
     assert output_path.exists()
 
 
+def test_mixed_glsl_ssbo_std140_hlsl_output_compiles_with_dxc(tmp_path):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / "mixed_glsl_ssbo_std140.hlsl"
+    output_path = tmp_path / "mixed_glsl_ssbo_std140.dxil"
+
+    code = HLSLCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_SSBO_STD140_COMPUTE_SHADER, "compute")
+    )
+    assert "RWByteAddressBuffer std140Block : register(u25);" in code
+    assert "std140Block.Load2(16)" in code
+    assert "std140Block.Load2(32)" in code
+    assert "std140Block.Load(80)" in code
+    assert "std140Block.Load((96 + i * 16))" in code
+    assert "unsupported HLSL GLSL buffer block" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
 def test_generated_glsl_fragment_validates_with_glslangvalidator(tmp_path):
     glslang = _require_tool("glslangValidator")
     shader_path = tmp_path / "validator_smoke.frag"
@@ -419,6 +471,23 @@ def test_generated_glsl_parameter_image_atomic_specialization_validates_with_gls
     _run_validator([glslang, "-S", "comp", str(shader_path)])
 
 
+def test_mixed_glsl_ssbo_std140_glsl_output_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "mixed_glsl_ssbo_std140.comp"
+
+    code = GLSLCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_SSBO_STD140_COMPUTE_SHADER, "compute")
+    )
+    assert "layout(std140, binding = 25) buffer Std140Block" in code
+    assert "float weights[3];" in code
+    assert "float values[];" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
 def test_generated_metal_fragment_compiles_with_xcrun_metal(tmp_path):
     xcrun = _require_xcrun_tool("metal")
     shader_path = tmp_path / "validator_smoke.metal"
@@ -455,6 +524,37 @@ def test_generated_metal_compute_synchronization_compiles_with_xcrun_metal(tmp_p
     assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
     assert "threadgroup_barrier(mem_flags::mem_device);" in code
     assert "workgroupBarrier();" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_ssbo_std140_metal_output_compiles_with_xcrun_metal(tmp_path):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "mixed_glsl_ssbo_std140.metal"
+    output_path = tmp_path / "mixed_glsl_ssbo_std140.air"
+
+    code = MetalCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_SSBO_STD140_COMPUTE_SHADER, "compute")
+    )
+    assert "device uchar* std140Block [[buffer(25)]]" in code
+    assert "std140Block + 16" in code
+    assert "std140Block + 32" in code
+    assert "std140Block + 80" in code
+    assert "std140Block + (96 + i * 16)" in code
+    assert "unsupported Metal GLSL buffer block" not in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(

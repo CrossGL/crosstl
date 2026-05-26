@@ -15543,6 +15543,85 @@ def test_codegen_mixed_ssbo_fixed_only_scalar_vector_matrix_blocks_lower_to_offs
     assert "fixedPlain.transform = transform;" in glsl
 
 
+def test_codegen_mixed_ssbo_std140_blocks_lower_to_explicit_offsets():
+    code = """
+    #version 450 core
+    layout(std140, binding = 118) buffer Std140Block {
+        uint count;
+        mat2 basis;
+        float weights[3];
+        float values[];
+    } std140Block;
+
+    void main() {
+        uint i = std140Block.count;
+        mat2 basis = std140Block.basis;
+        float weight = std140Block.weights[2];
+        float value = std140Block.values[i];
+        std140Block.basis = basis;
+        std140Block.weights[1] = weight;
+        std140Block.values[i] = value;
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    assert "unsupported GLSL SSBO block Std140Block" not in crossgl
+    assert (
+        "Std140Block std140Block @glsl_buffer_block(std140) @binding(118);" in crossgl
+    )
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer std140Block : register(u118);" in hlsl
+    assert "uint i = std140Block.Load(0);" in hlsl
+    assert (
+        "float2x2 basis = float2x2(asfloat(std140Block.Load2(16)), "
+        "asfloat(std140Block.Load2(32)));" in hlsl
+    )
+    assert "float weight = asfloat(std140Block.Load(80));" in hlsl
+    assert "float value = asfloat(std140Block.Load((96 + i * 16)));" in hlsl
+    assert "std140Block.Store2(16, asuint(basis[0]));" in hlsl
+    assert "std140Block.Store2(32, asuint(basis[1]));" in hlsl
+    assert "std140Block.Store(64, asuint(weight));" in hlsl
+    assert "std140Block.Store((96 + i * 16), asuint(value));" in hlsl
+    assert "unsupported HLSL GLSL buffer block" not in hlsl
+
+    assert "device uchar* std140Block [[buffer(118)]]" in metal
+    assert "uint i = (*reinterpret_cast<const device uint*>(std140Block + 0));" in metal
+    assert (
+        "float2x2 basis = float2x2(float2((*reinterpret_cast<const device "
+        "float*>(std140Block + 16)), (*reinterpret_cast<const device float*>"
+        "(std140Block + 20))), float2((*reinterpret_cast<const device float*>"
+        "(std140Block + 32)), (*reinterpret_cast<const device float*>"
+        "(std140Block + 36))));" in metal
+    )
+    assert (
+        "float weight = (*reinterpret_cast<const device float*>"
+        "(std140Block + 80));" in metal
+    )
+    assert (
+        "float value = (*reinterpret_cast<const device float*>"
+        "(std140Block + (96 + i * 16)));" in metal
+    )
+    assert "(*reinterpret_cast<device float*>(std140Block + 16))" in metal
+    assert "(*reinterpret_cast<device float*>(std140Block + 32))" in metal
+    assert "(*reinterpret_cast<device float*>(std140Block + 64)) = weight;" in metal
+    assert (
+        "(*reinterpret_cast<device float*>(std140Block + (96 + i * 16))) = value;"
+        in metal
+    )
+    assert "unsupported Metal GLSL buffer block" not in metal
+
+    assert "layout(std140, binding = 118) buffer Std140Block" in glsl
+    assert "float weights[3];" in glsl
+    assert "float values[];" in glsl
+    assert "std140Block.weights[1] = weight;" in glsl
+
+
 def test_codegen_mixed_ssbo_uint_atomics_lower_to_byteaddress_and_device_atomics():
     code = """
     #version 450 core
