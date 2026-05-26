@@ -1322,6 +1322,16 @@ class TestCudaCodeGen:
     def test_qualified_template_argument_spacing_conversion(self):
         """Test template arguments keep spaces during conversion"""
         code = """
+        struct ResourceHolder {
+            cudaTextureObject_t sharedName;
+        };
+
+        cudaTextureObject_t sharedName;
+        cudaTextureObject_t globalTex;
+        cudaSurfaceObject_t globalSurface;
+        cudaTextureObject_t globalTextures[2];
+        cudaTextureObject_t mixedGlobal;
+
         void host() {
             std::array<unsigned int, 4> ids{};
             std::vector<const unsigned int> flags;
@@ -1439,6 +1449,49 @@ class TestCudaCodeGen:
                 pixel.y
             );
         }
+
+        void sample2DObject(cudaTextureObject_t sharedName, float2 uv) {
+            float4 sampled = tex2D<float4>(sharedName, uv);
+        }
+
+        void sample3DObject(cudaTextureObject_t sharedName, float3 uvw) {
+            float4 sampled = tex3D<float4>(
+                sharedName,
+                uvw.x,
+                uvw.y,
+                uvw.z
+            );
+        }
+
+        void sampleGlobals(int2 pixel, float2 uv, float3 uvw) {
+            float4 sampled = tex2D<float4>(globalTex, uv);
+            float4 arraySample = tex2D<float4>(globalTextures[1], uv);
+            float4 loaded = surf2Dread<float4>(
+                globalSurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 mixedSample = tex2D<float4>(mixedGlobal, uv);
+            float4 mixedVolume = tex3D<float4>(
+                mixedGlobal,
+                uvw.x,
+                uvw.y,
+                uvw.z
+            );
+        }
+
+        void shadowGlobal(cudaTextureObject_t globalTex, float3 uvw) {
+            float4 sampled = tex3D<float4>(
+                globalTex,
+                uvw.x,
+                uvw.y,
+                uvw.z
+            );
+        }
+
+        void shadowUnused(cudaSurfaceObject_t globalSurface) {
+            return;
+        }
         """
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
@@ -1450,6 +1503,12 @@ class TestCudaCodeGen:
 
         assert "var ids: std::array<unsigned int, 4> = {};" in result
         assert "var flags: std::vector<const unsigned int>;" in result
+        assert "cudaTextureObject_t sharedName;" in result
+        assert "var sharedName: cudaTextureObject_t;" in result
+        assert "var globalTex: sampler2D;" in result
+        assert "var globalSurface: image2D;" in result
+        assert "var globalTextures: array<sampler2D, 2>;" in result
+        assert "var mixedGlobal: cudaTextureObject_t;" in result
         assert "var tex2d: sampler2D;" in result
         assert "var layeredTex: sampler2DArray;" in result
         assert "var cubeTex: samplerCube;" in result
@@ -1543,6 +1602,15 @@ class TestCudaCodeGen:
         assert "void localResourceObjects(vec2<i32> pixel, vec2<f32> uv) {" in result
         assert "var localTex: sampler2D;" in result
         assert "var localSurface: image2D;" in result
+        assert "void sample2DObject(sampler2D sharedName, vec2<f32> uv) {" in result
+        assert "void sample3DObject(sampler3D sharedName, vec3<f32> uvw) {" in result
+        assert "var arraySample: vec4<f32> = texture(globalTextures[1], uv);" in result
+        assert (
+            "var loaded: vec4<f32> = imageLoad("
+            "globalSurface, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert "void shadowGlobal(sampler3D globalTex, vec3<f32> uvw) {" in result
+        assert "void shadowUnused(cudaSurfaceObject_t globalSurface) {" in result
         assert "unsignedint" not in result
         assert "constunsigned" not in result
 

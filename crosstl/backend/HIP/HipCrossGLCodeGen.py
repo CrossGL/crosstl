@@ -80,6 +80,37 @@ class HipToCrossGLConverter:
         **VECTOR_TYPE_MAPPING,
         **{f"make_{name}": mapped for name, mapped in VECTOR_TYPE_MAPPING.items()},
     }
+    HIP_TEXTURE_TYPE_MAPPING = {
+        "1": "sampler1D",
+        "2": "sampler2D",
+        "3": "sampler3D",
+        "hipTextureType1D": "sampler1D",
+        "hipTextureType1DLayered": "sampler1DArray",
+        "hipTextureType2D": "sampler2D",
+        "hipTextureType2DLayered": "sampler2DArray",
+        "hipTextureType3D": "sampler3D",
+        "hipTextureTypeCubemap": "samplerCube",
+        "hipTextureTypeCubemapLayered": "samplerCubeArray",
+        "cudaTextureType1D": "sampler1D",
+        "cudaTextureType1DLayered": "sampler1DArray",
+        "cudaTextureType2D": "sampler2D",
+        "cudaTextureType2DLayered": "sampler2DArray",
+        "cudaTextureType3D": "sampler3D",
+        "cudaTextureTypeCubemap": "samplerCube",
+        "cudaTextureTypeCubemapLayered": "samplerCubeArray",
+    }
+    HIP_SURFACE_TYPE_MAPPING = {
+        "2": "image2D",
+        "3": "image3D",
+        "hipSurfaceType2D": "image2D",
+        "hipSurfaceType2DLayered": "image2DArray",
+        "hipSurfaceType3D": "image3D",
+        "hipSurfaceTypeCubemap": "imageCube",
+        "cudaSurfaceType2D": "image2D",
+        "cudaSurfaceType2DLayered": "image2DArray",
+        "cudaSurfaceType3D": "image3D",
+        "cudaSurfaceTypeCubemap": "imageCube",
+    }
 
     def __init__(self):
         """Initialize HIP-to-CrossGL visitor state."""
@@ -720,9 +751,148 @@ class HipToCrossGLConverter:
         if self.is_user_defined_function(func_name):
             return f"{func_name}({args_str})"
 
+        resource_call = self.format_hip_resource_call(func_name, args)
+        if resource_call is not None:
+            return resource_call
+
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
         return f"{crossgl_func}({args_str})"
+
+    def format_hip_resource_call(self, function_name, args):
+        base_name, template_args = self.parse_cpp_template(function_name)
+        if self.is_user_defined_function(base_name):
+            return None
+
+        value_type = template_args[0] if template_args else None
+        if base_name in {"tex1D", "tex1DLod", "tex1DGrad"}:
+            return self.format_hip_texture_call(base_name, args, "vec1", 1)
+        if base_name in {"tex2D", "tex2DLod", "tex2DGrad"}:
+            return self.format_hip_texture_call(base_name, args, "vec2", 2)
+        if base_name in {"tex3D", "tex3DLod", "tex3DGrad"}:
+            return self.format_hip_texture_call(base_name, args, "vec3", 3)
+        if base_name in {"texCubemap", "texCubemapLod", "texCubemapGrad"}:
+            return self.format_hip_texture_call(base_name, args, "vec3", 3)
+        if base_name in {"tex1DLayered", "tex1DLayeredLod", "tex1DLayeredGrad"}:
+            return self.format_hip_texture_call(base_name, args, "vec2", 2)
+        if base_name in {"tex2DLayered", "tex2DLayeredLod", "tex2DLayeredGrad"}:
+            return self.format_hip_texture_call(base_name, args, "vec3", 3)
+        if base_name in {
+            "texCubemapLayered",
+            "texCubemapLayeredLod",
+            "texCubemapLayeredGrad",
+        }:
+            return self.format_hip_texture_call(base_name, args, "vec4", 4)
+
+        if base_name in {
+            "surf2Dread",
+            "surf3Dread",
+            "surf2DLayeredread",
+            "surfCubemapread",
+            "surfCubemapLayeredread",
+        }:
+            dimensions = {
+                "surf2Dread": 2,
+                "surf3Dread": 3,
+                "surf2DLayeredread": 3,
+                "surfCubemapread": 3,
+                "surfCubemapLayeredread": 3,
+            }[base_name]
+            return self.format_hip_surface_read(args, dimensions, value_type)
+
+        if base_name in {
+            "surf2Dwrite",
+            "surf3Dwrite",
+            "surf2DLayeredwrite",
+            "surfCubemapwrite",
+            "surfCubemapLayeredwrite",
+        }:
+            dimensions = {
+                "surf2Dwrite": 2,
+                "surf3Dwrite": 3,
+                "surf2DLayeredwrite": 3,
+                "surfCubemapwrite": 3,
+                "surfCubemapLayeredwrite": 3,
+            }[base_name]
+            return self.format_hip_surface_write(args, dimensions, value_type)
+
+        return None
+
+    def format_hip_texture_call(self, function_name, args, vector_name, dimensions):
+        if len(args) < 2:
+            return None
+
+        extra_count = (
+            2 if "Grad" in function_name else 1 if "Lod" in function_name else 0
+        )
+        coordinate_count = len(args) - 1 - extra_count
+        if coordinate_count <= 0:
+            return None
+
+        texture_name = args[0]
+        coordinate_args = args[1 : 1 + coordinate_count]
+        if coordinate_count == 1:
+            coordinate = coordinate_args[0]
+            consumed = 2
+        elif coordinate_count == dimensions:
+            coordinate = self.format_vector_constructor(vector_name, coordinate_args)
+            consumed = 1 + dimensions
+        else:
+            return None
+
+        remaining = args[consumed:]
+        if "Grad" in function_name:
+            if len(remaining) < 2:
+                return None
+            return (
+                f"textureGrad({texture_name}, {coordinate}, "
+                f"{remaining[0]}, {remaining[1]})"
+            )
+        if "Lod" in function_name:
+            if not remaining:
+                return None
+            return f"textureLod({texture_name}, {coordinate}, {remaining[0]})"
+        return f"texture({texture_name}, {coordinate})"
+
+    def format_hip_surface_read(self, args, dimensions, value_type):
+        if len(args) < dimensions + 1:
+            return None
+        surface_name = args[0]
+        coord_args = [self.strip_surface_byte_offset(args[1], value_type)]
+        coord_args.extend(args[2 : dimensions + 1])
+        coord = self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
+        return f"imageLoad({surface_name}, {coord})"
+
+    def format_hip_surface_write(self, args, dimensions, value_type):
+        if len(args) < dimensions + 2:
+            return None
+        value = args[0]
+        surface_name = args[1]
+        coord_args = [self.strip_surface_byte_offset(args[2], value_type)]
+        coord_args.extend(args[3 : dimensions + 2])
+        coord = self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
+        return f"imageStore({surface_name}, {coord}, {value})"
+
+    def strip_surface_byte_offset(self, expression, value_type):
+        text = str(expression).strip()
+        if text.startswith("(") and text.endswith(")"):
+            text = text[1:-1].strip()
+
+        if value_type:
+            suffix = f" * sizeof({value_type})"
+            if text.endswith(suffix):
+                return text[: -len(suffix)].strip()
+
+        marker = " * sizeof("
+        if marker in text and text.endswith(")"):
+            return text.split(marker, 1)[0].strip()
+
+        return expression
+
+    def format_vector_constructor(self, vector_name, args, element_type="f32"):
+        if vector_name == "vec1":
+            return args[0]
+        return f"{vector_name}<{element_type}>({', '.join(args)})"
 
     def format_lambda_call(self, args):
         if not args:
@@ -1059,6 +1229,10 @@ class HipToCrossGLConverter:
         if unique_ptr_type is not None:
             return unique_ptr_type
 
+        resource_type = self.convert_hip_resource_type(hip_type)
+        if resource_type is not None:
+            return resource_type
+
         # Handle arrays
         if self.has_array_suffix(hip_type):
             return self.convert_hip_array_type(hip_type, type_mapping)
@@ -1068,6 +1242,14 @@ class HipToCrossGLConverter:
             return self.convert_hip_pointer_type(hip_type)
 
         return type_mapping.get(hip_type, hip_type)
+
+    def convert_hip_resource_type(self, hip_type):
+        base_name, template_args = self.parse_cpp_template(hip_type)
+        if base_name == "texture" and len(template_args) >= 2:
+            return self.HIP_TEXTURE_TYPE_MAPPING.get(template_args[1])
+        if base_name == "surface" and len(template_args) >= 2:
+            return self.HIP_SURFACE_TYPE_MAPPING.get(template_args[1])
+        return None
 
     def convert_unique_ptr_type(self, hip_type):
         base_name, template_args = self.parse_cpp_template(hip_type)

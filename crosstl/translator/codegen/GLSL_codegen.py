@@ -630,6 +630,7 @@ class GLSLCodeGen:
             "image2DArray": "image2DArray",
             "image2DMS": "image2DMS",
             "image2DMSArray": "image2DMSArray",
+            "accelerationStructureEXT": "accelerationStructureEXT",
         }
 
         self.function_map = {
@@ -654,6 +655,11 @@ class GLSLCodeGen:
             "textureQueryLevels": "textureQueryLevels",
             "textureQueryLod": "textureQueryLod",
             "texelFetch": "texelFetch",
+            "TraceRay": "traceRayEXT",
+            "ReportHit": "reportIntersectionEXT",
+            "ReportIntersection": "reportIntersectionEXT",
+            "CallShader": "executeCallableEXT",
+            "ExecuteCallable": "executeCallableEXT",
             "imageAtomicAdd": "imageAtomicAdd",
             "imageAtomicMin": "imageAtomicMin",
             "imageAtomicMax": "imageAtomicMax",
@@ -2087,6 +2093,19 @@ class GLSLCodeGen:
         }
         return mesh_intrinsics.get(operation, operation)
 
+    def map_ray_tracing_intrinsic(self, operation, args):
+        ray_intrinsics = {
+            "TraceRay": "traceRayEXT",
+            "ReportHit": "reportIntersectionEXT",
+            "CallShader": "executeCallableEXT",
+            "AcceptHitAndEndSearch": "terminateRayEXT",
+            "IgnoreHit": "ignoreIntersectionEXT",
+        }
+        mapped = ray_intrinsics.get(operation, operation)
+        if mapped in {"ignoreIntersectionEXT", "terminateRayEXT"} and not args:
+            return mapped
+        return f"{mapped}({', '.join(args)})"
+
     def glsl_tessellation_domain(self, domain):
         domain_name = str(domain).strip().strip('"').lower()
         domain_map = {
@@ -2513,6 +2532,7 @@ class GLSLCodeGen:
             signature = (
                 self.map_type(vtype),
                 array_suffix,
+                self.glsl_variable_layout_prefix(node),
                 self.glsl_variable_qualifier_prefix(node),
             )
             existing = declarations_by_name.get(name)
@@ -3623,7 +3643,8 @@ class GLSLCodeGen:
             initializer = (
                 f" = {self.generate_expression_with_expected(initial_value, vtype)}"
             )
-        return f"{qualifier}{declaration}{initializer};\n"
+        layout = self.glsl_variable_layout_prefix(node)
+        return f"{layout}{qualifier}{declaration}{initializer};\n"
 
     def generate_stage_local_interface_variable_declaration(self, node):
         vtype, _, array_suffix, _ = self.resource_declaration_shape(node)
@@ -3649,7 +3670,7 @@ class GLSLCodeGen:
                 emitted.append(qualifier)
 
         for qualifier in qualifiers:
-            normalized = qualifier.removeprefix("glsl_")
+            normalized = qualifier[5:] if qualifier.startswith("glsl_") else qualifier
             normalized = normalized.replace("-", "_")
             if normalized in {"perprimitive", "perprimitiveext"}:
                 add("perprimitiveEXT")
@@ -3659,6 +3680,16 @@ class GLSLCodeGen:
                 "taskpayloadsharedext",
             }:
                 add("taskPayloadSharedEXT")
+            elif normalized in {"raypayload", "raypayloadext"}:
+                add("rayPayloadEXT")
+            elif normalized in {"raypayloadin", "raypayloadinext"}:
+                add("rayPayloadInEXT")
+            elif normalized in {"hitattribute", "hitattributeext"}:
+                add("hitAttributeEXT")
+            elif normalized in {"callabledata", "callabledataext"}:
+                add("callableDataEXT")
+            elif normalized in {"callabledatain", "callabledatainext"}:
+                add("callableDataInEXT")
             elif normalized in {"shared", "groupshared", "workgroup", "threadgroup"}:
                 add("shared")
             elif normalized in {
@@ -3688,9 +3719,33 @@ class GLSLCodeGen:
             "out": 8,
             "shared": 9,
             "taskPayloadSharedEXT": 10,
+            "rayPayloadEXT": 11,
+            "rayPayloadInEXT": 12,
+            "hitAttributeEXT": 13,
+            "callableDataEXT": 14,
+            "callableDataInEXT": 15,
         }
         emitted.sort(key=lambda qualifier: order.get(qualifier, len(order)))
         return " ".join(emitted)
+
+    def glsl_variable_layout_prefix(self, node):
+        layout_parts = []
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            normalized = str(attr_name).lower()
+            if normalized != "location":
+                continue
+            arguments = getattr(attr, "arguments", []) or []
+            if len(arguments) != 1:
+                continue
+            layout_parts.append(
+                f"location = {self.attribute_value_to_string(arguments[0])}"
+            )
+        if not layout_parts:
+            return ""
+        return f"layout({', '.join(layout_parts)}) "
 
     def type_name_string(self, vtype):
         if vtype is None:
@@ -4197,8 +4252,8 @@ class GLSLCodeGen:
             args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
             return f"{expr.operation}({args})"
         elif isinstance(expr, RayTracingOpNode):
-            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
-            return f"{expr.operation}({args})"
+            args = [self.generate_expression(arg) for arg in expr.arguments]
+            return self.map_ray_tracing_intrinsic(expr.operation, args)
         elif isinstance(expr, MeshOpNode):
             args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
             operation = self.map_mesh_intrinsic(expr.operation)
@@ -7978,6 +8033,7 @@ class GLSLCodeGen:
             "uimage2DMS",
             "uimage2DMSArray",
             "atomic_uint",
+            "accelerationStructureEXT",
         }
 
     def supported_image_formats(self):

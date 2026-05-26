@@ -3232,6 +3232,32 @@ def test_metal_atomic_fetch_codegen():
     assert "atomic_fetch_add_explicit(counter" not in generated
 
 
+def test_metal_atomic_local_initializers_use_atomic_store():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                atomic_uint counter = 0;
+                uint old = atomic_fetch_add_explicit(
+                    counter,
+                    1u,
+                    memory_order_relaxed
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "threadgroup atomic_uint counter;" in generated
+    assert "atomic_store_explicit(&counter, 0, memory_order_relaxed);" in generated
+    assert (
+        "uint old = atomic_fetch_add_explicit(&counter, 1u, memory_order_relaxed);"
+        in generated
+    )
+    assert "threadgroup atomic_uint counter = 0;" not in generated
+
+
 def test_compute_builtin_semantics_roundtrip():
     code = """
     shader cs {

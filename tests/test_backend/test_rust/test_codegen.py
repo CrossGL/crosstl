@@ -2388,6 +2388,98 @@ def test_gpu_texture_helper_calls_convert_to_crossgl_intrinsics():
     assert "texture_gather_component" not in result
 
 
+def test_gpu_image_and_buffer_helper_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn resource_helpers(
+        color_image: Image2D<Vec4<f32>>,
+        counter_image: Image2D<Vec4<u32>>,
+        ramp_image: Image1D<Vec4<f32>>,
+        ramp_array_image: Image1DArray<Vec4<f32>>,
+        volume_image: Image3D<Vec4<f32>>,
+        cube_image: ImageCube<Vec4<f32>>,
+        layer_image: Image2DArray<Vec4<f32>>,
+        ms_image: Image2DMS<Vec4<f32>>,
+        ms_array_image: Image2DMSArray<Vec4<f32>>,
+        signed_volume: Image3D<Vec4<i32>>,
+        counter_layers: Image2DArray<Vec4<u32>>,
+        values: RwBuffer<i32>,
+        weights: Buffer<f32>,
+        append_values: AppendBuffer<u32>,
+        consume_values: ConsumeBuffer<u32>,
+        raw_bytes: ByteAddressBuffer,
+        raw_out: RwByteAddressBuffer,
+        pixel: Vec2<i32>,
+        index: u32,
+        amount: u32,
+    ) -> Vec4<f32> {
+        let color = image_load(color_image, pixel);
+        image_store(color_image, pixel, color);
+        let previous = image_atomic_add(counter_image, pixel, amount);
+        let min_value = image_atomic_min(counter_image, pixel, amount);
+        let max_value = image_atomic_max(counter_image, pixel, amount);
+        let and_value = image_atomic_and(counter_image, pixel, amount);
+        let or_value = image_atomic_or(counter_image, pixel, amount);
+        let xor_value = image_atomic_xor(counter_image, pixel, amount);
+        let exchanged = image_atomic_exchange(counter_image, pixel, amount);
+        let swapped = image_atomic_comp_swap(counter_image, pixel, previous, amount);
+        let value = buffer_load(values, index);
+        let weight = buffer_load(weights, index);
+        let length: u32 = 0;
+        buffer_dimensions(values, length);
+        buffer_store(values, index, value);
+        return color;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec4 resource_helpers(image2D color_image, uimage2D counter_image" in result
+    assert "image1D ramp_image" in result
+    assert "image1DArray ramp_array_image" in result
+    assert "image3D volume_image" in result
+    assert "imageCube cube_image" in result
+    assert "image2DArray layer_image" in result
+    assert "image2DMS ms_image" in result
+    assert "image2DMSArray ms_array_image" in result
+    assert "iimage3D signed_volume" in result
+    assert "uimage2DArray counter_layers" in result
+    assert "RWStructuredBuffer<int> values" in result
+    assert "StructuredBuffer<float> weights" in result
+    assert "AppendStructuredBuffer<uint> append_values" in result
+    assert "ConsumeStructuredBuffer<uint> consume_values" in result
+    assert "ByteAddressBuffer raw_bytes" in result
+    assert "RWByteAddressBuffer raw_out" in result
+    assert "color = imageLoad(color_image, pixel);" in result
+    assert "imageStore(color_image, pixel, color);" in result
+    assert "previous = imageAtomicAdd(counter_image, pixel, amount);" in result
+    assert "min_value = imageAtomicMin(counter_image, pixel, amount);" in result
+    assert "max_value = imageAtomicMax(counter_image, pixel, amount);" in result
+    assert "and_value = imageAtomicAnd(counter_image, pixel, amount);" in result
+    assert "or_value = imageAtomicOr(counter_image, pixel, amount);" in result
+    assert "xor_value = imageAtomicXor(counter_image, pixel, amount);" in result
+    assert "exchanged = imageAtomicExchange(counter_image, pixel, amount);" in result
+    assert (
+        "swapped = imageAtomicCompSwap(counter_image, pixel, previous, amount);"
+        in result
+    )
+    assert "value = buffer_load(values, index);" in result
+    assert "weight = buffer_load(weights, index);" in result
+    assert "length = 0;" in result
+    assert "buffer_dimensions(values, length);" in result
+    assert "buffer_store(values, index, value);" in result
+    assert "Image2D" not in result
+    assert "RwBuffer" not in result
+    assert "Buffer<f32>" not in result
+    assert "image_load" not in result
+    assert "image_atomic_min" not in result
+    assert "image_atomic_max" not in result
+    assert "image_atomic_and" not in result
+    assert "image_atomic_or" not in result
+    assert "image_atomic_xor" not in result
+    assert "image_atomic_exchange" not in result
+    assert "image_atomic_comp_swap" not in result
+
+
 def test_char_literal_conversion():
     code = r"""
     fn test_chars(c: char) -> char {

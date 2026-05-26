@@ -590,6 +590,142 @@ def test_resource_placeholders_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_resource_query_and_image_placeholders_emit_mojo_helpers():
+    code = """
+    sampler2D colorMap;
+    image2D colorImage;
+    iimage2D signedImage;
+    uimage2D counterImage;
+
+    ivec2 texSize(sampler2D tex) {
+        return textureSize(tex, 0);
+    }
+    int texLevels(sampler2D tex) {
+        return textureQueryLevels(tex);
+    }
+    vec4 fetchTex(sampler2D tex, ivec2 pixel) {
+        return texelFetch(tex, pixel, 0);
+    }
+    ivec2 imgSize(image2D image) {
+        return imageSize(image);
+    }
+    vec4 readColor(image2D image, ivec2 pixel) {
+        return imageLoad(image, pixel);
+    }
+    void writeColor(image2D image, ivec2 pixel, vec4 value) {
+        imageStore(image, pixel, value);
+    }
+    int readSigned(iimage2D image, ivec2 pixel) {
+        return imageLoad(image, pixel);
+    }
+    void writeSigned(iimage2D image, ivec2 pixel, int value) {
+        imageStore(image, pixel, value);
+    }
+    uint readCounter(uimage2D image, ivec2 pixel) {
+        return imageLoad(image, pixel);
+    }
+    void writeCounter(uimage2D image, ivec2 pixel, uint value) {
+        imageStore(image, pixel, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Image2D:" in generated_code
+    assert "struct IImage2D:" in generated_code
+    assert "struct UImage2D:" in generated_code
+    assert "var colorImage: Image2D = Image2D()" in generated_code
+    assert "var signedImage: IImage2D = IImage2D()" in generated_code
+    assert "var counterImage: UImage2D = UImage2D()" in generated_code
+    assert (
+        "fn texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
+        in generated_code
+    )
+    assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
+    assert (
+        "fn texel_fetch(tex: Texture2D, coord: SIMD[DType.int32, 2], lod: Int32)"
+        in generated_code
+    )
+    assert "fn image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert (
+        "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn image_load(image: IImage2D, coord: SIMD[DType.int32, 2]) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "fn image_load(image: UImage2D, coord: SIMD[DType.int32, 2]) -> UInt32:"
+        in generated_code
+    )
+    assert "return texture_size(tex, 0)" in generated_code
+    assert "return texture_query_levels(tex)" in generated_code
+    assert "return texel_fetch(tex, pixel, 0)" in generated_code
+    assert "return image_size(image)" in generated_code
+    assert "return image_load(image, pixel)" in generated_code
+    assert "image_store(image, pixel, value)" in generated_code
+    assert "textureSize" not in generated_code
+    assert "textureQueryLevels" not in generated_code
+    assert "texelFetch" not in generated_code
+    assert "imageLoad" not in generated_code
+    assert "imageStore" not in generated_code
+
+
+def test_resource_query_and_image_placeholders_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    sampler2D colorMap;
+    image2D colorImage;
+    iimage2D signedImage;
+    uimage2D counterImage;
+
+    ivec2 texSize(sampler2D tex) {
+        return textureSize(tex, 0);
+    }
+    int texLevels(sampler2D tex) {
+        return textureQueryLevels(tex);
+    }
+    vec4 fetchTex(sampler2D tex, ivec2 pixel) {
+        return texelFetch(tex, pixel, 0);
+    }
+    ivec2 imgSize(image2D image) {
+        return imageSize(image);
+    }
+    vec4 readColor(image2D image, ivec2 pixel) {
+        return imageLoad(image, pixel);
+    }
+    void writeColor(image2D image, ivec2 pixel, vec4 value) {
+        imageStore(image, pixel, value);
+    }
+    int readSigned(iimage2D image, ivec2 pixel) {
+        return imageLoad(image, pixel);
+    }
+    void writeSigned(iimage2D image, ivec2 pixel, int value) {
+        imageStore(image, pixel, value);
+    }
+    uint readCounter(uimage2D image, ivec2 pixel) {
+        return imageLoad(image, pixel);
+    }
+    void writeCounter(uimage2D image, ivec2 pixel, uint value) {
+        imageStore(image, pixel, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "resource_query_image_placeholders.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_for_statement():
     code = """
     shader main {

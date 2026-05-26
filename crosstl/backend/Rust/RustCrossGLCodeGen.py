@@ -124,6 +124,16 @@ class RustToCrossGLConverter:
             "Texture3D": "sampler3D",
             "TextureCube": "samplerCube",
             "TextureCubeArray": "samplerCubeArray",
+            "Image1D": "image1D",
+            "Image1DArray": "image1DArray",
+            "Image2D": "image2D",
+            "Image3D": "image3D",
+            "ImageCube": "imageCube",
+            "Image2DArray": "image2DArray",
+            "Image2DMS": "image2DMS",
+            "Image2DMSArray": "image2DMSArray",
+            "ByteAddressBuffer": "ByteAddressBuffer",
+            "RwByteAddressBuffer": "RWByteAddressBuffer",
             "Sampler": "sampler",
             # Reference types (stripped in CrossGL)
             "&f32": "float",
@@ -232,6 +242,19 @@ class RustToCrossGLConverter:
             "texture_gather_offset_component": "textureGatherOffset",
             "texture_gather_offsets": "textureGatherOffsets",
             "texture_gather_offsets_component": "textureGatherOffsets",
+            "image_load": "imageLoad",
+            "image_store": "imageStore",
+            "image_atomic_add": "imageAtomicAdd",
+            "image_atomic_min": "imageAtomicMin",
+            "image_atomic_max": "imageAtomicMax",
+            "image_atomic_and": "imageAtomicAnd",
+            "image_atomic_or": "imageAtomicOr",
+            "image_atomic_xor": "imageAtomicXor",
+            "image_atomic_exchange": "imageAtomicExchange",
+            "image_atomic_comp_swap": "imageAtomicCompSwap",
+            "buffer_load": "buffer_load",
+            "buffer_store": "buffer_store",
+            "buffer_dimensions": "buffer_dimensions",
         }
 
         self.attribute_map = {
@@ -6983,6 +7006,10 @@ class RustToCrossGLConverter:
 
         base_name, args = generic
         for base_candidate in self.type_lookup_names(base_name):
+            resource_type = self.map_resource_generic_type(base_candidate, args)
+            if resource_type is not None:
+                return resource_type
+
             candidate = f"{base_candidate}<{', '.join(args)}>"
             mapped = self.type_map.get(candidate)
             if mapped is not None:
@@ -6992,6 +7019,40 @@ class RustToCrossGLConverter:
                 return self.type_map.get(base_candidate)
 
         return None
+
+    def map_resource_generic_type(self, base_name, args):
+        if not args:
+            return None
+
+        buffer_map = {
+            "Buffer": "StructuredBuffer",
+            "RwBuffer": "RWStructuredBuffer",
+            "AppendBuffer": "AppendStructuredBuffer",
+            "ConsumeBuffer": "ConsumeStructuredBuffer",
+        }
+        if base_name in buffer_map:
+            return f"{buffer_map[base_name]}<{self.map_type(args[0])}>"
+
+        image_suffixes = {
+            "Image1D": "1D",
+            "Image1DArray": "1DArray",
+            "Image2D": "2D",
+            "Image3D": "3D",
+            "ImageCube": "Cube",
+            "Image2DArray": "2DArray",
+            "Image2DMS": "2DMS",
+            "Image2DMSArray": "2DMSArray",
+        }
+        suffix = image_suffixes.get(base_name)
+        if suffix is None:
+            return None
+
+        element_type = self.map_type(args[0])
+        if element_type.startswith("u"):
+            return f"uimage{suffix}"
+        if element_type.startswith("i"):
+            return f"iimage{suffix}"
+        return f"image{suffix}"
 
     def resolve_type_alias(self, rust_type):
         for alias_name in self.type_lookup_names(rust_type):

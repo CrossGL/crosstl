@@ -137,6 +137,16 @@ class TestHipCodeGen:
             codegen.convert_hip_type_to_crossgl("hipSurfaceObject_t []")
             == "array<image2D>"
         )
+        assert codegen.convert_hip_type_to_crossgl("texture<float4, 2>") == "sampler2D"
+        assert (
+            codegen.convert_hip_type_to_crossgl("texture<float4, hipTextureType3D>")
+            == "sampler3D"
+        )
+        assert codegen.convert_hip_type_to_crossgl("surface<void, 2>") == "image2D"
+        assert (
+            codegen.convert_hip_type_to_crossgl("surface<void, hipSurfaceType3D>")
+            == "image3D"
+        )
 
     def test_function_conversion(self):
         """Test HIP function to CrossGL function conversion"""
@@ -350,8 +360,13 @@ class TestHipCodeGen:
             return x;
         }
 
+        float tex2D(float x) {
+            return x;
+        }
+
         __global__ void kernel(float* out, float x) {
             out[0] = lerp(x);
+            out[1] = tex2D(x);
         }
         """
         lexer = HipLexer(code)
@@ -363,8 +378,11 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert "f32 lerp(f32 x) {" in result
+        assert "f32 tex2D(f32 x) {" in result
         assert "out[0] = lerp(x);" in result
+        assert "out[1] = tex2D(x);" in result
         assert "out[0] = mix(x);" not in result
+        assert "out[1] = texture(x);" not in result
 
     def test_hyperbolic_builtins_convert_to_crossgl(self):
         """Test HIP hyperbolic functions convert back to CrossGL names."""
@@ -525,6 +543,34 @@ class TestHipCodeGen:
             double2 d = make_double2(1.0, 2.0);
             uint4 ids = make_uint4(1u, 2u, 3u, 4u);
             uchar2 bytes(1, 2);
+            hipTextureObject_t tex;
+            hipSurfaceObject_t surf;
+            texture<float4, 2> legacyTex;
+            surface<void, 2> legacySurf;
+            float2 uv = make_float2(0.25f, 0.75f);
+            int2 pixel = make_int2(1, 2);
+            float4 sampled = tex2D<float4>(tex, uv.x, uv.y);
+            float4 sampledCoord = tex2D<float4>(tex, uv);
+            float4 sampledLod = tex2DLod<float4>(tex, uv.x, uv.y, 1.0f);
+            float4 sampledGrad = tex2DGrad<float4>(tex, uv, uv, uv);
+            float4 legacySample = tex2D<float4>(legacyTex, uv);
+            float4 loaded = surf2Dread<float4>(
+                surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 legacyLoaded = surf2Dread<float4>(
+                legacySurf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(loaded, surf, pixel.x * sizeof(float4), pixel.y);
+            surf2Dwrite(
+                legacyLoaded,
+                legacySurf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
         }
         """
         lexer = HipLexer(code)
@@ -541,6 +587,33 @@ class TestHipCodeGen:
         assert "var d: vec2<f64> = vec2<f64>(1.0, 2.0);" in result
         assert "var ids: vec4<u32> = vec4<u32>(1u, 2u, 3u, 4u);" in result
         assert "var bytes: vec2<u8> = vec2<u8>(1, 2);" in result
+        assert "var tex: sampler;" in result
+        assert "var surf: image2D;" in result
+        assert "var legacyTex: sampler2D;" in result
+        assert "var legacySurf: image2D;" in result
+        assert "var sampled: vec4<f32> = texture(tex, vec2<f32>(uv.x, uv.y));" in result
+        assert "var sampledCoord: vec4<f32> = texture(tex, uv);" in result
+        assert (
+            "var sampledLod: vec4<f32> = textureLod("
+            "tex, vec2<f32>(uv.x, uv.y), 1.0f);" in result
+        )
+        assert "var sampledGrad: vec4<f32> = textureGrad(tex, uv, uv, uv);" in result
+        assert "var legacySample: vec4<f32> = texture(legacyTex, uv);" in result
+        assert (
+            "var loaded: vec4<f32> = imageLoad(surf, vec2<i32>(pixel.x, pixel.y));"
+            in result
+        )
+        assert (
+            "var legacyLoaded: vec4<f32> = imageLoad("
+            "legacySurf, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert "imageStore(surf, vec2<i32>(pixel.x, pixel.y), loaded);" in result
+        assert (
+            "imageStore(legacySurf, vec2<i32>(pixel.x, pixel.y), legacyLoaded);"
+            in result
+        )
+        assert "tex2D<" not in result
+        assert "surf2D" not in result
 
     def test_kernel_launch_conversion(self):
         """Test HIP kernel launch configuration conversion"""

@@ -163,6 +163,7 @@ class HipParser:
         "ULONGLONG3",
         "ULONGLONG4",
     }
+    RESOURCE_TYPE_TOKENS = {"TEXTURE", "SURFACE"}
 
     def __init__(self, tokens: List[Token]):
         """Initialize the parser with a token stream from ``HipLexer``."""
@@ -311,6 +312,8 @@ class HipParser:
         if self.is_builtin_type_token(token):
             return True
         if token.type in self.VECTOR_TYPE_TOKENS:
+            return True
+        if token.type in self.RESOURCE_TYPE_TOKENS:
             return True
         return allow_identifier and token.type == "IDENTIFIER"
 
@@ -778,6 +781,7 @@ class HipParser:
         if (
             self.is_builtin_type_token()
             or self.match(*self.VECTOR_TYPE_TOKENS)
+            or self.match(*self.RESOURCE_TYPE_TOKENS)
             or self.match("IDENTIFIER")
         ):
             type_parts.append(self.parse_type_name())
@@ -811,6 +815,7 @@ class HipParser:
         if (
             self.is_builtin_type_token()
             or self.match(*self.VECTOR_TYPE_TOKENS)
+            or self.match(*self.RESOURCE_TYPE_TOKENS)
             or self.match("IDENTIFIER")
         ):
             type_parts.append(self.parse_type_name())
@@ -1333,7 +1338,10 @@ class HipParser:
                 expr = MemberAccessNode(expr, member, True)
             elif self.match("LPAREN"):
                 self.consume("LPAREN")
-                args = self.parse_argument_list()
+                if expr == "sizeof" and self.is_sizeof_type_operand():
+                    args = [self.parse_type()]
+                else:
+                    args = self.parse_argument_list()
                 self.consume("RPAREN")
                 expr = self.parse_function_call_node(expr, args)
             elif self.match("KERNEL_LAUNCH_START"):
@@ -1346,6 +1354,41 @@ class HipParser:
                 break
 
         return expr
+
+    def is_sizeof_type_operand(self):
+        saved_pos = self.pos
+        try:
+            while self.match(*self.TYPE_QUALIFIER_TOKENS):
+                self.advance()
+
+            if not self.is_type_token(allow_identifier=False) and not (
+                self.match("IDENTIFIER")
+                and self.current_token.value in self.type_aliases
+            ):
+                return False
+
+            token_type = self.current_token.type
+            self.advance()
+            if token_type == "LONG" and self.match("LONG"):
+                self.advance()
+
+            while self.match("ASTERISK", "STAR"):
+                self.advance()
+
+            while self.match("LBRACKET"):
+                self.advance()
+                while self.current_token and not self.match("RBRACKET"):
+                    self.advance()
+                if not self.current_token:
+                    return False
+                self.advance()
+
+            return self.match("RPAREN")
+        finally:
+            self.pos = saved_pos
+            self.current_token = (
+                self.tokens[self.pos] if self.pos < len(self.tokens) else None
+            )
 
     def append_qualified_name(self, base, separator, member):
         if isinstance(base, str):

@@ -135,6 +135,34 @@ class RustCodeGen:
             "samplerCube": "TextureCube<f32>",
             "samplerCubeArray": "TextureCubeArray<f32>",
             "sampler": "Sampler",
+            "image1D": "Image1D<Vec4<f32>>",
+            "image1DArray": "Image1DArray<Vec4<f32>>",
+            "image2D": "Image2D<Vec4<f32>>",
+            "image3D": "Image3D<Vec4<f32>>",
+            "imageCube": "ImageCube<Vec4<f32>>",
+            "image2DArray": "Image2DArray<Vec4<f32>>",
+            "image2DMS": "Image2DMS<Vec4<f32>>",
+            "image2DMSArray": "Image2DMSArray<Vec4<f32>>",
+            "iimage1D": "Image1D<Vec4<i32>>",
+            "iimage1DArray": "Image1DArray<Vec4<i32>>",
+            "iimage2D": "Image2D<Vec4<i32>>",
+            "iimage3D": "Image3D<Vec4<i32>>",
+            "iimage2DArray": "Image2DArray<Vec4<i32>>",
+            "iimage2DMS": "Image2DMS<Vec4<i32>>",
+            "iimage2DMSArray": "Image2DMSArray<Vec4<i32>>",
+            "uimage1D": "Image1D<Vec4<u32>>",
+            "uimage1DArray": "Image1DArray<Vec4<u32>>",
+            "uimage2D": "Image2D<Vec4<u32>>",
+            "uimage3D": "Image3D<Vec4<u32>>",
+            "uimage2DArray": "Image2DArray<Vec4<u32>>",
+            "uimage2DMS": "Image2DMS<Vec4<u32>>",
+            "uimage2DMSArray": "Image2DMSArray<Vec4<u32>>",
+            "StructuredBuffer": "Buffer",
+            "RWStructuredBuffer": "RwBuffer",
+            "AppendStructuredBuffer": "AppendBuffer",
+            "ConsumeStructuredBuffer": "ConsumeBuffer",
+            "ByteAddressBuffer": "ByteAddressBuffer",
+            "RWByteAddressBuffer": "RwByteAddressBuffer",
         }
 
         self.semantic_map = {
@@ -186,6 +214,16 @@ class RustCodeGen:
             "textureQueryLevels": "texture_query_levels",
             "textureQueryLod": "texture_query_lod",
             "textureSamples": "texture_samples",
+            "imageLoad": "image_load",
+            "imageStore": "image_store",
+            "imageAtomicAdd": "image_atomic_add",
+            "imageAtomicMin": "image_atomic_min",
+            "imageAtomicMax": "image_atomic_max",
+            "imageAtomicAnd": "image_atomic_and",
+            "imageAtomicOr": "image_atomic_or",
+            "imageAtomicXor": "image_atomic_xor",
+            "imageAtomicExchange": "image_atomic_exchange",
+            "imageAtomicCompSwap": "image_atomic_comp_swap",
             "normalize": "normalize",
             "dot": "dot",
             "cross": "cross",
@@ -5176,6 +5214,18 @@ class RustCodeGen:
         if mapped_name == "texture_query_lod":
             return "vec2"
 
+        if mapped_name == "image_load" and arg_types:
+            return self.storage_image_value_result_type(arg_types[0])
+
+        if mapped_name.startswith("image_atomic_") and arg_types:
+            return self.storage_image_atomic_result_type(arg_types[0])
+
+        if mapped_name == "buffer_load" and arg_types:
+            return self.buffer_element_result_type(arg_types[0])
+
+        if mapped_name in {"image_store", "buffer_store", "buffer_dimensions"}:
+            return "void"
+
         if mapped_name in {"normalize", "reflect", "refract"} and arg_types:
             return arg_types[0]
 
@@ -5242,6 +5292,41 @@ class RustCodeGen:
         }:
             return "ivec3"
         return "ivec2"
+
+    def storage_image_value_result_type(self, image_type):
+        image_type = str(image_type or "")
+        if image_type.startswith("uimage") or "Vec4<u32>" in image_type:
+            return "uvec4"
+        if image_type.startswith("iimage") or "Vec4<i32>" in image_type:
+            return "ivec4"
+        return "vec4"
+
+    def storage_image_atomic_result_type(self, image_type):
+        image_type = str(image_type or "")
+        if image_type.startswith("iimage") or "Vec4<i32>" in image_type:
+            return "int"
+        return "uint"
+
+    def buffer_element_result_type(self, buffer_type):
+        base_type, generic_args = self.generic_type_parts(buffer_type)
+        if generic_args and base_type in {
+            "StructuredBuffer",
+            "RWStructuredBuffer",
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+            "Buffer",
+            "RwBuffer",
+            "AppendBuffer",
+            "ConsumeBuffer",
+        }:
+            return generic_args[0]
+        if base_type in {
+            "ByteAddressBuffer",
+            "RWByteAddressBuffer",
+            "RwByteAddressBuffer",
+        }:
+            return "uint"
+        return None
 
     def vector_or_scalar_component_type(self, type_name):
         vector_info = self.vector_type_info(type_name)

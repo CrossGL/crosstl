@@ -3812,24 +3812,78 @@ def test_glsl_mesh_task_stage_extensions_and_local_size_layouts():
 def test_glsl_ray_stage_entries_use_distinct_names():
     shader = """
     shader CombinedRayStages {
+        struct RayPayload {
+            vec4 color;
+        };
+
+        struct CallableData {
+            vec4 value;
+        };
+
+        accelerationStructureEXT topLevelAS @binding(0);
+
         ray_generation {
-            void main() { }
+            layout(location = 0) @rayPayloadEXT RayPayload rayPayload;
+            layout(location = 1) @callableDataEXT CallableData callableData;
+
+            void main() {
+                TraceRay(
+                    topLevelAS,
+                    gl_RayFlagsNoneEXT,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    0
+                );
+                CallShader(0, 1);
+            }
         }
 
         ray_closest_hit {
-            void main() { }
+            layout(location = 0) @rayPayloadInEXT RayPayload closestPayload;
+            @hitAttributeEXT vec2 hitAttributes;
+
+            void main() {
+                closestPayload.color = vec4(hitAttributes, 0.0, 1.0);
+            }
         }
 
         ray_any_hit {
-            void main() { }
+            layout(location = 0) @rayPayloadInEXT RayPayload anyPayload;
+            @hitAttributeEXT vec2 anyHitAttributes;
+
+            void main() {
+                IgnoreHit();
+            }
         }
 
         ray_miss {
-            void main() { }
+            layout(location = 0) @rayPayloadInEXT RayPayload missPayload;
+
+            void main() {
+                missPayload.color = vec4(0.0);
+            }
+        }
+
+        ray_intersection {
+            @hitAttributeEXT vec2 reportedAttributes;
+
+            void main() {
+                ReportHit(1.0, gl_HitKindFrontFacingTriangleEXT);
+            }
         }
 
         ray_callable {
-            void main() { }
+            layout(location = 1) @callableDataInEXT CallableData callableInput;
+
+            void main() {
+                callableInput.value = vec4(1.0);
+            }
         }
     }
     """
@@ -3842,13 +3896,54 @@ def test_glsl_ray_stage_entries_use_distinct_names():
     assert "void ray_closest_hit_main()" in combined_code
     assert "void ray_any_hit_main()" in combined_code
     assert "void ray_miss_main()" in combined_code
+    assert "void ray_intersection_main()" in combined_code
     assert "void ray_callable_main()" in combined_code
     assert "void main()" not in combined_code
     assert "#extension GL_EXT_ray_tracing : require" in combined_code
+    assert (
+        "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;"
+        in combined_code
+    )
+    assert "layout(location = 0) rayPayloadEXT RayPayload rayPayload;" in combined_code
+    assert (
+        "layout(location = 0) rayPayloadInEXT RayPayload closestPayload;"
+        in combined_code
+    )
+    assert (
+        "layout(location = 0) rayPayloadInEXT RayPayload anyPayload;" in combined_code
+    )
+    assert (
+        "layout(location = 0) rayPayloadInEXT RayPayload missPayload;" in combined_code
+    )
+    assert "hitAttributeEXT vec2 hitAttributes;" in combined_code
+    assert "hitAttributeEXT vec2 anyHitAttributes;" in combined_code
+    assert "hitAttributeEXT vec2 reportedAttributes;" in combined_code
+    assert (
+        "layout(location = 1) callableDataEXT CallableData callableData;"
+        in combined_code
+    )
+    assert (
+        "layout(location = 1) callableDataInEXT CallableData callableInput;"
+        in combined_code
+    )
+    assert "traceRayEXT(" in combined_code
+    assert "executeCallableEXT(0, 1);" in combined_code
+    assert "ignoreIntersectionEXT;" in combined_code
+    assert (
+        "reportIntersectionEXT(1.0, gl_HitKindFrontFacingTriangleEXT);" in combined_code
+    )
+    assert "TraceRay" not in combined_code
+    assert "CallShader" not in combined_code
+    assert "IgnoreHit" not in combined_code
+    assert "ReportHit" not in combined_code
 
     assert "void main()" in ray_miss_code
     assert "void ray_miss_main()" not in ray_miss_code
     assert "#extension GL_EXT_ray_tracing : require" in ray_miss_code
+    assert (
+        "layout(location = 0) rayPayloadInEXT RayPayload missPayload;" in ray_miss_code
+    )
+    assert "rayPayloadEXT RayPayload rayPayload;" not in ray_miss_code
 
 
 def test_glsl_stage_local_helpers_emit_before_entrypoint():

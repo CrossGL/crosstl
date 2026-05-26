@@ -71,12 +71,16 @@ class CudaToCrossGLConverter:
         "cudaTextureTypeCubemapLayered": "samplerCubeArray",
     }
     CUDA_SURFACE_TYPE_MAPPING = {
+        "1": "image1D",
         "2": "image2D",
         "3": "image3D",
+        "cudaSurfaceType1D": "image1D",
+        "cudaSurfaceType1DLayered": "image1DArray",
         "cudaSurfaceType2D": "image2D",
         "cudaSurfaceType2DLayered": "image2DArray",
         "cudaSurfaceType3D": "image3D",
         "cudaSurfaceTypeCubemap": "imageCube",
+        "cudaSurfaceTypeCubemapLayered": "imageCubeArray",
     }
     CUDA_TEXTURE_CALL_TYPE_HINTS = {
         "tex1D": "sampler1D",
@@ -102,6 +106,10 @@ class CudaToCrossGLConverter:
         "texCubemapLayeredGrad": "samplerCubeArray",
     }
     CUDA_SURFACE_CALL_TYPE_HINTS = {
+        "surf1Dread": "image1D",
+        "surf1Dwrite": "image1D",
+        "surf1DLayeredread": "image1DArray",
+        "surf1DLayeredwrite": "image1DArray",
         "surf2Dread": "image2D",
         "surf2Dwrite": "image2D",
         "surf3Dread": "image3D",
@@ -110,6 +118,8 @@ class CudaToCrossGLConverter:
         "surf2DLayeredwrite": "image2DArray",
         "surfCubemapread": "imageCube",
         "surfCubemapwrite": "imageCube",
+        "surfCubemapLayeredread": "imageCubeArray",
+        "surfCubemapLayeredwrite": "imageCubeArray",
     }
 
     def __init__(self):
@@ -120,7 +130,8 @@ class CudaToCrossGLConverter:
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
         self.user_function_names = set()
-        self.resource_object_type_hints = {}
+        self.global_resource_object_type_hints = {}
+        self.resource_object_hint_scopes = []
 
     def generate(self, ast_node):
         """Generate complete CrossGL source from a parsed CUDA AST."""
@@ -130,9 +141,10 @@ class CudaToCrossGLConverter:
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
         self.user_function_names = self.collect_user_function_names(ast_node)
-        self.resource_object_type_hints = self.collect_resource_object_type_hints(
-            ast_node
+        self.global_resource_object_type_hints = (
+            self.collect_global_resource_object_type_hints(ast_node)
         )
+        self.resource_object_hint_scopes = []
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -183,16 +195,16 @@ class CudaToCrossGLConverter:
         names.discard(None)
         return names
 
-    def collect_resource_object_type_hints(self, node):
-        hints = {}
+    def add_resource_object_type_hint(self, hints, name, resource_type):
+        if not name or not resource_type:
+            return
+        if name in hints and hints[name] != resource_type:
+            hints[name] = None
+            return
+        hints[name] = resource_type
 
-        def add_hint(name, resource_type):
-            if not name or not resource_type:
-                return
-            if name in hints and hints[name] != resource_type:
-                hints[name] = None
-                return
-            hints[name] = resource_type
+    def collect_resource_object_type_hints(self, node, declared_names=None):
+        hints = {}
 
         def collect(current):
             if current is None:
@@ -215,7 +227,8 @@ class CudaToCrossGLConverter:
                 if hint is not None:
                     arg_index, resource_type = hint
                     if len(current.args) > arg_index:
-                        add_hint(
+                        self.add_resource_object_type_hint(
+                            hints,
                             self.get_resource_object_expression_name(
                                 current.args[arg_index]
                             ),
@@ -226,7 +239,100 @@ class CudaToCrossGLConverter:
                 collect(value)
 
         collect(node)
+        for name in declared_names or []:
+            hints.setdefault(name, None)
         return hints
+
+    def collect_global_resource_object_type_hints(self, node):
+        hints = {}
+        global_names = self.collect_global_declared_variable_names(node)
+        for function in getattr(node, "functions", []):
+            self.collect_global_resource_object_type_hints_from_function(
+                function, global_names, hints
+            )
+        for kernel in getattr(node, "kernels", []):
+            self.collect_global_resource_object_type_hints_from_function(
+                kernel, global_names, hints
+            )
+        return hints
+
+    def collect_global_resource_object_type_hints_from_function(
+        self, node, global_names, hints
+    ):
+        local_names = self.collect_declared_variable_names(node)
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, (list, tuple)):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, dict):
+                for item in current.values():
+                    collect(item)
+                return
+            if isinstance(current, (str, int, float, bool)):
+                return
+            if not hasattr(current, "__dict__"):
+                return
+
+            if isinstance(current, FunctionCallNode):
+                hint = self.get_resource_object_call_hint(current.name)
+                if hint is not None:
+                    arg_index, resource_type = hint
+                    if len(current.args) > arg_index:
+                        name = self.get_resource_object_expression_name(
+                            current.args[arg_index]
+                        )
+                        if name in global_names and name not in local_names:
+                            self.add_resource_object_type_hint(
+                                hints, name, resource_type
+                            )
+
+            for value in vars(current).values():
+                collect(value)
+
+        collect(getattr(node, "body", []))
+
+    def collect_global_declared_variable_names(self, node):
+        return {
+            var.name
+            for var in getattr(node, "global_variables", [])
+            if isinstance(var, VariableNode)
+        }
+
+    def collect_declared_variable_names(self, node):
+        names = {
+            param.name
+            for param in getattr(node, "params", [])
+            if isinstance(param, VariableNode)
+        }
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, (list, tuple)):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, dict):
+                for item in current.values():
+                    collect(item)
+                return
+            if isinstance(current, (str, int, float, bool)):
+                return
+            if not hasattr(current, "__dict__"):
+                return
+
+            if isinstance(current, VariableNode):
+                names.add(current.name)
+
+            for value in vars(current).values():
+                collect(value)
+
+        collect(getattr(node, "body", []))
+        return names
 
     def get_resource_object_call_hint(self, function_name):
         base_name, _ = self.parse_cpp_template(function_name)
@@ -253,6 +359,19 @@ class CudaToCrossGLConverter:
 
     def is_user_defined_function(self, func_name):
         return isinstance(func_name, str) and func_name in self.user_function_names
+
+    def push_resource_object_hint_scope(self, hints):
+        self.resource_object_hint_scopes.append(hints)
+
+    def pop_resource_object_hint_scope(self):
+        if self.resource_object_hint_scopes:
+            self.resource_object_hint_scopes.pop()
+
+    def lookup_resource_object_type_hint(self, name):
+        for scope in reversed(self.resource_object_hint_scopes):
+            if name in scope:
+                return scope[name]
+        return self.global_resource_object_type_hints.get(name)
 
     def emit_statement(self, stmt):
         """Render and append one converted statement."""
@@ -474,9 +593,7 @@ class CudaToCrossGLConverter:
         self.indent_level += 1
 
         for member in node.members:
-            member_type = self.convert_cuda_variable_type_to_crossgl(
-                member.vtype, member.name
-            )
+            member_type = self.convert_cuda_type_to_crossgl(member.vtype)
             self.emit(f"{member_type} {member.name};")
 
         self.indent_level -= 1
@@ -487,29 +604,37 @@ class CudaToCrossGLConverter:
         return_type = self.convert_cuda_type_to_crossgl(node.return_type)
         params = []
 
-        for param in node.params:
-            param_type = self.convert_cuda_variable_type_to_crossgl(
-                param.vtype, param.name
+        self.push_resource_object_hint_scope(
+            self.collect_resource_object_type_hints(
+                node, self.collect_declared_variable_names(node)
             )
-            params.append(f"{param_type} {param.name}")
-
-        param_str = ", ".join(params)
-        self.emit(f"{return_type} {node.name}({param_str}) {{")
-
-        self.indent_level += 1
-        self.push_packed_argument_scope()
-        self.push_type_alias_scope()
-        self.push_unique_ptr_scope()
-        for param in node.params:
-            self.register_unique_ptr_name(param.name, param.vtype)
+        )
         try:
-            for stmt in node.body:
-                self.emit_statement(stmt)
+            for param in node.params:
+                param_type = self.convert_cuda_variable_type_to_crossgl(
+                    param.vtype, param.name
+                )
+                params.append(f"{param_type} {param.name}")
+
+            param_str = ", ".join(params)
+            self.emit(f"{return_type} {node.name}({param_str}) {{")
+
+            self.indent_level += 1
+            self.push_packed_argument_scope()
+            self.push_type_alias_scope()
+            self.push_unique_ptr_scope()
+            for param in node.params:
+                self.register_unique_ptr_name(param.name, param.vtype)
+            try:
+                for stmt in node.body:
+                    self.emit_statement(stmt)
+            finally:
+                self.pop_unique_ptr_scope()
+                self.pop_type_alias_scope()
+                self.pop_packed_argument_scope()
+                self.indent_level -= 1
         finally:
-            self.pop_unique_ptr_scope()
-            self.pop_type_alias_scope()
-            self.pop_packed_argument_scope()
-            self.indent_level -= 1
+            self.pop_resource_object_hint_scope()
 
         self.emit("}")
 
@@ -519,50 +644,58 @@ class CudaToCrossGLConverter:
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 
         params = []
-        for param in kernel.params:
-            # Add storage buffer qualifiers for pointer parameters
-            if "*" in param.vtype:
-                element_type = self.convert_cuda_pointer_element_type(param.vtype)
-                params.append(
-                    f"@group(0) @binding({len(params)}) var<storage, read_write> {param.name}: array<{element_type}>"
-                )
-            else:
-                param_type = self.convert_cuda_variable_type_to_crossgl(
-                    param.vtype, param.name
-                )
-                params.append(f"{param_type} {param.name}")
-
-        self.emit(f"fn {kernel.name}(")
-        self.indent_level += 1
-        for i, param in enumerate(params):
-            if i == len(params) - 1:
-                self.emit(f"{param}")
-            else:
-                self.emit(f"{param},")
-        self.indent_level -= 1
-        self.emit(") {")
-
-        self.indent_level += 1
-        self.emit("let thread_id = gl_GlobalInvocationID;")
-        self.emit("let block_id = gl_WorkGroupID;")
-        self.emit("let thread_local_id = gl_LocalInvocationID;")
-        self.emit("let block_dim = gl_WorkGroupSize;")
-        self.emit("")
-
-        self.push_packed_argument_scope()
-        self.push_type_alias_scope()
-        self.push_unique_ptr_scope()
-        for param in kernel.params:
-            self.register_unique_ptr_name(param.name, param.vtype)
+        self.push_resource_object_hint_scope(
+            self.collect_resource_object_type_hints(
+                kernel, self.collect_declared_variable_names(kernel)
+            )
+        )
         try:
-            for stmt in kernel.body:
-                self.emit_statement(stmt)
-        finally:
-            self.pop_unique_ptr_scope()
-            self.pop_type_alias_scope()
-            self.pop_packed_argument_scope()
+            for param in kernel.params:
+                # Add storage buffer qualifiers for pointer parameters
+                if "*" in param.vtype:
+                    element_type = self.convert_cuda_pointer_element_type(param.vtype)
+                    params.append(
+                        f"@group(0) @binding({len(params)}) var<storage, read_write> {param.name}: array<{element_type}>"
+                    )
+                else:
+                    param_type = self.convert_cuda_variable_type_to_crossgl(
+                        param.vtype, param.name
+                    )
+                    params.append(f"{param_type} {param.name}")
 
-        self.indent_level -= 1
+            self.emit(f"fn {kernel.name}(")
+            self.indent_level += 1
+            for i, param in enumerate(params):
+                if i == len(params) - 1:
+                    self.emit(f"{param}")
+                else:
+                    self.emit(f"{param},")
+            self.indent_level -= 1
+            self.emit(") {")
+
+            self.indent_level += 1
+            self.emit("let thread_id = gl_GlobalInvocationID;")
+            self.emit("let block_id = gl_WorkGroupID;")
+            self.emit("let thread_local_id = gl_LocalInvocationID;")
+            self.emit("let block_dim = gl_WorkGroupSize;")
+            self.emit("")
+
+            self.push_packed_argument_scope()
+            self.push_type_alias_scope()
+            self.push_unique_ptr_scope()
+            for param in kernel.params:
+                self.register_unique_ptr_name(param.name, param.vtype)
+            try:
+                for stmt in kernel.body:
+                    self.emit_statement(stmt)
+            finally:
+                self.pop_unique_ptr_scope()
+                self.pop_type_alias_scope()
+                self.pop_packed_argument_scope()
+                self.indent_level -= 1
+        finally:
+            self.pop_resource_object_hint_scope()
+
         self.emit("}")
 
     def visit_KernelLaunchNode(self, node):
@@ -1224,7 +1357,7 @@ class CudaToCrossGLConverter:
         return self.convert_cuda_type_to_crossgl(cuda_type)
 
     def convert_cuda_resource_object_type(self, cuda_type, name):
-        hint = self.resource_object_type_hints.get(name)
+        hint = self.lookup_resource_object_type_hint(name)
         if hint is None:
             return None
         return self.convert_cuda_resource_object_type_with_hint(cuda_type, hint)

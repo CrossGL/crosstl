@@ -2383,6 +2383,7 @@ class MetalCodeGen:
         if isinstance(stmt, VariableNode):
             var_type = self.local_variable_declared_type(stmt)
             self.local_variable_types[stmt.name] = var_type
+            is_atomic_local = self.is_metal_atomic_value_type(var_type)
             if self.is_unsupported_glsl_buffer_block_struct_type(var_type):
                 self.current_unsupported_glsl_buffer_block_local_variables.add(
                     stmt.name
@@ -2412,6 +2413,12 @@ class MetalCodeGen:
                 init_expr = self.generate_expression_with_expected(
                     initial_value, var_type
                 )
+                if is_atomic_local:
+                    return (
+                        f"{indent_str}{declaration};\n"
+                        f"{indent_str}atomic_store_explicit(&{stmt.name}, {init_expr}, "
+                        "memory_order_relaxed);\n"
+                    )
                 return f"{indent_str}{declaration} = {init_expr};\n"
             else:
                 return f"{indent_str}{declaration};\n"

@@ -1027,16 +1027,18 @@ class SlangCodeGen:
         identifier_aliases = self.slang_stage_system_value_aliases(
             body_statements, shader_type, param_list
         )
-        if (
-            builtin_return_rewrite is not None
-            and builtin_return_rewrite["mode"] == "local"
-        ):
-            identifier_aliases[builtin_return_rewrite["target_name"]] = (
-                builtin_return_rewrite["local_name"]
-            )
+        identifier_aliases.update(
+            self.slang_stage_builtin_return_aliases(builtin_return_rewrite)
+        )
         self.identifier_aliases = identifier_aliases
 
         result = ""
+        if (
+            builtin_return_rewrite is not None
+            and builtin_return_rewrite["mode"] == "struct"
+        ):
+            result += self.generate_slang_builtin_output_struct(builtin_return_rewrite)
+            result += "\n\n"
         if shader_type:
             self.validate_slang_stage_attributes(node, shader_type)
         result += self.generate_slang_stage_numthreads(
@@ -1050,10 +1052,10 @@ class SlangCodeGen:
         result += f"{ret_type} {function_name}({params_str}){semantic_str}\n{{\n"
         self.indent_level += 1
 
-        if (
-            builtin_return_rewrite is not None
-            and builtin_return_rewrite["mode"] == "local"
-        ):
+        if builtin_return_rewrite is not None and builtin_return_rewrite["mode"] in {
+            "local",
+            "struct",
+        }:
             local_type = self.convert_type(builtin_return_rewrite["return_type_name"])
             local_name = builtin_return_rewrite["local_name"]
             result += f"{self.indent()}{local_type} {local_name};\n"
@@ -1066,10 +1068,10 @@ class SlangCodeGen:
                 + "\n"
             )
 
-        if (
-            builtin_return_rewrite is not None
-            and builtin_return_rewrite["mode"] == "local"
-        ):
+        if builtin_return_rewrite is not None and builtin_return_rewrite["mode"] in {
+            "local",
+            "struct",
+        }:
             result += f"{self.indent()}return {builtin_return_rewrite['local_name']};\n"
 
         self.indent_level -= 1
@@ -1212,17 +1214,22 @@ class SlangCodeGen:
             return None
         if self.convert_type(ret_type_name) != "void" or not body_statements:
             return None
+        if self.contains_return_statement(body_statements):
+            return None
 
         output_assignments = self.slang_stage_builtin_output_assignments(
             body_statements, shader_type
         )
-        output_targets = {
-            target_name for _assignment, target_name in output_assignments
-        }
-        if len(output_targets) != 1:
+        output_targets = self.unique_slang_builtin_output_targets(output_assignments)
+        if not output_targets:
             return None
 
-        target_name = next(iter(output_targets))
+        if len(output_targets) > 1:
+            return self.slang_stage_builtin_struct_return_rewrite(
+                shader_type, body_statements, output_targets
+            )
+
+        target_name = output_targets[0]
         return_type_name = self.slang_stage_builtin_return_type(
             shader_type, target_name
         )
@@ -1246,9 +1253,6 @@ class SlangCodeGen:
                 ),
             }
 
-        if not self.statement_contains_assignments(final_statement, output_assignments):
-            return None
-
         return {
             "mode": "local",
             "return_type_name": return_type_name,
@@ -1258,6 +1262,89 @@ class SlangCodeGen:
                 target_name, body_statements
             ),
         }
+
+    def contains_return_statement(self, body_statements):
+        return any(
+            isinstance(node, ReturnNode) for node in self.walk_ast(body_statements)
+        )
+
+    def unique_slang_builtin_output_targets(self, output_assignments):
+        targets = []
+        seen = set()
+        for _assignment, target_name in output_assignments:
+            if target_name not in seen:
+                seen.add(target_name)
+                targets.append(target_name)
+        return targets
+
+    def slang_stage_builtin_struct_return_rewrite(
+        self, shader_type, body_statements, output_targets
+    ):
+        struct_name = self.unique_slang_builtin_output_struct_name(shader_type)
+        local_name = self.unique_slang_builtin_output_local_name(
+            "gl_Output", body_statements
+        )
+        fields = []
+        for target_name in output_targets:
+            return_type_name = self.slang_stage_builtin_return_type(
+                shader_type, target_name
+            )
+            if return_type_name is None:
+                return None
+            fields.append(
+                {
+                    "target_name": target_name,
+                    "field_name": self.slang_builtin_output_field_name(target_name),
+                    "return_type_name": return_type_name,
+                    "semantic": target_name,
+                }
+            )
+
+        return {
+            "mode": "struct",
+            "return_type_name": struct_name,
+            "semantic": None,
+            "local_name": local_name,
+            "fields": fields,
+        }
+
+    def unique_slang_builtin_output_struct_name(self, shader_type):
+        base_name = f"CGL{self.slang_stage_entry_function_name(shader_type)}Output"
+        used_names = set(self.user_symbol_names)
+        if base_name not in used_names:
+            return base_name
+
+        suffix = 1
+        while f"{base_name}_{suffix}" in used_names:
+            suffix += 1
+        return f"{base_name}_{suffix}"
+
+    def slang_builtin_output_field_name(self, target_name):
+        target_suffix = (
+            target_name[3:] if target_name.startswith("gl_") else target_name
+        )
+        return f"cgl_{target_suffix}"
+
+    def slang_stage_builtin_return_aliases(self, rewrite):
+        if rewrite is None:
+            return {}
+        if rewrite["mode"] == "local":
+            return {rewrite["target_name"]: rewrite["local_name"]}
+        if rewrite["mode"] == "struct":
+            return {
+                field["target_name"]: f"{rewrite['local_name']}.{field['field_name']}"
+                for field in rewrite["fields"]
+            }
+        return {}
+
+    def generate_slang_builtin_output_struct(self, rewrite):
+        result = f"struct {rewrite['return_type_name']}\n{{\n"
+        for field in rewrite["fields"]:
+            field_type = self.convert_type(field["return_type_name"])
+            semantic = self.semantic_suffix(field["semantic"])
+            result += f"    {field_type} {field['field_name']}{semantic};\n"
+        result += "};"
+        return result
 
     def slang_stage_builtin_output_assignments(self, body_statements, shader_type):
         assignments = []
@@ -1273,14 +1360,11 @@ class SlangCodeGen:
                 assignments.append((node, target_name))
         return assignments
 
-    def statement_contains_assignments(self, statement, assignments):
-        statement_node_ids = {id(node) for node in self.walk_ast(statement)}
-        return all(
-            id(assignment) in statement_node_ids for assignment, _ in assignments
-        )
-
     def unique_slang_builtin_output_local_name(self, target_name, body_statements):
-        base_name = f"cgl_{target_name.removeprefix('gl_')}"
+        target_suffix = (
+            target_name[3:] if target_name.startswith("gl_") else target_name
+        )
+        base_name = f"cgl_{target_suffix}"
         used_names = set()
         for node in self.walk_ast(body_statements):
             if hasattr(node, "name") and isinstance(getattr(node, "name"), str):
@@ -1294,8 +1378,11 @@ class SlangCodeGen:
         return f"{base_name}_{suffix}"
 
     def slang_stage_builtin_return_type(self, shader_type, target_name):
-        if shader_type == "vertex" and target_name == "gl_Position":
-            return "vec4"
+        if shader_type == "vertex":
+            if target_name == "gl_Position":
+                return "vec4"
+            if target_name == "gl_PointSize":
+                return "float"
         if shader_type == "fragment":
             if target_name == "gl_FragDepth":
                 return "float"

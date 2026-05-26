@@ -341,6 +341,120 @@ mod gpu {
         }
     }
 
+    #[derive(Debug, Clone, Copy)]
+    pub struct Image1D<T>(PhantomData<T>);
+
+    impl<T> Default for Image1D<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Image1DArray<T>(PhantomData<T>);
+
+    impl<T> Default for Image1DArray<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Image2D<T>(PhantomData<T>);
+
+    impl<T> Default for Image2D<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Image3D<T>(PhantomData<T>);
+
+    impl<T> Default for Image3D<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct ImageCube<T>(PhantomData<T>);
+
+    impl<T> Default for ImageCube<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Image2DArray<T>(PhantomData<T>);
+
+    impl<T> Default for Image2DArray<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Image2DMS<T>(PhantomData<T>);
+
+    impl<T> Default for Image2DMS<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Image2DMSArray<T>(PhantomData<T>);
+
+    impl<T> Default for Image2DMSArray<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Buffer<T>(PhantomData<T>);
+
+    impl<T> Default for Buffer<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct RwBuffer<T>(PhantomData<T>);
+
+    impl<T> Default for RwBuffer<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct AppendBuffer<T>(PhantomData<T>);
+
+    impl<T> Default for AppendBuffer<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct ConsumeBuffer<T>(PhantomData<T>);
+
+    impl<T> Default for ConsumeBuffer<T> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct ByteAddressBuffer;
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct RwByteAddressBuffer;
+
     pub trait TextureLike {}
     impl<T> TextureLike for Texture1D<T> {}
     impl<T> TextureLike for Texture1DArray<T> {}
@@ -349,6 +463,24 @@ mod gpu {
     impl<T> TextureLike for Texture3D<T> {}
     impl<T> TextureLike for TextureCube<T> {}
     impl<T> TextureLike for TextureCubeArray<T> {}
+
+    pub trait ImageLike<T> {}
+    impl<T> ImageLike<T> for Image1D<T> {}
+    impl<T> ImageLike<T> for Image1DArray<T> {}
+    impl<T> ImageLike<T> for Image2D<T> {}
+    impl<T> ImageLike<T> for Image3D<T> {}
+    impl<T> ImageLike<T> for ImageCube<T> {}
+    impl<T> ImageLike<T> for Image2DArray<T> {}
+    impl<T> ImageLike<T> for Image2DMS<T> {}
+    impl<T> ImageLike<T> for Image2DMSArray<T> {}
+
+    pub trait BufferLike<T> {}
+    impl<T> BufferLike<T> for Buffer<T> {}
+    impl<T> BufferLike<T> for RwBuffer<T> {}
+    impl<T> BufferLike<T> for AppendBuffer<T> {}
+    impl<T> BufferLike<T> for ConsumeBuffer<T> {}
+    impl BufferLike<u32> for ByteAddressBuffer {}
+    impl BufferLike<u32> for RwByteAddressBuffer {}
 
     pub trait SampleCoord {}
     impl SampleCoord for f32 {}
@@ -615,6 +747,136 @@ mod gpu {
     {
         Vec4::default()
     }
+
+    pub fn image_load<Image, Coord, Value>(_image: Image, _coord: Coord) -> Value
+    where
+        Image: ImageLike<Value>,
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_store<Image, Coord, Value>(
+        _image: Image,
+        _coord: Coord,
+        _value: Value,
+    )
+    where
+        Image: ImageLike<Value>,
+    {
+    }
+
+    pub fn image_atomic_add<Image, Coord, Value>(
+        _image: Image,
+        _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_min<Image, Coord, Value>(
+        _image: Image,
+        _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_max<Image, Coord, Value>(
+        _image: Image,
+        _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_and<Image, Coord, Value>(
+        _image: Image,
+        _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_or<Image, Coord, Value>(
+        _image: Image,
+        _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_xor<Image, Coord, Value>(
+        _image: Image,
+        _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_exchange<Image, Coord, Value>(
+        _image: Image,
+        _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_comp_swap<Image, Coord, Value>(
+        _image: Image,
+        _coord: Coord,
+        _compare: Value,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn buffer_load<Resource, Index, Value>(
+        _resource: Resource,
+        _index: Index,
+    ) -> Value
+    where
+        Resource: BufferLike<Value>,
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn buffer_store<Resource, Index, Value>(
+        _resource: Resource,
+        _index: Index,
+        _value: Value,
+    )
+    where
+        Resource: BufferLike<Value>,
+    {
+    }
+
+    pub fn buffer_dimensions<Resource, Size>(_resource: Resource, _size: Size) {}
 }
 """
 
@@ -1956,6 +2218,167 @@ def test_projected_sampling_and_gather_calls_map_to_rust_helpers_and_compile(
     assert "textureGather" not in generated_code
     assert "textureGatherOffset" not in generated_code
     assert "textureGatherOffsets" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_path):
+    code = """
+    shader ResourceHelperProbe {
+        image2D colorImage;
+        uimage2D counterImage;
+        image1D rampImage;
+        image1DArray rampArrayImage;
+        image3D volumeImage;
+        imageCube cubeImage;
+        image2DArray layerImage;
+        image2DMS msImage;
+        image2DMSArray msArrayImage;
+        iimage3D signedVolume;
+        uimage2DArray counterLayers;
+        RWStructuredBuffer<int> values;
+        StructuredBuffer<float> weights;
+        AppendStructuredBuffer<uint> appendValues;
+        ConsumeStructuredBuffer<uint> consumeValues;
+        ByteAddressBuffer rawBytes;
+        RWByteAddressBuffer rawOut;
+
+        fragment {
+            vec4 main(ivec2 pixel, uint amount, uint index) @ gl_FragColor {
+                let color = imageLoad(colorImage, pixel);
+                let ramp = imageLoad(rampImage, 0);
+                let signedValue = imageLoad(signedVolume, ivec3(0));
+                let unsignedValue = imageLoad(counterLayers, ivec3(0));
+                imageStore(colorImage, pixel, color + vec4(1.0));
+                let previous = imageAtomicAdd(counterImage, pixel, amount);
+                let minValue = imageAtomicMin(counterImage, pixel, amount);
+                let maxValue = imageAtomicMax(counterImage, pixel, amount);
+                let andValue = imageAtomicAnd(counterImage, pixel, amount);
+                let orValue = imageAtomicOr(counterImage, pixel, amount);
+                let xorValue = imageAtomicXor(counterImage, pixel, amount);
+                let exchanged = imageAtomicExchange(counterImage, pixel, amount);
+                let swapped = imageAtomicCompSwap(counterImage, pixel, previous, amount);
+                let value = buffer_load(values, index);
+                let weight = buffer_load(weights, index);
+                uint length = 0u;
+                buffer_dimensions(values, length);
+                buffer_store(values, index, value + int(previous));
+                return color + ramp + vec4(weight + float(signedValue.x + int(unsignedValue.x)));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static COLOR_IMAGE: std::sync::LazyLock<Image2D<Vec4<f32>>>" in (
+        generated_code
+    )
+    assert "static COUNTER_IMAGE: std::sync::LazyLock<Image2D<Vec4<u32>>>" in (
+        generated_code
+    )
+    assert "static RAMP_IMAGE: std::sync::LazyLock<Image1D<Vec4<f32>>>" in (
+        generated_code
+    )
+    assert "static RAMP_ARRAY_IMAGE: std::sync::LazyLock<Image1DArray<Vec4<f32>>>" in (
+        generated_code
+    )
+    assert "static VOLUME_IMAGE: std::sync::LazyLock<Image3D<Vec4<f32>>>" in (
+        generated_code
+    )
+    assert "static CUBE_IMAGE: std::sync::LazyLock<ImageCube<Vec4<f32>>>" in (
+        generated_code
+    )
+    assert "static LAYER_IMAGE: std::sync::LazyLock<Image2DArray<Vec4<f32>>>" in (
+        generated_code
+    )
+    assert "static MS_IMAGE: std::sync::LazyLock<Image2DMS<Vec4<f32>>>" in (
+        generated_code
+    )
+    assert "static MS_ARRAY_IMAGE: std::sync::LazyLock<Image2DMSArray<Vec4<f32>>>" in (
+        generated_code
+    )
+    assert "static SIGNED_VOLUME: std::sync::LazyLock<Image3D<Vec4<i32>>>" in (
+        generated_code
+    )
+    assert "static COUNTER_LAYERS: std::sync::LazyLock<Image2DArray<Vec4<u32>>>" in (
+        generated_code
+    )
+    assert "static VALUES: std::sync::LazyLock<RwBuffer<i32>>" in generated_code
+    assert "static WEIGHTS: std::sync::LazyLock<Buffer<f32>>" in generated_code
+    assert "static APPEND_VALUES: std::sync::LazyLock<AppendBuffer<u32>>" in (
+        generated_code
+    )
+    assert "static CONSUME_VALUES: std::sync::LazyLock<ConsumeBuffer<u32>>" in (
+        generated_code
+    )
+    assert "static RAW_BYTES: std::sync::LazyLock<ByteAddressBuffer>" in generated_code
+    assert "static RAW_OUT: std::sync::LazyLock<RwByteAddressBuffer>" in generated_code
+    assert "let color: Vec4<f32> = image_load(*COLOR_IMAGE, pixel);" in generated_code
+    assert "let ramp: Vec4<f32> = image_load(*RAMP_IMAGE, 0);" in generated_code
+    assert (
+        "let signedValue: Vec4<i32> = image_load(*SIGNED_VOLUME, Vec3::<i32>::new(0, 0, 0));"
+        in generated_code
+    )
+    assert (
+        "let unsignedValue: Vec4<u32> = image_load(*COUNTER_LAYERS, Vec3::<i32>::new(0, 0, 0));"
+        in generated_code
+    )
+    assert "image_store(*COLOR_IMAGE, pixel, (color + Vec4::<f32>::new" in (
+        generated_code
+    )
+    assert (
+        "let previous: u32 = image_atomic_add(*COUNTER_IMAGE, pixel, amount);"
+        in generated_code
+    )
+    assert (
+        "let minValue: u32 = image_atomic_min(*COUNTER_IMAGE, pixel, amount);"
+        in generated_code
+    )
+    assert (
+        "let maxValue: u32 = image_atomic_max(*COUNTER_IMAGE, pixel, amount);"
+        in generated_code
+    )
+    assert (
+        "let andValue: u32 = image_atomic_and(*COUNTER_IMAGE, pixel, amount);"
+        in generated_code
+    )
+    assert (
+        "let orValue: u32 = image_atomic_or(*COUNTER_IMAGE, pixel, amount);"
+        in generated_code
+    )
+    assert (
+        "let xorValue: u32 = image_atomic_xor(*COUNTER_IMAGE, pixel, amount);"
+        in generated_code
+    )
+    assert (
+        "let exchanged: u32 = image_atomic_exchange(*COUNTER_IMAGE, pixel, amount);"
+        in generated_code
+    )
+    assert (
+        "let swapped: u32 = image_atomic_comp_swap(*COUNTER_IMAGE, pixel, previous, amount);"
+        in generated_code
+    )
+    assert "let value: i32 = buffer_load(*VALUES, index);" in generated_code
+    assert "let weight: f32 = buffer_load(*WEIGHTS, index);" in generated_code
+    assert "let length: u32 = 0;" in generated_code
+    assert "buffer_dimensions(*VALUES, length);" in generated_code
+    assert (
+        "buffer_store(*VALUES, index, (value + (previous as i32)));" in generated_code
+    )
+    assert "image2D" not in generated_code
+    assert "uimage2D" not in generated_code
+    assert "RWStructuredBuffer" not in generated_code
+    assert "StructuredBuffer" not in generated_code
+    assert "imageLoad" not in generated_code
+    assert "imageStore" not in generated_code
+    assert "imageAtomicAdd" not in generated_code
+    assert "imageAtomicMin" not in generated_code
+    assert "imageAtomicMax" not in generated_code
+    assert "imageAtomicAnd" not in generated_code
+    assert "imageAtomicOr" not in generated_code
+    assert "imageAtomicXor" not in generated_code
+    assert "imageAtomicExchange" not in generated_code
+    assert "imageAtomicCompSwap" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

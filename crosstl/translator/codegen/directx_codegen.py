@@ -5208,6 +5208,8 @@ class HLSLCodeGen:
 
     def validate_hlsl_stage_parameter_requirements(self, func, shader_type):
         parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
+        self.validate_hlsl_dispatch_mesh_calls(func, shader_type)
+        self.validate_hlsl_dispatch_mesh_payloads(func, shader_type)
         if not parameters:
             return
 
@@ -5294,8 +5296,6 @@ class HLSLCodeGen:
         if shader_type == "mesh":
             self.validate_hlsl_mesh_payload_parameter(func, parameters)
             self.validate_hlsl_mesh_output_parameters(func, parameters)
-
-        self.validate_hlsl_dispatch_mesh_payloads(func, shader_type)
 
     def validate_hlsl_geometry_stream_output_semantics(self, parameters):
         stream_types = {"PointStream", "LineStream", "TriangleStream"}
@@ -5665,6 +5665,49 @@ class HLSLCodeGen:
                 if getattr(node, "operation", None) == "DispatchMesh":
                     calls.append(getattr(node, "arguments", []))
         return calls
+
+    def validate_hlsl_dispatch_mesh_group_count_arguments(self, args, shader_type):
+        labels = ("ThreadGroupCountX", "ThreadGroupCountY", "ThreadGroupCountZ")
+        for label, argument in zip(labels, args[:3]):
+            argument_type = self.expression_result_type(argument)
+            if argument_type is None:
+                continue
+
+            mapped_type = self.map_type(argument_type)
+            base_type, array_suffix = split_array_type_suffix(mapped_type)
+            if array_suffix or base_type not in {"int", "uint"}:
+                raise ValueError(
+                    f"DirectX {shader_type} DispatchMesh {label} argument "
+                    f"must be scalar int or uint, got {mapped_type}"
+                )
+
+    def validate_hlsl_dispatch_mesh_calls(self, func, shader_type):
+        calls = self.hlsl_dispatch_mesh_calls(func)
+        if not calls:
+            return
+
+        allowed_stages = {"task", "amplification", "object"}
+        if shader_type not in allowed_stages:
+            if shader_type is not None:
+                raise ValueError(
+                    f"DirectX {shader_type} stage cannot call DispatchMesh; "
+                    "DispatchMesh is only valid in amplification/task/object stages"
+                )
+            return
+
+        if len(calls) > 1:
+            raise ValueError(
+                f"DirectX {shader_type} stage must call DispatchMesh at most once"
+            )
+
+        for args in calls:
+            if len(args) not in {3, 4}:
+                raise ValueError(
+                    f"DirectX {shader_type} DispatchMesh requires exactly "
+                    "three thread group count arguments and an optional "
+                    "mesh payload argument"
+                )
+            self.validate_hlsl_dispatch_mesh_group_count_arguments(args, shader_type)
 
     def hlsl_dispatch_mesh_payload_types_for_function(self, func):
         payload_types = set()

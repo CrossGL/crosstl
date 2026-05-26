@@ -133,10 +133,34 @@ MOJO_RESOURCE_TYPE_MAPPING = {
     "sampler1DArray": "Texture1DArray",
     "sampler2D": "Texture2D",
     "sampler2DArray": "Texture2DArray",
+    "sampler2DMS": "Texture2DMS",
+    "sampler2DMSArray": "Texture2DMSArray",
     "sampler3D": "Texture3D",
     "samplerCube": "TextureCube",
     "samplerCubeArray": "TextureCubeArray",
     "sampler": "Sampler",
+    "image1D": "Image1D",
+    "image1DArray": "Image1DArray",
+    "image2D": "Image2D",
+    "image2DArray": "Image2DArray",
+    "image2DMS": "Image2DMS",
+    "image2DMSArray": "Image2DMSArray",
+    "image3D": "Image3D",
+    "imageCube": "ImageCube",
+    "iimage1D": "IImage1D",
+    "iimage1DArray": "IImage1DArray",
+    "iimage2D": "IImage2D",
+    "iimage2DArray": "IImage2DArray",
+    "iimage2DMS": "IImage2DMS",
+    "iimage2DMSArray": "IImage2DMSArray",
+    "iimage3D": "IImage3D",
+    "uimage1D": "UImage1D",
+    "uimage1DArray": "UImage1DArray",
+    "uimage2D": "UImage2D",
+    "uimage2DArray": "UImage2DArray",
+    "uimage2DMS": "UImage2DMS",
+    "uimage2DMSArray": "UImage2DMSArray",
+    "uimage3D": "UImage3D",
 }
 
 MOJO_RESOURCE_SAMPLE_COORDS = {
@@ -147,6 +171,74 @@ MOJO_RESOURCE_SAMPLE_COORDS = {
     "Texture3D": "SIMD[DType.float32, 4]",
     "TextureCube": "SIMD[DType.float32, 4]",
     "TextureCubeArray": "SIMD[DType.float32, 4]",
+}
+
+MOJO_RESOURCE_TEXEL_COORDS = {
+    "Texture1D": "Int32",
+    "Texture1DArray": "SIMD[DType.int32, 2]",
+    "Texture2D": "SIMD[DType.int32, 2]",
+    "Texture2DArray": "SIMD[DType.int32, 4]",
+    "Texture2DMS": "SIMD[DType.int32, 2]",
+    "Texture2DMSArray": "SIMD[DType.int32, 4]",
+    "Texture3D": "SIMD[DType.int32, 4]",
+    "TextureCube": "SIMD[DType.int32, 4]",
+    "TextureCubeArray": "SIMD[DType.int32, 4]",
+    "Image1D": "Int32",
+    "Image1DArray": "SIMD[DType.int32, 2]",
+    "Image2D": "SIMD[DType.int32, 2]",
+    "Image2DArray": "SIMD[DType.int32, 4]",
+    "Image2DMS": "SIMD[DType.int32, 2]",
+    "Image2DMSArray": "SIMD[DType.int32, 4]",
+    "Image3D": "SIMD[DType.int32, 4]",
+    "ImageCube": "SIMD[DType.int32, 4]",
+    "IImage1D": "Int32",
+    "IImage1DArray": "SIMD[DType.int32, 2]",
+    "IImage2D": "SIMD[DType.int32, 2]",
+    "IImage2DArray": "SIMD[DType.int32, 4]",
+    "IImage2DMS": "SIMD[DType.int32, 2]",
+    "IImage2DMSArray": "SIMD[DType.int32, 4]",
+    "IImage3D": "SIMD[DType.int32, 4]",
+    "UImage1D": "Int32",
+    "UImage1DArray": "SIMD[DType.int32, 2]",
+    "UImage2D": "SIMD[DType.int32, 2]",
+    "UImage2DArray": "SIMD[DType.int32, 4]",
+    "UImage2DMS": "SIMD[DType.int32, 2]",
+    "UImage2DMSArray": "SIMD[DType.int32, 4]",
+    "UImage3D": "SIMD[DType.int32, 4]",
+}
+
+MOJO_RESOURCE_SIZE_RETURNS = {
+    "Texture1D": "Int32",
+    "Texture1DArray": "SIMD[DType.int32, 2]",
+    "Texture2D": "SIMD[DType.int32, 2]",
+    "Texture2DArray": "SIMD[DType.int32, 4]",
+    "Texture2DMS": "SIMD[DType.int32, 2]",
+    "Texture2DMSArray": "SIMD[DType.int32, 4]",
+    "Texture3D": "SIMD[DType.int32, 4]",
+    "TextureCube": "SIMD[DType.int32, 2]",
+    "TextureCubeArray": "SIMD[DType.int32, 4]",
+    "Image1D": "Int32",
+    "Image1DArray": "SIMD[DType.int32, 2]",
+    "Image2D": "SIMD[DType.int32, 2]",
+    "Image2DArray": "SIMD[DType.int32, 4]",
+    "Image2DMS": "SIMD[DType.int32, 2]",
+    "Image2DMSArray": "SIMD[DType.int32, 4]",
+    "Image3D": "SIMD[DType.int32, 4]",
+    "ImageCube": "SIMD[DType.int32, 2]",
+    "IImage1D": "Int32",
+    "IImage1DArray": "SIMD[DType.int32, 2]",
+    "IImage2D": "SIMD[DType.int32, 2]",
+    "IImage2DArray": "SIMD[DType.int32, 4]",
+    "IImage2DMS": "SIMD[DType.int32, 2]",
+    "IImage2DMSArray": "SIMD[DType.int32, 4]",
+    "IImage3D": "SIMD[DType.int32, 4]",
+    "UImage1D": "Int32",
+    "UImage1DArray": "SIMD[DType.int32, 2]",
+    "UImage2D": "SIMD[DType.int32, 2]",
+    "UImage2DArray": "SIMD[DType.int32, 4]",
+    "UImage2DMS": "SIMD[DType.int32, 2]",
+    "UImage2DMSArray": "SIMD[DType.int32, 4]",
+    "UImage3D": "SIMD[DType.int32, 4]",
 }
 
 MOJO_INTEGER_INDEX_TYPES = {"int", "uint", "short", "ushort", "long", "ulong"}
@@ -176,6 +268,11 @@ class MojoCodeGen:
         self.required_resource_sample_types = set()
         self.required_resource_lod_types = set()
         self.required_resource_grad_types = set()
+        self.required_resource_size_types = set()
+        self.required_resource_query_level_types = set()
+        self.required_resource_texel_fetch_types = set()
+        self.required_image_load_types = set()
+        self.required_image_store_types = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -307,6 +404,11 @@ class MojoCodeGen:
         self.required_resource_sample_types = set()
         self.required_resource_lod_types = set()
         self.required_resource_grad_types = set()
+        self.required_resource_size_types = set()
+        self.required_resource_query_level_types = set()
+        self.required_resource_texel_fetch_types = set()
+        self.required_image_load_types = set()
+        self.required_image_store_types = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -1744,6 +1846,18 @@ class MojoCodeGen:
                 return self.generate_texture_call(expr.args, "sample_lod")
             if func_name == "textureGrad":
                 return self.generate_texture_call(expr.args, "sample_grad")
+            if func_name == "textureSize":
+                return self.generate_resource_size_call(expr.args, "texture_size")
+            if func_name == "textureQueryLevels":
+                return self.generate_resource_query_levels_call(expr.args)
+            if func_name == "texelFetch":
+                return self.generate_texel_fetch_call(expr.args)
+            if func_name == "imageSize":
+                return self.generate_resource_size_call(expr.args, "image_size")
+            if func_name == "imageLoad":
+                return self.generate_image_load_call(expr.args)
+            if func_name == "imageStore":
+                return self.generate_image_store_call(expr.args)
 
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
@@ -2018,6 +2132,53 @@ class MojoCodeGen:
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"{helper_name}({generated_args})"
 
+    def generate_resource_size_call(self, args, helper_name):
+        if not args:
+            return f"{helper_name}()"
+
+        resource_type = self.map_type(self.expression_result_type(args[0]))
+        if resource_type in MOJO_RESOURCE_SIZE_RETURNS:
+            self.required_resource_size_types.add(resource_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def generate_resource_query_levels_call(self, args):
+        if args:
+            resource_type = self.map_type(self.expression_result_type(args[0]))
+            if resource_type in MOJO_RESOURCE_SIZE_RETURNS:
+                self.required_resource_query_level_types.add(resource_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"texture_query_levels({generated_args})"
+
+    def generate_texel_fetch_call(self, args):
+        if args:
+            resource_type = self.map_type(self.expression_result_type(args[0]))
+            if resource_type in MOJO_RESOURCE_TEXEL_COORDS:
+                self.required_resource_texel_fetch_types.add(resource_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"texel_fetch({generated_args})"
+
+    def generate_image_load_call(self, args):
+        if args:
+            resource_type = self.map_type(self.expression_result_type(args[0]))
+            if resource_type in MOJO_RESOURCE_TEXEL_COORDS:
+                self.required_image_load_types.add(resource_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"image_load({generated_args})"
+
+    def generate_image_store_call(self, args):
+        if args:
+            resource_type = self.map_type(self.expression_result_type(args[0]))
+            if resource_type in MOJO_RESOURCE_TEXEL_COORDS:
+                self.required_image_store_types.add(resource_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"image_store({generated_args})"
+
     def generate_bool_vector_select_expression(
         self, condition_expr, true_expr, false_expr
     ):
@@ -2262,6 +2423,11 @@ class MojoCodeGen:
             and not self.required_resource_sample_types
             and not self.required_resource_lod_types
             and not self.required_resource_grad_types
+            and not self.required_resource_size_types
+            and not self.required_resource_query_level_types
+            and not self.required_resource_texel_fetch_types
+            and not self.required_image_load_types
+            and not self.required_image_store_types
         ):
             return ""
 
@@ -2270,6 +2436,11 @@ class MojoCodeGen:
             self.required_resource_sample_types
             | self.required_resource_lod_types
             | self.required_resource_grad_types
+            | self.required_resource_size_types
+            | self.required_resource_query_level_types
+            | self.required_resource_texel_fetch_types
+            | self.required_image_load_types
+            | self.required_image_store_types
         )
         if self.required_resource_types or resource_sampled_types:
             code += "# CrossGL resource placeholders\n"
@@ -2283,6 +2454,16 @@ class MojoCodeGen:
                 code += self.generate_resource_lod_helper(resource_type)
             for resource_type in sorted(self.required_resource_grad_types):
                 code += self.generate_resource_grad_helper(resource_type)
+            for resource_type in sorted(self.required_resource_size_types):
+                code += self.generate_resource_size_helper(resource_type)
+            for resource_type in sorted(self.required_resource_query_level_types):
+                code += self.generate_resource_query_levels_helper(resource_type)
+            for resource_type in sorted(self.required_resource_texel_fetch_types):
+                code += self.generate_texel_fetch_helper(resource_type)
+            for resource_type in sorted(self.required_image_load_types):
+                code += self.generate_image_load_helper(resource_type)
+            for resource_type in sorted(self.required_image_store_types):
+                code += self.generate_image_store_helper(resource_type)
             code += "\n"
 
         if self.required_fract_helpers or self.required_saturate_helpers:
@@ -2357,6 +2538,98 @@ class MojoCodeGen:
         )
         code += "    return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n\n"
         return code
+
+    def generate_resource_size_helper(self, resource_type):
+        return_type = MOJO_RESOURCE_SIZE_RETURNS[resource_type]
+        zero_value = self.zero_mojo_value(return_type)
+        code = f"fn texture_size(tex: {resource_type}) -> {return_type}:\n"
+        code += f"    return {zero_value}\n\n"
+        code += f"fn texture_size(tex: {resource_type}, lod: Int32) -> {return_type}:\n"
+        code += f"    return {zero_value}\n\n"
+        code += f"fn image_size(image: {resource_type}) -> {return_type}:\n"
+        code += f"    return {zero_value}\n\n"
+        return code
+
+    def generate_resource_query_levels_helper(self, resource_type):
+        code = f"fn texture_query_levels(tex: {resource_type}) -> Int32:\n"
+        code += "    return 1\n\n"
+        return code
+
+    def generate_texel_fetch_helper(self, resource_type):
+        coord_type = MOJO_RESOURCE_TEXEL_COORDS[resource_type]
+        code = (
+            f"fn texel_fetch(tex: {resource_type}, coord: {coord_type}, "
+            "lod: Int32) -> SIMD[DType.float32, 4]:\n"
+        )
+        code += "    return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n\n"
+        return code
+
+    def generate_image_load_helper(self, resource_type):
+        coord_type = MOJO_RESOURCE_TEXEL_COORDS[resource_type]
+        value_type = self.image_value_type(resource_type)
+        if self.is_multisample_resource_type(resource_type):
+            code = (
+                f"fn image_load(image: {resource_type}, coord: {coord_type}, "
+                f"sample: Int32) -> {value_type}:\n"
+            )
+        else:
+            code = (
+                f"fn image_load(image: {resource_type}, coord: {coord_type}) -> "
+                f"{value_type}:\n"
+            )
+        code += f"    return {self.zero_mojo_value(value_type)}\n\n"
+        return code
+
+    def generate_image_store_helper(self, resource_type):
+        coord_type = MOJO_RESOURCE_TEXEL_COORDS[resource_type]
+        value_type = self.image_value_type(resource_type)
+        if self.is_multisample_resource_type(resource_type):
+            code = (
+                f"fn image_store(image: {resource_type}, coord: {coord_type}, "
+                f"sample: Int32, value: {value_type}):\n"
+            )
+        else:
+            code = (
+                f"fn image_store(image: {resource_type}, coord: {coord_type}, "
+                f"value: {value_type}):\n"
+            )
+        code += "    pass\n\n"
+        return code
+
+    def is_multisample_resource_type(self, resource_type):
+        return "MS" in resource_type
+
+    def image_value_type(self, resource_type):
+        if resource_type.startswith("IImage"):
+            return "Int32"
+        if resource_type.startswith("UImage"):
+            return "UInt32"
+        return "SIMD[DType.float32, 4]"
+
+    def zero_mojo_value(self, mojo_type):
+        if mojo_type in {
+            "Int",
+            "Int16",
+            "Int32",
+            "Int64",
+            "UInt16",
+            "UInt32",
+            "UInt64",
+        }:
+            return "0"
+        if mojo_type in {"Float16", "Float32", "Float64"}:
+            return "0.0"
+        if mojo_type == "Bool":
+            return "False"
+
+        vector_match = re.fullmatch(r"SIMD\[(DType\.\w+), (\d+)\]", mojo_type)
+        if vector_match:
+            dtype = vector_match.group(1)
+            width = int(vector_match.group(2))
+            zero = MOJO_DTYPE_INFO.get(dtype, MOJO_DTYPE_INFO["DType.float32"])[2]
+            return f"{mojo_type}({', '.join([zero] * width)})"
+
+        return f"{mojo_type}()"
 
     def generate_fract_helper(self, key):
         kind, dtype, source_width, storage_width = key
@@ -2892,6 +3165,29 @@ class MojoCodeGen:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name == "saturate" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"texture", "textureLod", "textureGrad", "texelFetch"}:
+                return "vec4"
+            if func_name == "textureQueryLevels":
+                return "int"
+            if func_name in {"textureSize", "imageSize"} and expr.args:
+                resource_type = self.map_type(self.expression_result_type(expr.args[0]))
+                size_type = MOJO_RESOURCE_SIZE_RETURNS.get(resource_type)
+                if size_type == "Int32":
+                    return "int"
+                if size_type == "SIMD[DType.int32, 2]":
+                    return "ivec2"
+                if size_type == "SIMD[DType.int32, 4]":
+                    return "ivec3"
+            if func_name == "imageLoad" and expr.args:
+                resource_type = self.map_type(self.expression_result_type(expr.args[0]))
+                value_type = self.image_value_type(resource_type)
+                if value_type == "Int32":
+                    return "int"
+                if value_type == "UInt32":
+                    return "uint"
+                return "vec4"
+            if func_name == "imageStore":
+                return "void"
             return self.function_return_types.get(func_name)
         if isinstance(expr, MemberAccessNode):
             swizzle_indices = self.get_swizzle_indices(expr.member)

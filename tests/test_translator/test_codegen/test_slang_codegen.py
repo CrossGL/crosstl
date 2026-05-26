@@ -1,5 +1,7 @@
 from crosstl.translator.lexer import Lexer
 import pytest
+import shutil
+import subprocess
 from typing import List
 from crosstl.translator.parser import Parser
 from crosstl.translator.ast import LiteralNode, PrimitiveType
@@ -33,6 +35,39 @@ def generate_code(ast_node):
     """
     codegen = SlangCodeGen()
     return codegen.generate(ast_node)
+
+
+def compile_generated_slang(generated_code, tmp_path, stage, profile="sm_6_0"):
+    slangc = shutil.which("slangc")
+    if slangc is None:
+        pytest.skip("slangc is not installed")
+
+    source_path = tmp_path / f"smoke_{stage}.slang"
+    output_path = tmp_path / f"smoke_{stage}.hlsl"
+    source_path.write_text(generated_code, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            slangc,
+            "-target",
+            "hlsl",
+            "-entry",
+            "main",
+            "-stage",
+            stage,
+            "-profile",
+            profile,
+            "-o",
+            str(output_path),
+            str(source_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert output_path.exists()
 
 
 def test_struct():
@@ -146,33 +181,12 @@ def test_vertex_position_assignment_rewrites_only_final_top_level_assignment():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "void main()" in generated_code
-    assert "gl_Position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
-    assert "return float4(0.0, 0.0, 0.0, 1.0);" not in generated_code
-
-
-def test_vertex_position_branch_assignment_rewrites_with_output_local():
-    code = """
-    shader main {
-        vertex {
-            void main(bool usePrimary) {
-                if (usePrimary) {
-                    gl_Position = vec4(1.0, 0.0, 0.0, 1.0);
-                } else {
-                    gl_Position = vec4(0.0, 1.0, 0.0, 1.0);
-                }
-            }
-        }
-    }
-    """
-    generated_code = generate_code(parse_code(tokenize_code(code)))
-
-    assert "float4 main(bool usePrimary) : SV_Position" in generated_code
+    assert "float4 main() : SV_Position" in generated_code
     assert "float4 cgl_Position;" in generated_code
-    assert "cgl_Position = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
-    assert "cgl_Position = float4(0.0, 1.0, 0.0, 1.0);" in generated_code
+    assert "cgl_Position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "float y = 1.0;" in generated_code
     assert "return cgl_Position;" in generated_code
-    assert "\n        gl_Position =" not in generated_code
+    assert "\n    gl_Position =" not in generated_code
 
 
 def test_fragment_output_assignments_rewrite_to_slang_return_semantics():
@@ -209,6 +223,148 @@ def test_fragment_depth_assignment_rewrites_to_slang_return_semantic():
     assert "float depth = 0.25;" in generated_code
     assert "return depth;" in generated_code
     assert "gl_FragDepth =" not in generated_code
+
+
+def test_control_flow_fragment_output_assignments_rewrite_to_local_return():
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                if (gl_FrontFacing) {
+                    gl_FragColor = vec4(1.0);
+                } else {
+                    gl_FragColor = vec4(0.0);
+                }
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "float4 main(bool gl_FrontFacing : SV_IsFrontFace) : SV_Target"
+        in generated_code
+    )
+    assert "float4 cgl_FragColor;" in generated_code
+    assert "if (gl_FrontFacing)" in generated_code
+    assert "cgl_FragColor = float4(1.0);" in generated_code
+    assert "cgl_FragColor = float4(0.0);" in generated_code
+    assert "return cgl_FragColor;" in generated_code
+    assert "\n        gl_FragColor =" not in generated_code
+
+
+def test_fragment_color_and_depth_outputs_rewrite_to_slang_output_struct():
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                gl_FragColor = vec4(1.0, 0.5, 0.25, 1.0);
+                gl_FragDepth = 0.5;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct CGLPSMainOutput" in generated_code
+    assert "float4 cgl_FragColor : SV_Target;" in generated_code
+    assert "float cgl_FragDepth : SV_Depth;" in generated_code
+    assert "CGLPSMainOutput main()" in generated_code
+    assert "CGLPSMainOutput cgl_Output;" in generated_code
+    assert "cgl_Output.cgl_FragColor = float4(1.0, 0.5, 0.25, 1.0);" in generated_code
+    assert "cgl_Output.cgl_FragDepth = 0.5;" in generated_code
+    assert "return cgl_Output;" in generated_code
+    assert "\n    gl_FragColor =" not in generated_code
+    assert "\n    gl_FragDepth =" not in generated_code
+
+
+def test_fragment_multiple_color_outputs_rewrite_to_slang_output_struct():
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                gl_FragColor0 = vec4(1.0);
+                gl_FragColor1 = vec4(0.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 cgl_FragColor0 : SV_Target0;" in generated_code
+    assert "float4 cgl_FragColor1 : SV_Target1;" in generated_code
+    assert "cgl_Output.cgl_FragColor0 = float4(1.0);" in generated_code
+    assert "cgl_Output.cgl_FragColor1 = float4(0.0);" in generated_code
+    assert "return cgl_Output;" in generated_code
+
+
+def test_vertex_position_and_point_size_outputs_rewrite_to_slang_output_struct():
+    code = """
+    shader main {
+        vertex {
+            void main() {
+                gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+                gl_PointSize = 4.0;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct CGLVSMainOutput" in generated_code
+    assert "float4 cgl_Position : SV_Position;" in generated_code
+    assert "float cgl_PointSize : PSIZE;" in generated_code
+    assert "CGLVSMainOutput main()" in generated_code
+    assert "cgl_Output.cgl_Position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "cgl_Output.cgl_PointSize = 4.0;" in generated_code
+    assert "return cgl_Output;" in generated_code
+
+
+def test_slangc_smoke_compiles_generated_vertex_output_rewrite(tmp_path):
+    code = """
+    shader SmokeVertex {
+        vertex {
+            void main() {
+                gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    compile_generated_slang(generated_code, tmp_path, "vertex")
+
+
+def test_slangc_smoke_compiles_generated_fragment_output_struct(tmp_path):
+    code = """
+    shader SmokeFragment {
+        fragment {
+            void main() {
+                gl_FragColor = vec4(1.0, 0.5, 0.25, 1.0);
+                gl_FragDepth = 0.5;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    compile_generated_slang(generated_code, tmp_path, "fragment")
+
+
+def test_slangc_smoke_compiles_generated_compute_system_values(tmp_path):
+    code = """
+    shader SmokeCompute {
+        compute {
+            void main() {
+                uint globalX = gl_GlobalInvocationID.x;
+                uint localIndex = gl_LocalInvocationIndex;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    compile_generated_slang(generated_code, tmp_path, "compute")
 
 
 def test_compute_system_value_builtins_emit_implicit_slang_parameters():

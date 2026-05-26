@@ -32,7 +32,7 @@ shader main {
     [
         (
             RustCodeGen,
-            "static PARTICLES: std::sync::LazyLock<RWStructuredBuffer<Particles>> = "
+            "static PARTICLES: std::sync::LazyLock<RwBuffer<Particles>> = "
             "std::sync::LazyLock::new(|| Default::default());",
         ),
         (MojoCodeGen, "var particles: RWStructuredBuffer<Particles>"),

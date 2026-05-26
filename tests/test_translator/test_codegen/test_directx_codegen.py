@@ -3386,7 +3386,7 @@ def test_directx_amplification_mesh_payload_type_mismatch_is_rejected():
     }
     """
 
-    with pytest.raises(ValueError, match="payload.*MeshPayload.*DispatchMesh"):
+    with pytest.raises(ValueError, match="DispatchMesh payload type.*MeshPayload"):
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
@@ -3419,7 +3419,7 @@ def test_directx_mesh_payload_requires_amplification_dispatch_payload():
     }
     """
 
-    with pytest.raises(ValueError, match="DispatchMesh calls to pass a payload"):
+    with pytest.raises(ValueError, match="DispatchMesh call must pass a payload"):
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
@@ -3442,6 +3442,84 @@ def test_directx_mesh_payload_does_not_capture_ray_payload_semantic():
 
     assert "RayPayload payload : payload" in generated
     assert "in payload RayPayload" not in generated
+
+
+def test_directx_dispatch_mesh_validates_argument_count_and_group_count_types():
+    too_many_args_code = """
+    shader DispatchMeshTooManyArgs {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                DispatchMesh(1, 1, 1, 1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh requires exactly"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(too_many_args_code), "task"
+        )
+
+    float_count_code = """
+    shader DispatchMeshFloatCount {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                DispatchMesh(1.5, 1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ThreadGroupCountX.*scalar int or uint"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(float_count_code), "task")
+
+    vector_count_code = """
+    shader DispatchMeshVectorCount {
+        task {
+            void main(uvec3 count @ SV_GroupID) @numthreads(1, 1, 1) {
+                DispatchMesh(count, 1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ThreadGroupCountX.*uint3"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vector_count_code), "task"
+        )
+
+
+def test_directx_dispatch_mesh_rejects_multiple_calls_per_amplification_stage():
+    shader = """
+    shader DispatchMeshMultipleCalls {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                DispatchMesh(1, 1, 1);
+                DispatchMesh(1, 1, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="DispatchMesh at most once"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "task")
+
+
+def test_directx_dispatch_mesh_rejects_calls_outside_amplification_stages():
+    shader = """
+    shader DispatchMeshWrongStage {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        compute {
+            void main() {
+                MeshPayload payload;
+                DispatchMesh(1, 1, 1, payload);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="compute.*cannot call DispatchMesh"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
 
 
 def test_directx_advanced_stage_entries_use_stage_specific_names():
