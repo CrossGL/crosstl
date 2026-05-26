@@ -1270,6 +1270,41 @@
     },
     {
       "category": "language",
+      "description": "Lower barrier, memoryBarrier, and workgroupBarrier calls to backend-native synchronization intrinsics.",
+      "id": "language.synchronization",
+      "name": "Synchronization and memory barriers",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_user_defined_synchronization_names_are_not_lowered",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_hlsl_compute_synchronization_compiles_with_dxc"
+          ],
+          "notes": "barrier/workgroupBarrier lower to GroupMemoryBarrierWithGroupSync; memoryBarrier lowers to AllMemoryBarrier; user-defined functions with the same names are preserved.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_synchronization_builtins_lower_to_threadgroup_barriers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_user_defined_synchronization_names_are_not_lowered",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_metal_compute_synchronization_compiles_with_xcrun_metal"
+          ],
+          "notes": "barrier/workgroupBarrier lower to threadgroup barriers; memoryBarrier lowers to a device-memory threadgroup barrier; user-defined functions with the same names are preserved.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_user_defined_workgroup_barrier_is_not_lowered",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_glsl_compute_synchronization_validates_with_glslangvalidator"
+          ],
+          "notes": "workgroupBarrier lowers to GLSL barrier; barrier and memoryBarrier remain native; user-defined workgroupBarrier functions are preserved.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "language",
       "description": "CrossGL match expressions and pattern arms.",
       "id": "language.match",
       "name": "Match/pattern lowering",
@@ -1398,12 +1433,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 41,
+    "feature_count": 42,
     "status_counts": {
       "directx": {
         "diagnostic": 0,
         "partial": 5,
-        "supported": 36,
+        "supported": 37,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -1411,7 +1446,7 @@
       "metal": {
         "diagnostic": 0,
         "partial": 6,
-        "supported": 33,
+        "supported": 34,
         "unknown": 0,
         "unsupported": 2,
         "validated_rejection": 0
@@ -1419,7 +1454,7 @@
       "opengl": {
         "diagnostic": 0,
         "partial": 5,
-        "supported": 36,
+        "supported": 37,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

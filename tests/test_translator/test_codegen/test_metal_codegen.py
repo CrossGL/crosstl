@@ -39,6 +39,64 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
+    shader = """
+    shader SynchronizationBuiltins {
+        compute {
+            void main() {
+                barrier();
+                memoryBarrier();
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert "threadgroup_barrier(mem_flags::mem_device);" in generated_code
+    assert "barrier();" not in generated_code
+    assert "memoryBarrier();" not in generated_code
+    assert "workgroupBarrier();" not in generated_code
+
+
+def test_metal_user_defined_synchronization_names_are_not_lowered():
+    shader = """
+    shader SynchronizationShadowing {
+        compute {
+            void barrier() {
+                return;
+            }
+
+            void memoryBarrier() {
+                return;
+            }
+
+            void workgroupBarrier() {
+                return;
+            }
+
+            void main() {
+                barrier();
+                memoryBarrier();
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "void barrier()" in generated_code
+    assert "void memoryBarrier()" in generated_code
+    assert "void workgroupBarrier()" in generated_code
+    assert "barrier();" in generated_code
+    assert "memoryBarrier();" in generated_code
+    assert "workgroupBarrier();" in generated_code
+    assert "threadgroup_barrier(" not in generated_code
+
+
 def test_metal_precision_aliases_map_to_native_metal_types():
     shader = """
     shader PrecisionAliasSmoke {

@@ -22,6 +22,19 @@ shader ExternalValidatorSmoke {
 """
 
 
+CROSSGL_SYNCHRONIZATION_COMPUTE_SHADER = """
+shader ExternalValidatorSynchronization {
+    compute {
+        void main() {
+            barrier();
+            memoryBarrier();
+            workgroupBarrier();
+        }
+    }
+}
+"""
+
+
 GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER = """
 shader GLSLMultisampleStorageValidator {
     image2DMS colorImage @rgba16f;
@@ -235,6 +248,34 @@ def test_generated_hlsl_fragment_compiles_with_dxc(tmp_path):
     assert output_path.exists()
 
 
+def test_generated_hlsl_compute_synchronization_compiles_with_dxc(tmp_path):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / "synchronization.hlsl"
+    output_path = tmp_path / "synchronization.dxil"
+
+    code = HLSLCodeGen().generate(
+        crosstl.translator.parse(CROSSGL_SYNCHRONIZATION_COMPUTE_SHADER)
+    )
+    assert code.count("GroupMemoryBarrierWithGroupSync();") == 2
+    assert "AllMemoryBarrier();" in code
+    assert "workgroupBarrier();" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
 @pytest.mark.parametrize(
     ("case_name", "source", "expected_snippets", "forbidden_snippets"),
     [
@@ -326,6 +367,23 @@ def test_generated_glsl_fragment_validates_with_glslangvalidator(tmp_path):
     _run_validator([glslang, "-S", "frag", str(shader_path)])
 
 
+def test_generated_glsl_compute_synchronization_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "synchronization.comp"
+
+    code = GLSLCodeGen().generate(
+        crosstl.translator.parse(CROSSGL_SYNCHRONIZATION_COMPUTE_SHADER)
+    )
+    assert code.count("barrier();") == 2
+    assert "memoryBarrier();" in code
+    assert "workgroupBarrier();" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
 def test_generated_glsl_multisample_storage_validates_with_glslangvalidator(
     tmp_path,
 ):
@@ -370,6 +428,34 @@ def test_generated_metal_fragment_compiles_with_xcrun_metal(tmp_path):
         MetalCodeGen().generate_stage(_fragment_ast(), "fragment"),
         encoding="utf-8",
     )
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_generated_metal_compute_synchronization_compiles_with_xcrun_metal(tmp_path):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "synchronization.metal"
+    output_path = tmp_path / "synchronization.air"
+
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(CROSSGL_SYNCHRONIZATION_COMPUTE_SHADER)
+    )
+    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert "threadgroup_barrier(mem_flags::mem_device);" in code
+    assert "workgroupBarrier();" not in code
+    shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(
         [

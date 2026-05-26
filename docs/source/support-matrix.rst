@@ -22,9 +22,9 @@ implicitly supported.
 .. csv-table:: Backend inventory
    :header: "Backend", "Ext", "Target generator", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
-   "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "460", "372", "Microsoft Learn HLSL reference; HLSL specification project"
-   "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "670", "997", "GLSL 4.60 specification; OpenGL registry"
-   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "417", "380", "Apple Metal resources; Metal Shading Language specification"
+   "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "462", "372", "Microsoft Learn HLSL reference; HLSL specification project"
+   "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "672", "997", "GLSL 4.60 specification; OpenGL registry"
+   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "419", "380", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "327", "19", "SPIR-V unified specification; Khronos SPIR-V registry"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "240", "56", "CUDA C++ programming guide"
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "271", "60", "ROCm HIP documentation"
@@ -35,15 +35,15 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "36", "5", "0", "0", "0", "0"
-   "OpenGL / GLSL", "36", "5", "0", "0", "0", "0"
-   "Metal", "33", "6", "0", "0", "2", "0"
-   "Vulkan SPIR-V", "6", "12", "0", "0", "0", "23"
-   "CUDA", "10", "11", "0", "0", "3", "17"
-   "HIP", "10", "11", "0", "0", "3", "17"
-   "Mojo", "10", "7", "0", "0", "0", "24"
-   "Rust", "11", "6", "0", "0", "0", "24"
-   "Slang", "12", "8", "0", "0", "0", "21"
+   "DirectX / HLSL", "37", "5", "0", "0", "0", "0"
+   "OpenGL / GLSL", "37", "5", "0", "0", "0", "0"
+   "Metal", "34", "6", "0", "0", "2", "0"
+   "Vulkan SPIR-V", "6", "12", "0", "0", "0", "24"
+   "CUDA", "11", "11", "0", "0", "3", "17"
+   "HIP", "10", "12", "0", "0", "3", "17"
+   "Mojo", "10", "7", "0", "0", "0", "25"
+   "Rust", "11", "6", "0", "0", "0", "25"
+   "Slang", "13", "8", "0", "0", "0", "21"
 
 Graphics Backend Focus
 ----------------------
@@ -54,9 +54,9 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "36", "5", "0", "0", "0", "0"
-   "OpenGL / GLSL", "36", "5", "0", "0", "0", "0"
-   "Metal", "33", "6", "0", "0", "2", "0"
+   "DirectX / HLSL", "37", "5", "0", "0", "0", "0"
+   "OpenGL / GLSL", "37", "5", "0", "0", "0", "0"
+   "Metal", "34", "6", "0", "0", "2", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
@@ -153,6 +153,7 @@ Each category below uses the status codes from the legend.
    "Array declarations and access", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
    "Function declarations and calls", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
    "Control flow", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
+   "Synchronization and memory barriers", "Y", "Y", "Y", "?", "Y", "P", "?", "?", "Y"
    "Match/pattern lowering", "Y", "Y", "Y", "?", "P", "P", "P", "Y", "P"
    "Vector and matrix expressions", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
    "Bitwise operations", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
@@ -363,6 +364,10 @@ need an audit before implementation work can be scoped accurately.
    "Vulkan SPIR-V", "language", "Array declarations and access", "partial", ""
    "Vulkan SPIR-V", "language", "Function declarations and calls", "partial", ""
    "Vulkan SPIR-V", "language", "Control flow", "partial", ""
+   "Vulkan SPIR-V", "language", "Synchronization and memory barriers", "unknown", ""
+   "HIP", "language", "Synchronization and memory barriers", "partial", ""
+   "Mojo", "language", "Synchronization and memory barriers", "unknown", ""
+   "Rust", "language", "Synchronization and memory barriers", "unknown", ""
    "Vulkan SPIR-V", "language", "Match/pattern lowering", "unknown", ""
    "CUDA", "language", "Match/pattern lowering", "partial", ""
    "HIP", "language", "Match/pattern lowering", "partial", ""

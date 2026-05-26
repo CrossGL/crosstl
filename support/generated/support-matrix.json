@@ -132,7 +132,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 460
+        "test_count": 462
       },
       "translator_codegen": {
         "exists": true,
@@ -271,7 +271,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 670
+        "test_count": 672
       },
       "translator_codegen": {
         "exists": true,
@@ -410,7 +410,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 417
+        "test_count": 419
       },
       "translator_codegen": {
         "exists": true,
@@ -2875,6 +2875,42 @@
       "backend": "Vulkan SPIR-V",
       "backend_id": "vulkan",
       "category": "language",
+      "feature": "Synchronization and memory barriers",
+      "feature_id": "language.synchronization",
+      "notes": "",
+      "status": "unknown"
+    },
+    {
+      "backend": "HIP",
+      "backend_id": "hip",
+      "category": "language",
+      "feature": "Synchronization and memory barriers",
+      "feature_id": "language.synchronization",
+      "notes": "",
+      "status": "partial"
+    },
+    {
+      "backend": "Mojo",
+      "backend_id": "mojo",
+      "category": "language",
+      "feature": "Synchronization and memory barriers",
+      "feature_id": "language.synchronization",
+      "notes": "",
+      "status": "unknown"
+    },
+    {
+      "backend": "Rust",
+      "backend_id": "rust",
+      "category": "language",
+      "feature": "Synchronization and memory barriers",
+      "feature_id": "language.synchronization",
+      "notes": "",
+      "status": "unknown"
+    },
+    {
+      "backend": "Vulkan SPIR-V",
+      "backend_id": "vulkan",
+      "category": "language",
       "feature": "Match/pattern lowering",
       "feature_id": "language.match",
       "notes": "",
@@ -5242,6 +5278,71 @@
     },
     {
       "category": "language",
+      "description": "Lower barrier, memoryBarrier, and workgroupBarrier calls to backend-native synchronization intrinsics.",
+      "id": "language.synchronization",
+      "name": "Synchronization and memory barriers",
+      "support": {
+        "cuda": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_user_defined_synchronization_names_are_not_lowered",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_hlsl_compute_synchronization_compiles_with_dxc"
+          ],
+          "notes": "barrier/workgroupBarrier lower to GroupMemoryBarrierWithGroupSync; memoryBarrier lowers to AllMemoryBarrier; user-defined functions with the same names are preserved.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [],
+          "notes": "",
+          "status": "partial"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_synchronization_builtins_lower_to_threadgroup_barriers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_user_defined_synchronization_names_are_not_lowered",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_metal_compute_synchronization_compiles_with_xcrun_metal"
+          ],
+          "notes": "barrier/workgroupBarrier lower to threadgroup barriers; memoryBarrier lowers to a device-memory threadgroup barrier; user-defined functions with the same names are preserved.",
+          "status": "supported"
+        },
+        "mojo": {
+          "evidence": [],
+          "notes": "",
+          "status": "unknown"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_user_defined_workgroup_barrier_is_not_lowered",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_glsl_compute_synchronization_validates_with_glslangvalidator"
+          ],
+          "notes": "workgroupBarrier lowers to GLSL barrier; barrier and memoryBarrier remain native; user-defined workgroupBarrier functions are preserved.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [],
+          "notes": "",
+          "status": "unknown"
+        },
+        "slang": {
+          "evidence": [],
+          "notes": "",
+          "status": "supported"
+        },
+        "vulkan": {
+          "evidence": [],
+          "notes": "",
+          "status": "unknown"
+        }
+      }
+    },
+    {
+      "category": "language",
       "description": "CrossGL match expressions and pattern arms.",
       "id": "language.match",
       "name": "Match/pattern lowering",
@@ -5485,13 +5586,13 @@
   },
   "summary": {
     "backend_count": 9,
-    "backlog_count": 205,
-    "feature_count": 41,
+    "backlog_count": 209,
+    "feature_count": 42,
     "status_counts": {
       "cuda": {
         "diagnostic": 0,
         "partial": 11,
-        "supported": 10,
+        "supported": 11,
         "unknown": 17,
         "unsupported": 3,
         "validated_rejection": 0
@@ -5499,14 +5600,14 @@
       "directx": {
         "diagnostic": 0,
         "partial": 5,
-        "supported": 36,
+        "supported": 37,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "hip": {
         "diagnostic": 0,
-        "partial": 11,
+        "partial": 12,
         "supported": 10,
         "unknown": 17,
         "unsupported": 3,
@@ -5515,7 +5616,7 @@
       "metal": {
         "diagnostic": 0,
         "partial": 6,
-        "supported": 33,
+        "supported": 34,
         "unknown": 0,
         "unsupported": 2,
         "validated_rejection": 0
@@ -5524,14 +5625,14 @@
         "diagnostic": 0,
         "partial": 7,
         "supported": 10,
-        "unknown": 24,
+        "unknown": 25,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "opengl": {
         "diagnostic": 0,
         "partial": 5,
-        "supported": 36,
+        "supported": 37,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -5540,14 +5641,14 @@
         "diagnostic": 0,
         "partial": 6,
         "supported": 11,
-        "unknown": 24,
+        "unknown": 25,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "slang": {
         "diagnostic": 0,
         "partial": 8,
-        "supported": 12,
+        "supported": 13,
         "unknown": 21,
         "unsupported": 0,
         "validated_rejection": 0
@@ -5556,7 +5657,7 @@
         "diagnostic": 0,
         "partial": 12,
         "supported": 6,
-        "unknown": 23,
+        "unknown": 24,
         "unsupported": 0,
         "validated_rejection": 0
       }

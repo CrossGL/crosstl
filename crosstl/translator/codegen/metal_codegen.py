@@ -3087,6 +3087,12 @@ class MetalCodeGen:
             if glsl_block_atomic_call is not None:
                 return glsl_block_atomic_call
 
+            synchronization_call = self.synchronization_function_call(
+                func_name, expr.args
+            )
+            if synchronization_call is not None:
+                return synchronization_call
+
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:
                 return texture_call
@@ -3343,6 +3349,15 @@ class MetalCodeGen:
             return name
         else:
             return str(expr)
+
+    def synchronization_function_call(self, func_name, args):
+        if args or func_name in self.user_function_names:
+            return None
+        return {
+            "barrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
+            "workgroupBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
+            "memoryBarrier": "threadgroup_barrier(mem_flags::mem_device)",
+        }.get(func_name)
 
     def generate_buffer_call(self, func_name, args):
         if func_name == "buffer_load" and len(args) >= 2:

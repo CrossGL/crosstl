@@ -2917,6 +2917,10 @@ class HLSLCodeGen:
             if unsupported_call is not None:
                 return unsupported_call
 
+            synchronization_call = self.synchronization_function_call(func_name, args)
+            if synchronization_call is not None:
+                return synchronization_call
+
             texture_call = self.generate_texture_call(func_name, args)
             if texture_call is not None:
                 return texture_call
@@ -3106,6 +3110,15 @@ class HLSLCodeGen:
             return f"({condition} ? {true_expr} : {false_expr})"
         else:
             return str(expr)
+
+    def synchronization_function_call(self, func_name, args):
+        if args or func_name in getattr(self, "function_return_types", {}):
+            return None
+        return {
+            "barrier": "GroupMemoryBarrierWithGroupSync()",
+            "workgroupBarrier": "GroupMemoryBarrierWithGroupSync()",
+            "memoryBarrier": "AllMemoryBarrier()",
+        }.get(func_name)
 
     def generate_buffer_call(self, func_name, args):
         """Render canonical CrossGL buffer operations as HLSL resource methods."""

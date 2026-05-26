@@ -46,6 +46,65 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
+    shader = """
+    shader SynchronizationBuiltins {
+        compute {
+            void main() {
+                barrier();
+                memoryBarrier();
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("GroupMemoryBarrierWithGroupSync();") == 2
+    assert "AllMemoryBarrier();" in generated_code
+    assert "barrier();" not in generated_code
+    assert "memoryBarrier();" not in generated_code
+    assert "workgroupBarrier();" not in generated_code
+
+
+def test_directx_user_defined_synchronization_names_are_not_lowered():
+    shader = """
+    shader SynchronizationShadowing {
+        compute {
+            void barrier() {
+                return;
+            }
+
+            void memoryBarrier() {
+                return;
+            }
+
+            void workgroupBarrier() {
+                return;
+            }
+
+            void main() {
+                barrier();
+                memoryBarrier();
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "void barrier()" in generated_code
+    assert "void memoryBarrier()" in generated_code
+    assert "void workgroupBarrier()" in generated_code
+    assert "barrier();" in generated_code
+    assert "memoryBarrier();" in generated_code
+    assert "workgroupBarrier();" in generated_code
+    assert "GroupMemoryBarrierWithGroupSync();" not in generated_code
+    assert "AllMemoryBarrier();" not in generated_code
+
+
 def test_hlsl_float16_ir_aliases_map_to_half_and_min_precision_names():
     shader = """
     shader Float16IRSmoke {

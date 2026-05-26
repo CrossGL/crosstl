@@ -3763,6 +3763,13 @@ class GLSLCodeGen:
             else:
                 callee = self.generate_expression(func_expr)
             original_func_name = func_name
+
+            synchronization_call = self.synchronization_function_call(
+                original_func_name, expr.args
+            )
+            if synchronization_call is not None:
+                return synchronization_call
+
             func_name = self.function_map.get(func_name, func_name)
 
             static_generic_call = generate_static_generic_numeric_call(
@@ -3837,6 +3844,13 @@ class GLSLCodeGen:
             return f"({condition} ? {true_expr} : {false_expr})"
         else:
             return str(expr)
+
+    def synchronization_function_call(self, func_name, args):
+        if args or func_name in self.function_return_types:
+            return None
+        if func_name == "workgroupBarrier":
+            return "barrier()"
+        return None
 
     def generate_buffer_call(self, func_name, args):
         if func_name == "buffer_load" and len(args) >= 2:

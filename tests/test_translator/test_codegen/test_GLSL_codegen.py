@@ -63,6 +63,48 @@ def glsl_image_atomic_parameter_diagnostic(operation, resource_type, zero_value)
     )
 
 
+def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier():
+    shader = """
+    shader SynchronizationBuiltins {
+        compute {
+            void main() {
+                barrier();
+                memoryBarrier();
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("barrier();") == 2
+    assert "memoryBarrier();" in generated_code
+    assert "workgroupBarrier();" not in generated_code
+
+
+def test_glsl_user_defined_workgroup_barrier_is_not_lowered():
+    shader = """
+    shader SynchronizationShadowing {
+        compute {
+            void workgroupBarrier() {
+                return;
+            }
+
+            void main() {
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "void workgroupBarrier()" in generated_code
+    assert "workgroupBarrier();" in generated_code
+    assert "barrier();" not in generated_code
+
+
 def test_structured_buffer_operations_lower_to_ssbo():
     code = """
     shader StructuredBufferGLSL {
