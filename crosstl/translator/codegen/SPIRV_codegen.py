@@ -3140,8 +3140,10 @@ class VulkanSPIRVCodeGen:
         if category == "ray query":
             if operation == "Proceed":
                 return self.register_primitive_type("bool")
-            if operation in {"CandidateRayT", "CommittedRayT"}:
-                return self.register_primitive_type("float")
+            getter_info = self.ray_query_intersection_getter_info(operation)
+            if getter_info is not None:
+                _, result_kind, _ = getter_info
+                return self.ray_query_result_type_for_kind(result_kind)
             if operation in {
                 "CandidateObjectRayOrigin",
                 "CandidateObjectRayDirection",
@@ -3169,16 +3171,125 @@ class VulkanSPIRVCodeGen:
 
         return query_pointer
 
+    def ray_query_intersection_selector(self, operation: str) -> Optional[int]:
+        if operation.startswith("Candidate"):
+            return 0
+        if operation.startswith("Committed"):
+            return 1
+        return None
+
     def ray_query_intersection_constant(self, operation: str) -> Optional[SpirvId]:
-        selectors = {
-            "CandidateRayT": 0,
-            "CommittedRayT": 1,
-        }
-        selector = selectors.get(operation)
+        selector = self.ray_query_intersection_selector(operation)
         if selector is None:
             return None
 
         return self.register_constant(selector, self.register_primitive_type("uint"))
+
+    def ray_query_result_type_for_kind(self, result_kind: str) -> SpirvId:
+        if result_kind == "bool":
+            return self.register_primitive_type("bool")
+        if result_kind == "float":
+            return self.register_primitive_type("float")
+        if result_kind == "vec2":
+            return self.register_vector_type(self.register_primitive_type("float"), 2)
+        return self.register_primitive_type("uint")
+
+    def ray_query_intersection_getter_info(self, operation: str):
+        getters = {
+            "CandidateType": ("OpRayQueryGetIntersectionTypeKHR", "uint"),
+            "CommittedType": ("OpRayQueryGetIntersectionTypeKHR", "uint"),
+            "CandidateRayT": ("OpRayQueryGetIntersectionTKHR", "float"),
+            "CommittedRayT": ("OpRayQueryGetIntersectionTKHR", "float"),
+            "CandidatePrimitiveIndex": (
+                "OpRayQueryGetIntersectionPrimitiveIndexKHR",
+                "uint",
+            ),
+            "CommittedPrimitiveIndex": (
+                "OpRayQueryGetIntersectionPrimitiveIndexKHR",
+                "uint",
+            ),
+            "CandidateInstanceID": (
+                "OpRayQueryGetIntersectionInstanceIdKHR",
+                "uint",
+            ),
+            "CommittedInstanceID": (
+                "OpRayQueryGetIntersectionInstanceIdKHR",
+                "uint",
+            ),
+            "CandidateGeometryIndex": (
+                "OpRayQueryGetIntersectionGeometryIndexKHR",
+                "uint",
+            ),
+            "CommittedGeometryIndex": (
+                "OpRayQueryGetIntersectionGeometryIndexKHR",
+                "uint",
+            ),
+            "CandidateTriangleBarycentrics": (
+                "OpRayQueryGetIntersectionBarycentricsKHR",
+                "vec2",
+            ),
+            "CommittedTriangleBarycentrics": (
+                "OpRayQueryGetIntersectionBarycentricsKHR",
+                "vec2",
+            ),
+            "CandidateTriangleFrontFace": (
+                "OpRayQueryGetIntersectionFrontFaceKHR",
+                "bool",
+            ),
+            "CommittedTriangleFrontFace": (
+                "OpRayQueryGetIntersectionFrontFaceKHR",
+                "bool",
+            ),
+        }
+        getter = getters.get(operation)
+        if getter is None:
+            return None
+
+        selector = self.ray_query_intersection_selector(operation)
+        if selector is None:
+            return None
+
+        opcode, result_kind = getter
+        return opcode, result_kind, selector
+
+    def ray_query_intersection_getter_operations(self):
+        return {
+            "CandidateType",
+            "CommittedType",
+            "CandidateRayT",
+            "CommittedRayT",
+            "CandidatePrimitiveIndex",
+            "CommittedPrimitiveIndex",
+            "CandidateInstanceID",
+            "CommittedInstanceID",
+            "CandidateGeometryIndex",
+            "CommittedGeometryIndex",
+            "CandidateTriangleBarycentrics",
+            "CommittedTriangleBarycentrics",
+            "CandidateTriangleFrontFace",
+            "CommittedTriangleFrontFace",
+        }
+
+    def process_ray_query_intersection_getter(
+        self, query_pointer: SpirvId, operation: str
+    ) -> SpirvId:
+        getter_info = self.ray_query_intersection_getter_info(operation)
+        if getter_info is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        opcode, result_kind, _ = getter_info
+        intersection = self.ray_query_intersection_constant(operation)
+        if intersection is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        result_type = self.ray_query_result_type_for_kind(result_kind)
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = {opcode} %{result_type.id} "
+            f"%{query_pointer.id} %{intersection.id}"
+        )
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
 
     def format_expected_argument_counts(self, expected_counts) -> str:
         return " or ".join(str(count) for count in sorted(expected_counts))
@@ -3384,12 +3495,10 @@ class VulkanSPIRVCodeGen:
             "CommitProceduralPrimitiveHit",
             "ConfirmIntersection",
             "Proceed",
-            "CandidateRayT",
-            "CommittedRayT",
             "GenerateIntersection",
             "Terminate",
             "TraceRayInline",
-        }
+        } | self.ray_query_intersection_getter_operations()
 
     def ray_query_call_from_function_call(self, expr) -> Optional[RayQueryOpNode]:
         if not isinstance(expr, FunctionCallNode):
@@ -3421,10 +3530,10 @@ class VulkanSPIRVCodeGen:
             "CommitNonOpaqueTriangleHit": 0,
             "GenerateIntersection": 1,
             "CommitProceduralPrimitiveHit": 1,
-            "CandidateRayT": 0,
-            "CommittedRayT": 0,
             "TraceRayInline": {4, 7},
         }
+        for getter_operation in self.ray_query_intersection_getter_operations():
+            supported_argument_counts[getter_operation] = 0
         if operation not in supported_argument_counts:
             return self.represented_ir_diagnostic_default_value("ray query", operation)
 
@@ -3481,18 +3590,10 @@ class VulkanSPIRVCodeGen:
             self.value_types[id_value] = result_type
             return SpirvId(id_value, result_type.type)
 
-        intersection = self.ray_query_intersection_constant(operation)
-        if intersection is None:
-            return self.represented_ir_diagnostic_default_value("ray query", operation)
+        if operation in self.ray_query_intersection_getter_operations():
+            return self.process_ray_query_intersection_getter(query_pointer, operation)
 
-        result_type = self.register_primitive_type("float")
-        id_value = self.get_id()
-        self.emit(
-            f"%{id_value} = OpRayQueryGetIntersectionTKHR %{result_type.id} "
-            f"%{query_pointer.id} %{intersection.id}"
-        )
-        self.value_types[id_value] = result_type
-        return SpirvId(id_value, result_type.type)
+        return self.represented_ir_diagnostic_default_value("ray query", operation)
 
     def flatten_vector_constructor_args(
         self,

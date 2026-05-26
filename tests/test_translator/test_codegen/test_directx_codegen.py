@@ -11213,6 +11213,53 @@ def test_directx_resource_array_register_space_conflicts_use_full_ranges():
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
+def test_directx_register_space0_aliases_default_resource_space():
+    conflict_shader = """
+    shader RegisterSpaceZeroConflict {
+        sampler2D implicitSpace @register(t0);
+        sampler2D explicitSpaceZero @register(t0, space0);
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "Conflicting DirectX resource binding for 'explicitSpaceZero': "
+            "t0 overlaps 'implicitSpace' t0"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(conflict_shader))
+
+    allocation_shader = """
+    shader RegisterSpaceZeroAllocation {
+        sampler2D explicitSpaceZero @register(t0, space0);
+        sampler2D autoSpaceZero @space(space0);
+        sampler2D autoImplicit;
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return texture(autoSpaceZero, uv) + texture(autoImplicit, uv);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(allocation_shader))
+
+    assert "Texture2D explicitSpaceZero : register(t0);" in generated_code
+    assert "Texture2D autoSpaceZero : register(t1);" in generated_code
+    assert "SamplerState autoSpaceZeroSampler : register(s0);" in generated_code
+    assert "Texture2D autoImplicit : register(t2);" in generated_code
+    assert "SamplerState autoImplicitSampler : register(s1);" in generated_code
+    assert "space0" not in generated_code
+
+
 def test_directx_rg_image_arrays_respect_scalar_and_vector_context():
     shader = """
     shader RGImageArrayContext {

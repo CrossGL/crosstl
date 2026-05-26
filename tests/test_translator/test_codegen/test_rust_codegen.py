@@ -3994,6 +3994,232 @@ def test_non_copy_return_call_and_constructor_args_move_when_unique_and_compile(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_non_copy_return_call_and_constructor_member_args_move_when_safe_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    wrapper_type = NamedType("Wrapper")
+    pair_type = NamedType("Pair")
+    ast = ShaderNode(
+        "NonCopyReturnMemberArguments",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode("Wrapper", [StructMemberNode("payload", payload_type)]),
+            StructNode(
+                "Pair",
+                [
+                    StructMemberNode("payload", payload_type),
+                    StructMemberNode("backup", payload_type),
+                ],
+            ),
+        ],
+        global_variables=[
+            VariableNode("globalWrapper", wrapper_type),
+            ArrayNode("Payload", "globalValues", 2),
+        ],
+        functions=[
+            FunctionNode(
+                "make_pair",
+                pair_type,
+                [
+                    ParameterNode("payload", payload_type),
+                    ParameterNode("backup", payload_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            pair_type,
+                            [IdentifierNode("payload"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_member_call",
+                pair_type,
+                [
+                    ParameterNode("left", wrapper_type),
+                    ParameterNode("right", wrapper_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_pair"),
+                            [
+                                MemberAccessNode(IdentifierNode("left"), "payload"),
+                                MemberAccessNode(IdentifierNode("right"), "payload"),
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_member_constructor",
+                pair_type,
+                [
+                    ParameterNode("left", wrapper_type),
+                    ParameterNode("right", wrapper_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            pair_type,
+                            [
+                                MemberAccessNode(IdentifierNode("left"), "payload"),
+                                MemberAccessNode(IdentifierNode("right"), "payload"),
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_duplicate_member_call",
+                pair_type,
+                [ParameterNode("wrapper", wrapper_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_pair"),
+                            [
+                                MemberAccessNode(IdentifierNode("wrapper"), "payload"),
+                                MemberAccessNode(IdentifierNode("wrapper"), "payload"),
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_member_named_constructor",
+                pair_type,
+                [
+                    ParameterNode("left", wrapper_type),
+                    ParameterNode("right", wrapper_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            pair_type,
+                            [],
+                            named_arguments={
+                                "payload": MemberAccessNode(
+                                    IdentifierNode("left"),
+                                    "payload",
+                                ),
+                                "backup": MemberAccessNode(
+                                    IdentifierNode("right"),
+                                    "payload",
+                                ),
+                            },
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_duplicate_member_named_constructor",
+                pair_type,
+                [ParameterNode("wrapper", wrapper_type)],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            pair_type,
+                            [],
+                            named_arguments={
+                                "payload": MemberAccessNode(
+                                    IdentifierNode("wrapper"),
+                                    "payload",
+                                ),
+                                "backup": MemberAccessNode(
+                                    IdentifierNode("wrapper"),
+                                    "payload",
+                                ),
+                            },
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_static_and_indexed_call",
+                pair_type,
+                [ParameterNode("values", ArrayType(payload_type, 2))],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_pair"),
+                            [
+                                MemberAccessNode(
+                                    IdentifierNode("globalWrapper"),
+                                    "payload",
+                                ),
+                                ArrayAccessNode(
+                                    IdentifierNode("values"),
+                                    LiteralNode(0, PrimitiveType("int")),
+                                ),
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_static_indexed_constructor",
+                pair_type,
+                [],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            pair_type,
+                            [
+                                ArrayAccessNode(
+                                    IdentifierNode("globalValues"),
+                                    LiteralNode(0, PrimitiveType("int")),
+                                ),
+                                MemberAccessNode(
+                                    IdentifierNode("globalWrapper"),
+                                    "payload",
+                                ),
+                            ],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "return make_pair(left.payload, right.payload);" in generated_code
+    assert "return Pair::new(left.payload, right.payload);" in generated_code
+    assert "return make_pair(wrapper.payload.clone(), wrapper.payload);" in (
+        generated_code
+    )
+    assert "return Pair { payload: left.payload, backup: right.payload };" in (
+        generated_code
+    )
+    assert (
+        "return Pair { payload: wrapper.payload.clone(), backup: wrapper.payload };"
+    ) in generated_code
+    assert (
+        "return make_pair((*GLOBAL_WRAPPER).payload.clone(), values[0].clone());"
+    ) in generated_code
+    assert (
+        "return Pair::new((*GLOBAL_VALUES)[0].clone(), "
+        "(*GLOBAL_WRAPPER).payload.clone());"
+    ) in generated_code
+    assert "return make_pair(left.payload.clone(), right.payload.clone());" not in (
+        generated_code
+    )
+    assert "return Pair::new(left.payload.clone(), right.payload.clone());" not in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_struct_constructor_args_normalize_field_types_and_clone_non_copy_compile(
     tmp_path,
 ):

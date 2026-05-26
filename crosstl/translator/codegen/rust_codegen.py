@@ -3621,7 +3621,7 @@ class RustCodeGen:
         named_arguments = getattr(expr, "named_arguments", {}) or {}
         if named_arguments:
             argument_values = list(named_arguments.values())
-            move_counts = self.return_direct_move_identifier_counts(argument_values)
+            move_counts = self.return_move_place_counts(argument_values)
             fields = []
             for name, value in named_arguments.items():
                 member_type = self.resolve_struct_member_type(type_name, name)
@@ -3651,7 +3651,7 @@ class RustCodeGen:
         return f"{func_name}({', '.join(generated_args)})"
 
     def generate_return_call_args_with_types(self, args, target_types):
-        move_counts = self.return_direct_move_identifier_counts(args)
+        move_counts = self.return_move_place_counts(args)
         generated_args = []
         for index, arg in enumerate(args):
             target_type = target_types[index] if index < len(target_types) else None
@@ -3665,23 +3665,60 @@ class RustCodeGen:
         return generated_args
 
     def generate_return_argument_with_type(self, arg, target_type, move_counts):
-        name = self.simple_identifier_expression_name(arg)
-        if name is not None and self.should_move_direct_return_identifier(name):
-            move_counts[name] -= 1
-            if move_counts[name] == 0:
-                return self.lazy_static_identifier_expression(name)
+        move_key = self.return_move_place_key(arg)
+        if move_key is not None and move_key in move_counts:
+            move_counts[move_key] -= 1
+            if move_counts[move_key] == 0:
+                direct_move = self.generate_direct_return_move_expression(arg)
+                if direct_move is not None:
+                    return direct_move
+                member_move = self.generate_return_member_access_expression(arg)
+                if member_move is not None:
+                    return self.normalize_typed_expression_value(
+                        arg,
+                        member_move,
+                        target_type,
+                    )
 
         arg_expr = self.generate_expression_with_type(arg, target_type)
         return self.normalize_typed_expression_value(arg, arg_expr, target_type)
 
-    def return_direct_move_identifier_counts(self, args):
+    def return_move_place_counts(self, args):
         counts = {}
         for arg in args:
-            name = self.simple_identifier_expression_name(arg)
-            if name is None or not self.should_move_direct_return_identifier(name):
+            move_key = self.return_move_place_key(arg)
+            if move_key is None:
                 continue
-            counts[name] = counts.get(name, 0) + 1
+            counts[move_key] = counts.get(move_key, 0) + 1
         return counts
+
+    def return_move_place_key(self, expr):
+        name = self.simple_identifier_expression_name(expr)
+        if name is not None and self.should_move_direct_return_identifier(name):
+            return ("identifier", name)
+
+        if self.should_move_member_return_place(expr):
+            place_key = self.return_place_expression_key(expr)
+            if place_key is not None:
+                return ("member", place_key)
+
+        return None
+
+    def return_place_expression_key(self, expr):
+        if isinstance(expr, IdentifierNode):
+            return ("identifier", expr.name)
+        if isinstance(expr, VariableNode):
+            return ("identifier", expr.name)
+        if isinstance(expr, str):
+            return ("identifier", expr) if expr.isidentifier() else None
+        if isinstance(expr, MemberAccessNode):
+            object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
+            object_key = self.return_place_expression_key(object_expr)
+            if object_key is None:
+                return None
+            member = getattr(expr, "member", None)
+            return ("member", object_key, member)
+        return None
 
     def generate_constructor_call_args_with_types(self, args, target_types):
         generated_args = []

@@ -22,6 +22,7 @@ from crosstl.backend.CUDA.CudaAst import (
     RangeForNode,
     ReturnNode,
     ShaderNode,
+    SyncNode,
     SwitchNode,
     TernaryOpNode,
     TypeAliasNode,
@@ -1414,6 +1415,29 @@ class TestCudaParser:
 
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
+
+    def test_masked_syncwarp_parsing(self):
+        """Test parsing masked and unmasked CUDA warp synchronization."""
+        code = """
+        __global__ void kernel(unsigned int mask) {
+            __syncwarp(mask);
+            __syncwarp();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        masked_sync = ast.kernels[0].body[0]
+        unmasked_sync = ast.kernels[0].body[1]
+
+        assert isinstance(masked_sync, SyncNode)
+        assert masked_sync.sync_type == "__syncwarp"
+        assert masked_sync.args == ["mask"]
+        assert isinstance(unmasked_sync, SyncNode)
+        assert unmasked_sync.sync_type == "__syncwarp"
+        assert unmasked_sync.args == []
 
     def test_fixed_arrays_and_initializer_lists_parsing(self):
         """Test fixed arrays and brace initializer lists"""

@@ -20464,6 +20464,65 @@ def test_metal_storage_image_access_allows_compatible_helper_calls():
     assert "writePixel(target, int2(0, 0), float4(value));" in generated_code
 
 
+def test_metal_storage_image_access_qualifiers_thread_through_helpers():
+    shader = """
+    shader StorageImageAccessQualifiedHelpers {
+        image2D source @rgba32f @readonly;
+        image2D target @rgba32f @writeonly;
+        uimage2D counters @r32ui @readwrite;
+
+        vec4 readSource(image2D image @rgba32f @readonly, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        void writeTarget(image2D image @rgba32f @writeonly, ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        uint addCounter(uimage2D image @r32ui @readwrite, ivec2 pixel, uint value) {
+            return imageAtomicAdd(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 1);
+                vec4 color = readSource(source, pixel);
+                uint oldValue = addCounter(counters, pixel, 2u);
+                writeTarget(target, pixel, color + vec4(float(oldValue)));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert (
+        "float4 readSource(texture2d<float, access::read> image, int2 pixel)"
+        in generated_code
+    )
+    assert (
+        "void writeTarget(texture2d<float, access::write> image, int2 pixel, float4 value)"
+        in generated_code
+    )
+    assert (
+        "uint addCounter(texture2d<uint, access::read_write> image, int2 pixel, uint value)"
+        in generated_code
+    )
+    assert (
+        "kernel void kernel_main(texture2d<float, access::read> source [[texture(0)]], texture2d<float, access::write> target [[texture(1)]], texture2d<uint, access::read_write> counters [[texture(2)]])"
+        in generated_code
+    )
+    assert "float4 color = readSource(source, pixel);" in generated_code
+    assert "uint oldValue = addCounter(counters, pixel, 2u);" in generated_code
+    assert (
+        "writeTarget(target, pixel, color + float4(float(oldValue)));" in generated_code
+    )
+    assert "source.write(" not in generated_code
+    assert "target.read(" not in generated_code
+    assert "counters.atomic_fetch_add(uint2(pixel), 2u).x" not in generated_code
+
+
 @pytest.mark.parametrize(
     ("shader", "match"),
     [

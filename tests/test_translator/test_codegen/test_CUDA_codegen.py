@@ -247,7 +247,19 @@ class TestCudaCodeGen:
 
         # Test synchronization
         assert codegen.convert_builtin_function("barrier") == "__syncthreads"
+        assert (
+            codegen.convert_builtin_function("groupMemoryBarrier")
+            == "__threadfence_block"
+        )
         assert codegen.convert_builtin_function("memoryBarrier") == "__threadfence"
+        assert (
+            codegen.convert_builtin_function("memoryBarrierShared")
+            == "__threadfence_block"
+        )
+        assert (
+            codegen.convert_builtin_function("memoryBarrierBuffer") == "__threadfence"
+        )
+        assert codegen.convert_builtin_function("memoryBarrierImage") == "__threadfence"
         assert codegen.convert_builtin_function("workgroupBarrier") == "__syncthreads"
 
         # Test texture functions
@@ -295,7 +307,11 @@ class TestCudaCodeGen:
             compute {
                 void main() {
                     barrier();
+                    groupMemoryBarrier();
                     memoryBarrier();
+                    memoryBarrierShared();
+                    memoryBarrierBuffer();
+                    memoryBarrierImage();
                     workgroupBarrier();
                 }
             }
@@ -311,9 +327,14 @@ class TestCudaCodeGen:
 
         assert "__syncthreads();" in cuda_code
         assert cuda_code.count("__syncthreads();") == 2
-        assert "__threadfence();" in cuda_code
+        assert cuda_code.count("__threadfence();") == 3
+        assert cuda_code.count("__threadfence_block();") == 2
         assert "barrier();" not in cuda_code
+        assert "groupMemoryBarrier();" not in cuda_code
         assert "memoryBarrier();" not in cuda_code
+        assert "memoryBarrierShared();" not in cuda_code
+        assert "memoryBarrierBuffer();" not in cuda_code
+        assert "memoryBarrierImage();" not in cuda_code
         assert "workgroupBarrier();" not in cuda_code
 
     def test_builtin_invocation_ids_emit_cuda_names(self):

@@ -11405,9 +11405,11 @@ class HLSLCodeGen:
             return None
         raw_value = str(raw_value).strip().lower()
         if raw_value.isdigit():
-            return f"space{raw_value}"
+            space_index = int(raw_value)
+            return None if space_index == 0 else f"space{space_index}"
         if raw_value.startswith("space") and raw_value[5:].isdigit():
-            return raw_value
+            space_index = int(raw_value[5:])
+            return None if space_index == 0 else f"space{space_index}"
         return None
 
     def explicit_resource_binding_index(

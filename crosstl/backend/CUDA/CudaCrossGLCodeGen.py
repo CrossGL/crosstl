@@ -1342,7 +1342,8 @@ class CudaToCrossGLConverter:
         if node.sync_type == "__syncthreads":
             self.emit("workgroupBarrier();")
         elif node.sync_type == "__syncwarp":
-            self.emit("// Warp sync not directly supported in CrossGL")
+            args = ", ".join(self.visit(arg) for arg in node.args)
+            self.emit(f"// __syncwarp({args}) not directly supported in CrossGL")
         else:
             self.emit(f"// {node.sync_type}();")
 
@@ -1835,6 +1836,8 @@ class CudaToCrossGLConverter:
             "fmin": "min",
             "fmax": "max",
             "__threadfence": "memoryBarrier",
+            "__threadfence_block": "memoryBarrier",
+            "__threadfence_system": "memoryBarrier",
             "floor": "floor",
             "ceil": "ceil",
             "bool": "bool",

@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 534
+        "test_count": 535
       },
       "translator_codegen": {
         "exists": true,
@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 728
+        "test_count": 729
       },
       "translator_codegen": {
         "exists": true,
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 495
+        "test_count": 496
       },
       "translator_codegen": {
         "exists": true,
@@ -437,7 +437,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 387
+        "test_count": 389
       },
       "translator_codegen": {
         "exists": true,
@@ -551,7 +551,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 271
+        "test_count": 273
       },
       "translator_codegen": {
         "exists": true,
@@ -743,7 +743,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 296
+        "test_count": 298
       },
       "translator_codegen": {
         "exists": true,
@@ -857,7 +857,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 492
+        "test_count": 493
       },
       "translator_codegen": {
         "exists": true,
@@ -1346,7 +1346,7 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "Registers RayQuery types and acceleration-structure resources as SPIR-V KHR objects, lowers TraceRayInline to OpRayQueryInitializeKHR, and lowers Proceed, CandidateRayT, and CommittedRayT to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, TraceRay, acceleration-structure arrays, object/world ray vectors, and broader intersection metadata remain incomplete.",
+      "notes": "Registers RayQuery types and acceleration-structure resources as SPIR-V KHR objects; lowers TraceRayInline, Proceed, CandidateRayT, CommittedRayT, abort/terminate, generated/procedural intersection commits, non-opaque/confirm intersection commits, and intersection metadata getters for type, primitive index, instance ID, geometry index, barycentrics, and triangle front-face to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, TraceRay, acceleration-structure arrays, object/world ray vectors, transform matrices, ray flags/TMin, instance custom index/SBT offset, candidate AABB opacity, and triangle vertex positions remain incomplete.",
       "status": "partial"
     },
     {
@@ -3598,10 +3598,14 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_supported_operations_reject_unexpected_arguments",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_trace_ray_inline_expanded_operands_initialize_query",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_trace_ray_inline_raydesc_fields_initialize_query",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_commit_and_abort_operations_emit_khr_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_commit_operations_reject_bad_arguments",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_intersection_metadata_getters_emit_khr_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_intersection_metadata_getters_reject_unexpected_arguments",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
           ],
-          "notes": "Registers RayQuery types and acceleration-structure resources as SPIR-V KHR objects, lowers TraceRayInline to OpRayQueryInitializeKHR, and lowers Proceed, CandidateRayT, and CommittedRayT to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, TraceRay, acceleration-structure arrays, object/world ray vectors, and broader intersection metadata remain incomplete.",
+          "notes": "Registers RayQuery types and acceleration-structure resources as SPIR-V KHR objects; lowers TraceRayInline, Proceed, CandidateRayT, CommittedRayT, abort/terminate, generated/procedural intersection commits, non-opaque/confirm intersection commits, and intersection metadata getters for type, primitive index, instance ID, geometry index, barycentrics, and triangle front-face to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, TraceRay, acceleration-structure arrays, object/world ray vectors, transform matrices, ray flags/TMin, instance custom index/SBT offset, candidate AABB opacity, and triangle vertex positions remain incomplete.",
           "status": "partial"
         }
       }

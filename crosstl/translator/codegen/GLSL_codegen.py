@@ -417,6 +417,12 @@ class GLSLCodeGen:
         "CandidateTriangleVertexPositions",
         "CommittedTriangleVertexPositions",
     }
+    RAY_QUERY_RAY_DESC_FIELDS = (
+        ("Origin", "origin", "rayOrigin", "RayOrigin"),
+        ("TMin", "tMin", "Tmin", "tmin"),
+        ("Direction", "direction", "rayDirection", "RayDirection"),
+        ("TMax", "tMax", "Tmax", "tmax"),
+    )
     GLSL_LAYOUT_ATTRIBUTE_NAMES = (
         "location",
         "component",
@@ -2670,15 +2676,45 @@ class GLSLCodeGen:
 
     def map_ray_query_intrinsic(self, operation, query, args):
         mapping = self.RAY_QUERY_METHOD_MAP.get(operation)
+        query_expr = self.generate_expression(query)
         if mapping is None:
-            return f"{query}.{operation}({', '.join(args)})"
+            generated_args = [self.generate_expression(arg) for arg in args]
+            return f"{query_expr}.{operation}({', '.join(generated_args)})"
 
         function_name, committed = mapping
-        call_args = [query]
+        call_args = [query_expr]
         if committed is not None:
             call_args.append(committed)
+        args = self.ray_query_initialize_arguments(operation, args)
+        args = [self.generate_expression(arg) for arg in args]
         call_args.extend(args)
         return f"{function_name}({', '.join(call_args)})"
+
+    def ray_query_initialize_arguments(self, operation, args):
+        if operation not in {"Initialize", "TraceRayInline"} or len(args) != 4:
+            return args
+
+        acceleration, ray_flags, cull_mask, ray_desc = args
+        return [
+            acceleration,
+            ray_flags,
+            cull_mask,
+            *[
+                MemberAccessNode(
+                    ray_desc,
+                    self.ray_desc_field_name(ray_desc, field_names),
+                )
+                for field_names in self.RAY_QUERY_RAY_DESC_FIELDS
+            ],
+        ]
+
+    def ray_desc_field_name(self, ray_desc, field_names):
+        ray_desc_type = self.type_name_string(self.expression_result_type(ray_desc))
+        members = self.struct_member_types.get(ray_desc_type, {})
+        for field_name in field_names:
+            if field_name in members:
+                return field_name
+        return field_names[0]
 
     def glsl_tessellation_domain(self, domain):
         domain_name = str(domain).strip().strip('"').lower()
@@ -5346,9 +5382,9 @@ class GLSLCodeGen:
             operation = self.map_mesh_intrinsic(expr.operation)
             return f"{operation}({args})"
         elif isinstance(expr, RayQueryOpNode):
-            query = self.generate_expression(expr.query_expr)
-            args = [self.generate_expression(arg) for arg in expr.arguments]
-            return self.map_ray_query_intrinsic(expr.operation, query, args)
+            return self.map_ray_query_intrinsic(
+                expr.operation, expr.query_expr, expr.arguments
+            )
         elif hasattr(expr, "__class__") and "ArrayAccessNode" in str(type(expr)):
             # Handle array access properly
             if hasattr(expr, "array") and hasattr(expr, "index"):
@@ -5484,9 +5520,7 @@ class GLSLCodeGen:
     def ray_query_member_function_call(self, func_expr, args):
         if not isinstance(func_expr, MemberAccessNode):
             return None
-        query = self.generate_expression_with_expected(func_expr.object, None)
-        generated_args = [self.generate_expression(arg) for arg in args]
-        return self.map_ray_query_intrinsic(func_expr.member, query, generated_args)
+        return self.map_ray_query_intrinsic(func_expr.member, func_expr.object, args)
 
     def generate_buffer_call(self, func_name, args):
         if func_name == "buffer_load" and len(args) >= 2:

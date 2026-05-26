@@ -4605,6 +4605,118 @@ fn main():
     assert "2.0" in result.stdout
 
 
+def test_mixed_vector_scalar_matrix_constructors_use_helpers():
+    code = """
+    vec2 makeUv() {
+        return vec2(1.0, 2.0);
+    }
+
+    ivec2 makeIndexPair() {
+        return ivec2(3, 4);
+    }
+
+    int nextIndex() {
+        return 5;
+    }
+
+    float nextWeight() {
+        return 6.0;
+    }
+
+    double nextPrecise() {
+        return 7.0;
+    }
+
+    mat2 fromUvAndScalars() {
+        return mat2(makeUv(), nextIndex(), nextPrecise());
+    }
+
+    mat2 fromIndexAndScalars() {
+        return mat2(makeIndexPair(), nextWeight(), nextIndex());
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "fn _crossgl_construct_matrix_f32_c2_r2_2_vf322_01_si32_sf64" in generated_code
+    )
+    assert "fn _crossgl_construct_matrix_f32_c2_r2_2_vi322_01_s_si32" in generated_code
+    assert "var v0_cast = v0.cast[DType.float32]()" in generated_code
+    assert (
+        "return _crossgl_construct_matrix_f32_c2_r2_2_vf322_01_si32_sf64("
+        "makeUv(), nextIndex(), nextPrecise())"
+    ) in generated_code
+    assert (
+        "return _crossgl_construct_matrix_f32_c2_r2_2_vi322_01_s_si32("
+        "makeIndexPair(), nextWeight(), nextIndex())"
+    ) in generated_code
+    assert "makeUv()[0]" not in generated_code
+    assert "makeIndexPair()[0]" not in generated_code
+
+
+def test_mixed_vector_scalar_matrix_constructors_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    vec2 makeUv() {
+        return vec2(1.0, 2.0);
+    }
+
+    ivec2 makeIndexPair() {
+        return ivec2(3, 4);
+    }
+
+    int nextIndex() {
+        return 5;
+    }
+
+    float nextWeight() {
+        return 6.0;
+    }
+
+    double nextPrecise() {
+        return 7.0;
+    }
+
+    mat2 fromUvAndScalars() {
+        return mat2(makeUv(), nextIndex(), nextPrecise());
+    }
+
+    mat2 fromIndexAndScalars() {
+        return mat2(makeIndexPair(), nextWeight(), nextIndex());
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    print(fromUvAndScalars().c0)
+    print(fromUvAndScalars().c1)
+    print(fromIndexAndScalars().c0)
+    print(fromIndexAndScalars().c1)
+"""
+
+    source_path = tmp_path / "mixed_vector_scalar_matrix_constructors.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1.0, 2.0]" in result.stdout
+    assert "[5.0, 7.0]" in result.stdout
+    assert "[3.0, 4.0]" in result.stdout
+    assert "[6.0, 5.0]" in result.stdout
+
+
 def test_dynamic_matrix_indexing_emits_getitem_and_vector_index_casts():
     code = """
     mat2 mutateLocal(int column, int row) {

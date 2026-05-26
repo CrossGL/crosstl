@@ -3255,6 +3255,86 @@ class TestVulkanSPIRVCodeGen:
         assert "OpRayQueryGenerateIntersectionKHR" not in spv_code
         assert "OpRayQueryConfirmIntersectionKHR" not in spv_code
 
+    def test_ray_query_intersection_metadata_getters_emit_khr_instructions(
+        self, tmp_path
+    ):
+        source_code = """
+        shader RayQueryIntersectionMetadata {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    uint candidateType = rq.CandidateType();
+                    uint committedType = rq.CommittedType();
+                    uint candidatePrimitive = rq.CandidatePrimitiveIndex();
+                    uint committedPrimitive = rq.CommittedPrimitiveIndex();
+                    uint candidateInstance = rq.CandidateInstanceID();
+                    uint committedInstance = rq.CommittedInstanceID();
+                    uint candidateGeometry = rq.CandidateGeometryIndex();
+                    uint committedGeometry = rq.CommittedGeometryIndex();
+                    vec2 candidateBarycentrics = rq.CandidateTriangleBarycentrics();
+                    vec2 committedBarycentrics = rq.CommittedTriangleBarycentrics();
+                    bool candidateFrontFace = rq.CandidateTriangleFrontFace();
+                    bool committedFrontFace = rq.CommittedTriangleFrontFace();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert spv_code.count("OpRayQueryGetIntersectionTypeKHR") == 2
+        assert spv_code.count("OpRayQueryGetIntersectionPrimitiveIndexKHR") == 2
+        assert spv_code.count("OpRayQueryGetIntersectionInstanceIdKHR") == 2
+        assert spv_code.count("OpRayQueryGetIntersectionGeometryIndexKHR") == 2
+        assert spv_code.count("OpRayQueryGetIntersectionBarycentricsKHR") == 2
+        assert spv_code.count("OpRayQueryGetIntersectionFrontFaceKHR") == 2
+        assert "CandidateType yet; using a default" not in spv_code
+        assert "CandidateTriangleBarycentrics yet; using a default" not in spv_code
+        assert "CommittedTriangleFrontFace yet; using a default" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_ray_query_intersection_metadata_getters_reject_unexpected_arguments(
+        self,
+    ):
+        source_code = """
+        shader RayQueryIntersectionMetadataBadArgs {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    uint candidateType = rq.CandidateType(1);
+                    uint committedPrimitive = rq.CommittedPrimitiveIndex(1);
+                    vec2 barycentrics = rq.CandidateTriangleBarycentrics(1);
+                    bool frontFace = rq.CommittedTriangleFrontFace(1);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "WARNING: SPIR-V RayQuery.CandidateType requires 0 arguments" in spv_code
+        assert (
+            "WARNING: SPIR-V RayQuery.CommittedPrimitiveIndex requires 0 arguments"
+            in spv_code
+        )
+        assert (
+            "WARNING: SPIR-V RayQuery.CandidateTriangleBarycentrics requires 0 "
+            "arguments"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V RayQuery.CommittedTriangleFrontFace requires 0 "
+            "arguments"
+        ) in spv_code
+        assert "OpRayQueryGetIntersectionTypeKHR" not in spv_code
+        assert "OpRayQueryGetIntersectionPrimitiveIndexKHR" not in spv_code
+        assert "OpRayQueryGetIntersectionBarycentricsKHR" not in spv_code
+        assert "OpRayQueryGetIntersectionFrontFaceKHR" not in spv_code
+
     def test_ray_query_supported_operations_reject_unexpected_arguments(self):
         source_code = """
         shader RayQueryBadArgs {

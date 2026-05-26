@@ -2972,7 +2972,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "atomicDec": "atomicDec",
             # Synchronization
             "barrier": "__syncthreads",
+            "groupMemoryBarrier": "__threadfence_block",
             "memoryBarrier": "__threadfence",
+            "memoryBarrierShared": "__threadfence_block",
+            "memoryBarrierBuffer": "__threadfence",
+            "memoryBarrierImage": "__threadfence",
             "workgroupBarrier": "__syncthreads",
             # Texture functions
             "texture": "tex2D",

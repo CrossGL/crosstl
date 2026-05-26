@@ -4496,6 +4496,52 @@ def test_glsl_ray_query_methods_lower_to_ext_functions():
     assert ".Abort(" not in generated_code
 
 
+def test_glsl_ray_query_trace_ray_inline_raydesc_lowers_to_initialize_fields():
+    shader = """
+    shader RayQueryTraceRayInlineRayDesc {
+        struct RayDesc {
+            vec3 Origin;
+            float TMin;
+            vec3 Direction;
+            float TMax;
+        };
+
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        compute {
+            void main() {
+                RayDesc ray = RayDesc(
+                    vec3(0.0, 1.0, 2.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0
+                );
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(topLevelAS, gl_RayFlagsNoneEXT, 255u, ray);
+                bool active = rq.Proceed();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "#extension GL_EXT_ray_query : require" in generated_code
+    assert "rayQueryEXT rq;" in generated_code
+    assert (
+        "rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsNoneEXT, 255u, "
+        "ray.Origin, ray.TMin, ray.Direction, ray.TMax);" in generated_code
+    )
+    assert (
+        "rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsNoneEXT, 255u, ray);"
+        not in (generated_code)
+    )
+    assert "bool active_ = rayQueryProceedEXT(rq);" in generated_code
+    assert ".TraceRayInline(" not in generated_code
+
+
 def test_glsl_target_stage_ray_query_extensions_are_scoped_to_emitted_stage():
     shader = """
     shader ScopedRayQueryExtensions {

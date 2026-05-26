@@ -2788,6 +2788,36 @@ shader MetalResourceArrayImageAtomicsValidation {
 """
 
 
+METAL_STORAGE_IMAGE_ACCESS_QUALIFIERS_COMPUTE_SHADER = """
+shader MetalStorageImageAccessQualifiersValidation {
+    image2D source @rgba32f @readonly;
+    image2D target @rgba32f @writeonly;
+    uimage2D counters @r32ui @readwrite;
+
+    vec4 readSource(image2D image @rgba32f @readonly, ivec2 pixel) {
+        return imageLoad(image, pixel);
+    }
+
+    void writeTarget(image2D image @rgba32f @writeonly, ivec2 pixel, vec4 value) {
+        imageStore(image, pixel, value);
+    }
+
+    uint addCounter(uimage2D image @r32ui @readwrite, ivec2 pixel, uint value) {
+        return imageAtomicAdd(image, pixel, value);
+    }
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(0, 1);
+            vec4 color = readSource(source, pixel);
+            uint oldValue = addCounter(counters, pixel, 2u);
+            writeTarget(target, pixel, color + vec4(float(oldValue)));
+        }
+    }
+}
+"""
+
+
 RG_IMAGE_ARRAY_COMPUTE_SHADER = """
 shader RGImageArrayValidation {
     image2D rgFloatImages @rg32f[3];
@@ -4865,6 +4895,29 @@ def test_generated_metal_compute_resource_array_image_atomics_compiles_with_meta
     )
     assert "images[index].atomic_fetch_add(uint2(pixel), value).x" in code
     assert "imageAtomicCompSwap_iimage2D(images[index], pixel, expected, value)" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_storage_image_access_qualifiers_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_storage_image_access_qualifiers.metal"
+    output = tmp_path / "compute_storage_image_access_qualifiers.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_STORAGE_IMAGE_ACCESS_QUALIFIERS_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "texture2d<float, access::read> source [[texture(0)]]" in code
+    assert "texture2d<float, access::write> target [[texture(1)]]" in code
+    assert "texture2d<uint, access::read_write> counters [[texture(2)]]" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

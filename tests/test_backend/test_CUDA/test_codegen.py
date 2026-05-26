@@ -423,10 +423,12 @@ class TestCudaCodeGen:
         assert "// CUDA memory free: out" not in result
 
     def test_threadfence_converts_to_crossgl_memory_barrier(self):
-        """Test CUDA thread fence converts back to CrossGL memoryBarrier."""
+        """Test CUDA thread fence variants convert back to CrossGL memoryBarrier."""
         code = """
         __global__ void fence(float* out) {
             __threadfence();
+            __threadfence_block();
+            __threadfence_system();
             __syncthreads();
         }
         """
@@ -438,9 +440,29 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "memoryBarrier();" in result
+        assert result.count("memoryBarrier();") == 3
         assert "workgroupBarrier();" in result
         assert "__threadfence" not in result
+
+    def test_syncwarp_mask_emits_explicit_diagnostic(self):
+        """Test CUDA warp synchronization emits an explicit CrossGL diagnostic."""
+        code = """
+        __global__ void sync(unsigned int mask) {
+            __syncwarp(mask);
+            __syncwarp();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// __syncwarp(mask) not directly supported in CrossGL" in result
+        assert "// __syncwarp() not directly supported in CrossGL" in result
+        assert "None" not in result
 
     def test_inverse_trig_builtins_convert_to_crossgl(self):
         """Test CUDA inverse trig functions convert back to CrossGL names."""
