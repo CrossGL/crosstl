@@ -1363,6 +1363,71 @@ def test_resource_layout_preserves_access_and_memory_qualifiers():
     assert lookup.qualifiers == ["constant"]
 
 
+def test_glsl_layout_buffer_block_lowers_to_struct_and_resource_variable():
+    code = """
+    shader BufferBlockLayouts {
+        layout(std430, set = 1, binding = 2) readonly buffer ParticleBlock {
+            vec4 position;
+            uint count;
+        } particles[4];
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    block_struct = ast.structs[0]
+    particles = ast.global_variables[0]
+
+    assert block_struct.name == "ParticleBlock"
+    assert [member.name for member in block_struct.members] == ["position", "count"]
+
+    assert particles.name == "particles"
+    assert particles.qualifiers == ["readonly", "buffer"]
+    assert isinstance(particles.var_type, ArrayType)
+    assert particles.var_type.element_type.name == "ParticleBlock"
+    assert particles.var_type.size.value == 4
+    assert [attribute.name for attribute in particles.attributes] == [
+        "glsl_buffer_block",
+        "set",
+        "binding",
+    ]
+    assert particles.attributes[0].arguments[0].name == "std430"
+    assert [attribute.arguments[0].value for attribute in particles.attributes[1:]] == [
+        1,
+        2,
+    ]
+
+
+def test_translation_unit_glsl_layout_buffer_block_lowers_to_ir():
+    code = """
+    layout(std140, binding = 3) buffer Globals {
+        mat4 transform;
+    };
+
+    shader BufferBlockTranslationUnit {
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    block_struct = ast.structs[0]
+    globals_block = ast.global_variables[0]
+
+    assert block_struct.name == "Globals"
+    assert block_struct.members[0].name == "transform"
+    assert globals_block.name == "globals"
+    assert globals_block.var_type.name == "Globals"
+    assert globals_block.qualifiers == ["buffer"]
+    assert [attribute.name for attribute in globals_block.attributes] == [
+        "glsl_buffer_block",
+        "binding",
+    ]
+    assert globals_block.attributes[0].arguments[0].name == "std140"
+    assert globals_block.attributes[1].arguments[0].value == 3
+
+
 def test_capitalized_type_names_are_not_mistaken_for_qualifiers():
     code = """
     shader CapitalizedTypeNames {

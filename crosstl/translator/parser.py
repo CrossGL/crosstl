@@ -280,7 +280,12 @@ class Parser:
             previous_pos = self.pos
 
             parsed_element = self.parse_global()
-            if parsed_element:
+            parsed_elements = (
+                parsed_element if isinstance(parsed_element, list) else [parsed_element]
+            )
+            for parsed_element in parsed_elements:
+                if not parsed_element:
+                    continue
                 if isinstance(parsed_element, ShaderNode):
                     shader_name = parsed_element.name or shader_name
                     structs.extend(parsed_element.structs)
@@ -367,7 +372,13 @@ class Parser:
                 constants.append(self.parse_constant())
             elif self.current_token[0] == "LAYOUT":
                 attributes = self.parse_layout_attributes()
-                if self.is_variable_declaration():
+                if self.is_layout_buffer_block_declaration():
+                    struct_node, variable_node = self.parse_layout_buffer_block(
+                        attributes
+                    )
+                    structs.append(struct_node)
+                    global_variables.append(variable_node)
+                elif self.is_variable_declaration():
                     global_variables.append(self.parse_variable_declaration(attributes))
                 else:
                     self.skip_unknown_token()
@@ -491,7 +502,13 @@ class Parser:
                 constants.append(self.parse_constant())
             elif self.current_token[0] == "LAYOUT":
                 attributes = self.parse_layout_attributes()
-                if self.is_variable_declaration():
+                if self.is_layout_buffer_block_declaration():
+                    struct_node, variable_node = self.parse_layout_buffer_block(
+                        attributes
+                    )
+                    structs.append(struct_node)
+                    global_variables.append(variable_node)
+                elif self.is_variable_declaration():
                     global_variables.append(self.parse_variable_declaration(attributes))
                 else:
                     self.skip_unknown_token()
@@ -597,7 +614,13 @@ class Parser:
                 execution_config.update(self.execution_config_from_layout(layout))
             elif self.current_token[0] == "LAYOUT":
                 attributes = self.parse_layout_attributes()
-                if self.is_variable_declaration():
+                if self.is_layout_buffer_block_declaration():
+                    struct_node, variable_node = self.parse_layout_buffer_block(
+                        attributes
+                    )
+                    local_structs.append(struct_node)
+                    local_variables.append(variable_node)
+                elif self.is_variable_declaration():
                     local_variables.append(self.parse_variable_declaration(attributes))
                 else:
                     self.skip_unknown_token()
@@ -779,6 +802,100 @@ class Parser:
         if direction_value not in {"in", "out", "patch"}:
             return False
         return self.peek(offset + 1)[0] == "SEMICOLON"
+
+    def is_layout_buffer_block_declaration(self):
+        """Return whether current tokens start a GLSL-style buffer block."""
+        offset = 0
+        while self.token_is_layout_buffer_block_qualifier(self.peek(offset)):
+            offset += 1
+        return (
+            self.peek(offset)[0] == "BUFFER"
+            and self.peek(offset + 1)[0] == "IDENTIFIER"
+            and self.peek(offset + 2)[0] == "LBRACE"
+        )
+
+    def parse_layout_buffer_block(self, layout_attributes):
+        """Parse ``layout(...) [readonly] buffer Block { ... } instance;``."""
+        qualifiers = []
+        while self.token_is_layout_buffer_block_qualifier(self.current_token):
+            token_type, token_value = self.current_token
+            qualifiers.append(str(token_value).lower())
+            self.eat(token_type)
+
+        self.eat("BUFFER")
+        block_name = self.current_token[1]
+        self.eat("IDENTIFIER")
+
+        self.eat("LBRACE")
+        members = []
+        while self.current_token[0] != "RBRACE":
+            member = self.parse_struct_member()
+            if member:
+                members.append(member)
+        self.eat("RBRACE")
+
+        variable_name = self.default_layout_buffer_instance_name(block_name)
+        variable_type = NamedType(block_name)
+        if self.current_token[0] == "IDENTIFIER":
+            variable_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+
+        while self.current_token[0] == "LBRACKET":
+            self.eat("LBRACKET")
+            size = None
+            if self.current_token[0] != "RBRACKET":
+                size = self.parse_expression()
+            self.eat("RBRACKET")
+            variable_type = ArrayType(variable_type, size)
+
+        self.eat("SEMICOLON")
+
+        struct_node = StructNode(name=block_name, members=members)
+        variable_node = VariableNode(
+            name=variable_name,
+            var_type=variable_type,
+            qualifiers=qualifiers + ["buffer"],
+            attributes=self.glsl_buffer_block_attributes(layout_attributes),
+        )
+        return struct_node, variable_node
+
+    def glsl_buffer_block_attributes(self, layout_attributes):
+        """Convert GLSL layout metadata into CrossGL buffer-block attributes."""
+        attributes = []
+        block_layout = self.glsl_buffer_block_layout_attribute(layout_attributes)
+        if block_layout is not None:
+            attributes.append(
+                AttributeNode(
+                    "glsl_buffer_block",
+                    [IdentifierNode(block_layout)],
+                )
+            )
+        for attr in layout_attributes:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name != block_layout:
+                attributes.append(attr)
+        return attributes
+
+    def glsl_buffer_block_layout_attribute(self, layout_attributes):
+        """Return the GLSL memory layout name from layout attributes."""
+        for attr in layout_attributes:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name in {"std140", "std430", "scalar"}:
+                return attr_name
+        return None
+
+    def token_is_layout_buffer_block_qualifier(self, token):
+        """Return whether token is a qualifier before a GLSL buffer block."""
+        token_type, token_value = token
+        if token_type == "BUFFER":
+            return False
+        return self.token_is_variable_qualifier(token_type, token_value)
+
+    def default_layout_buffer_instance_name(self, block_name):
+        """Return a stable fallback instance name for anonymous buffer blocks."""
+        if not block_name:
+            return "bufferBlock"
+        return block_name[0].lower() + block_name[1:]
 
     def parse_preprocessor_directive(self):
         """Parse a preprocessor token into a structured directive node."""
@@ -1330,6 +1447,10 @@ class Parser:
     def current_token_is_variable_qualifier(self):
         """Return whether the current token is a variable declaration qualifier."""
         token_type, token_value = self.current_token
+        return self.token_is_variable_qualifier(token_type, token_value)
+
+    def token_is_variable_qualifier(self, token_type, token_value):
+        """Return whether a token is a variable declaration qualifier."""
         if token_type in VARIABLE_QUALIFIER_TOKEN_TYPES:
             return True
         return (
@@ -3335,6 +3456,8 @@ class Parser:
 
         if self.current_token[0] == "LAYOUT":
             attributes = self.parse_layout_attributes()
+            if self.is_layout_buffer_block_declaration():
+                return list(self.parse_layout_buffer_block(attributes))
             if self.is_variable_declaration():
                 return self.parse_variable_declaration(attributes)
             self.skip_unknown_token()
