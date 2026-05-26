@@ -1,5 +1,7 @@
 """CrossGL-to-HLSL code generator."""
 
+from hashlib import sha1
+
 from ..ast import (
     AssignmentNode,
     BinaryOpNode,
@@ -8973,12 +8975,45 @@ class HLSLCodeGen:
             for char in access["hlsl_type"]
         )
 
+    def hlsl_buffer_aggregate_layout_signature(self, access):
+        parts = []
+
+        def visit(member_name, member):
+            fields = [
+                member_name,
+                str(member.get("type")),
+                str(member.get("layout_type")),
+                str(member.get("offset")),
+                str(member.get("size")),
+                str(member.get("align")),
+                str(member.get("components")),
+                str(member.get("component_type")),
+                str(member.get("matrix_columns")),
+                str(member.get("matrix_rows")),
+                str(member.get("column_stride")),
+                str(member.get("is_array")),
+                str(member.get("array_count")),
+                str(member.get("stride")),
+                str(member.get("runtime_array")),
+            ]
+            parts.append(":".join(fields))
+            for child_name, child in (member.get("members") or {}).items():
+                visit(f"{member_name}.{child_name}", child)
+
+        for field_name, member in access["members"].items():
+            visit(field_name, member)
+        return sha1("|".join(parts).encode("utf-8")).hexdigest()[:10]
+
     def hlsl_byteaddress_aggregate_load_helper_name(self, access):
         buffer_type = (
             "ByteAddressBuffer" if access.get("readonly") else "RWByteAddressBuffer"
         )
         kind = "ro" if access.get("readonly") else "rw"
-        helper_name = f"__crossgl_load_{kind}_glsl_buffer_{self.hlsl_buffer_aggregate_helper_suffix(access)}"
+        layout_hash = self.hlsl_buffer_aggregate_layout_signature(access)
+        helper_name = (
+            f"__crossgl_load_{kind}_glsl_buffer_"
+            f"{self.hlsl_buffer_aggregate_helper_suffix(access)}_{layout_hash}"
+        )
         self.required_glsl_buffer_aggregate_load_helpers[(helper_name, buffer_type)] = (
             access
         )

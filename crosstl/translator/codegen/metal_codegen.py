@@ -1,5 +1,7 @@
 """CrossGL-to-Metal code generator."""
 
+from hashlib import sha1
+
 from ..ast import (
     AssignmentNode,
     ArrayNode,
@@ -5069,9 +5071,40 @@ class MetalCodeGen:
             for char in access["metal_type"]
         )
 
+    def metal_aggregate_layout_signature(self, access):
+        parts = []
+
+        def visit(member_name, member):
+            fields = [
+                member_name,
+                str(member.get("type")),
+                str(member.get("layout_type")),
+                str(member.get("offset")),
+                str(member.get("size")),
+                str(member.get("align")),
+                str(member.get("components")),
+                str(member.get("component_type")),
+                str(member.get("matrix_columns")),
+                str(member.get("matrix_rows")),
+                str(member.get("column_stride")),
+                str(member.get("is_array")),
+                str(member.get("array_count")),
+                str(member.get("stride")),
+                str(member.get("runtime_array")),
+            ]
+            parts.append(":".join(fields))
+            for child_name, child in (member.get("members") or {}).items():
+                visit(f"{member_name}.{child_name}", child)
+
+        for field_name, member in access["members"].items():
+            visit(field_name, member)
+        return sha1("|".join(parts).encode("utf-8")).hexdigest()[:10]
+
     def metal_aggregate_load_helper_name(self, access):
         helper_name = (
-            f"__crossgl_load_glsl_buffer_{self.metal_aggregate_helper_suffix(access)}"
+            f"__crossgl_load_glsl_buffer_"
+            f"{self.metal_aggregate_helper_suffix(access)}_"
+            f"{self.metal_aggregate_layout_signature(access)}"
         )
         self.required_glsl_buffer_aggregate_load_helpers[helper_name] = access
         return helper_name

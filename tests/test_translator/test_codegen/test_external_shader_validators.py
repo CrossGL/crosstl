@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 
@@ -339,6 +340,30 @@ void main() {
     ArrayAggregateData entry = arrayAggregateBlock.entries[i];
     arrayAggregateBlock.inner = entry;
     arrayAggregateBlock.entries[i] = inner;
+}
+"""
+
+
+MIXED_GLSL_SSBO_AGGREGATE_LAYOUT_HELPER_COMPUTE_SHADER = """
+#version 450 core
+struct LayoutSharedData {
+    float weights[2];
+    uint id;
+};
+
+layout(std430, binding = 14) buffer LayoutStd430Block {
+    LayoutSharedData item;
+} block430;
+
+layout(std140, binding = 15) buffer LayoutStd140Block {
+    LayoutSharedData item;
+} block140;
+
+void main() {
+    LayoutSharedData a = block430.item;
+    LayoutSharedData b = block140.item;
+    block430.item = b;
+    block140.item = a;
 }
 """
 
@@ -868,19 +893,23 @@ def test_mixed_glsl_ssbo_nested_struct_aggregate_hlsl_output_compiles_with_dxc(
         )
     )
     assert "RWByteAddressBuffer aggregateBlock : register(u30);" in code
-    assert (
-        "AggregateBlockData __crossgl_load_rw_glsl_buffer_AggregateBlockData"
-        "(RWByteAddressBuffer buffer, uint offset)" in code
+    assert re.search(
+        r"AggregateBlockData __crossgl_load_rw_glsl_buffer_AggregateBlockData_[0-9a-f]{10}"
+        r"\(RWByteAddressBuffer buffer, uint offset\)",
+        code,
     )
     assert "result.payload.scale = asfloat(buffer.Load(offset));" in code
-    assert (
-        "AggregateBlockData inner = "
-        "__crossgl_load_rw_glsl_buffer_AggregateBlockData(aggregateBlock, 0);" in code
+    assert re.search(
+        r"AggregateBlockData inner = "
+        r"__crossgl_load_rw_glsl_buffer_AggregateBlockData_[0-9a-f]{10}"
+        r"\(aggregateBlock, 0\);",
+        code,
     )
-    assert (
-        "AggregateBlockData item = "
-        "__crossgl_load_rw_glsl_buffer_AggregateBlockData"
-        "(aggregateBlock, (48 + i * 48));" in code
+    assert re.search(
+        r"AggregateBlockData item = "
+        r"__crossgl_load_rw_glsl_buffer_AggregateBlockData_[0-9a-f]{10}"
+        r"\(aggregateBlock, \(48 \+ i \* 48\)\);",
+        code,
     )
     assert "AggregateBlockData __crossgl_aggregate_store_0 = item;" in code
     assert (
@@ -928,24 +957,74 @@ def test_mixed_glsl_ssbo_nested_struct_aggregate_array_hlsl_output_compiles_with
         )
     )
     assert "RWByteAddressBuffer arrayAggregateBlock : register(u16);" in code
-    assert (
-        "ArrayAggregateData __crossgl_load_rw_glsl_buffer_ArrayAggregateData"
-        "(RWByteAddressBuffer buffer, uint offset)" in code
+    assert re.search(
+        r"ArrayAggregateData __crossgl_load_rw_glsl_buffer_ArrayAggregateData_[0-9a-f]{10}"
+        r"\(RWByteAddressBuffer buffer, uint offset\)",
+        code,
     )
     assert "result.weights[0] = asfloat(buffer.Load(offset));" in code
     assert "result.items[1].flags = bool2" in code
-    assert (
-        "ArrayAggregateData inner = "
-        "__crossgl_load_rw_glsl_buffer_ArrayAggregateData(arrayAggregateBlock, 0);"
-        in code
+    assert re.search(
+        r"ArrayAggregateData inner = "
+        r"__crossgl_load_rw_glsl_buffer_ArrayAggregateData_[0-9a-f]{10}"
+        r"\(arrayAggregateBlock, 0\);",
+        code,
     )
-    assert (
-        "ArrayAggregateData entry = "
-        "__crossgl_load_rw_glsl_buffer_ArrayAggregateData"
-        "(arrayAggregateBlock, (48 + i * 48));" in code
+    assert re.search(
+        r"ArrayAggregateData entry = "
+        r"__crossgl_load_rw_glsl_buffer_ArrayAggregateData_[0-9a-f]{10}"
+        r"\(arrayAggregateBlock, \(48 \+ i \* 48\)\);",
+        code,
     )
     assert "arrayAggregateBlock.Store2(8, asuint" in code
     assert "arrayAggregateBlock.Store((48 + i * 48 + 40)" in code
+    assert ("un" + "supported HLSL GLSL buffer block") not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_ssbo_aggregate_layout_helper_hlsl_output_compiles_with_dxc(
+    tmp_path,
+):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / "mixed_glsl_ssbo_aggregate_layout_helper.hlsl"
+    output_path = tmp_path / "mixed_glsl_ssbo_aggregate_layout_helper.dxil"
+
+    code = HLSLCodeGen().generate(
+        _mixed_glsl_ast(
+            MIXED_GLSL_SSBO_AGGREGATE_LAYOUT_HELPER_COMPUTE_SHADER,
+            "compute",
+        )
+    )
+    assert "RWByteAddressBuffer block430 : register(u14);" in code
+    assert "RWByteAddressBuffer block140 : register(u15);" in code
+    helper_names = re.findall(
+        r"LayoutSharedData "
+        r"(__crossgl_load_rw_glsl_buffer_LayoutSharedData_[0-9a-f]{10})"
+        r"\(RWByteAddressBuffer buffer, uint offset\)",
+        code,
+    )
+    assert len(helper_names) == 2
+    assert len(set(helper_names)) == 2
+    assert "result.weights[1] = asfloat(buffer.Load((offset + 4)));" in code
+    assert "result.id = buffer.Load((offset + 8));" in code
+    assert "result.weights[1] = asfloat(buffer.Load((offset + 16)));" in code
+    assert "result.id = buffer.Load((offset + 32));" in code
+    assert "block430.Store(4, asuint(__crossgl_aggregate_store_0.weights[1]))" in code
+    assert "block140.Store(16, asuint(__crossgl_aggregate_store_1.weights[1]))" in code
     assert ("un" + "supported HLSL GLSL buffer block") not in code
     shader_path.write_text(code, encoding="utf-8")
 
@@ -1197,24 +1276,76 @@ def test_mixed_glsl_ssbo_nested_struct_aggregate_array_metal_output_compiles_wit
         )
     )
     assert "device uchar* arrayAggregateBlock [[buffer(16)]]" in code
-    assert (
-        "ArrayAggregateData __crossgl_load_glsl_buffer_ArrayAggregateData"
-        "(const device uchar* buffer, uint offset)" in code
+    assert re.search(
+        r"ArrayAggregateData __crossgl_load_glsl_buffer_ArrayAggregateData_[0-9a-f]{10}"
+        r"\(const device uchar\* buffer, uint offset\)",
+        code,
     )
     assert "result.weights[0] =" in code
     assert "result.items[1].flags = bool2" in code
-    assert (
-        "ArrayAggregateData inner = "
-        "__crossgl_load_glsl_buffer_ArrayAggregateData(arrayAggregateBlock, 0);" in code
+    assert re.search(
+        r"ArrayAggregateData inner = "
+        r"__crossgl_load_glsl_buffer_ArrayAggregateData_[0-9a-f]{10}"
+        r"\(arrayAggregateBlock, 0\);",
+        code,
     )
-    assert (
-        "ArrayAggregateData entry = "
-        "__crossgl_load_glsl_buffer_ArrayAggregateData"
-        "(arrayAggregateBlock, (48 + i * 48));" in code
+    assert re.search(
+        r"ArrayAggregateData entry = "
+        r"__crossgl_load_glsl_buffer_ArrayAggregateData_[0-9a-f]{10}"
+        r"\(arrayAggregateBlock, \(48 \+ i \* 48\)\);",
+        code,
     )
     assert "float2 __crossgl_buffer_store_1" in code
     assert "bool2 __crossgl_buffer_store_2" in code
     assert "arrayAggregateBlock + (48 + i * 48 + 40)" in code
+    assert ("un" + "supported Metal GLSL buffer block") not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_ssbo_aggregate_layout_helper_metal_output_compiles_with_xcrun_metal(
+    tmp_path,
+):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "mixed_glsl_ssbo_aggregate_layout_helper.metal"
+    output_path = tmp_path / "mixed_glsl_ssbo_aggregate_layout_helper.air"
+
+    code = MetalCodeGen().generate(
+        _mixed_glsl_ast(
+            MIXED_GLSL_SSBO_AGGREGATE_LAYOUT_HELPER_COMPUTE_SHADER,
+            "compute",
+        )
+    )
+    assert "device uchar* block430 [[buffer(14)]]" in code
+    assert "device uchar* block140 [[buffer(15)]]" in code
+    helper_names = re.findall(
+        r"LayoutSharedData "
+        r"(__crossgl_load_glsl_buffer_LayoutSharedData_[0-9a-f]{10})"
+        r"\(const device uchar\* buffer, uint offset\)",
+        code,
+    )
+    assert len(helper_names) == 2
+    assert len(set(helper_names)) == 2
+    assert "result.weights[1] =" in code
+    assert "buffer + (offset + 4)" in code
+    assert "buffer + (offset + 8)" in code
+    assert "buffer + (offset + 16)" in code
+    assert "buffer + (offset + 32)" in code
+    assert "block430 + 4" in code
+    assert "block140 + 16" in code
     assert ("un" + "supported Metal GLSL buffer block") not in code
     shader_path.write_text(code, encoding="utf-8")
 
