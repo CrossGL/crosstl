@@ -141,6 +141,14 @@ QUALIFIER_TOKENS = {
     "HIGHP",
 }
 
+RAY_STORAGE_QUALIFIERS = {
+    "rayPayloadEXT",
+    "rayPayloadInEXT",
+    "hitAttributeEXT",
+    "callableDataEXT",
+    "callableDataInEXT",
+}
+
 ASSIGNMENT_TOKENS = {
     "EQUALS": "=",
     "PLUS_EQUALS": "+=",
@@ -384,7 +392,10 @@ class GLSLParser:
 
     def parse_qualifiers(self):
         qualifiers = []
-        while self.current_token[0] in QUALIFIER_TOKENS:
+        while self.current_token[0] in QUALIFIER_TOKENS or (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in RAY_STORAGE_QUALIFIERS
+        ):
             if self.current_token[0] == "SUBROUTINE":
                 self.advance()
                 if self.current_token[0] == "LPAREN":

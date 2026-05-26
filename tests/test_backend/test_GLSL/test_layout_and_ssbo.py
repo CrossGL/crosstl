@@ -1,12 +1,21 @@
 import pytest
 
+import crosstl.translator
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
+from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 
 
 def parse_glsl(code: str, shader_type: str):
     tokens = GLSLLexer(code).tokenize()
     return GLSLParser(tokens, shader_type).parse()
+
+
+def generate_crossgl(code: str, shader_type: str):
+    return GLSLToCrossGLConverter(shader_type=shader_type).generate(
+        parse_glsl(code, shader_type)
+    )
 
 
 def test_parse_ssbo_layout():
@@ -60,6 +69,82 @@ def test_parse_early_fragment_tests_layout():
     """
     ast = parse_glsl(code, "fragment")
     assert ast is not None
+
+
+def test_parse_ray_shader_record_layout_roundtrips_without_binding():
+    code = """
+    #version 460 core
+    #extension GL_EXT_ray_tracing : require
+
+    struct RayPayload {
+        vec4 color;
+    };
+
+    layout(binding = 0) uniform accelerationStructureEXT topLevelAS;
+    layout(location = 0) rayPayloadEXT RayPayload rayPayload;
+    layout(shaderRecordEXT, std430) buffer ShaderRecordData {
+        uint materialIndex;
+    } shaderRecord;
+
+    void main() {
+        rayPayload.color = vec4(float(shaderRecord.materialIndex));
+        traceRayEXT(
+            topLevelAS,
+            gl_RayFlagsNoneEXT,
+            0xff,
+            0,
+            1,
+            0,
+            vec3(0.0),
+            0.001,
+            vec3(0.0, 0.0, 1.0),
+            1000.0,
+            0
+        );
+    }
+    """
+
+    crossgl = generate_crossgl(code, "ray_generation")
+
+    assert "accelerationStructureEXT topLevelAS @binding(0);" in crossgl
+    assert "RayPayload rayPayload @location(0) @rayPayloadEXT;" in crossgl
+    assert (
+        "ShaderRecordData shaderRecord @glsl_buffer_block(shaderRecordEXT, std430);"
+        in crossgl
+    )
+    assert "RayGenerationInput" not in crossgl
+    assert "RayGenerationOutput" not in crossgl
+    assert "void main()" in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert glsl.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_tracing : require" in glsl
+    assert "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;" in glsl
+    assert "layout(location = 0) rayPayloadEXT RayPayload rayPayload;" in glsl
+    assert "layout(shaderRecordEXT, std430) buffer ShaderRecordData" in glsl
+    assert "layout(shaderRecordEXT, std430, binding" not in glsl
+    assert "rayPayload.color = vec4(float(shaderRecord.materialIndex));" in glsl
+    assert "traceRayEXT(" in glsl
+
+
+def test_parse_ray_shader_record_layout_rejects_binding():
+    code = """
+    #version 460 core
+    #extension GL_EXT_ray_tracing : require
+
+    layout(shaderRecordEXT, binding = 3) buffer ShaderRecordData {
+        uint materialIndex;
+    } shaderRecord;
+
+    void main() { }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="shaderRecordEXT buffer blocks cannot declare binding layout qualifiers",
+    ):
+        generate_crossgl(code, "ray_generation")
 
 
 if __name__ == "__main__":

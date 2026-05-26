@@ -30,6 +30,26 @@ from .OpenglAst import (
 class GLSLToCrossGLConverter:
     """Serialize OpenGL backend AST nodes back into CrossGL source."""
 
+    BUFFER_BLOCK_LAYOUT_QUALIFIERS = {"std140", "std430", "scalar"}
+    RAY_STORAGE_QUALIFIERS = {
+        "raypayloadext": "rayPayloadEXT",
+        "raypayloadinext": "rayPayloadInEXT",
+        "hitattributeext": "hitAttributeEXT",
+        "callabledataext": "callableDataEXT",
+        "callabledatainext": "callableDataInEXT",
+    }
+    NON_STRUCT_STAGE_TYPES = {
+        "compute",
+        "mesh",
+        "task",
+        "ray_generation",
+        "ray_intersection",
+        "ray_any_hit",
+        "ray_closest_hit",
+        "ray_miss",
+        "ray_callable",
+    }
+
     def __init__(self, shader_type="vertex"):
         """Initialize GLSL-to-CrossGL mappings for a shader stage."""
         self.shader_type = shader_type
@@ -217,6 +237,7 @@ class GLSLToCrossGLConverter:
             "uimageBuffer": "uimageBuffer",
             "uimage2DMS": "uimage2DMS",
             "uimage2DMSArray": "uimage2DMSArray",
+            "accelerationStructureEXT": "accelerationStructureEXT",
             "void": "void",
         }
 
@@ -290,7 +311,7 @@ class GLSLToCrossGLConverter:
         if not type_name:
             return False
         name = str(type_name)
-        return name.startswith(
+        return name == "accelerationStructureEXT" or name.startswith(
             ("sampler", "isampler", "usampler", "image", "iimage", "uimage")
         )
 
@@ -325,17 +346,12 @@ class GLSLToCrossGLConverter:
         return f" @binding({binding})" if binding is not None else ""
 
     def ssbo_block_attribute_suffix(self, var):
-        layout = getattr(var, "layout", None) or {}
-        layout_name = next(
-            (
-                str(name)
-                for name, value in layout.items()
-                if value is None and str(name).lower() in {"std140", "std430", "scalar"}
-            ),
-            "std430",
-        )
-        attributes = [f"@glsl_buffer_block({layout_name})"]
-        binding = layout.get("binding")
+        layout_names = self.ssbo_block_layout_names(var)
+        attributes = [f"@glsl_buffer_block({', '.join(layout_names)})"]
+        if self.is_shader_record_buffer_block(var):
+            self.validate_shader_record_layout(var)
+
+        binding = self.ssbo_binding(var)
         if binding is not None:
             attributes.append(f"@binding({binding})")
 
@@ -346,8 +362,40 @@ class GLSLToCrossGLConverter:
 
         return " " + " ".join(attributes)
 
+    def ssbo_binding(self, var):
+        layout = getattr(var, "layout", None) or {}
+        return layout.get("binding")
+
+    def ssbo_block_layout_names(self, var):
+        layout = getattr(var, "layout", None) or {}
+        layout_names = []
+        for name, value in layout.items():
+            normalized = str(name).lower()
+            if value is not None:
+                continue
+            if normalized in self.BUFFER_BLOCK_LAYOUT_QUALIFIERS:
+                layout_names.append(normalized)
+            elif normalized == "shaderrecordext":
+                layout_names.append("shaderRecordEXT")
+        return layout_names or ["std430"]
+
+    def is_shader_record_buffer_block(self, var):
+        return any(
+            str(layout_name).lower() == "shaderrecordext"
+            for layout_name in self.ssbo_block_layout_names(var)
+        )
+
+    def validate_shader_record_layout(self, var):
+        if self.ssbo_binding(var) is not None:
+            raise ValueError(
+                "GLSL shaderRecordEXT buffer blocks cannot declare binding layout "
+                "qualifiers"
+            )
+
     def ssbo_element_member(self, var):
         if not self._is_buffer_qualified(var):
+            return None
+        if self.is_shader_record_buffer_block(var):
             return None
 
         struct = self.structs_by_name.get(getattr(var, "vtype", None))
@@ -457,7 +505,8 @@ class GLSLToCrossGLConverter:
 
     def image_resource_attribute_suffix(self, var):
         var_type = getattr(var, "vtype", None)
-        if not self._is_image_resource_type(var_type):
+        ray_attributes = self.ray_storage_qualifier_attributes(var)
+        if not self._is_resource_type(var_type) and not ray_attributes:
             return ""
 
         attributes = []
@@ -466,19 +515,34 @@ class GLSLToCrossGLConverter:
         if binding is not None:
             attributes.append(f"@binding({binding})")
 
-        supported_formats = self.supported_image_formats()
-        for key in layout:
-            format_name = str(key).lower()
-            if format_name in supported_formats:
-                attributes.append(f"@{format_name}")
-                break
+        location = layout.get("location")
+        if location is not None:
+            attributes.append(f"@location({location})")
+
+        if self._is_image_resource_type(var_type):
+            supported_formats = self.supported_image_formats()
+            for key in layout:
+                format_name = str(key).lower()
+                if format_name in supported_formats:
+                    attributes.append(f"@{format_name}")
+                    break
 
         qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
         for qualifier in ("coherent", "volatile", "restrict", "readonly", "writeonly"):
             if qualifier in qualifiers:
                 attributes.append(f"@{qualifier}")
 
+        attributes.extend(ray_attributes)
+
         return f" {' '.join(attributes)}" if attributes else ""
+
+    def ray_storage_qualifier_attributes(self, var):
+        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
+        return [
+            f"@{attribute}"
+            for qualifier, attribute in self.RAY_STORAGE_QUALIFIERS.items()
+            if qualifier in qualifiers
+        ]
 
     def format_layout(self, layout_entry):
         layout = (
@@ -708,7 +772,7 @@ class GLSLToCrossGLConverter:
                     self.indent()
                     + f"{output_type} main({self.stage_struct_name()}Input input) @ {output_name}"
                 )
-            elif self.shader_type == "compute":
+            elif self.shader_type in self.NON_STRUCT_STAGE_TYPES:
                 result += self.indent() + "void main()"
             else:
                 result += (
