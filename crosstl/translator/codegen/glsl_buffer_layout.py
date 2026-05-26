@@ -11,7 +11,7 @@ def align_to(value, alignment):
 
 def byte_offset_expression(base_offset, index, stride):
     if str(index).isdigit():
-        return str(base_offset + int(index) * stride)
+        return byte_offset_add(base_offset, int(index) * stride)
     indexed_offset = byte_offset_index_expression(index, stride)
     if base_offset == 0:
         return f"({indexed_offset})"

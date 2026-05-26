@@ -2086,6 +2086,95 @@ def test_codegen_mixed_ssbo_readonly_aggregate_helpers_use_const_readers():
     assert "ReadOnlyAggregateData entry = readEntry(readAggregateBlock, i);" in glsl
 
 
+def test_codegen_mixed_ssbo_nested_aggregate_leaf_compound_offsets():
+    code = """
+    #version 450 core
+    struct CompoundItem {
+        vec2 uv;
+        bvec2 flags;
+    };
+
+    struct CompoundData {
+        float weights[2];
+        CompoundItem items[2];
+        uint id;
+    };
+
+    layout(std430, binding = 98) buffer CompoundAggregateBlock {
+        uint index;
+        CompoundData entries[];
+    } compoundAggregateBlock;
+
+    void main() {
+        uint i = compoundAggregateBlock.index;
+        compoundAggregateBlock.entries[i].weights[1] += 1.0;
+        compoundAggregateBlock.entries[i].items[1].uv += vec2(0.5);
+        compoundAggregateBlock.entries[i].items[0].flags = bvec2(true, false);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer compoundAggregateBlock : register(u98);" in hlsl
+    assert "uint i = compoundAggregateBlock.Load(0);" in hlsl
+    assert (
+        "compoundAggregateBlock.Store((8 + i * 48 + 4), "
+        "asuint((asfloat(compoundAggregateBlock.Load((8 + i * 48 + 4))) + 1.0)));"
+        in hlsl
+    )
+    assert (
+        "compoundAggregateBlock.Store2((8 + i * 48 + 8 + 16), "
+        "asuint((asfloat(compoundAggregateBlock.Load2((8 + i * 48 + 8 + 16))) "
+        "+ float2(0.5))));" in hlsl
+    )
+    assert "bool2 __crossgl_bool_store_0 = bool2(true, false);" in hlsl
+    assert (
+        "compoundAggregateBlock.Store2((8 + i * 48 + 8 + 8), "
+        "uint2((__crossgl_bool_store_0.x ? 1u : 0u), "
+        "(__crossgl_bool_store_0.y ? 1u : 0u)));" in hlsl
+    )
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    assert "device uchar* compoundAggregateBlock [[buffer(98)]]" in metal
+    assert (
+        "uint i = (*reinterpret_cast<const device uint*>"
+        "(compoundAggregateBlock + 0));" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device float*>"
+        "(compoundAggregateBlock + (8 + i * 48 + 4))) = "
+        "((*reinterpret_cast<const device float*>"
+        "(compoundAggregateBlock + (8 + i * 48 + 4))) + 1.0);" in metal
+    )
+    assert (
+        "float2 __crossgl_buffer_store_0 = "
+        "(float2((*reinterpret_cast<const device float*>"
+        "(compoundAggregateBlock + (8 + i * 48 + 8 + 16))), "
+        "(*reinterpret_cast<const device float*>"
+        "(compoundAggregateBlock + (8 + i * 48 + 8 + 16 + 4)))) "
+        "+ float2(0.5));" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>"
+        "(compoundAggregateBlock + (8 + i * 48 + 8 + 8 + 4))) = "
+        "((__crossgl_buffer_store_1.y) ? 1u : 0u);" in metal
+    )
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 98) buffer CompoundAggregateBlock" in glsl
+    assert "compoundAggregateBlock.entries[i].weights[1] += 1.0;" in glsl
+    assert "compoundAggregateBlock.entries[i].items[1].uv += vec2(0.5);" in glsl
+    assert (
+        "compoundAggregateBlock.entries[i].items[0].flags = bvec2(true, false);" in glsl
+    )
+
+
 def test_codegen_mixed_ssbo_aggregate_helpers_distinguish_std140_and_std430_layouts():
     crossgl = """
     shader main {

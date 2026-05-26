@@ -400,6 +400,33 @@ void main() {
 """
 
 
+MIXED_GLSL_SSBO_NESTED_AGGREGATE_LEAF_COMPOUND_COMPUTE_SHADER = """
+#version 450 core
+struct CompoundItem {
+    vec2 uv;
+    bvec2 flags;
+};
+
+struct CompoundData {
+    float weights[2];
+    CompoundItem items[2];
+    uint id;
+};
+
+layout(std430, binding = 12) buffer CompoundAggregateBlock {
+    uint index;
+    CompoundData entries[];
+} compoundAggregateBlock;
+
+void main() {
+    uint i = compoundAggregateBlock.index;
+    compoundAggregateBlock.entries[i].weights[1] += 1.0;
+    compoundAggregateBlock.entries[i].items[1].uv += vec2(0.5);
+    compoundAggregateBlock.entries[i].items[0].flags = bvec2(true, false);
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
 
@@ -1127,6 +1154,50 @@ def test_mixed_glsl_ssbo_readonly_aggregate_hlsl_output_compiles_with_dxc(
     assert output_path.exists()
 
 
+def test_mixed_glsl_ssbo_nested_aggregate_leaf_compound_hlsl_output_compiles_with_dxc(
+    tmp_path,
+):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / "mixed_glsl_ssbo_nested_aggregate_leaf_compound.hlsl"
+    output_path = tmp_path / "mixed_glsl_ssbo_nested_aggregate_leaf_compound.dxil"
+
+    code = HLSLCodeGen().generate(
+        _mixed_glsl_ast(
+            MIXED_GLSL_SSBO_NESTED_AGGREGATE_LEAF_COMPOUND_COMPUTE_SHADER,
+            "compute",
+        )
+    )
+    assert "RWByteAddressBuffer compoundAggregateBlock : register(u12);" in code
+    assert "uint i = compoundAggregateBlock.Load(0);" in code
+    assert (
+        "compoundAggregateBlock.Store((8 + i * 48 + 4), "
+        "asuint((asfloat(compoundAggregateBlock.Load((8 + i * 48 + 4))) + 1.0)))"
+        in code
+    )
+    assert (
+        "compoundAggregateBlock.Store2((8 + i * 48 + 8 + 16), "
+        "asuint((asfloat(compoundAggregateBlock.Load2((8 + i * 48 + 8 + 16))) "
+        "+ float2(0.5))))" in code
+    )
+    assert "compoundAggregateBlock.Store2((8 + i * 48 + 8 + 8), uint2" in code
+    assert ("un" + "supported HLSL GLSL buffer block") not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
 def test_mixed_glsl_ssbo_bool_metal_output_compiles_with_xcrun_metal(tmp_path):
     xcrun = _require_xcrun_tool("metal")
     shader_path = tmp_path / "mixed_glsl_ssbo_bool.metal"
@@ -1482,6 +1553,55 @@ def test_mixed_glsl_ssbo_readonly_aggregate_metal_output_compiles_with_xcrun_met
     )
     assert "result.items[1].flags = bool2" in code
     assert "reinterpret_cast<device" not in code
+    assert ("un" + "supported Metal GLSL buffer block") not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_ssbo_nested_aggregate_leaf_compound_metal_output_compiles_with_xcrun_metal(
+    tmp_path,
+):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "mixed_glsl_ssbo_nested_aggregate_leaf_compound.metal"
+    output_path = tmp_path / "mixed_glsl_ssbo_nested_aggregate_leaf_compound.air"
+
+    code = MetalCodeGen().generate(
+        _mixed_glsl_ast(
+            MIXED_GLSL_SSBO_NESTED_AGGREGATE_LEAF_COMPOUND_COMPUTE_SHADER,
+            "compute",
+        )
+    )
+    assert "device uchar* compoundAggregateBlock [[buffer(12)]]" in code
+    assert (
+        "uint i = (*reinterpret_cast<const device uint*>"
+        "(compoundAggregateBlock + 0));" in code
+    )
+    assert (
+        "(*reinterpret_cast<device float*>"
+        "(compoundAggregateBlock + (8 + i * 48 + 4))) = "
+        "((*reinterpret_cast<const device float*>"
+        "(compoundAggregateBlock + (8 + i * 48 + 4))) + 1.0)" in code
+    )
+    assert (
+        "float2 __crossgl_buffer_store_0 = "
+        "(float2((*reinterpret_cast<const device float*>"
+        "(compoundAggregateBlock + (8 + i * 48 + 8 + 16)))" in code
+    )
+    assert "compoundAggregateBlock + (8 + i * 48 + 8 + 16 + 4)" in code
+    assert "compoundAggregateBlock + (8 + i * 48 + 8 + 8 + 4)" in code
     assert ("un" + "supported Metal GLSL buffer block") not in code
     shader_path.write_text(code, encoding="utf-8")
 

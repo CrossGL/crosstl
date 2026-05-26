@@ -138,6 +138,7 @@ def test_std430_type_info_normalizes_fixed_width_scalar_aliases():
 
 def test_byte_offset_expression_formats_literal_and_dynamic_indices():
     assert byte_offset_expression(16, "2", 16) == "48"
+    assert byte_offset_expression("(16 + i * 48)", "1", 4) == "(16 + i * 48 + 4)"
     assert byte_offset_expression(0, "i", 64) == "(i * 64)"
     assert byte_offset_expression(16, "i", 64) == "(16 + i * 64)"
     assert byte_offset_expression(16, "vertex_id", 16) == "(16 + vertex_id * 16)"
