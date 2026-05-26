@@ -122,6 +122,16 @@ class TestHipCodeGen:
         assert codegen.convert_hip_type_to_crossgl("float *") == "ptr<f32>"
         assert codegen.convert_hip_type_to_crossgl("void * *") == "ptr<ptr<void>>"
         assert codegen.convert_hip_type_to_crossgl("void * []") == "array<ptr<void>>"
+        assert codegen.convert_hip_type_to_crossgl("hipTextureObject_t") == "sampler"
+        assert (
+            codegen.convert_hip_type_to_crossgl("const hipTextureObject_t *")
+            == "ptr<sampler>"
+        )
+        assert codegen.convert_hip_type_to_crossgl("hipSurfaceObject_t") == "image2D"
+        assert (
+            codegen.convert_hip_type_to_crossgl("hipSurfaceObject_t []")
+            == "array<image2D>"
+        )
 
     def test_function_conversion(self):
         """Test HIP function to CrossGL function conversion"""

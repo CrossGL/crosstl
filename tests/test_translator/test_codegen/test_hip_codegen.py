@@ -2363,6 +2363,7 @@ class TestHipCodeGen:
                     vec4 color = texture(tex, uv);
                     vec4 lodColor = textureLod(tex, uv, 1.0);
                     vec4 gradColor = textureGrad(tex, uv, uv, uv);
+                    vec4 directColor = tex2D(tex, uv);
                 }
             }
         }
@@ -2378,10 +2379,14 @@ class TestHipCodeGen:
         assert "#include <hip/hip_runtime.h>" in hip_code
         assert "hipTextureObject_t tex;" in hip_code
         assert "float2 uv = make_float2(0.5, 0.5);" in hip_code
-        assert "float4 color = tex2D(tex, uv);" in hip_code
-        assert "float4 lodColor = tex2DLod(tex, uv, 1.0);" in hip_code
-        assert "float4 gradColor = tex2DGrad(tex, uv, uv, uv);" in hip_code
+        assert "float4 color = tex2D<float4>(tex, uv.x, uv.y);" in hip_code
+        assert "float4 lodColor = tex2DLod<float4>(tex, uv.x, uv.y, 1.0);" in hip_code
+        assert (
+            "float4 gradColor = tex2DGrad<float4>(tex, uv.x, uv.y, uv, uv);" in hip_code
+        )
+        assert "float4 directColor = tex2D<float4>(tex, uv.x, uv.y);" in hip_code
         assert "sampler2D tex;" not in hip_code
+        assert "tex2D(tex, uv)" not in hip_code
         assert " = texture(" not in hip_code
         assert " = textureLod(" not in hip_code
         assert " = textureGrad(" not in hip_code
@@ -2439,14 +2444,15 @@ class TestHipCodeGen:
             "(paramLayers, uvLayer.x, uvLayer.y, uvLayer.z, ddx2, ddy2);" in hip_code
         )
         assert (
-            "float4 volumeColor = tex3D(paramVolume, uvw.x, uvw.y, uvw.z);" in hip_code
-        )
-        assert (
-            "float4 volumeMip = tex3DLod(paramVolume, uvw.x, uvw.y, uvw.z, 1.0);"
+            "float4 volumeColor = tex3D<float4>(paramVolume, uvw.x, uvw.y, uvw.z);"
             in hip_code
         )
         assert (
-            "float4 volumeGrad = tex3DGrad"
+            "float4 volumeMip = tex3DLod<float4>(paramVolume, uvw.x, uvw.y, uvw.z, 1.0);"
+            in hip_code
+        )
+        assert (
+            "float4 volumeGrad = tex3DGrad<float4>"
             "(paramVolume, uvw.x, uvw.y, uvw.z, ddx3, ddy3);" in hip_code
         )
         assert " = texture(" not in hip_code
@@ -2505,9 +2511,9 @@ class TestHipCodeGen:
         assert "hipTextureObject_t ramp;" in hip_code
         assert "hipTextureObject_t rampArray;" in hip_code
         assert "hipTextureObject_t envMap;" in hip_code
-        assert "float4 rampColor = tex1D(paramRamp, u);" in hip_code
-        assert "float4 rampMip = tex1DLod(paramRamp, u, 2.0);" in hip_code
-        assert "float4 rampGrad = tex1DGrad(paramRamp, u, du, du);" in hip_code
+        assert "float4 rampColor = tex1D<float4>(paramRamp, u);" in hip_code
+        assert "float4 rampMip = tex1DLod<float4>(paramRamp, u, 2.0);" in hip_code
+        assert "float4 rampGrad = tex1DGrad<float4>(paramRamp, u, du, du);" in hip_code
         assert (
             "float4 rampArrayColor = tex1DLayered<float4>"
             "(paramRampArray, uLayer.x, uLayer.y);" in hip_code
@@ -2521,14 +2527,15 @@ class TestHipCodeGen:
             "(paramRampArray, uLayer.x, uLayer.y, duLayer, duLayer);" in hip_code
         )
         assert (
-            "float4 envColor = texCubemap(paramEnv, dir.x, dir.y, dir.z);" in hip_code
-        )
-        assert (
-            "float4 envMip = texCubemapLod(paramEnv, dir.x, dir.y, dir.z, 1.0);"
+            "float4 envColor = texCubemap<float4>(paramEnv, dir.x, dir.y, dir.z);"
             in hip_code
         )
         assert (
-            "float4 envGrad = texCubemapGrad"
+            "float4 envMip = texCubemapLod<float4>(paramEnv, dir.x, dir.y, dir.z, 1.0);"
+            in hip_code
+        )
+        assert (
+            "float4 envGrad = texCubemapGrad<float4>"
             "(paramEnv, dir.x, dir.y, dir.z, ddxCube, ddyCube);" in hip_code
         )
         assert " = texture(" not in hip_code
@@ -2693,10 +2700,10 @@ class TestHipCodeGen:
         assert "texture(cascades" not in hip_code
         assert "texture(cubeShadow" not in hip_code
         assert "texture(cubeArrayShadow" not in hip_code
-        assert " = tex2D(shadowMap" not in hip_code
-        assert " = tex2D(cascades" not in hip_code
-        assert " = tex2D(cubeShadow" not in hip_code
-        assert " = tex2D(cubeArrayShadow" not in hip_code
+        assert " = tex2D<float4>(shadowMap" not in hip_code
+        assert " = tex2D<float4>(cascades" not in hip_code
+        assert " = tex2D<float4>(cubeShadow" not in hip_code
+        assert " = tex2D<float4>(cubeArrayShadow" not in hip_code
 
     def test_texture_gather_calls_emit_hip_diagnostics(self):
         """Test HIP makes unsupported gather sampled-resource calls explicit."""
@@ -2963,7 +2970,7 @@ class TestHipCodeGen:
             "__device__ T cgl_surf2DLayeredread"
             "(hipSurfaceObject_t surfObj, int x, int y, int layer)" in hip_code
         )
-        assert "float4 fetched = tex2D(paramTex, pixel.x, pixel.y);" in hip_code
+        assert "float4 fetched = tex2D<float4>(paramTex, pixel.x, pixel.y);" in hip_code
         assert (
             "float4 fetchedLayer = tex2DLayered<float4>"
             "(layers, pixelLayer.x, pixelLayer.y, pixelLayer.z);" in hip_code
@@ -3069,17 +3076,25 @@ class TestHipCodeGen:
             "float2 uv, float3 uvLayer, int2 pixel, int3 pixelLayer, "
             "int sampleIndex)" in hip_code
         )
-        assert "float4 sampled = tex2D(textureGrid[layer][slot], uv);" in hip_code
+        assert (
+            "float4 sampled = tex2D<float4>(textureGrid[layer][slot], uv.x, uv.y);"
+            in hip_code
+        )
         assert (
             "float4 sampledLayer = tex2DLayered<float4>"
             "(layerGrid[layer][slot], uvLayer.x, uvLayer.y, uvLayer.z);" in hip_code
         )
-        assert "float4 mip = tex2DLod(textureGrid[layer][slot], uv, 1.0);" in hip_code
         assert (
-            "float4 grad = tex2DGrad(textureGrid[layer][slot], uv, uv, uv);" in hip_code
+            "float4 mip = tex2DLod<float4>(textureGrid[layer][slot], uv.x, uv.y, 1.0);"
+            in hip_code
         )
         assert (
-            "float4 sampledParam = tex2D(paramTextures[layer][slot], uv);" in hip_code
+            "float4 grad = tex2DGrad<float4>(textureGrid[layer][slot], uv.x, uv.y, uv, uv);"
+            in hip_code
+        )
+        assert (
+            "float4 sampledParam = tex2D<float4>(paramTextures[layer][slot], uv.x, uv.y);"
+            in hip_code
         )
         assert (
             "float4 gathered = /* unsupported HIP sampled resource call: "
@@ -3087,7 +3102,7 @@ class TestHipCodeGen:
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
         )
         assert (
-            "float4 fetched = tex2D(textureGrid[layer][slot], pixel.x, pixel.y);"
+            "float4 fetched = tex2D<float4>(textureGrid[layer][slot], pixel.x, pixel.y);"
             in hip_code
         )
         assert (
@@ -3209,12 +3224,15 @@ class TestHipCodeGen:
             "hipSurfaceObject_t (*dynGridImages)[3], int layer, int slot, "
             "float2 uv, int2 pixel)" in hip_code
         )
-        assert "float4 sampled = tex2D(dynTextures[i], uv);" in hip_code
+        assert "float4 sampled = tex2D<float4>(dynTextures[i], uv.x, uv.y);" in hip_code
         assert (
             "float4 layered = tex2DLayered<float4>"
             "(dynLayers[i], uvLayer.x, uvLayer.y, uvLayer.z);" in hip_code
         )
-        assert "float4 fetched = tex2D(dynTextures[i], pixel.x, pixel.y);" in hip_code
+        assert (
+            "float4 fetched = tex2D<float4>(dynTextures[i], pixel.x, pixel.y);"
+            in hip_code
+        )
         assert (
             "float4 color = cgl_surf2Dread<float4>"
             "(dynImages[i], pixel.x * sizeof(float4), pixel.y);" in hip_code
@@ -3231,7 +3249,10 @@ class TestHipCodeGen:
             "surf2Dwrite(count, dynCounters[i], pixel.x * sizeof(uint), pixel.y);"
             in hip_code
         )
-        assert "float4 sampled = tex2D(dynGrid[layer][slot], uv);" in hip_code
+        assert (
+            "float4 sampled = tex2D<float4>(dynGrid[layer][slot], uv.x, uv.y);"
+            in hip_code
+        )
         assert (
             "float4 color = cgl_surf2Dread<float4>"
             "(dynGridImages[layer][slot], pixel.x * sizeof(float4), pixel.y);"
@@ -3384,7 +3405,7 @@ class TestHipCodeGen:
             "forwardQuery(textureGrid, textureGrid_metadata, imageGrid, "
             "imageGrid_metadata, 1, 2);" in hip_code
         )
-        assert "return tex2D(dynGrid[layer][slot], uv);" in hip_code
+        assert "return tex2D<float4>(dynGrid[layer][slot], uv.x, uv.y);" in hip_code
         assert (
             "float4 color = cgl_surf2Dread<float4>"
             "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
@@ -3510,8 +3531,14 @@ class TestHipCodeGen:
             "textureGrid_metadata[1], imageGrid, imageGrid_metadata, imageGrid[1], "
             "imageGrid_metadata[1], 1, 2, uv, pixel);" in hip_code
         )
-        assert "float4 dynamicSample = tex2D(dynamicGrid[layer][slot], uv);" in hip_code
-        assert "float4 fixedSample = tex2D(fixedRow[slot], uv);" in hip_code
+        assert (
+            "float4 dynamicSample = tex2D<float4>(dynamicGrid[layer][slot], uv.x, uv.y);"
+            in hip_code
+        )
+        assert (
+            "float4 fixedSample = tex2D<float4>(fixedRow[slot], uv.x, uv.y);"
+            in hip_code
+        )
         assert (
             "float4 dynamicColor = cgl_surf2Dread<float4>"
             "(dynamicImages[layer][slot], pixel.x * sizeof(float4), pixel.y);"
@@ -3700,9 +3727,18 @@ class TestHipCodeGen:
             "imageGrid_metadata, textureGrid, textureGrid_metadata, imageGrid[1], "
             "imageGrid_metadata[1], 1, 2, uv, pixel);" in hip_code
         )
-        assert "float4 sampledA = tex2D(dynA[layer][slot], uv);" in hip_code
-        assert "float4 sampledFixed = tex2D(fixedTexRow[slot], uv);" in hip_code
-        assert "float4 sampledAlias = tex2D(dynAlias[layer][slot], uv);" in hip_code
+        assert (
+            "float4 sampledA = tex2D<float4>(dynA[layer][slot], uv.x, uv.y);"
+            in hip_code
+        )
+        assert (
+            "float4 sampledFixed = tex2D<float4>(fixedTexRow[slot], uv.x, uv.y);"
+            in hip_code
+        )
+        assert (
+            "float4 sampledAlias = tex2D<float4>(dynAlias[layer][slot], uv.x, uv.y);"
+            in hip_code
+        )
         assert (
             "float4 dynamicColor = cgl_surf2Dread<float4>"
             "(dynImageGrid[layer][slot], pixel.x * sizeof(float4), pixel.y);"
@@ -4019,7 +4055,10 @@ class TestHipCodeGen:
         assert "continue;" in hip_code
         assert "break;" in hip_code
         assert "while ((fixedSlot < 3))" in hip_code
-        assert "float4 sampled = tex2D(dynTex[layer][slot], uv);" in hip_code
+        assert (
+            "float4 sampled = tex2D<float4>(dynTex[layer][slot], uv.x, uv.y);"
+            in hip_code
+        )
         assert (
             "float4 loaded = cgl_surf2Dread<float4>"
             "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
@@ -4037,7 +4076,8 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "accum = cgl_float4_add(accum, tex2D(fixedTex[fixedSlot], uv));" in hip_code
+            "accum = cgl_float4_add(accum, tex2D<float4>(fixedTex[fixedSlot], uv.x, uv.y));"
+            in hip_code
         )
         assert (
             "accum = cgl_float4_add(accum, cgl_surf2Dread<float4>"
@@ -4123,7 +4163,10 @@ class TestHipCodeGen:
         assert "for (int slot = 0; (slot < 3); slot++)" in hip_code
         assert "break;" in hip_code
         assert "continue;" in hip_code
-        assert "float4 sampled = tex2D(dynTex[layer][slot], uv);" in hip_code
+        assert (
+            "float4 sampled = tex2D<float4>(dynTex[layer][slot], uv.x, uv.y);"
+            in hip_code
+        )
         assert (
             "float4 loaded = cgl_surf2Dread<float4>"
             "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
@@ -4268,11 +4311,12 @@ class TestHipCodeGen:
             "imageGrid[1], imageGrid_metadata[1]);" in hip_code
         )
         assert (
-            "float4 dynamicSample = tex2D"
-            "(dynTex[params.layer][params.slot], params.uv);" in hip_code
+            "float4 dynamicSample = tex2D<float4>"
+            "(dynTex[params.layer][params.slot], params.uv.x, params.uv.y);" in hip_code
         )
         assert (
-            "float4 fixedSample = tex2D(fixedTex[params.slot], params.uv);" in hip_code
+            "float4 fixedSample = tex2D<float4>(fixedTex[params.slot], params.uv.x, params.uv.y);"
+            in hip_code
         )
         assert (
             "float4 dynamicColor = cgl_surf2Dread<float4>"
@@ -4420,7 +4464,10 @@ class TestHipCodeGen:
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
             "float2 uv, int2 pixel)" in hip_code
         )
-        assert "result.sampled = tex2D(dynTex[layer][slot], uv);" in hip_code
+        assert (
+            "result.sampled = tex2D<float4>(dynTex[layer][slot], uv.x, uv.y);"
+            in hip_code
+        )
         assert (
             "result.loaded = cgl_surf2Dread<float4>"
             "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
@@ -4434,7 +4481,7 @@ class TestHipCodeGen:
             "(dynImages_metadata[layer][slot]);" in hip_code
         )
         assert (
-            "return SampleResult(tex2D(dynTex[layer][slot], uv), "
+            "return SampleResult(tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
             "cgl_surf2Dread<float4>(dynImages[layer][slot], "
             "pixel.x * sizeof(float4), pixel.y), "
             "cgl_textureSize_sampler2D(dynTex_metadata[layer][slot], 0), "
@@ -4539,7 +4586,10 @@ class TestHipCodeGen:
             "CglResourceQueryInfo (*dynImages_metadata)[3], int layer, int slot, "
             "float2 uv, int2 pixel)" in hip_code
         )
-        assert "envelope.result.sampled = tex2D(dynTex[layer][slot], uv);" in hip_code
+        assert (
+            "envelope.result.sampled = tex2D<float4>(dynTex[layer][slot], uv.x, uv.y);"
+            in hip_code
+        )
         assert (
             "envelope.result.loaded = cgl_surf2Dread<float4>"
             "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
@@ -4557,7 +4607,7 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "envelope.bias = cgl_float4_add(tex2D(dynTex[layer][slot], uv), "
+            "envelope.bias = cgl_float4_add(tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
             "cgl_surf2Dread<float4>(dynImages[layer][slot], "
             "pixel.x * sizeof(float4), pixel.y));" in hip_code
         )
@@ -4666,7 +4716,7 @@ class TestHipCodeGen:
             "float2 uv, int2 pixel)" in hip_code
         )
         assert (
-            "envelope.results[slot].sampled = tex2D(dynTex[layer][slot], uv);"
+            "envelope.results[slot].sampled = tex2D<float4>(dynTex[layer][slot], uv.x, uv.y);"
             in hip_code
         )
         assert (
@@ -4812,13 +4862,17 @@ class TestHipCodeGen:
         assert "break;" in hip_code
         assert "envelope.accum = make_float4(0.0, 0.0, 0.0, 0.0);" in hip_code
         assert "envelope.chosen = slot;" in hip_code
-        assert "envelope.result.sampled = tex2D(dynTex[layer][slot], uv);" in hip_code
+        assert (
+            "envelope.result.sampled = tex2D<float4>(dynTex[layer][slot], uv.x, uv.y);"
+            in hip_code
+        )
         assert (
             "envelope.result.loaded = cgl_surf2Dread<float4>"
             "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
         )
         assert (
-            "envelope.result.sampled = tex2D(dynTex[fallback][slot], uv);" in hip_code
+            "envelope.result.sampled = tex2D<float4>(dynTex[fallback][slot], uv.x, uv.y);"
+            in hip_code
         )
         assert (
             "envelope.result.loaded = cgl_surf2Dread<float4>"
@@ -4834,7 +4888,7 @@ class TestHipCodeGen:
             "(dynImages_metadata[layer][i]);" in hip_code
         )
         assert (
-            "envelope.accum = cgl_float4_add(envelope.accum, tex2D(dynTex[layer][i], uv));"
+            "envelope.accum = cgl_float4_add(envelope.accum, tex2D<float4>(dynTex[layer][i], uv.x, uv.y));"
             in hip_code
         )
         assert (
@@ -6061,7 +6115,7 @@ class TestHipCodeGen:
         assert "imageLoad(msImageLayers" not in hip_code
         assert "imageStore(msImage" not in hip_code
         assert "imageStore(msImageLayers" not in hip_code
-        assert "tex2D(msTex" not in hip_code
+        assert "tex2D<float4>(msTex" not in hip_code
         assert "tex2DLayered<float4>(msLayers" not in hip_code
         assert "cgl_surf2Dread" not in hip_code
         assert "cgl_surf2DLayeredread" not in hip_code

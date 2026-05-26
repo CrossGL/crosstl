@@ -1027,6 +1027,8 @@ class HipToCrossGLConverter:
             "float": "f32",
             "double": "f64",
             "size_t": "u32",
+            "hipTextureObject_t": "sampler",
+            "hipSurfaceObject_t": "image2D",
             # HIP vector types
             **self.VECTOR_TYPE_MAPPING,
             "dim3": "vec3<u32>",
