@@ -8882,6 +8882,72 @@ def test_metal_integer_image_dimension_atomics():
     assert "imageAtomicCompSwap(image" not in generated_code
 
 
+def test_metal_resource_array_image_atomics_use_indexed_textures():
+    shader = """
+    shader ResourceArrayImageAtomics {
+        uimage2D counters @r32ui[2];
+        iimage2D signedCounters @r32i[2];
+
+        uint addCounter(uimage2D images[2] @r32ui, int index, ivec2 pixel, uint value) {
+            return imageAtomicAdd(images[index], pixel, value);
+        }
+
+        int swapSigned(
+            iimage2D images[2] @r32i,
+            int index,
+            ivec2 pixel,
+            int expected,
+            int value
+        ) {
+            return imageAtomicCompSwap(images[index], pixel, expected, value);
+        }
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 1);
+                uint oldValue = addCounter(counters, 1, pixel, 2u);
+                int oldSigned = swapSigned(signedCounters, 0, pixel, 3, int(oldValue));
+                imageStore(counters[0], pixel, oldValue + uint(oldSigned));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert (
+        "kernel void kernel_main(array<texture2d<uint, access::read_write>, 2> counters [[texture(0)]], array<texture2d<int, access::read_write>, 2> signedCounters [[texture(2)]])"
+        in generated_code
+    )
+    assert (
+        "uint addCounter(array<texture2d<uint, access::read_write>, 2> images, int index, int2 pixel, uint value)"
+        in generated_code
+    )
+    assert (
+        "int swapSigned(array<texture2d<int, access::read_write>, 2> images, int index, int2 pixel, int expected, int value)"
+        in generated_code
+    )
+    assert (
+        "int imageAtomicCompSwap_iimage2D(texture2d<int, access::read_write> image, int2 coord, int compareValue, int value)"
+        in generated_code
+    )
+    assert (
+        "return images[index].atomic_fetch_add(uint2(pixel), value).x;"
+        in generated_code
+    )
+    assert (
+        "return imageAtomicCompSwap_iimage2D(images[index], pixel, expected, value);"
+        in generated_code
+    )
+    assert (
+        "counters[0].write(uint4(oldValue + uint(oldSigned)), uint2(pixel));"
+        in generated_code
+    )
+    assert "imageAtomicAdd(" not in generated_code
+    assert "imageAtomicCompSwap(images" not in generated_code
+
+
 def test_metal_integer_image_scalar_load_store():
     shader = """
     shader IntegerImageLoadStore {

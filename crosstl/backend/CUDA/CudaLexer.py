@@ -43,6 +43,8 @@ TOKENS = tuple(
         ("ATOMICAND", r"\batomicAnd\b"),
         ("ATOMICOR", r"\batomicOr\b"),
         ("ATOMICXOR", r"\batomicXor\b"),
+        ("ATOMICINC", r"\batomicInc\b"),
+        ("ATOMICDEC", r"\batomicDec\b"),
         # Standard C/C++ keywords
         ("TYPEDEF", r"\btypedef\b"),
         ("STRUCT", r"\bstruct\b"),
@@ -225,6 +227,8 @@ KEYWORDS = {
     "atomicAnd": "ATOMICAND",
     "atomicOr": "ATOMICOR",
     "atomicXor": "ATOMICXOR",
+    "atomicInc": "ATOMICINC",
+    "atomicDec": "ATOMICDEC",
     "typedef": "TYPEDEF",
     "struct": "STRUCT",
     "union": "UNION",

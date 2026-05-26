@@ -224,6 +224,30 @@ RAYTRACING_HLSL = textwrap.dedent("""
     }
     """).strip()
 
+RAY_QUERY_HLSL = textwrap.dedent("""
+    RaytracingAccelerationStructure accel : register(t0);
+
+    [shader(\"raygeneration\")]
+    void RayGen() {
+        RayDesc ray;
+        ray.Origin = float3(0.0, 0.0, 0.0);
+        ray.TMin = 0.001;
+        ray.Direction = float3(0.0, 0.0, 1.0);
+        ray.TMax = 100.0;
+
+        RayQuery<RAY_FLAG_NONE> rq;
+        rq.TraceRayInline(accel, RAY_FLAG_NONE, 0xFF, ray);
+        while (rq.Proceed()) {
+            if (rq.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+                rq.CommitNonOpaqueTriangleHit();
+            }
+        }
+
+        uint status = rq.CommittedStatus();
+        float t = rq.CommittedRayT();
+    }
+    """).strip()
+
 TEXTURE_SAMPLE_HLSL = textwrap.dedent("""
     Texture2D tex : register(t0);
     SamplerState samp : register(s0);
@@ -474,6 +498,22 @@ def test_codegen_raytracing_stage():
     assert "ray_generation" in output.lower()
 
 
+def test_codegen_rayquery_stage_roundtrip_drops_native_shader_attribute():
+    output = generate_crossgl(RAY_QUERY_HLSL)
+
+    assert "ray_generation" in output.lower()
+    assert "@ shader" not in output
+    assert "rayQuery rq;" in output
+    assert "rq.TraceRayInline(accel, RAY_FLAG_NONE, 255, ray);" in output
+    assert "rq.Proceed()" in output
+    assert "rq.CommitNonOpaqueTriangleHit();" in output
+    assert "uint status = rq.CommittedStatus();" in output
+    assert "float t = rq.CommittedRayT();" in output
+
+    shader_ast = parse_crossgl(output)
+    assert ShaderStage.RAY_GENERATION in shader_ast.stages
+
+
 def test_codegen_texture_sample_mapping():
     output = generate_crossgl(TEXTURE_SAMPLE_HLSL)
     assert "texture(tex, samp, uv)" in output
@@ -662,6 +702,7 @@ def test_codegen_ray_shader_stages():
     assert "ray_any_hit" in lowered
     assert "ray_miss" in lowered
     assert "ray_callable" in lowered
+    assert "@ shader" not in output
 
 
 def test_codegen_texture_method_descriptors():

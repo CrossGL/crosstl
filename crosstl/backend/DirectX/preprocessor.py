@@ -121,10 +121,15 @@ class HLSLPreprocessor:
                     if name in self.macros:
                         del self.macros[name]
                 elif directive == "include":
-                    included_text = self._handle_include(rest, file_path)
-                    if included_text is not None:
+                    included = self._handle_include(rest, file_path)
+                    if included is not None:
+                        if isinstance(included, tuple):
+                            included_text, included_path = included
+                        else:
+                            included_text = included
+                            included_path = file_path
                         nested_lines = self._split_logical_lines(included_text)
-                        output.extend(self._process_lines(nested_lines, file_path))
+                        output.extend(self._process_lines(nested_lines, included_path))
                 elif directive == "line":
                     line_override = self._handle_line_directive(rest)
                     if line_override is not None:
@@ -219,7 +224,9 @@ class HLSLPreprocessor:
             is_variadic = True
         return params, remainder, is_variadic
 
-    def _handle_include(self, rest: str, file_path: Optional[str]) -> Optional[str]:
+    def _handle_include(
+        self, rest: str, file_path: Optional[str]
+    ) -> Optional[Tuple[str, str]]:
         match = re.match(r"\s*([<\"])([^>\"]+)[>\"]", rest)
         if not match:
             return None
@@ -235,7 +242,7 @@ class HLSLPreprocessor:
             candidate = os.path.join(base, target)
             if os.path.isfile(candidate):
                 with open(candidate, "r", encoding="utf-8") as handle:
-                    return handle.read()
+                    return handle.read(), candidate
 
         if self.strict:
             raise FileNotFoundError(f"Include not found: {target}")

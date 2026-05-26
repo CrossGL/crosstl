@@ -48,6 +48,46 @@ def test_include_with_search_path(tmp_path):
     assert "includedValue" in output
 
 
+def test_nested_include_resolves_relative_to_included_file(tmp_path):
+    shader_dir = tmp_path / "shaders"
+    include_dir = shader_dir / "include"
+    include_dir.mkdir(parents=True)
+    (include_dir / "constants.hlsl").write_text(
+        "#define BASE_COLOR float4(1.0, 0.0, 0.0, 1.0)\n",
+        encoding="utf-8",
+    )
+    (include_dir / "material.hlsl").write_text(
+        '#include "constants.hlsl"\nfloat4 materialColor = BASE_COLOR;\n',
+        encoding="utf-8",
+    )
+    main_path = shader_dir / "main.hlsl"
+    main_path.write_text(
+        '#include "include/material.hlsl"\nfloat4 main() { return materialColor; }\n',
+        encoding="utf-8",
+    )
+
+    output = HLSLPreprocessor().preprocess(
+        main_path.read_text(encoding="utf-8"),
+        file_path=str(main_path),
+    )
+
+    assert "materialColor" in output
+    assert "BASE_COLOR" not in output
+    assert "float4(1.0, 0.0, 0.0, 1.0)" in output
+
+
+def test_include_handler_accepts_legacy_text_result():
+    class LegacyIncludePreprocessor(HLSLPreprocessor):
+        def _handle_include(self, rest, file_path):
+            return "#define INCLUDED_VALUE 7\n"
+
+    code = '#include "generated.hlsl"\nint value = INCLUDED_VALUE;\n'
+    output = LegacyIncludePreprocessor().preprocess(code)
+
+    assert "INCLUDED_VALUE" not in output
+    assert "int value = 7;" in output
+
+
 def test_conditional_compilation_and_undef():
     code = """
     #define ENABLED 1

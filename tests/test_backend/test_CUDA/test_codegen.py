@@ -370,6 +370,35 @@ class TestCudaCodeGen:
         assert "(&values[index])" not in result
         assert "(&sharedMasks[gl_LocalInvocationID.x])" not in result
 
+    def test_bounded_wrap_atomics_preserve_cuda_semantics(self):
+        """Test CUDA atomicInc/atomicDec preserve bounded wrap intrinsics."""
+        code = """
+        __global__ void kernel(unsigned int* values, unsigned int limit, int index) {
+            __shared__ unsigned int sharedCounters[32];
+            unsigned int oldInc = atomicInc(&values[index], limit);
+            unsigned int oldDec = atomicDec(&sharedCounters[threadIdx.x], limit);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var<workgroup> sharedCounters: array<u32, 32>;" in result
+        assert "var oldInc: u32 = atomicInc(values[index], limit);" in result
+        expected_old_dec = (
+            "var oldDec: u32 = "
+            "atomicDec(sharedCounters[gl_LocalInvocationID.x], limit);"
+        )
+        assert expected_old_dec in result
+        assert "atomicAdd(values[index], limit)" not in result
+        assert "atomicSub(sharedCounters[gl_LocalInvocationID.x], limit)" not in result
+        assert "(&values[index])" not in result
+        assert "(&sharedCounters[gl_LocalInvocationID.x])" not in result
+
     def test_user_defined_cuda_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined CUDA runtime names shadow runtime call comments."""
         code = """

@@ -475,10 +475,10 @@ class HLSLParser:
         self.eat("IDENTIFIER")
 
         if self.current_token[0] == "COLON":
-            _, register, packoffset = self.parse_semantic_or_register()
+            _, cbuffer_register, cbuffer_packoffset = self.parse_semantic_or_register()
         else:
-            register = None
-            packoffset = None
+            cbuffer_register = None
+            cbuffer_packoffset = None
 
         self.eat("LBRACE")
         members = []
@@ -489,10 +489,12 @@ class HLSLParser:
             self.eat("IDENTIFIER")
             array_sizes = self.parse_array_suffixes()
             semantic = None
-            register = None
-            packoffset = None
+            member_register = None
+            member_packoffset = None
             if self.current_token[0] == "COLON":
-                semantic, register, packoffset = self.parse_semantic_or_register()
+                semantic, member_register, member_packoffset = (
+                    self.parse_semantic_or_register()
+                )
             self.eat("SEMICOLON")
 
             member = VariableNode(
@@ -501,8 +503,8 @@ class HLSLParser:
                 qualifiers=qualifiers,
                 semantic=semantic,
             )
-            member.register = register
-            member.packoffset = packoffset
+            member.register = member_register
+            member.packoffset = member_packoffset
             member.array_sizes = array_sizes
             members.append(member)
 
@@ -512,8 +514,8 @@ class HLSLParser:
 
         cbuffer_node = StructNode(name, members)
         cbuffer_node.is_cbuffer = True
-        cbuffer_node.register = register
-        cbuffer_node.packoffset = packoffset
+        cbuffer_node.register = cbuffer_register
+        cbuffer_node.packoffset = cbuffer_packoffset
         return cbuffer_node
 
     def parse_function(self, return_type, name, qualifiers, attributes):

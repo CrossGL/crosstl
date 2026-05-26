@@ -276,6 +276,27 @@ def test_parse_resource_arrays_and_register_space():
     assert_parses(code)
 
 
+def test_parse_cbuffer_preserves_buffer_and_member_bindings():
+    code = """
+    cbuffer FrameData : register(b0, space1) {
+        row_major float4x4 viewProj : packoffset(c0);
+        float4 tint : packoffset(c4);
+    };
+    """
+
+    ast = parse_code(code)
+    cbuffer = ast.cbuffers[0]
+
+    assert cbuffer.register == "b0, space1"
+    assert cbuffer.packoffset is None
+    assert cbuffer.members[0].name == "viewProj"
+    assert cbuffer.members[0].packoffset == "c0"
+    assert cbuffer.members[0].register is None
+    assert cbuffer.members[1].name == "tint"
+    assert cbuffer.members[1].packoffset == "c4"
+    assert cbuffer.members[1].register is None
+
+
 def test_parse_geometry_shader():
     code = """
     struct GSInput {

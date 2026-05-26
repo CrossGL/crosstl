@@ -1312,6 +1312,40 @@ class TestCudaParser:
         assert isinstance(atomic_xor.args[0], UnaryOpNode)
         assert isinstance(atomic_xor.args[0].operand, ArrayAccessNode)
 
+    def test_bounded_wrap_atomic_operations_parsing(self):
+        """Test CUDA atomicInc/atomicDec parse as bounded atomic nodes."""
+        code = """
+        __global__ void kernel(unsigned int* values, unsigned int limit, int index) {
+            __shared__ unsigned int sharedCounters[32];
+            unsigned int oldInc = atomicInc(&values[index], limit);
+            unsigned int oldDec = atomicDec(&sharedCounters[threadIdx.x], limit);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.kernels[0].body
+        atomic_inc = body[1].value
+        atomic_dec = body[2].value
+
+        assert isinstance(atomic_inc, AtomicOperationNode)
+        assert atomic_inc.operation == "atomicInc"
+        assert isinstance(atomic_inc.args[0], UnaryOpNode)
+        assert atomic_inc.args[0].op == "&"
+        assert isinstance(atomic_inc.args[0].operand, ArrayAccessNode)
+        assert atomic_inc.args[0].operand.array == "values"
+
+        assert isinstance(atomic_dec, AtomicOperationNode)
+        assert atomic_dec.operation == "atomicDec"
+        assert isinstance(atomic_dec.args[0], UnaryOpNode)
+        shared_target = atomic_dec.args[0].operand
+        assert isinstance(shared_target, ArrayAccessNode)
+        assert shared_target.array == "sharedCounters"
+        assert isinstance(shared_target.index, CudaBuiltinNode)
+        assert shared_target.index.builtin_name == "threadIdx"
+
     def test_user_defined_atomic_name_is_not_parsed_as_builtin_atomic(self):
         """Test user-defined atomic names shadow CUDA atomic parsing."""
         code = """

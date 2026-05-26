@@ -923,6 +923,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "atomicAnd": ("atomicAnd", 2, integer_kinds, "int/uint"),
             "atomicOr": ("atomicOr", 2, integer_kinds, "int/uint"),
             "atomicXor": ("atomicXor", 2, integer_kinds, "int/uint"),
+            "atomicInc": ("atomicInc", 2, {"uint"}, "uint"),
+            "atomicDec": ("atomicDec", 2, {"uint"}, "uint"),
             "atomicExchange": ("atomicExch", 2, add_exchange_kinds, "int/uint/float"),
             "atomicCompareExchange": ("atomicCAS", 3, integer_kinds, "int/uint"),
             "atomicCompSwap": ("atomicCAS", 3, integer_kinds, "int/uint"),
@@ -2966,6 +2968,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "atomicExchange": "atomicExch",
             "atomicCompareExchange": "atomicCAS",
             "atomicCompSwap": "atomicCAS",
+            "atomicInc": "atomicInc",
+            "atomicDec": "atomicDec",
             # Synchronization
             "barrier": "__syncthreads",
             "memoryBarrier": "__threadfence",

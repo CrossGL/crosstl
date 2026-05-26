@@ -2752,6 +2752,42 @@ shader IntegerImageAtomicsValidation {
 """
 
 
+METAL_RESOURCE_ARRAY_IMAGE_ATOMICS_COMPUTE_SHADER = """
+shader MetalResourceArrayImageAtomicsValidation {
+    uimage2D counters @r32ui[2];
+    iimage2D signedCounters @r32i[2];
+
+    uint addCounter(
+        uimage2D images[2] @r32ui,
+        int index,
+        ivec2 pixel,
+        uint value
+    ) {
+        return imageAtomicAdd(images[index], pixel, value);
+    }
+
+    int swapSigned(
+        iimage2D images[2] @r32i,
+        int index,
+        ivec2 pixel,
+        int expected,
+        int value
+    ) {
+        return imageAtomicCompSwap(images[index], pixel, expected, value);
+    }
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(0, 1);
+            uint oldValue = addCounter(counters, 1, pixel, 2u);
+            int oldSigned = swapSigned(signedCounters, 0, pixel, 3, int(oldValue));
+            imageStore(counters[0], pixel, oldValue + uint(oldSigned));
+        }
+    }
+}
+"""
+
+
 RG_IMAGE_ARRAY_COMPUTE_SHADER = """
 shader RGImageArrayValidation {
     image2D rgFloatImages @rg32f[3];
@@ -4807,6 +4843,28 @@ def test_generated_metal_compute_integer_image_atomics_compiles_with_metal(tmp_p
     code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(INTEGER_IMAGE_ATOMICS_COMPUTE_SHADER), "compute"
     )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_resource_array_image_atomics_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_resource_array_image_atomics.metal"
+    output = tmp_path / "compute_resource_array_image_atomics.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_RESOURCE_ARRAY_IMAGE_ATOMICS_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "images[index].atomic_fetch_add(uint2(pixel), value).x" in code
+    assert "imageAtomicCompSwap_iimage2D(images[index], pixel, expected, value)" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

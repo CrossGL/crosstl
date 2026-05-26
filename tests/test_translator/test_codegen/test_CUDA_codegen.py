@@ -242,6 +242,8 @@ class TestCudaCodeGen:
         # Test atomic operations
         assert codegen.convert_builtin_function("atomicAdd") == "atomicAdd"
         assert codegen.convert_builtin_function("atomicExchange") == "atomicExch"
+        assert codegen.convert_builtin_function("atomicInc") == "atomicInc"
+        assert codegen.convert_builtin_function("atomicDec") == "atomicDec"
 
         # Test synchronization
         assert codegen.convert_builtin_function("barrier") == "__syncthreads"
@@ -3801,6 +3803,52 @@ class TestCudaCodeGen:
             "float oldExchange = /* unsupported CUDA structured buffer atomic"
             not in cuda_code
         )
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_uint_structured_buffer_inc_dec_emit_cuda_bounded_atomics(self, tmp_path):
+        """Test CUDA emits native bounded inc/dec atomics only for uint buffers."""
+        source_code = """
+        shader BoundedStructuredBufferAtomicsCUDA {
+            RWStructuredBuffer<uint> counters;
+            RWStructuredBuffer<int> signedCounters;
+            RWStructuredBuffer<float> floatCounters;
+
+            void process(uint index, uint limit, int signedLimit, float floatLimit) {
+                uint oldInc = atomicInc(counters[index], limit);
+                uint oldDec = atomicDec(counters[index], limit);
+                int signedInc = atomicInc(signedCounters[index], signedLimit);
+                float floatDec = atomicDec(floatCounters[index], floatLimit);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "uint* counters;" in cuda_code
+        assert "int* signedCounters;" in cuda_code
+        assert "float* floatCounters;" in cuda_code
+        assert "uint oldInc = atomicInc(&counters[index], limit);" in cuda_code
+        assert "uint oldDec = atomicDec(&counters[index], limit);" in cuda_code
+        assert (
+            "int signedInc = /* unsupported CUDA structured buffer atomic: "
+            "atomicInc on RWStructuredBuffer<int> requires supported scalar "
+            "uint target */ 0;" in cuda_code
+        )
+        assert (
+            "float floatDec = /* unsupported CUDA structured buffer atomic: "
+            "atomicDec on RWStructuredBuffer<float> requires supported scalar "
+            "uint target */ 0.0f;" in cuda_code
+        )
+        assert "atomicAdd(&counters[index], limit)" not in cuda_code
+        assert "atomicSub(&counters[index], limit)" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_byte_address_buffer_resources_emit_cuda_byte_pointer_helpers(

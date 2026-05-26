@@ -422,17 +422,21 @@ class HLSLToCrossGLConverter:
                 parts.append(f"[{self.generate_expression(size, is_main)}]")
         return "".join(parts)
 
-    def format_attributes(self, attributes, indent):
+    def format_attributes(self, attributes, indent, skip_names=None):
         if not attributes:
             return ""
+        skip_names = {str(name).lower() for name in skip_names or ()}
         lines = ""
         for attr in attributes:
+            attr_name = str(getattr(attr, "name", ""))
+            if attr_name.lower() in skip_names:
+                continue
             args = getattr(attr, "args", getattr(attr, "arguments", []))
             if args:
                 rendered_args = ", ".join(self.generate_expression(arg) for arg in args)
-                lines += "    " * indent + f"@ {attr.name}({rendered_args})\n"
+                lines += "    " * indent + f"@ {attr_name}({rendered_args})\n"
             else:
-                lines += "    " * indent + f"@ {attr.name}\n"
+                lines += "    " * indent + f"@ {attr_name}\n"
         return lines
 
     def format_binding_attributes(self, node, indent):
@@ -1012,7 +1016,7 @@ class HLSLToCrossGLConverter:
             if stage_name:
                 code += f"    // {stage_name} Shader\n"
                 code += f"    {stage_name} {{\n"
-                code += self.generate_function(func)
+                code += self.generate_function(func, skip_attribute_names={"shader"})
                 code += "    }\n\n"
             else:
                 code += self.generate_function(func)
@@ -1035,9 +1039,11 @@ class HLSLToCrossGLConverter:
                 code += "    }\n"
         return code
 
-    def generate_function(self, func, indent=1):
+    def generate_function(self, func, indent=1, skip_attribute_names=None):
         """Render one HLSL function node as a CrossGL function block."""
-        code = self.format_attributes(getattr(func, "attributes", []), indent)
+        code = self.format_attributes(
+            getattr(func, "attributes", []), indent, skip_attribute_names
+        )
         code += "    " * indent
         previous_variable_types = self.current_variable_types
         previous_resource_array_dims = self.current_resource_array_dims
