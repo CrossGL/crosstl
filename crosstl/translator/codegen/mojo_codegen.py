@@ -335,6 +335,14 @@ MOJO_RESOURCE_TYPE_MAPPING = {
     "uimage3D": "UImage3D",
 }
 
+MOJO_HLSL_RW_TEXTURE_TYPE_MAPPING = {
+    "RWTexture1D": ("Image1D", "IImage1D", "UImage1D"),
+    "RWTexture1DArray": ("Image1DArray", "IImage1DArray", "UImage1DArray"),
+    "RWTexture2D": ("Image2D", "IImage2D", "UImage2D"),
+    "RWTexture2DArray": ("Image2DArray", "IImage2DArray", "UImage2DArray"),
+    "RWTexture3D": ("Image3D", "IImage3D", "UImage3D"),
+}
+
 MOJO_RESOURCE_SAMPLE_COORDS = {
     "Texture1D": "Float32",
     "Texture1DArray": "SIMD[DType.float32, 2]",
@@ -1186,6 +1194,10 @@ class MojoCodeGen:
 
     def resource_type_alias(self, type_name):
         type_name = self.type_name(type_name)
+        rw_alias = self.rw_texture_resource_alias(type_name)
+        if rw_alias is not None:
+            return rw_alias
+
         mapped_type = MOJO_RESOURCE_TYPE_MAPPING.get(type_name)
         if mapped_type is not None:
             return mapped_type
@@ -1194,13 +1206,43 @@ class MojoCodeGen:
         if generic is None:
             return None
 
-        base_type, _ = generic
+        base_type, generic_args = generic
+        rw_alias = self.rw_texture_resource_alias(
+            base_type, generic_args[0] if generic_args else None
+        )
+        if rw_alias is not None:
+            return rw_alias
+
         mapped_base_type = MOJO_RESOURCE_TYPE_MAPPING.get(base_type, base_type)
         if self.is_mojo_resource_type(
             mapped_base_type
         ) and self.is_texture_resource_type(mapped_base_type):
             return mapped_base_type
         return None
+
+    def rw_texture_resource_alias(self, base_type, element_type=None):
+        image_aliases = MOJO_HLSL_RW_TEXTURE_TYPE_MAPPING.get(self.type_name(base_type))
+        if image_aliases is None:
+            return None
+
+        dtype = self.resource_element_dtype(element_type)
+        if dtype in {"DType.uint16", "DType.uint32"}:
+            return image_aliases[2]
+        if dtype in {"DType.int16", "DType.int32"}:
+            return image_aliases[1]
+        return image_aliases[0]
+
+    def resource_element_dtype(self, element_type):
+        if element_type is None:
+            return None
+
+        type_name = self.normalize_generic_vector_type_name(
+            self.type_name(element_type)
+        )
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            return vector_info[0]
+        return MOJO_SCALAR_DTYPES.get(type_name)
 
     def mapped_buffer_type(self, buffer_type, element_type=None):
         if buffer_type in MOJO_TYPED_BUFFER_RESOURCE_TYPES and element_type is not None:
@@ -3352,11 +3394,26 @@ class MojoCodeGen:
             return self.generate_resource_builtin_call(args, helper_base, return_kind)
         if operation in {"Load", "texelFetch"}:
             fetch_args = list(resource_args)
+            if fetch_args:
+                resource_type = self.map_type(
+                    self.expression_result_type(fetch_args[0])
+                )
+                if self.is_image_resource_type(resource_type):
+                    return self.generate_image_load_call(fetch_args)
             if len(fetch_args) == 2:
                 fetch_args.append(0)
             return self.generate_texel_fetch_call(fetch_args)
+        if operation in {"Store", "imageStore"}:
+            return self.generate_image_store_call(resource_args)
         if operation in {"GetDimensions", "textureSize"}:
-            return self.generate_resource_size_call(resource_args, "texture_size")
+            helper_name = "texture_size"
+            if resource_args:
+                resource_type = self.map_type(
+                    self.expression_result_type(resource_args[0])
+                )
+                if self.is_image_resource_type(resource_type):
+                    helper_name = "image_size"
+            return self.generate_resource_size_call(resource_args, helper_name)
         if operation == "textureQueryLevels":
             return self.generate_resource_query_levels_call(resource_args)
 
@@ -3952,7 +4009,10 @@ class MojoCodeGen:
         member = getattr(func_expr, "member", None)
         obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
         resource_type = self.map_type(self.expression_result_type(obj_expr))
-        if not self.is_texture_resource_type(resource_type):
+        if not (
+            self.is_texture_resource_type(resource_type)
+            or self.is_image_resource_type(resource_type)
+        ):
             return None
 
         call_args = [obj_expr, *args]
@@ -4664,6 +4724,11 @@ class MojoCodeGen:
 
     def is_texture_resource_type(self, resource_type):
         return isinstance(resource_type, str) and resource_type.startswith("Texture")
+
+    def is_image_resource_type(self, resource_type):
+        return isinstance(resource_type, str) and resource_type.startswith(
+            ("Image", "IImage", "UImage")
+        )
 
     def resource_sample_return_type(self, resource_type):
         if self.is_shadow_resource_type(resource_type):
@@ -5508,6 +5573,14 @@ class MojoCodeGen:
         obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
         resource_type = self.map_type(self.expression_result_type(obj_expr))
         if not self.is_texture_resource_type(resource_type):
+            if not self.is_image_resource_type(resource_type):
+                return None
+            if member == "Load":
+                return self.image_result_type_name(resource_type)
+            if member == "Store":
+                return "void"
+            if member in {"GetDimensions", "textureSize"}:
+                return self.resource_size_result_type_name(resource_type)
             return None
 
         if member in {
@@ -5518,15 +5591,27 @@ class MojoCodeGen:
         }:
             return "float"
         if member in {"GetDimensions", "textureSize"}:
-            size_type = MOJO_RESOURCE_SIZE_RETURNS.get(resource_type)
-            if size_type == "Int32":
-                return "int"
-            if size_type == "SIMD[DType.int32, 2]":
-                return "ivec2"
-            if size_type == "SIMD[DType.int32, 4]":
-                return "ivec3"
+            return self.resource_size_result_type_name(resource_type)
         if member == "textureQueryLevels":
             return "int"
+        return "vec4"
+
+    def resource_size_result_type_name(self, resource_type):
+        size_type = MOJO_RESOURCE_SIZE_RETURNS.get(resource_type)
+        if size_type == "Int32":
+            return "int"
+        if size_type == "SIMD[DType.int32, 2]":
+            return "ivec2"
+        if size_type == "SIMD[DType.int32, 4]":
+            return "ivec3"
+        return None
+
+    def image_result_type_name(self, resource_type):
+        value_type = self.image_value_type(resource_type)
+        if value_type == "Int32":
+            return "int"
+        if value_type == "UInt32":
+            return "uint"
         return "vec4"
 
     def vector_type_info(self, type_name):

@@ -2968,7 +2968,11 @@ class MetalCodeGen:
         return "thread"
 
     def is_metal_atomic_value_type(self, vtype):
-        return self.type_name_string(vtype) in {
+        type_name = self.type_name_string(vtype)
+        if type_name is None:
+            return False
+        type_name = type_name.split("[", 1)[0].strip()
+        return type_name in {
             "atomic_bool",
             "atomic_int",
             "atomic_uint",
@@ -4423,6 +4427,8 @@ class MetalCodeGen:
             "atomic_fetch_and_explicit",
             "atomic_fetch_or_explicit",
             "atomic_fetch_xor_explicit",
+            "atomic_load_explicit",
+            "atomic_store_explicit",
             "atomic_exchange_explicit",
             "atomic_compare_exchange_weak_explicit",
             "atomic_compare_exchange_strong_explicit",

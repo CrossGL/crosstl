@@ -184,7 +184,13 @@ class HLSLToCrossGLConverter:
         }
         self.buffer_method_map = {
             "Load": "buffer_load",
+            "Load2": "buffer_load2",
+            "Load3": "buffer_load3",
+            "Load4": "buffer_load4",
             "Store": "buffer_store",
+            "Store2": "buffer_store2",
+            "Store3": "buffer_store3",
+            "Store4": "buffer_store4",
             "Append": "buffer_append",
             "Consume": "buffer_consume",
             "GetDimensions": "buffer_dimensions",

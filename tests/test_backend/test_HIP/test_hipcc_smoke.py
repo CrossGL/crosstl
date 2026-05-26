@@ -282,6 +282,186 @@ def test_native_hip_managed_async_memory_parses_and_compiles_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_memory_pool_virtual_memory_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP memory-pool and virtual-memory lifecycle APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void memory_pool_virtual_memory(size_t bytes, hipStream_t stream) {
+        hipMemPool_t pool;
+        hipMemPool_t imported_pool;
+        hipMemPoolProps pool_props;
+        hipMemPoolPtrExportData export_data;
+        hipMemAccessDesc access_desc;
+        hipMemLocation location;
+        hipMemGenericAllocationHandle_t allocation_handle;
+        hipMemGenericAllocationHandle_t retained_handle;
+        hipMemAllocationProp allocation_prop;
+        hipMemAllocationHandleType handle_type;
+        void* shareable_handle = NULL;
+        void* pooled_ptr = NULL;
+        void* imported_ptr = NULL;
+        void* virtual_address = NULL;
+        size_t threshold = bytes;
+        size_t granularity = 0;
+        unsigned int pool_flags = 0;
+        unsigned long long access_flags = 0;
+
+        hipMemPoolCreate(&pool, &pool_props);
+        hipDeviceGetDefaultMemPool(&pool, 0);
+        hipDeviceGetMemPool(&pool, 0);
+        hipMallocFromPoolAsync(&pooled_ptr, bytes, pool, stream);
+        hipMemPoolTrimTo(pool, bytes);
+        hipMemPoolSetAttribute(
+            pool, hipMemPoolAttrReleaseThreshold, &threshold
+        );
+        hipMemPoolGetAttribute(
+            pool, hipMemPoolAttrReleaseThreshold, &threshold
+        );
+        hipMemPoolSetAccess(pool, &access_desc, 1);
+        hipMemPoolGetAccess(&pool_flags, pool, &location);
+        hipMemPoolExportToShareableHandle(
+            shareable_handle, pool, handle_type, 0
+        );
+        hipMemPoolImportFromShareableHandle(
+            &imported_pool, shareable_handle, handle_type, 0
+        );
+        hipMemPoolExportPointer(&export_data, pooled_ptr);
+        hipMemPoolImportPointer(&imported_ptr, imported_pool, &export_data);
+        hipMemGetAllocationGranularity(
+            &granularity, &allocation_prop, hipMemAllocationGranularityMinimum
+        );
+        hipMemCreate(&allocation_handle, bytes, &allocation_prop, 0);
+        hipMemAddressReserve(&virtual_address, bytes, granularity, NULL, 0);
+        hipMemMap(virtual_address, bytes, 0, allocation_handle, 0);
+        hipMemSetAccess(virtual_address, bytes, &access_desc, 1);
+        hipMemGetAccess(&access_flags, &location, virtual_address);
+        hipMemGetAllocationPropertiesFromHandle(
+            &allocation_prop, allocation_handle
+        );
+        hipMemRetainAllocationHandle(&retained_handle, virtual_address);
+        hipMemUnmap(virtual_address, bytes);
+        hipMemRelease(retained_handle);
+        hipMemRelease(allocation_handle);
+        hipMemAddressFree(virtual_address, bytes);
+        hipFreeAsync(pooled_ptr, stream);
+        hipMemPoolDestroy(pool);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: memory_pool_virtual_memory" in crossgl
+    assert "void memory_pool_virtual_memory(u32 bytes, hipStream_t stream)" in crossgl
+    assert "var pool: hipMemPool_t;" in crossgl
+    assert "var imported_pool: hipMemPool_t;" in crossgl
+    assert "var pool_props: hipMemPoolProps;" in crossgl
+    assert "var export_data: hipMemPoolPtrExportData;" in crossgl
+    assert "var access_desc: hipMemAccessDesc;" in crossgl
+    assert "var location: hipMemLocation;" in crossgl
+    assert "var allocation_handle: hipMemGenericAllocationHandle_t;" in crossgl
+    assert "var retained_handle: hipMemGenericAllocationHandle_t;" in crossgl
+    assert "var allocation_prop: hipMemAllocationProp;" in crossgl
+    assert "var handle_type: hipMemAllocationHandleType;" in crossgl
+    assert "var shareable_handle: ptr<void> = NULL;" in crossgl
+    assert "var pooled_ptr: ptr<void> = NULL;" in crossgl
+    assert "var imported_ptr: ptr<void> = NULL;" in crossgl
+    assert "var virtual_address: ptr<void> = NULL;" in crossgl
+    assert "var threshold: u32 = bytes;" in crossgl
+    assert "var granularity: u32 = 0;" in crossgl
+    assert "var pool_flags: u32 = 0;" in crossgl
+    assert "var access_flags: u64 = 0;" in crossgl
+    assert (
+        "// HIP memory pool create: output: pool, properties: (&pool_props)" in crossgl
+    )
+    assert "// HIP get default memory pool: output: pool, device: 0" in crossgl
+    assert "// HIP get device memory pool: output: pool, device: 0" in crossgl
+    assert (
+        "// HIP async memory allocate from pool: pooled_ptr, "
+        "bytes: bytes, pool: pool, stream: stream"
+    ) in crossgl
+    assert "// HIP memory pool trim: pool: pool, minimum bytes: bytes" in crossgl
+    assert (
+        "// HIP memory pool set attribute: pool: pool, "
+        "attribute: hipMemPoolAttrReleaseThreshold, value: threshold"
+    ) in crossgl
+    assert (
+        "// HIP memory pool get attribute: pool: pool, "
+        "attribute: hipMemPoolAttrReleaseThreshold, output: threshold"
+    ) in crossgl
+    assert (
+        "// HIP memory pool set access: pool: pool, "
+        "descriptors: (&access_desc), count: 1"
+    ) in crossgl
+    assert (
+        "// HIP memory pool get access: output: pool_flags, "
+        "pool: pool, location: (&location)"
+    ) in crossgl
+    assert (
+        "// HIP memory pool export to shareable handle: "
+        "output: shareable_handle, pool: pool, handle type: handle_type, "
+        "flags: 0"
+    ) in crossgl
+    assert (
+        "// HIP memory pool import from shareable handle: "
+        "output: imported_pool, handle: shareable_handle, "
+        "handle type: handle_type, flags: 0"
+    ) in crossgl
+    assert (
+        "// HIP memory pool export pointer: output: export_data, " "pointer: pooled_ptr"
+    ) in crossgl
+    assert (
+        "// HIP memory pool import pointer: output: imported_ptr, "
+        "pool: imported_pool, export data: (&export_data)"
+    ) in crossgl
+    assert (
+        "// HIP virtual memory allocation granularity: output: granularity, "
+        "properties: (&allocation_prop), option: hipMemAllocationGranularityMinimum"
+    ) in crossgl
+    assert (
+        "// HIP virtual memory create allocation: output: allocation_handle, "
+        "bytes: bytes, properties: (&allocation_prop), flags: 0"
+    ) in crossgl
+    assert (
+        "// HIP virtual memory reserve address: output: virtual_address, "
+        "bytes: bytes, alignment: granularity, address: NULL, flags: 0"
+    ) in crossgl
+    assert (
+        "// HIP virtual memory map: pointer: virtual_address, bytes: bytes, "
+        "offset: 0, handle: allocation_handle, flags: 0"
+    ) in crossgl
+    assert (
+        "// HIP virtual memory set access: pointer: virtual_address, "
+        "bytes: bytes, descriptors: (&access_desc), count: 1"
+    ) in crossgl
+    assert (
+        "// HIP virtual memory get access: output: access_flags, "
+        "location: (&location), pointer: virtual_address"
+    ) in crossgl
+    assert (
+        "// HIP virtual memory allocation properties: "
+        "output: allocation_prop, handle: allocation_handle"
+    ) in crossgl
+    assert (
+        "// HIP virtual memory retain allocation handle: "
+        "output: retained_handle, address: virtual_address"
+    ) in crossgl
+    assert (
+        "// HIP virtual memory unmap: pointer: virtual_address, bytes: bytes" in crossgl
+    )
+    assert "// HIP virtual memory release allocation: retained_handle" in crossgl
+    assert "// HIP virtual memory release allocation: allocation_handle" in crossgl
+    assert (
+        "// HIP virtual memory free address: pointer: virtual_address, " "bytes: bytes"
+    ) in crossgl
+    assert "// HIP async memory free: pooled_ptr, stream: stream" in crossgl
+    assert "// HIP memory pool destroy: pool" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_stream_event_lifecycle_parses_and_compiles_if_available(
     tmp_path,
 ):

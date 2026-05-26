@@ -22,13 +22,13 @@ implicitly supported.
 .. csv-table:: Backend inventory
    :header: "Backend", "Ext", "Target generator", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
-   "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "543", "277", "Microsoft Learn HLSL reference; HLSL specification project"
+   "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "544", "277", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "732", "146", "GLSL 4.60 specification; OpenGL registry"
-   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "498", "366", "Apple Metal resources; Metal Shading Language specification"
+   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "499", "366", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "395", "12", "SPIR-V unified specification; Khronos SPIR-V registry"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "282", "39", "CUDA C++ programming guide"
-   "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "298", "11", "ROCm HIP documentation"
-   "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "301", "33", "Mojo manual"
+   "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "299", "11", "ROCm HIP documentation"
+   "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "303", "33", "Mojo manual"
    "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "496", "35", "Rust reference"
    "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "316", "95", "Slang user guide"
 
@@ -335,7 +335,7 @@ need an audit before implementation work can be scoped accurately.
    "Slang", "textures", "Advanced texture operations", "unknown", ""
    "CUDA", "images", "Storage image load/store", "unknown", ""
    "HIP", "images", "Storage image load/store", "unknown", ""
-   "Mojo", "images", "Storage image load/store", "partial", "Storage image load/store and size operations lower to compile-smoke Mojo placeholder helpers for float, signed, unsigned, and multisample images; access qualifiers and native image memory semantics are incomplete."
+   "Mojo", "images", "Storage image load/store", "partial", "Storage image load/store and size operations lower to compile-smoke Mojo placeholder helpers for float, signed, unsigned, and multisample images; HLSL RWTexture aliases and member Load/Store/GetDimensions lower to those helpers. Access qualifiers and native image memory semantics are incomplete."
    "Rust", "images", "Storage image load/store", "unknown", ""
    "Slang", "images", "Storage image load/store", "partial", "Covers RWTexture load/store for scalar, vector, explicit-format, array, formatted-image, and multisample storage images using Slang subscript access, plus typed helper generation and deterministic readonly/writeonly access diagnostics. Compiler-backed coverage remains incomplete."
    "CUDA", "images", "Image atomics", "unknown", ""

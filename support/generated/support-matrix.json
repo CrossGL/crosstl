@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 543
+        "test_count": 544
       },
       "translator_codegen": {
         "exists": true,
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 498
+        "test_count": 499
       },
       "translator_codegen": {
         "exists": true,
@@ -629,7 +629,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 298
+        "test_count": 299
       },
       "translator_codegen": {
         "exists": true,
@@ -743,7 +743,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 301
+        "test_count": 303
       },
       "translator_codegen": {
         "exists": true,
@@ -2435,7 +2435,7 @@
       "category": "images",
       "feature": "Storage image load/store",
       "feature_id": "image.storage",
-      "notes": "Storage image load/store and size operations lower to compile-smoke Mojo placeholder helpers for float, signed, unsigned, and multisample images; access qualifiers and native image memory semantics are incomplete.",
+      "notes": "Storage image load/store and size operations lower to compile-smoke Mojo placeholder helpers for float, signed, unsigned, and multisample images; HLSL RWTexture aliases and member Load/Store/GetDimensions lower to those helpers. Access qualifiers and native image memory semantics are incomplete.",
       "status": "partial"
     },
     {
@@ -3936,11 +3936,12 @@
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_structured_buffer_dimensions_lower_to_get_dimensions",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_structured_buffer_append_consume_lower_to_native_methods",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_byte_address_vector_buffer_helpers_lower_to_load_store_methods",
+            "tests/test_backend/test_directx/test_codegen.py::def test_codegen_byte_address_vector_method_mapping",
             "tests/test_backend/test_directx/test_codegen.py::def test_codegen_rasterizer_ordered_resources_roundtrip",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_hlsl_rasterizer_ordered_resources_compile_with_dxc",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract"
           ],
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed and inferred resource arrays, load/store/dimensions helpers, ByteAddressBuffer scalar/vector load/store helpers, register-space allocation, type aliases, append/consume buffers, rasterizer-ordered typed/structured buffers, and GLSL SSBO single-array round-trips.",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed and inferred resource arrays, load/store/dimensions helpers, ByteAddressBuffer scalar/vector load/store helpers, native HLSL ByteAddressBuffer/RWByteAddressBuffer vector method import, register-space allocation, type aliases, append/consume buffers, rasterizer-ordered typed/structured buffers, and GLSL SSBO single-array round-trips.",
           "status": "supported"
         },
         "hip": {
@@ -5089,9 +5090,11 @@
         "mojo": {
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_query_and_image_placeholders_compile_with_mojo",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rw_texture_aliases_emit_mojo_image_helpers",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rw_texture_aliases_compile_with_mojo"
           ],
-          "notes": "Storage image load/store and size operations lower to compile-smoke Mojo placeholder helpers for float, signed, unsigned, and multisample images; access qualifiers and native image memory semantics are incomplete.",
+          "notes": "Storage image load/store and size operations lower to compile-smoke Mojo placeholder helpers for float, signed, unsigned, and multisample images; HLSL RWTexture aliases and member Load/Store/GetDimensions lower to those helpers. Access qualifiers and native image memory semantics are incomplete.",
           "status": "partial"
         },
         "opengl": {
@@ -5520,11 +5523,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_synchronization_builtins_lower_to_threadgroup_barriers",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_threadgroup_atomic_array_elements_use_address_arguments",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_user_defined_synchronization_names_are_not_lowered",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_threadgroup_helper_barriers_compile_with_metal",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_threadgroup_atomic_barriers_compile_with_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_metal_compute_synchronization_compiles_with_xcrun_metal"
           ],
-          "notes": "barrier/workgroupBarrier, groupMemoryBarrier, and memoryBarrierShared lower to threadgroup barriers; memoryBarrier, memoryBarrierBuffer, and deviceMemoryBarrier lower to device-memory barriers; memoryBarrierImage lowers to a texture-memory barrier; allMemoryBarrier lowers to combined device/threadgroup/texture flags; user-defined functions with the same names are preserved.",
+          "notes": "barrier/workgroupBarrier, groupMemoryBarrier, and memoryBarrierShared lower to threadgroup barriers; memoryBarrier, memoryBarrierBuffer, and deviceMemoryBarrier lower to device-memory barriers; memoryBarrierImage lowers to a texture-memory barrier; allMemoryBarrier lowers to combined device/threadgroup/texture flags; threadgroup atomic arrays use address-form atomic operations across helper/kernel barrier ordering; user-defined functions with the same names are preserved.",
           "status": "supported"
         },
         "mojo": {

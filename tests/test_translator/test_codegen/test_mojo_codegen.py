@@ -1475,6 +1475,106 @@ def test_hlsl_sampled_texture_aliases_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_hlsl_rw_texture_aliases_emit_mojo_image_helpers():
+    code = """
+    RWTexture2D<float4> outColor : register(u0, space2);
+    RWTexture2D<int> signedImage;
+    RWTexture2D<uint> counters;
+
+    float4 readColor(int2 pixel) {
+        return outColor.Load(pixel);
+    }
+    void writeColor(int2 pixel, float4 value) {
+        outColor.Store(pixel, value);
+    }
+    int readSigned(int2 pixel) {
+        return signedImage.Load(pixel);
+    }
+    void writeSigned(int2 pixel, int value) {
+        signedImage.Store(pixel, value);
+    }
+    uint readCounter(int2 pixel) {
+        return counters.Load(pixel);
+    }
+    void writeCounter(int2 pixel, uint value) {
+        counters.Store(pixel, value);
+    }
+    int2 queryOut() {
+        return outColor.GetDimensions();
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Image2D:" in generated_code
+    assert "struct IImage2D:" in generated_code
+    assert "struct UImage2D:" in generated_code
+    assert "var outColor: Image2D = Image2D()" in generated_code
+    assert "var signedImage: IImage2D = IImage2D()" in generated_code
+    assert "var counters: UImage2D = UImage2D()" in generated_code
+    assert (
+        "# CrossGL resource metadata: name=outColor kind=image set=2 "
+        "binding=0 binding_source=explicit register=u0" in generated_code
+    )
+    assert "return image_load(outColor, pixel)" in generated_code
+    assert "image_store(outColor, pixel, value)" in generated_code
+    assert "return image_load(signedImage, pixel)" in generated_code
+    assert "image_store(signedImage, pixel, value)" in generated_code
+    assert "return image_load(counters, pixel)" in generated_code
+    assert "image_store(counters, pixel, value)" in generated_code
+    assert "return image_size(outColor)" in generated_code
+    assert "RWTexture2D<float4>" not in generated_code
+    assert "RWTexture2D<int>" not in generated_code
+    assert "RWTexture2D<uint>" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+    assert ".GetDimensions(" not in generated_code
+
+
+def test_hlsl_rw_texture_aliases_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    RWTexture2D<float4> outColor : register(u0, space2);
+    RWTexture2D<int> signedImage;
+    RWTexture2D<uint> counters;
+
+    float4 readColor(int2 pixel) {
+        return outColor.Load(pixel);
+    }
+    void writeColor(int2 pixel, float4 value) {
+        outColor.Store(pixel, value);
+    }
+    int readSigned(int2 pixel) {
+        return signedImage.Load(pixel);
+    }
+    void writeSigned(int2 pixel, int value) {
+        signedImage.Store(pixel, value);
+    }
+    uint readCounter(int2 pixel) {
+        return counters.Load(pixel);
+    }
+    void writeCounter(int2 pixel, uint value) {
+        counters.Store(pixel, value);
+    }
+    int2 queryOut() {
+        return outColor.GetDimensions();
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "hlsl_rw_texture_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     code = """
     sampler2D colorMap;

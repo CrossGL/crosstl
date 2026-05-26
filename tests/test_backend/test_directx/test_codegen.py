@@ -330,6 +330,21 @@ BUFFER_OPS_HLSL = textwrap.dedent("""
     }
     """).strip()
 
+BYTE_ADDRESS_VECTOR_OPS_HLSL = textwrap.dedent("""
+    ByteAddressBuffer rawInput : register(t3);
+    RWByteAddressBuffer rawOutput : register(u4);
+
+    uint4 main(uint offset : TEXCOORD0) : SV_Target0 {
+        uint2 pair = rawInput.Load2(offset);
+        uint3 triple = rawOutput.Load3(offset + 16u);
+        uint4 quad = rawOutput.Load4(offset + 32u);
+        rawOutput.Store2(offset, pair);
+        rawOutput.Store3(offset + 16u, triple);
+        rawOutput.Store4(offset + 32u, quad);
+        return quad;
+    }
+    """).strip()
+
 WAVE_OPS_HLSL = textwrap.dedent("""
     uint main(uint value) : SV_Target0 {
         return WaveActiveSum(value);
@@ -605,6 +620,22 @@ def test_codegen_interlocked_mapping():
 def test_codegen_buffer_method_mapping():
     output = generate_crossgl(BUFFER_OPS_HLSL)
     assert "buffer_load" in output
+
+
+def test_codegen_byte_address_vector_method_mapping():
+    output = generate_crossgl(BYTE_ADDRESS_VECTOR_OPS_HLSL)
+    assert "buffer rawInput;" in output
+    assert "buffer rawOutput;" in output
+    assert "@ register(t3)" in output
+    assert "@ register(u4)" in output
+    assert "uvec2 pair = buffer_load2(rawInput, offset);" in output
+    assert "uvec3 triple = buffer_load3(rawOutput, offset + 16);" in output
+    assert "uvec4 quad = buffer_load4(rawOutput, offset + 32);" in output
+    assert "buffer_store2(rawOutput, offset, pair);" in output
+    assert "buffer_store3(rawOutput, offset + 16, triple);" in output
+    assert "buffer_store4(rawOutput, offset + 32, quad);" in output
+    assert ".Load2(" not in output
+    assert ".Store4(" not in output
 
 
 def test_codegen_wave_ops_passthrough():

@@ -5450,6 +5450,69 @@ def test_metal_atomic_local_initializers_use_atomic_store():
     assert "threadgroup atomic_uint counter = 0;" not in generated
 
 
+def test_metal_threadgroup_atomic_array_elements_use_address_arguments():
+    code = """
+    shader main {
+        uint bump(threadgroup atomic_uint counters[64], uint index) {
+            return atomic_fetch_add_explicit(
+                counters[index],
+                1u,
+                memory_order_relaxed
+            );
+        }
+
+        compute {
+            void main() {
+                shared atomic_uint counters[64];
+                uint index = gl_LocalInvocationIndex;
+                atomic_store_explicit(
+                    counters[index],
+                    0u,
+                    memory_order_relaxed
+                );
+                barrier();
+                uint oldValue = bump(counters, index);
+                groupMemoryBarrier();
+                uint currentValue = atomic_load_explicit(
+                    counters[index],
+                    memory_order_relaxed
+                );
+                atomic_exchange_explicit(
+                    counters[index],
+                    oldValue + currentValue,
+                    memory_order_relaxed
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint bump(threadgroup atomic_uint counters[64], uint index)" in generated
+    assert "threadgroup atomic_uint counters[64];" in generated
+    assert (
+        "return atomic_fetch_add_explicit(&counters[index], 1u, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&counters[index], 0u, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "uint currentValue = atomic_load_explicit(&counters[index], memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_exchange_explicit(&counters[index], oldValue + currentValue, memory_order_relaxed);"
+        in generated
+    )
+    assert generated.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert "atomic_fetch_add_explicit(counters[index]" not in generated
+    assert "atomic_store_explicit(counters[index]" not in generated
+    assert "atomic_load_explicit(counters[index]" not in generated
+    assert "atomic_exchange_explicit(counters[index]" not in generated
+
+
 def test_compute_builtin_semantics_roundtrip():
     code = """
     shader cs {

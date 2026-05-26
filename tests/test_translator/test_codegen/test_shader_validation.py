@@ -1697,6 +1697,39 @@ shader MetalThreadgroupHelperBarrierValidation {
 """
 
 
+METAL_THREADGROUP_ATOMIC_BARRIERS_SHADER = """
+shader MetalThreadgroupAtomicBarrierValidation {
+    uint bump(threadgroup atomic_uint counters[64], uint index) {
+        return atomic_fetch_add_explicit(
+            counters[index],
+            1u,
+            memory_order_relaxed
+        );
+    }
+
+    compute {
+        void main() {
+            shared atomic_uint counters[64];
+            uint index = gl_LocalInvocationIndex;
+            atomic_store_explicit(counters[index], 0u, memory_order_relaxed);
+            barrier();
+            uint oldValue = bump(counters, index);
+            groupMemoryBarrier();
+            uint currentValue = atomic_load_explicit(
+                counters[index],
+                memory_order_relaxed
+            );
+            atomic_exchange_explicit(
+                counters[index],
+                oldValue + currentValue,
+                memory_order_relaxed
+            );
+        }
+    }
+}
+"""
+
+
 METAL_ADDRESS_SPACE_PARAMETER_SHADER = """
 shader MetalAddressSpaceParameterValidation {
     struct Payload {
@@ -4819,6 +4852,35 @@ def test_generated_metal_threadgroup_helper_barriers_compile_with_metal(tmp_path
     assert "deviceMemoryBarrier();" not in code
     assert "memoryBarrierImage();" not in code
     assert "allMemoryBarrier();" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_threadgroup_atomic_barriers_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "threadgroup_atomic_barriers.metal"
+    output = tmp_path / "threadgroup_atomic_barriers.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_THREADGROUP_ATOMIC_BARRIERS_SHADER),
+        "compute",
+    )
+    assert (
+        "return atomic_fetch_add_explicit(&counters[index], 1u, memory_order_relaxed);"
+        in code
+    )
+    assert "atomic_store_explicit(&counters[index], 0u, memory_order_relaxed);" in code
+    assert (
+        "uint currentValue = atomic_load_explicit(&counters[index], memory_order_relaxed);"
+        in code
+    )
+    assert "atomic_exchange_explicit(&counters[index]," in code
+    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
     source.write_text(code, encoding="utf-8")
 
     run_validator(
