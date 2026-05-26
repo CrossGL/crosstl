@@ -1656,9 +1656,7 @@ def test_codegen_mixed_ssbo_nested_struct_arrays_lower_as_leaf_offsets():
         in metal
     )
     assert "float readNestedArray(device uchar* localBlock, uint i)" in metal
-    assert (
-        "float((*reinterpret_cast<const device uint*>(localBlock + 48)))" in metal
-    )
+    assert "float((*reinterpret_cast<const device uint*>(localBlock + 48)))" in metal
     assert (
         "uint i = (*reinterpret_cast<const device uint*>"
         "(nestedArrayBlock + 96));" in metal
