@@ -120,33 +120,6 @@
     {
       "backend": "DirectX / HLSL",
       "backend_id": "directx",
-      "category": "resources",
-      "feature": "Resource memory qualifiers",
-      "feature_id": "resources.memory_qualifiers",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "resources",
-      "feature": "Resource memory qualifiers",
-      "feature_id": "resources.memory_qualifiers",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "resources",
-      "feature": "Resource memory qualifiers",
-      "feature_id": "resources.memory_qualifiers",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
       "category": "textures",
       "feature": "Projected texture operations",
       "feature_id": "texture.projected",
@@ -759,19 +732,31 @@
       "name": "Resource memory qualifiers",
       "support": {
         "directx": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_supported",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_storage_image_access_attributes_validate_without_semantics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_storage_image_access_rejects_invalid_operations"
+          ],
+          "notes": "coherent/globallycoherent lower to HLSL globallycoherent; readonly/writeonly enforce storage-image access validation; qualifiers without an HLSL resource equivalent do not leak as semantics.",
+          "status": "supported"
         },
         "metal": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_supported",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_storage_image_access_attributes_select_texture_access",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_storage_image_access_rejects_invalid_operations"
+          ],
+          "notes": "readonly/writeonly lower to Metal texture access modes; qualifiers without a Metal texture equivalent do not leak as attributes.",
+          "status": "supported"
         },
         "opengl": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_supported",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_storage_image_access_attributes_emit_parameter_qualifiers",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_storage_image_access_rejects_invalid_operations"
+          ],
+          "notes": "GLSL-native resource qualifiers are preserved; globallycoherent lowers to the closest GLSL coherent qualifier.",
+          "status": "supported"
         }
       }
     },
@@ -1374,21 +1359,21 @@
   "summary": {
     "backend_count": 3,
     "backlog": {
-      "backlog_count": 25,
+      "backlog_count": 22,
       "by_backend": {
-        "directx": 8,
-        "metal": 10,
-        "opengl": 7
+        "directx": 7,
+        "metal": 9,
+        "opengl": 6
       },
       "by_category": {
         "language": 3,
-        "resources": 8,
+        "resources": 5,
         "stages": 8,
         "textures": 6
       },
       "by_status": {
         "diagnostic": 0,
-        "partial": 23,
+        "partial": 20,
         "supported": 0,
         "unknown": 0,
         "unsupported": 2,
@@ -1399,24 +1384,24 @@
     "status_counts": {
       "directx": {
         "diagnostic": 0,
-        "partial": 8,
-        "supported": 33,
+        "partial": 7,
+        "supported": 34,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "metal": {
         "diagnostic": 0,
-        "partial": 8,
-        "supported": 31,
+        "partial": 7,
+        "supported": 32,
         "unknown": 0,
         "unsupported": 2,
         "validated_rejection": 0
       },
       "opengl": {
         "diagnostic": 0,
-        "partial": 7,
-        "supported": 34,
+        "partial": 6,
+        "supported": 35,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

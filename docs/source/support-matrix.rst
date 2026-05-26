@@ -35,9 +35,9 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "33", "8", "0", "0", "0", "0"
-   "OpenGL / GLSL", "34", "7", "0", "0", "0", "0"
-   "Metal", "31", "8", "0", "0", "2", "0"
+   "DirectX / HLSL", "34", "7", "0", "0", "0", "0"
+   "OpenGL / GLSL", "35", "6", "0", "0", "0", "0"
+   "Metal", "32", "7", "0", "0", "2", "0"
    "Vulkan SPIR-V", "6", "12", "0", "0", "0", "23"
    "CUDA", "10", "11", "0", "0", "3", "17"
    "HIP", "10", "11", "0", "0", "3", "17"
@@ -54,9 +54,9 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "33", "8", "0", "0", "0", "0"
-   "OpenGL / GLSL", "34", "7", "0", "0", "0", "0"
-   "Metal", "31", "8", "0", "0", "2", "0"
+   "DirectX / HLSL", "34", "7", "0", "0", "0", "0"
+   "OpenGL / GLSL", "35", "6", "0", "0", "0", "0"
+   "Metal", "32", "7", "0", "0", "2", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
@@ -74,9 +74,6 @@ scope for graphics backend completion work.
    "Metal", "resources", "Structured/storage buffers", "partial", ""
    "DirectX / HLSL", "resources", "GLSL buffer block lowering", "partial", ""
    "Metal", "resources", "GLSL buffer block lowering", "partial", ""
-   "DirectX / HLSL", "resources", "Resource memory qualifiers", "partial", ""
-   "OpenGL / GLSL", "resources", "Resource memory qualifiers", "partial", ""
-   "Metal", "resources", "Resource memory qualifiers", "partial", ""
    "DirectX / HLSL", "textures", "Projected texture operations", "partial", "Covers planar projected texture and shadow compare forms plus non-offset cube color and cube-shadow projection. Cube-array projection and target-invalid offset forms remain deterministic diagnostics."
    "OpenGL / GLSL", "textures", "Projected texture operations", "partial", "Covers planar projected texture and shadow compare forms plus non-offset cube color projection and target-valid cube-shadow projection forms. Cube-array projection and target-invalid LOD/offset forms remain deterministic diagnostics."
    "Metal", "textures", "Projected texture operations", "partial", "Covers planar projected texture and shadow compare forms plus non-offset cube color and cube-shadow projection. Cube-array projection and target-invalid offset forms remain deterministic diagnostics."
@@ -131,7 +128,7 @@ Each category below uses the status codes from the legend.
    "Resource arrays", "Y", "Y", "Y", "?", "?", "?", "?", "?", "?"
    "Texture and sampler object model", "Y", "Y", "Y", "?", "?", "?", "?", "?", "P"
    "GLSL buffer block lowering", "P", "Y", "P", "?", "?", "?", "?", "?", "?"
-   "Resource memory qualifiers", "P", "P", "P", "?", "P", "P", "?", "?", "?"
+   "Resource memory qualifiers", "Y", "Y", "Y", "?", "P", "P", "?", "?", "?"
 
 .. csv-table:: textures
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
@@ -283,9 +280,6 @@ need an audit before implementation work can be scoped accurately.
    "Mojo", "resources", "GLSL buffer block lowering", "unknown", ""
    "Rust", "resources", "GLSL buffer block lowering", "unknown", ""
    "Slang", "resources", "GLSL buffer block lowering", "unknown", ""
-   "DirectX / HLSL", "resources", "Resource memory qualifiers", "partial", ""
-   "OpenGL / GLSL", "resources", "Resource memory qualifiers", "partial", ""
-   "Metal", "resources", "Resource memory qualifiers", "partial", ""
    "Vulkan SPIR-V", "resources", "Resource memory qualifiers", "unknown", ""
    "CUDA", "resources", "Resource memory qualifiers", "partial", ""
    "HIP", "resources", "Resource memory qualifiers", "partial", ""

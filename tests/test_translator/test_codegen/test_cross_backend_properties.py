@@ -31,6 +31,28 @@ NUMERIC_CASES = (
 )
 
 
+@dataclass(frozen=True)
+class ResourceMemoryQualifierCase:
+    attribute: str
+    hlsl_prefix: str
+    glsl_qualifier: str
+    metal_access: str
+
+
+RESOURCE_MEMORY_QUALIFIER_CASES = (
+    ResourceMemoryQualifierCase(
+        "coherent", "globallycoherent ", "coherent", "read_write"
+    ),
+    ResourceMemoryQualifierCase(
+        "globallycoherent", "globallycoherent ", "coherent", "read_write"
+    ),
+    ResourceMemoryQualifierCase("volatile", "", "volatile", "read_write"),
+    ResourceMemoryQualifierCase("restrict", "", "restrict", "read_write"),
+    ResourceMemoryQualifierCase("readonly", "", "readonly", "read"),
+    ResourceMemoryQualifierCase("writeonly", "", "writeonly", "write"),
+)
+
+
 def _assert_codegen_output_is_usable(backend, generated):
     assert isinstance(generated, str)
     assert generated.strip(), f"{backend} generated empty output"
@@ -299,3 +321,55 @@ def test_primary_graphics_shadow_texture_sampler_contracts_are_preserved(
     assert "depth2d<float>" in metal
     assert ".sample_compare(" in metal
     assert re.search(r"\bsampler\b", metal)
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    suffix=IDENTIFIER_SUFFIXES,
+    qualifier_case=st.sampled_from(RESOURCE_MEMORY_QUALIFIER_CASES),
+)
+def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_supported(
+    suffix, qualifier_case
+):
+    image_name = f"image_{suffix}"
+    shader = f"""
+    shader ResourceMemoryQualifier_{suffix} {{
+        uimage2D {image_name} @r32ui @{qualifier_case.attribute};
+
+        compute {{
+            void main() {{
+            }}
+        }}
+    }}
+    """
+
+    ast = crosstl.translator.parse(shader)
+
+    hlsl = HLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    metal = MetalCodeGen().generate(ast)
+
+    for backend, generated in (
+        ("directx", hlsl),
+        ("opengl", glsl),
+        ("metal", metal),
+    ):
+        _assert_codegen_output_is_usable(backend, generated)
+
+    assert (
+        f"{qualifier_case.hlsl_prefix}RWTexture2D<uint> {image_name} : register(u0);"
+        in hlsl
+    )
+    assert f": {qualifier_case.attribute}" not in hlsl
+    assert f"@{qualifier_case.attribute}" not in hlsl
+
+    assert (
+        "layout(r32ui, binding = 0) "
+        f"{qualifier_case.glsl_qualifier} uniform uimage2D {image_name};" in glsl
+    )
+
+    assert (
+        f"texture2d<uint, access::{qualifier_case.metal_access}> "
+        f"{image_name} [[texture(0)]]" in metal
+    )
+    assert f"[[{qualifier_case.attribute}]]" not in metal

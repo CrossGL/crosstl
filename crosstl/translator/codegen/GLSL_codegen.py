@@ -7568,7 +7568,14 @@ class GLSLCodeGen:
         return f"layout(binding = {binding})"
 
     def resource_memory_qualifiers(self, node):
-        supported = {"coherent", "volatile", "restrict", "readonly", "writeonly"}
+        supported = {
+            "coherent",
+            "globallycoherent",
+            "volatile",
+            "restrict",
+            "readonly",
+            "writeonly",
+        }
         qualifiers = set()
 
         for qualifier in getattr(node, "qualifiers", []) or []:
@@ -7583,6 +7590,9 @@ class GLSLCodeGen:
             attr_name = str(attr_name).lower()
             if attr_name in supported:
                 qualifiers.add(attr_name)
+
+        if "globallycoherent" in qualifiers:
+            qualifiers.add("coherent")
 
         order = ("coherent", "volatile", "restrict", "readonly", "writeonly")
         return " ".join(qualifier for qualifier in order if qualifier in qualifiers)
