@@ -54,6 +54,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslang-tools
 
+      - name: Install DirectX Shader Compiler (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/dxc.tar.gz" \
+            https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/linux_dxc_2026_02_20.x86_64.tar.gz
+          mkdir -p "$RUNNER_TEMP/dxc"
+          tar -xzf "$RUNNER_TEMP/dxc.tar.gz" -C "$RUNNER_TEMP/dxc"
+          echo "$RUNNER_TEMP/dxc/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/dxc/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Install DirectX Shader Compiler (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $dxcRoot = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest `
+            -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/dxc_2026_02_20.zip" `
+            -OutFile $archive
+          Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
+          Join-Path $dxcRoot "bin\x64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

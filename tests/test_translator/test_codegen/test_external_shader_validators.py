@@ -235,6 +235,85 @@ def test_generated_hlsl_fragment_compiles_with_dxc(tmp_path):
     assert output_path.exists()
 
 
+@pytest.mark.parametrize(
+    ("case_name", "source", "expected_snippets", "forbidden_snippets"),
+    [
+        (
+            "uint",
+            MIXED_GLSL_SSBO_UINT_ATOMICS_COMPUTE_SHADER,
+            (
+                "RWByteAddressBuffer atomicBlock : register(u17);",
+                "__crossgl_byteaddress_atomic_compare_exchange_uint",
+                "InterlockedAdd",
+            ),
+            ("unsupported HLSL GLSL buffer block atomic", "#version"),
+        ),
+        (
+            "int",
+            MIXED_GLSL_SSBO_INT_ATOMICS_COMPUTE_SHADER,
+            (
+                "RWByteAddressBuffer signedAtomicBlock : register(u18);",
+                "__crossgl_byteaddress_atomic_compare_exchange_int",
+                "InterlockedMin",
+            ),
+            ("unsupported HLSL GLSL buffer block atomic", "#version"),
+        ),
+        (
+            "runtime_array",
+            MIXED_GLSL_SSBO_RUNTIME_ARRAY_ATOMICS_COMPUTE_SHADER,
+            (
+                "runtimeAtomicBlock, (4 + i * 4)",
+                "runtimeSignedAtomicBlock, (4 + j * 4)",
+                "__crossgl_byteaddress_atomic_compare_exchange_uint",
+            ),
+            ("unsupported HLSL GLSL buffer block atomic", "#version"),
+        ),
+        (
+            "unsupported",
+            MIXED_GLSL_SSBO_UNSUPPORTED_ATOMICS_COMPUTE_SHADER,
+            (
+                "ByteAddressBuffer readAtomicBlock : register(t21);",
+                "unsupported HLSL GLSL buffer block atomic",
+                "float floatOld = /* unsupported HLSL GLSL buffer block atomic",
+                "*/ 0;",
+            ),
+            ("Interlocked", "__crossgl_byteaddress_atomic", "#version"),
+        ),
+    ],
+)
+def test_mixed_glsl_ssbo_atomics_hlsl_output_compiles_with_dxc(
+    tmp_path,
+    case_name,
+    source,
+    expected_snippets,
+    forbidden_snippets,
+):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / f"mixed_glsl_ssbo_{case_name}_atomics.hlsl"
+    output_path = tmp_path / f"mixed_glsl_ssbo_{case_name}_atomics.dxil"
+
+    code = HLSLCodeGen().generate(_mixed_glsl_ast(source, "compute"))
+    for snippet in expected_snippets:
+        assert snippet in code
+    for snippet in forbidden_snippets:
+        assert snippet not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
 def test_generated_glsl_fragment_validates_with_glslangvalidator(tmp_path):
     glslang = _require_tool("glslangValidator")
     shader_path = tmp_path / "validator_smoke.frag"
