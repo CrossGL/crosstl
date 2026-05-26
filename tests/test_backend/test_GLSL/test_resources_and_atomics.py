@@ -1846,6 +1846,133 @@ def test_codegen_mixed_ssbo_nested_struct_aggregates_materialize_leaf_fields():
     assert "aggregateBlock.items[i] = inner;" in glsl
 
 
+def test_codegen_mixed_ssbo_nested_struct_aggregate_arrays_materialize_leaf_fields():
+    crossgl = """
+    shader main {
+        struct ArrayAggregateItem {
+            vec2 uv;
+            bvec2 flags;
+        };
+
+        struct ArrayAggregateData {
+            float weights[2];
+            ArrayAggregateItem items[2];
+            uint id;
+        };
+
+        struct ArrayAggregateBlock {
+            ArrayAggregateData inner;
+            ArrayAggregateData entries[];
+        };
+
+        ArrayAggregateBlock arrayAggregateBlock @glsl_buffer_block(std430) @binding(59);
+
+        ArrayAggregateData passArrayAggregate(ArrayAggregateBlock localBlock @glsl_buffer_block(std430), uint i) {
+            return localBlock.entries[i];
+        }
+
+        compute {
+            void main() {
+                uint i = 1u;
+                ArrayAggregateData inner = arrayAggregateBlock.inner;
+                ArrayAggregateData entry = passArrayAggregate(arrayAggregateBlock, i);
+                arrayAggregateBlock.inner = entry;
+                arrayAggregateBlock.entries[i] = inner;
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer arrayAggregateBlock : register(u59);" in hlsl
+    assert (
+        "ArrayAggregateData __crossgl_load_rw_glsl_buffer_ArrayAggregateData"
+        "(RWByteAddressBuffer buffer, uint offset)" in hlsl
+    )
+    assert "result.weights[0] = asfloat(buffer.Load(offset));" in hlsl
+    assert "result.weights[1] = asfloat(buffer.Load((offset + 4)));" in hlsl
+    assert "result.items[0].uv = asfloat(buffer.Load2((offset + 8)));" in hlsl
+    assert (
+        "result.items[1].flags = bool2((buffer.Load((offset + 8 + 16 + 8)) != 0u), "
+        "(buffer.Load((offset + 8 + 16 + 8 + 4)) != 0u));" in hlsl
+    )
+    assert "result.id = buffer.Load((offset + 40));" in hlsl
+    assert (
+        "return __crossgl_load_rw_glsl_buffer_ArrayAggregateData"
+        "(localBlock, (48 + i * 48));" in hlsl
+    )
+    assert (
+        "ArrayAggregateData inner = "
+        "__crossgl_load_rw_glsl_buffer_ArrayAggregateData(arrayAggregateBlock, 0);"
+        in hlsl
+    )
+    assert "ArrayAggregateData __crossgl_aggregate_store_0 = entry;" in hlsl
+    assert (
+        "arrayAggregateBlock.Store(0, "
+        "asuint(__crossgl_aggregate_store_0.weights[0]));" in hlsl
+    )
+    assert (
+        "arrayAggregateBlock.Store2(8, "
+        "asuint(__crossgl_aggregate_store_0.items[0].uv));" in hlsl
+    )
+    assert "bool2 __crossgl_bool_store_1" in hlsl
+    assert (
+        "arrayAggregateBlock.Store((48 + i * 48 + 40), "
+        "__crossgl_aggregate_store_3.id);" in hlsl
+    )
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    assert (
+        "ArrayAggregateData __crossgl_load_glsl_buffer_ArrayAggregateData"
+        "(const device uchar* buffer, uint offset)" in metal
+    )
+    assert (
+        "result.weights[0] = "
+        "(*reinterpret_cast<const device float*>(buffer + offset));" in metal
+    )
+    assert (
+        "result.items[0].uv = float2((*reinterpret_cast<const device float*>"
+        "(buffer + (offset + 8))), "
+        "(*reinterpret_cast<const device float*>(buffer + (offset + 8 + 4))));" in metal
+    )
+    assert (
+        "result.items[1].flags = bool2(((*reinterpret_cast<const device uint*>"
+        "(buffer + (offset + 8 + 16 + 8))) != 0u), "
+        "((*reinterpret_cast<const device uint*>"
+        "(buffer + (offset + 8 + 16 + 8 + 4))) != 0u));" in metal
+    )
+    assert (
+        "return __crossgl_load_glsl_buffer_ArrayAggregateData"
+        "(localBlock, (48 + i * 48));" in metal
+    )
+    assert "ArrayAggregateData __crossgl_aggregate_store_0 = entry;" in metal
+    assert (
+        "(*reinterpret_cast<device float*>(arrayAggregateBlock + 0)) = "
+        "__crossgl_aggregate_store_0.weights[0];" in metal
+    )
+    assert "float2 __crossgl_buffer_store_1" in metal
+    assert "bool2 __crossgl_buffer_store_2" in metal
+    assert (
+        "(*reinterpret_cast<device uint*>"
+        "(arrayAggregateBlock + (48 + i * 48 + 40))) = "
+        "__crossgl_aggregate_store_5.id;" in metal
+    )
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 59) buffer ArrayAggregateBlock" in glsl
+    assert "float weights[2];" in glsl
+    assert "ArrayAggregateItem items[2];" in glsl
+    assert "ArrayAggregateData entries[];" in glsl
+    assert "arrayAggregateBlock.inner = entry;" in glsl
+    assert "arrayAggregateBlock.entries[i] = inner;" in glsl
+
+
 def test_codegen_mixed_ssbo_metal_store_parenthesizes_binary_ternary_operand():
     crossgl = """
     shader main {

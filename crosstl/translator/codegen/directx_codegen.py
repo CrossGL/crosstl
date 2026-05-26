@@ -8990,8 +8990,6 @@ class HLSLCodeGen:
         indent_str = "    " * indent
         lines = []
         for field_name, member in access["members"].items():
-            if member.get("is_array"):
-                return None
             member_offset = byte_offset_add(offset, member["offset"])
             member_target = f"{target_name}.{field_name}"
             field_access = {
@@ -9000,6 +8998,32 @@ class HLSLCodeGen:
                 "member": f"{access['member']}.{field_name}",
                 "readonly": access["readonly"],
             }
+            if member.get("is_array"):
+                array_count = member.get("array_count")
+                if member.get("runtime_array") or array_count is None:
+                    return None
+                for index in range(array_count):
+                    element_offset = byte_offset_add(
+                        member_offset, index * member["stride"]
+                    )
+                    element_target = f"{member_target}[{index}]"
+                    if member.get("members"):
+                        nested_lines = self.hlsl_byteaddress_aggregate_load_assignments(
+                            element_target,
+                            buffer_name,
+                            element_offset,
+                            field_access,
+                            indent,
+                        )
+                        if nested_lines is None:
+                            return None
+                        lines.extend(nested_lines)
+                    else:
+                        value = self.hlsl_byteaddress_load(
+                            buffer_name, element_offset, field_access
+                        )
+                        lines.append(f"{indent_str}{element_target} = {value};")
+                continue
             if member.get("members"):
                 nested_lines = self.hlsl_byteaddress_aggregate_load_assignments(
                     member_target, buffer_name, member_offset, field_access, indent
@@ -9059,8 +9083,6 @@ class HLSLCodeGen:
     ):
         lines = []
         for field_name, member in access["members"].items():
-            if member.get("is_array"):
-                return None
             member_offset = byte_offset_add(offset, member["offset"])
             member_value = f"{value}.{field_name}"
             field_access = {
@@ -9069,6 +9091,30 @@ class HLSLCodeGen:
                 "member": f"{access['member']}.{field_name}",
                 "readonly": access["readonly"],
             }
+            if member.get("is_array"):
+                array_count = member.get("array_count")
+                if member.get("runtime_array") or array_count is None:
+                    return None
+                for index in range(array_count):
+                    element_offset = byte_offset_add(
+                        member_offset, index * member["stride"]
+                    )
+                    element_value = f"{member_value}[{index}]"
+                    if member.get("members"):
+                        nested_stores = self.hlsl_byteaddress_aggregate_store_members(
+                            buffer_name, element_offset, element_value, field_access
+                        )
+                        if nested_stores is None:
+                            return None
+                        lines.extend(nested_stores)
+                    else:
+                        store = self.hlsl_byteaddress_leaf_store(
+                            buffer_name, element_offset, element_value, field_access
+                        )
+                        if store is None:
+                            return None
+                        lines.extend(store.splitlines())
+                continue
             if member.get("members"):
                 nested_stores = self.hlsl_byteaddress_aggregate_store_members(
                     buffer_name, member_offset, member_value, field_access

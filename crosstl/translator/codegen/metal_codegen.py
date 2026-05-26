@@ -362,6 +362,7 @@ class MetalCodeGen:
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
         self.required_buffer_atomic_compare_helpers = set()
+        self.required_glsl_buffer_aggregate_load_helpers = {}
         self.unsupported_glsl_buffer_block_variables = set()
         self.unsupported_glsl_buffer_block_variable_types = {}
         self.current_glsl_buffer_block_parameters = {}
@@ -728,6 +729,7 @@ class MetalCodeGen:
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.required_image_atomic_compare_helpers = set()
+        self.required_glsl_buffer_aggregate_load_helpers = {}
         self.current_glsl_buffer_block_parameters = {}
         self.unsupported_glsl_buffer_block_variables = set()
         self.unsupported_glsl_buffer_block_variable_types = {}
@@ -1267,6 +1269,7 @@ class MetalCodeGen:
 
         code += self.generate_image_atomic_compare_helpers()
         code += self.generate_buffer_atomic_compare_helpers()
+        code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += functions_code
         return code
 
@@ -5052,7 +5055,106 @@ class MetalCodeGen:
                 )
         return "\n".join(lines)
 
+    def metal_aggregate_has_array_member(self, access):
+        for member in access["members"].values():
+            if member.get("is_array"):
+                return True
+            if member.get("members") and self.metal_aggregate_has_array_member(member):
+                return True
+        return False
+
+    def metal_aggregate_helper_suffix(self, access):
+        return "".join(
+            char if char.isalnum() or char == "_" else "_"
+            for char in access["metal_type"]
+        )
+
+    def metal_aggregate_load_helper_name(self, access):
+        helper_name = (
+            f"__crossgl_load_glsl_buffer_{self.metal_aggregate_helper_suffix(access)}"
+        )
+        self.required_glsl_buffer_aggregate_load_helpers[helper_name] = access
+        return helper_name
+
+    def metal_aggregate_load_assignments(
+        self, target_name, buffer_name, offset, access, indent=1
+    ):
+        indent_str = "    " * indent
+        lines = []
+        for field_name, member in access["members"].items():
+            member_offset = byte_offset_add(offset, member["offset"])
+            member_target = f"{target_name}.{field_name}"
+            field_access = {
+                **member,
+                "buffer": buffer_name,
+                "member": f"{access['member']}.{field_name}",
+                "readonly": access["readonly"],
+            }
+            if member.get("is_array"):
+                array_count = member.get("array_count")
+                if member.get("runtime_array") or array_count is None:
+                    return None
+                for index in range(array_count):
+                    element_offset = byte_offset_add(
+                        member_offset, index * member["stride"]
+                    )
+                    element_target = f"{member_target}[{index}]"
+                    if member.get("members"):
+                        nested_lines = self.metal_aggregate_load_assignments(
+                            element_target,
+                            buffer_name,
+                            element_offset,
+                            field_access,
+                            indent,
+                        )
+                        if nested_lines is None:
+                            return None
+                        lines.extend(nested_lines)
+                    else:
+                        value = self.metal_buffer_load(
+                            buffer_name, element_offset, field_access
+                        )
+                        lines.append(f"{indent_str}{element_target} = {value};")
+                continue
+            if member.get("members"):
+                nested_lines = self.metal_aggregate_load_assignments(
+                    member_target, buffer_name, member_offset, field_access, indent
+                )
+                if nested_lines is None:
+                    return None
+                lines.extend(nested_lines)
+            else:
+                value = self.metal_buffer_load(buffer_name, member_offset, field_access)
+                lines.append(f"{indent_str}{member_target} = {value};")
+        return lines
+
+    def generate_glsl_buffer_aggregate_load_helpers(self):
+        if not self.required_glsl_buffer_aggregate_load_helpers:
+            return ""
+
+        helpers = []
+        for helper_name, access in sorted(
+            self.required_glsl_buffer_aggregate_load_helpers.items()
+        ):
+            lines = [
+                f"{access['metal_type']} {helper_name}(const device uchar* buffer, uint offset) {{",
+                f"    {access['metal_type']} result;",
+            ]
+            assignments = self.metal_aggregate_load_assignments(
+                "result", "buffer", "offset", access
+            )
+            if assignments is None:
+                continue
+            lines.extend(assignments)
+            lines.extend(["    return result;", "}"])
+            helpers.append("\n".join(lines) + "\n\n")
+        return "".join(helpers)
+
     def metal_aggregate_load(self, buffer_name, offset, access):
+        if self.metal_aggregate_has_array_member(access):
+            helper_name = self.metal_aggregate_load_helper_name(access)
+            return f"{helper_name}({buffer_name}, {offset})"
+
         values = []
         for field_name, member in access["members"].items():
             if member.get("is_array"):
@@ -5078,8 +5180,6 @@ class MetalCodeGen:
     def metal_aggregate_store_members(self, buffer_name, offset, value, access):
         lines = []
         for field_name, member in access["members"].items():
-            if member.get("is_array"):
-                return None
             member_offset = byte_offset_add(offset, member["offset"])
             member_value = f"{value}.{field_name}"
             field_access = {
@@ -5088,6 +5188,30 @@ class MetalCodeGen:
                 "member": f"{access['member']}.{field_name}",
                 "readonly": access["readonly"],
             }
+            if member.get("is_array"):
+                array_count = member.get("array_count")
+                if member.get("runtime_array") or array_count is None:
+                    return None
+                for index in range(array_count):
+                    element_offset = byte_offset_add(
+                        member_offset, index * member["stride"]
+                    )
+                    element_value = f"{member_value}[{index}]"
+                    if member.get("members"):
+                        nested_stores = self.metal_aggregate_store_members(
+                            buffer_name, element_offset, element_value, field_access
+                        )
+                        if nested_stores is None:
+                            return None
+                        lines.extend(nested_stores)
+                    else:
+                        store = self.metal_buffer_store(
+                            buffer_name, element_offset, element_value, field_access
+                        )
+                        if store is None:
+                            return None
+                        lines.extend(store.splitlines())
+                continue
             if member.get("members"):
                 nested_stores = self.metal_aggregate_store_members(
                     buffer_name, member_offset, member_value, field_access

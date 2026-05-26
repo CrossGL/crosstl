@@ -315,6 +315,34 @@ void main() {
 """
 
 
+MIXED_GLSL_SSBO_NESTED_STRUCT_AGGREGATE_ARRAY_COMPUTE_SHADER = """
+#version 450 core
+struct ArrayAggregateItem {
+    vec2 uv;
+    bvec2 flags;
+};
+
+struct ArrayAggregateData {
+    float weights[2];
+    ArrayAggregateItem items[2];
+    uint id;
+};
+
+layout(std430, binding = 16) buffer ArrayAggregateBlock {
+    ArrayAggregateData inner;
+    ArrayAggregateData entries[];
+} arrayAggregateBlock;
+
+void main() {
+    uint i = 1u;
+    ArrayAggregateData inner = arrayAggregateBlock.inner;
+    ArrayAggregateData entry = arrayAggregateBlock.entries[i];
+    arrayAggregateBlock.inner = entry;
+    arrayAggregateBlock.entries[i] = inner;
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
 
@@ -886,6 +914,56 @@ def test_mixed_glsl_ssbo_nested_struct_aggregate_hlsl_output_compiles_with_dxc(
     assert output_path.exists()
 
 
+def test_mixed_glsl_ssbo_nested_struct_aggregate_array_hlsl_output_compiles_with_dxc(
+    tmp_path,
+):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / "mixed_glsl_ssbo_nested_struct_aggregate_array.hlsl"
+    output_path = tmp_path / "mixed_glsl_ssbo_nested_struct_aggregate_array.dxil"
+
+    code = HLSLCodeGen().generate(
+        _mixed_glsl_ast(
+            MIXED_GLSL_SSBO_NESTED_STRUCT_AGGREGATE_ARRAY_COMPUTE_SHADER,
+            "compute",
+        )
+    )
+    assert "RWByteAddressBuffer arrayAggregateBlock : register(u16);" in code
+    assert (
+        "ArrayAggregateData __crossgl_load_rw_glsl_buffer_ArrayAggregateData"
+        "(RWByteAddressBuffer buffer, uint offset)" in code
+    )
+    assert "result.weights[0] = asfloat(buffer.Load(offset));" in code
+    assert "result.items[1].flags = bool2" in code
+    assert (
+        "ArrayAggregateData inner = "
+        "__crossgl_load_rw_glsl_buffer_ArrayAggregateData(arrayAggregateBlock, 0);"
+        in code
+    )
+    assert (
+        "ArrayAggregateData entry = "
+        "__crossgl_load_rw_glsl_buffer_ArrayAggregateData"
+        "(arrayAggregateBlock, (48 + i * 48));" in code
+    )
+    assert "arrayAggregateBlock.Store2(8, asuint" in code
+    assert "arrayAggregateBlock.Store((48 + i * 48 + 40)" in code
+    assert ("un" + "supported HLSL GLSL buffer block") not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
 def test_mixed_glsl_ssbo_bool_metal_output_compiles_with_xcrun_metal(tmp_path):
     xcrun = _require_xcrun_tool("metal")
     shader_path = tmp_path / "mixed_glsl_ssbo_bool.metal"
@@ -1087,6 +1165,56 @@ def test_mixed_glsl_ssbo_nested_struct_aggregate_metal_output_compiles_with_xcru
         "reinterpret_cast<device float*>(aggregateBlock + (48 + i * 48))"
         ") = __crossgl_aggregate_store_2.payload.scale" in code
     )
+    assert ("un" + "supported Metal GLSL buffer block") not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_ssbo_nested_struct_aggregate_array_metal_output_compiles_with_xcrun_metal(
+    tmp_path,
+):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "mixed_glsl_ssbo_nested_struct_aggregate_array.metal"
+    output_path = tmp_path / "mixed_glsl_ssbo_nested_struct_aggregate_array.air"
+
+    code = MetalCodeGen().generate(
+        _mixed_glsl_ast(
+            MIXED_GLSL_SSBO_NESTED_STRUCT_AGGREGATE_ARRAY_COMPUTE_SHADER,
+            "compute",
+        )
+    )
+    assert "device uchar* arrayAggregateBlock [[buffer(16)]]" in code
+    assert (
+        "ArrayAggregateData __crossgl_load_glsl_buffer_ArrayAggregateData"
+        "(const device uchar* buffer, uint offset)" in code
+    )
+    assert "result.weights[0] =" in code
+    assert "result.items[1].flags = bool2" in code
+    assert (
+        "ArrayAggregateData inner = "
+        "__crossgl_load_glsl_buffer_ArrayAggregateData(arrayAggregateBlock, 0);" in code
+    )
+    assert (
+        "ArrayAggregateData entry = "
+        "__crossgl_load_glsl_buffer_ArrayAggregateData"
+        "(arrayAggregateBlock, (48 + i * 48));" in code
+    )
+    assert "float2 __crossgl_buffer_store_1" in code
+    assert "bool2 __crossgl_buffer_store_2" in code
+    assert "arrayAggregateBlock + (48 + i * 48 + 40)" in code
     assert ("un" + "supported Metal GLSL buffer block") not in code
     shader_path.write_text(code, encoding="utf-8")
 
