@@ -57,6 +57,26 @@ class CudaToCrossGLConverter:
         **VECTOR_TYPE_MAPPING,
         **{f"make_{name}": mapped for name, mapped in VECTOR_TYPE_MAPPING.items()},
     }
+    CUDA_TEXTURE_TYPE_MAPPING = {
+        "1": "sampler1D",
+        "2": "sampler2D",
+        "3": "sampler3D",
+        "cudaTextureType1D": "sampler1D",
+        "cudaTextureType1DLayered": "sampler1DArray",
+        "cudaTextureType2D": "sampler2D",
+        "cudaTextureType2DLayered": "sampler2DArray",
+        "cudaTextureType3D": "sampler3D",
+        "cudaTextureTypeCubemap": "samplerCube",
+        "cudaTextureTypeCubemapLayered": "samplerCubeArray",
+    }
+    CUDA_SURFACE_TYPE_MAPPING = {
+        "2": "image2D",
+        "3": "image3D",
+        "cudaSurfaceType2D": "image2D",
+        "cudaSurfaceType2DLayered": "image2DArray",
+        "cudaSurfaceType3D": "image3D",
+        "cudaSurfaceTypeCubemap": "imageCube",
+    }
 
     def __init__(self):
         """Initialize CUDA-to-CrossGL visitor state."""
@@ -966,6 +986,10 @@ class CudaToCrossGLConverter:
             "dim3": "vec3<u32>",
         }
 
+        resource_type = self.convert_cuda_resource_type(cuda_type)
+        if resource_type is not None:
+            return resource_type
+
         unique_ptr_type = self.convert_unique_ptr_type(cuda_type)
         if unique_ptr_type is not None:
             return unique_ptr_type
@@ -979,6 +1003,14 @@ class CudaToCrossGLConverter:
             return self.convert_cuda_pointer_type(cuda_type)
 
         return type_mapping.get(cuda_type, cuda_type)
+
+    def convert_cuda_resource_type(self, cuda_type):
+        base_name, template_args = self.parse_cpp_template(cuda_type)
+        if base_name == "texture" and len(template_args) >= 2:
+            return self.CUDA_TEXTURE_TYPE_MAPPING.get(template_args[1])
+        if base_name == "surface" and len(template_args) >= 2:
+            return self.CUDA_SURFACE_TYPE_MAPPING.get(template_args[1])
+        return None
 
     def convert_unique_ptr_type(self, cuda_type):
         base_name, template_args = self.parse_cpp_template(cuda_type)

@@ -147,6 +147,10 @@ class CudaParser:
         "ULONGLONG3",
         "ULONGLONG4",
         "SIZE_T",
+        "TEXTURE",
+        "SURFACE",
+        "CUDAARRAY",
+        "CUDAARRAYT",
         "IDENTIFIER",
     }
 

@@ -1317,6 +1317,13 @@ class TestCudaCodeGen:
         void host() {
             std::array<unsigned int, 4> ids{};
             std::vector<const unsigned int> flags;
+            texture<float4, 2> tex2d;
+            texture<float4, cudaTextureType2DLayered> layeredTex;
+            texture<float4, cudaTextureTypeCubemap> cubeTex;
+            surface<void, 2> surface2d;
+            surface<void, cudaSurfaceType3D> volumeSurface;
+            cudaArray_t arrayRef;
+            cudaArray* rawArray;
         }
         """
         lexer = CudaLexer(code)
@@ -1329,6 +1336,13 @@ class TestCudaCodeGen:
 
         assert "var ids: std::array<unsigned int, 4> = {};" in result
         assert "var flags: std::vector<const unsigned int>;" in result
+        assert "var tex2d: sampler2D;" in result
+        assert "var layeredTex: sampler2DArray;" in result
+        assert "var cubeTex: samplerCube;" in result
+        assert "var surface2d: image2D;" in result
+        assert "var volumeSurface: image3D;" in result
+        assert "var arrayRef: cudaArray_t;" in result
+        assert "var rawArray: ptr<cudaArray>;" in result
         assert "unsignedint" not in result
         assert "constunsigned" not in result
 
