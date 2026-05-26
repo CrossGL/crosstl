@@ -79,6 +79,7 @@ class SlangCodeGen:
         self.current_expression_expected_type = None
         self.user_function_names = set()
         self.user_function_return_types = {}
+        self.stage_entry_name_overrides = {}
         self._generating = False
         self.function_map = {
             "mix": "lerp",
@@ -108,6 +109,7 @@ class SlangCodeGen:
             self.user_function_return_types = self.collect_user_function_return_types(
                 ast
             )
+            self.stage_entry_name_overrides = {}
 
         if isinstance(ast, list):
             result = ""
@@ -167,6 +169,9 @@ class SlangCodeGen:
 
             # Handle shader stages (new AST structure)
             if hasattr(ast, "stages") and ast.stages:
+                self.stage_entry_name_overrides = (
+                    self.collect_stage_entry_name_overrides(ast.stages)
+                )
                 for stage_type, stage in ast.stages.items():
                     result += self.generate_stage(stage_type, stage)
 
@@ -303,6 +308,9 @@ class SlangCodeGen:
                 result += self.generate_function(function) + "\n\n"
 
         stages = getattr(node, "stages", {})
+        self.stage_entry_name_overrides = self.collect_stage_entry_name_overrides(
+            stages
+        )
         for stage_type, stage in stages.items():
             result += self.generate_stage(stage_type, stage)
 
@@ -342,6 +350,62 @@ class SlangCodeGen:
         }
         return stage_map.get(stage_name, stage_name)
 
+    def collect_stage_entry_name_overrides(self, stages):
+        """Return replacement entry names for stage blocks with duplicate names."""
+        entries_by_name = {}
+        for stage_type, stage in stages.items():
+            entry_point = getattr(stage, "entry_point", None)
+            entry_name = getattr(entry_point, "name", None)
+            if entry_name is None:
+                continue
+            stage_name = self.get_stage_name(stage_type)
+            entries_by_name.setdefault(entry_name, []).append((stage_name, entry_point))
+
+        used_names = set(self.user_function_names)
+        overrides = {}
+        for entries in entries_by_name.values():
+            if len(entries) < 2:
+                continue
+            for stage_name, entry_point in entries:
+                candidate = self.slang_stage_entry_function_name(stage_name)
+                unique_name = self.unique_stage_entry_name(candidate, used_names)
+                used_names.add(unique_name)
+                overrides[id(entry_point)] = unique_name
+        return overrides
+
+    def slang_stage_entry_function_name(self, stage_name):
+        stage_name = self.slang_shader_stage_name(stage_name)
+        stage_map = {
+            "vertex": "VSMain",
+            "fragment": "PSMain",
+            "compute": "CSMain",
+            "geometry": "GSMain",
+            "hull": "HSMain",
+            "domain": "DSMain",
+            "mesh": "MSMain",
+            "amplification": "ASMain",
+            "raygeneration": "RayGenMain",
+            "intersection": "IntersectionMain",
+            "closesthit": "ClosestHitMain",
+            "anyhit": "AnyHitMain",
+            "miss": "MissMain",
+            "callable": "CallableMain",
+        }
+        return stage_map.get(stage_name, f"{stage_name}_main")
+
+    def unique_stage_entry_name(self, candidate, used_names):
+        if candidate not in used_names:
+            return candidate
+
+        suffix = 1
+        while f"{candidate}_{suffix}" in used_names:
+            suffix += 1
+        return f"{candidate}_{suffix}"
+
+    def slang_stage_uses_numthreads(self, stage_name):
+        shader_stage = self.slang_shader_stage_name(stage_name)
+        return shader_stage in {"compute", "mesh", "amplification"}
+
     def generate_stage(self, stage_type, stage):
         """Render one staged entry point and its local functions."""
         stage_name = self.get_stage_name(stage_type)
@@ -360,6 +424,7 @@ class SlangCodeGen:
                 entry_point,
                 shader_type=stage_name,
                 execution_config=getattr(stage, "execution_config", None),
+                entry_name=self.stage_entry_name_overrides.get(id(entry_point)),
             )
             result += "\n\n"
 
@@ -519,7 +584,9 @@ class SlangCodeGen:
         result += "};"
         return result
 
-    def generate_function(self, node, shader_type=None, execution_config=None):
+    def generate_function(
+        self, node, shader_type=None, execution_config=None, entry_name=None
+    ):
         """Render one CrossGL function or shader entry point as Slang code."""
         saved_variable_types = self.variable_types.copy()
         saved_image_resource_types = self.image_resource_types.copy()
@@ -579,12 +646,13 @@ class SlangCodeGen:
                 )
 
         result = ""
-        if shader_type == "compute":
+        if self.slang_stage_uses_numthreads(shader_type):
             result += self.generate_compute_numthreads(execution_config)
         if shader_type:
             shader_stage = self.slang_shader_stage_name(shader_type)
             result += f'[shader("{shader_stage}")]\n'
-        result += f"{ret_type} {node.name}({params_str}){semantic_str}\n{{\n"
+        function_name = entry_name or node.name
+        result += f"{ret_type} {function_name}({params_str}){semantic_str}\n{{\n"
         self.indent_level += 1
 
         body = getattr(node, "body", [])

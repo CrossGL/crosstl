@@ -621,6 +621,37 @@ def test_multiple_stage_entry_points_emit():
     assert '[shader("compute")]' in generated_code
 
 
+def test_duplicate_stage_entry_names_emit_unique_slang_functions():
+    code = """
+    shader main {
+        vertex {
+            float VSMain(float x) {
+                return x;
+            }
+
+            void main() {
+                float x = VSMain(1.0);
+            }
+        }
+        fragment {
+            void main() {
+            }
+        }
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float VSMain(float x)" in generated_code
+    assert "void VSMain_1()" in generated_code
+    assert "void PSMain()" in generated_code
+    assert "void CSMain()" in generated_code
+    assert generated_code.count("void main()") == 0
+
+
 def test_advanced_stage_attributes_emit_slang_shader_names():
     code = """
     shader advanced {
@@ -732,6 +763,27 @@ def test_compute_stage_uses_execution_layout_numthreads():
 
     assert "[numthreads(8, 4, 2)]" in generated_code
     assert "[numthreads(1, 1, 1)]" not in generated_code
+
+
+def test_mesh_and_task_stages_emit_execution_layout_numthreads():
+    code = """
+    shader MeshTask {
+        task {
+            layout(local_size_x = 32, local_size_y = 2, local_size_z = 1) in;
+            void main() {
+            }
+        }
+        mesh {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[numthreads(32, 2, 1)]\n[shader("amplification")]' in generated_code
+    assert '[numthreads(64, 1, 1)]\n[shader("mesh")]' in generated_code
 
 
 def test_if_else_control_flow_emits_slang_blocks():
