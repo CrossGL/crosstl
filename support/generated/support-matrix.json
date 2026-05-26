@@ -300,7 +300,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 383,
+        "unsupported_marker_count": 413,
         "unsupported_marker_samples": [
           {
             "line": 263,
@@ -410,7 +410,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 422
+        "test_count": 423
       },
       "translator_codegen": {
         "exists": true,
@@ -4400,9 +4400,10 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_sample_offset_variants_use_sample_offsets",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_cube_array_texture_grad_gather_uses_cube_gradients",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_cube_texture_sample_offsets_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_sampler_1d_sampling_options_emit_target_diagnostics",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_fragment_texture_3d_sample_offset_compiles_with_metal"
           ],
-          "notes": "Covers explicit LOD, gradient, bias, 2D/array offsets, cube/cube-array gradients, 3D offsets, resource arrays, and deterministic diagnostics for target-invalid offset forms.",
+          "notes": "Covers target-valid explicit LOD, gradient, bias, 2D/array offsets, cube/cube-array gradients, 3D offsets, resource arrays, and deterministic diagnostics for target-invalid offset, 1D LOD/query, and 1D bias/gradient forms.",
           "status": "supported"
         },
         "mojo": {

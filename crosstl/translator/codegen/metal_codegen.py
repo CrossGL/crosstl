@@ -3856,11 +3856,7 @@ class MetalCodeGen:
 
         query_lod_coordinate_dimension = None
         if texture_type and not is_storage_image and not is_multisample:
-            if texture_type.startswith("texture1d_array<"):
-                query_lod_coordinate_dimension = 2
-            elif texture_type.startswith("texture1d<"):
-                query_lod_coordinate_dimension = 1
-            elif texture_type.startswith(("texture2d_array<", "depth2d_array<")):
+            if texture_type.startswith(("texture2d_array<", "depth2d_array<")):
                 query_lod_coordinate_dimension = 3
             elif texture_type.startswith(("texture2d<", "depth2d<")):
                 query_lod_coordinate_dimension = 2
@@ -7026,6 +7022,45 @@ class MetalCodeGen:
     def texture_sample_supports_offset(self, texture_type):
         return self.texture_sampling_capabilities(texture_type)["sample_offset"]
 
+    def is_texture1d_sample_resource(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        if self.is_storage_image_resource(texture_type):
+            return False
+        return texture_type.startswith(("texture1d<", "texture1d_array<"))
+
+    def unsupported_texture1d_sampling_option_call(self, func_name, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            "/* unsupported Metal texture sampling: "
+            f"{func_name} on {texture_type} supports only implicit sampling */ "
+            "float4(0.0)"
+        )
+
+    def unsupported_texture1d_texel_fetch_lod_call(self, func_name, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            "/* unsupported Metal texel fetch: "
+            f"{func_name} on {texture_type} requires a compile-time literal "
+            "mip level */ float4(0.0)"
+        )
+
+    def unsupported_texture1d_size_lod_call(self, texture_type, return_type):
+        texture_type = self.resource_base_type(texture_type)
+        zero_value = "0" if return_type == "int" else f"{return_type}(0)"
+        return (
+            "/* unsupported Metal texture size query: textureSize on "
+            f"{texture_type} requires a compile-time literal mip level */ "
+            f"{zero_value}"
+        )
+
+    def metal_texture1d_read_lod_argument(self, lod_arg):
+        if lod_arg is None:
+            return "uint(0)"
+        value = self.literal_int_value(lod_arg, self.literal_int_constants)
+        if value is None:
+            return None
+        return f"uint({value})"
+
     def unsupported_texture_sample_offset_call(self, func_name, reason):
         return unsupported_texture_offset_call_expression("Metal", func_name, reason)
 
@@ -7167,6 +7202,10 @@ class MetalCodeGen:
             )
             if count_error:
                 return self.unsupported_texture_projected_call(func_name, count_error)
+            if extra_args and self.is_texture1d_sample_resource(texture_type):
+                return self.unsupported_texture_projected_call(
+                    func_name, "bias is not supported for Metal 1D textures"
+                )
             if not extra_args:
                 return f"{texture_name}.sample({sampler_arg}, {projected_coord})"
             if len(extra_args) == 1:
@@ -7205,6 +7244,10 @@ class MetalCodeGen:
             )
             if count_error:
                 return self.unsupported_texture_projected_call(func_name, count_error)
+            if self.is_texture1d_sample_resource(texture_type):
+                return self.unsupported_texture_projected_call(
+                    func_name, "explicit LOD is not supported for Metal 1D textures"
+                )
             lod = self.generate_expression(extra_args[0])
             return (
                 f"{texture_name}.sample({sampler_arg}, {projected_coord}, level({lod}))"
@@ -7233,6 +7276,10 @@ class MetalCodeGen:
             )
             if count_error:
                 return self.unsupported_texture_projected_call(func_name, count_error)
+            if self.is_texture1d_sample_resource(texture_type):
+                return self.unsupported_texture_projected_call(
+                    func_name, "gradients are not supported for Metal 1D textures"
+                )
             ddx = self.generate_expression(extra_args[0])
             ddy = self.generate_expression(extra_args[1])
             gradient_options = self.texture_gradient_options(texture_type, ddx, ddy)
@@ -7826,13 +7873,21 @@ class MetalCodeGen:
 
     def texture_query_size_expression(self, texture_arg, lod_arg=None):
         texture_name = self.generate_expression(texture_arg)
+        texture_type = self.texture_resource_type(texture_arg)
         query_descriptor = self.texture_query_resource_descriptor(texture_arg)
         size_descriptor = query_descriptor["size_descriptor"]
         if size_descriptor is None:
             return None
 
-        lod = self.generate_expression(lod_arg) if lod_arg is not None else "0"
-        lod_arg_string = f"uint({lod})"
+        if self.is_texture1d_sample_resource(texture_type):
+            lod_arg_string = self.metal_texture1d_read_lod_argument(lod_arg)
+            if lod_arg_string is None:
+                return self.unsupported_texture1d_size_lod_call(
+                    texture_type, size_descriptor["return_type"]
+                )
+        else:
+            lod = self.generate_expression(lod_arg) if lod_arg is not None else "0"
+            lod_arg_string = f"uint({lod})"
         return self.texture_query_size_descriptor_expression(
             texture_name, size_descriptor, lod_arg_string
         )
@@ -8629,6 +8684,10 @@ class MetalCodeGen:
 
         if is_texture_sample_basic_operation(func_name):
             if extra_args:
+                if self.is_texture1d_sample_resource(texture_type):
+                    return self.unsupported_texture1d_sampling_option_call(
+                        func_name, texture_type
+                    )
                 bias = self.generate_expression(extra_args[0])
                 if is_array_texture:
                     return (
@@ -8640,11 +8699,19 @@ class MetalCodeGen:
                 return f"{texture_name}.sample({sampler_arg}, {coord_xy}, {layer})"
             return f"{texture_name}.sample({sampler_arg}, {coord})"
         if is_texture_sample_lod_operation(func_name) and extra_args:
+            if self.is_texture1d_sample_resource(texture_type):
+                return self.unsupported_texture1d_sampling_option_call(
+                    func_name, texture_type
+                )
             lod = self.generate_expression(extra_args[0])
             if is_array_texture:
                 return f"{texture_name}.sample({sampler_arg}, {coord_xy}, {layer}, level({lod}))"
             return f"{texture_name}.sample({sampler_arg}, {coord}, level({lod}))"
         if is_texture_sample_grad_operation(func_name) and len(extra_args) >= 2:
+            if self.is_texture1d_sample_resource(texture_type):
+                return self.unsupported_texture1d_sampling_option_call(
+                    func_name, texture_type
+                )
             ddx = self.generate_expression(extra_args[0])
             ddy = self.generate_expression(extra_args[1])
             gradient_options = self.texture_gradient_options(texture_type, ddx, ddy)
@@ -8693,32 +8760,63 @@ class MetalCodeGen:
                 return self.unsupported_multisample_texture_query_lod_call(texture_type)
             if self.is_storage_image_resource(texture_type):
                 return self.unsupported_texture_query_lod_call(texture_type)
+            if self.is_texture1d_sample_resource(texture_type):
+                return self.unsupported_texture_query_lod_call(texture_type)
             lod_coord = self.texture_query_lod_coordinate(texture_type, coord)
             return (
                 f"float2({texture_name}.calculate_unclamped_lod({sampler_arg}, {lod_coord}), "
                 f"{texture_name}.calculate_clamped_lod({sampler_arg}, {lod_coord}))"
             )
         if is_texel_fetch_basic_operation(func_name) and len(args) >= 3:
-            lod = self.generate_expression(args[2])
             if self.is_cube_texture_resource(texture_type):
                 return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
             if self.is_multisample_texture_resource(texture_type):
+                lod = self.generate_expression(args[2])
                 if texture_type == "texture2d_ms_array<float>":
                     texel_xy, layer = self.array_texture_coordinate_parts(coord)
                     return f"{texture_name}.read({texel_xy}, {layer}, uint({lod}))"
                 return f"{texture_name}.read({coord}, uint({lod}))"
+            if self.is_texture1d_sample_resource(texture_type):
+                lod = self.metal_texture1d_read_lod_argument(args[2])
+                if lod is None:
+                    return self.unsupported_texture1d_texel_fetch_lod_call(
+                        func_name, texture_type
+                    )
+                if is_array_texture:
+                    texel_coord, layer = self.texture_coordinate_parts(
+                        texture_type, coord
+                    )
+                    return f"{texture_name}.read(uint({texel_coord}), {layer}, {lod})"
+                return f"{texture_name}.read(uint({coord}), {lod})"
+            lod = self.generate_expression(args[2])
             if is_array_texture:
                 texel_coord, layer = self.texture_coordinate_parts(texture_type, coord)
                 return f"{texture_name}.read({texel_coord}, {layer}, {lod})"
             return f"{texture_name}.read({coord}, {lod})"
 
         if is_texel_fetch_offset_operation(func_name) and len(args) >= 4:
-            lod = self.generate_expression(args[2])
-            offset = self.generate_expression(args[3])
             if self.is_cube_texture_resource(texture_type):
                 return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
             if self.is_multisample_texture_resource(texture_type):
                 return unsupported_multisample_texel_fetch_offset_expression("Metal")
+            if self.is_texture1d_sample_resource(texture_type):
+                lod = self.metal_texture1d_read_lod_argument(args[2])
+                if lod is None:
+                    return self.unsupported_texture1d_texel_fetch_lod_call(
+                        func_name, texture_type
+                    )
+                offset = self.generate_expression(args[3])
+                if is_array_texture:
+                    texel_coord, layer = self.texture_coordinate_parts(
+                        texture_type, coord
+                    )
+                    return (
+                        f"{texture_name}.read(uint(({texel_coord} + {offset})), "
+                        f"{layer}, {lod})"
+                    )
+                return f"{texture_name}.read(uint(({coord} + {offset})), {lod})"
+            lod = self.generate_expression(args[2])
+            offset = self.generate_expression(args[3])
             if is_array_texture:
                 texel_coord, layer = self.texture_coordinate_parts(texture_type, coord)
                 return (

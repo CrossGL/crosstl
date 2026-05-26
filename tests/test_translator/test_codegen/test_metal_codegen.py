@@ -10225,7 +10225,6 @@ def test_metal_texture_dimension_descriptors():
         "texture1d_array<float>",
         coordinate_dimension=2,
         texel_fetch_offset_dimension=1,
-        query_lod_coordinate_dimension=2,
     )
     expect(
         "depth2d<float>",
@@ -17423,13 +17422,14 @@ def test_metal_sampler_1d_array_sampling_and_queries():
             int offset
         ) {
             ivec2 dims = textureSize(tex, lod);
+            ivec2 literalDims = textureSize(tex, 0);
             int levels = textureQueryLevels(tex);
             vec2 lodInfo = textureQueryLod(tex, samp, uvLayer);
             return texture(tex, samp, uvLayer)
                 + textureLod(tex, samp, uvLayer, lod)
-                + texelFetch(tex, pixelLayer, lod)
-                + texelFetchOffset(tex, pixelLayer, lod, offset)
-                + vec4(dims.x, dims.y, levels, lodInfo.x + lodInfo.y);
+                + texelFetch(tex, pixelLayer, 0)
+                + texelFetchOffset(tex, pixelLayer, 0, offset)
+                + vec4(dims.x + literalDims.x, dims.y + literalDims.y, levels, lodInfo.x + lodInfo.y);
         }
 
         fragment {
@@ -17456,21 +17456,116 @@ def test_metal_sampler_1d_array_sampling_and_queries():
         "float4 sampleLineArray(texture1d_array<float> tex, sampler samp, float2 uvLayer, int2 pixelLayer, int lod, int offset)"
         in generated_code
     )
-    assert "int2(tex.get_width(uint(lod)), tex.get_array_size())" in generated_code
-    assert "int(tex.get_num_mip_levels())" in generated_code
     assert (
-        "float2 lodInfo = float2(tex.calculate_unclamped_lod(samp, uvLayer.x), tex.calculate_clamped_lod(samp, uvLayer.x));"
+        "int2 dims = /* unsupported Metal texture size query: textureSize on "
+        "texture1d_array<float> requires a compile-time literal mip level */ "
+        "int2(0);" in generated_code
+    )
+    assert (
+        "int2 literalDims = int2(tex.get_width(uint(0)), tex.get_array_size());"
         in generated_code
     )
+    assert "int(tex.get_num_mip_levels())" in generated_code
     assert "tex.sample(samp, uvLayer.x, uint(uvLayer.y))" in generated_code
-    assert "tex.sample(samp, uvLayer.x, uint(uvLayer.y), level(lod))" in generated_code
-    assert "tex.read(pixelLayer.x, uint(pixelLayer.y), lod)" in generated_code
     assert (
-        "tex.read((pixelLayer.x + offset), uint(pixelLayer.y), lod)" in generated_code
+        "/* unsupported Metal texture sampling: textureLod on "
+        "texture1d_array<float> supports only implicit sampling */ float4(0.0)"
+        in generated_code
+    )
+    assert (
+        "float2 lodInfo = /* unsupported Metal texture query: "
+        "textureQueryLod on texture1d_array<float> */ float2(0.0);" in generated_code
+    )
+    assert "tex.read(uint(pixelLayer.x), uint(pixelLayer.y), uint(0))" in generated_code
+    assert (
+        "tex.read(uint((pixelLayer.x + offset)), uint(pixelLayer.y), uint(0))"
+        in generated_code
     )
     assert "tex.read(pixelLayer.xy" not in generated_code
     assert "tex.read((pixelLayer.xy" not in generated_code
-    assert "calculate_unclamped_lod(samp, uvLayer)" not in generated_code
+    assert "calculate_unclamped_lod" not in generated_code
+    assert (
+        "tex.sample(samp, uvLayer.x, uint(uvLayer.y), level(lod))" not in generated_code
+    )
+
+
+def test_metal_sampler_1d_sampling_options_emit_target_diagnostics():
+    shader = """
+    shader OneDTextureOptions {
+        sampler1D lineMap;
+        sampler linearSampler;
+
+        vec4 sampleLine(
+            sampler1D tex,
+            sampler samp,
+            float u,
+            vec2 uq,
+            int pixel,
+            int lod,
+            int offset
+        ) {
+            return texture(tex, samp, u)
+                + texture(tex, samp, u, 0.25)
+                + textureLod(tex, samp, u, lod)
+                + textureGrad(tex, samp, u, 0.1, 0.2)
+                + textureProj(tex, samp, uq)
+                + textureProj(tex, samp, uq, 0.25)
+                + textureProjLod(tex, samp, uq, lod)
+                + texelFetch(tex, pixel, 0)
+                + texelFetch(tex, pixel, lod)
+                + texelFetchOffset(tex, pixel, 0, offset)
+                + textureOffset(tex, samp, u, offset);
+        }
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return sampleLine(lineMap, linearSampler, 0.5, vec2(0.5, 1.0), 4, 1, 1);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert "texture1d<float> lineMap [[texture(0)]]" in generated_code
+    assert "tex.sample(samp, u)" in generated_code
+    assert "tex.sample(samp, uq.x / uq.y)" in generated_code
+    assert "tex.read(uint(pixel), uint(0))" in generated_code
+    assert "tex.read(uint((pixel + offset)), uint(0))" in generated_code
+    assert (
+        "/* unsupported Metal texture sampling: texture on texture1d<float> "
+        "supports only implicit sampling */ float4(0.0)" in generated_code
+    )
+    assert (
+        "/* unsupported Metal texture sampling: textureLod on texture1d<float> "
+        "supports only implicit sampling */ float4(0.0)" in generated_code
+    )
+    assert (
+        "/* unsupported Metal texture sampling: textureGrad on texture1d<float> "
+        "supports only implicit sampling */ float4(0.0)" in generated_code
+    )
+    assert (
+        "/* unsupported Metal projected texture: textureProj bias is not "
+        "supported for Metal 1D textures */ float4(0.0)" in generated_code
+    )
+    assert (
+        "/* unsupported Metal projected texture: textureProjLod explicit LOD is "
+        "not supported for Metal 1D textures */ float4(0.0)" in generated_code
+    )
+    assert (
+        "/* unsupported Metal texel fetch: texelFetch on texture1d<float> "
+        "requires a compile-time literal mip level */ float4(0.0)" in generated_code
+    )
+    assert (
+        "/* unsupported Metal texture offset: textureOffset offsets require 2D, "
+        "2D-array, or 3D textures */ float4(0.0)" in generated_code
+    )
+    assert "level(lod)" not in generated_code
+    assert "gradient2d" not in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureGrad(" not in generated_code
+    assert "textureOffset(" not in generated_code
 
 
 def test_metal_image_1d_and_1d_array_storage_operations():
