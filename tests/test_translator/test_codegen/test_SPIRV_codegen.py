@@ -3435,6 +3435,125 @@ class TestVulkanSPIRVCodeGen:
         assert "buffer_store" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_glsl_buffer_block_helper_parameters_inline_with_accesses(self):
+        source_code = """
+        shader StorageBuffers {
+            struct Particle {
+                vec4 position;
+                float mass;
+            };
+
+            struct ParticleBlock {
+                uint count;
+                Particle particles[];
+            };
+
+            struct OutputBlock {
+                float masses[];
+            };
+
+            ParticleBlock blocks[3] @glsl_buffer_block(std430)
+                @set(1) @binding(4) @readonly;
+            OutputBlock outputBlock @glsl_buffer_block(std430) @binding(5);
+
+            float readMass(
+                ParticleBlock localBlocks[] @glsl_buffer_block(std430) @readonly,
+                uint index
+            ) {
+                return localBlocks[2].particles[index].mass;
+            }
+
+            void writeMass(
+                OutputBlock localBlock @glsl_buffer_block(std430),
+                uint index,
+                float value
+            ) {
+                localBlock.masses[index] = value;
+            }
+
+            compute {
+                void main() {
+                    uint index = blocks[2].count;
+                    float mass = readMass(blocks, index);
+                    writeMass(outputBlock, 0u, mass);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        particle_block = spirv_named_id(spv_code, "ParticleBlock")
+        output_block = spirv_named_id(spv_code, "OutputBlock")
+        blocks_var = spirv_named_variable(spv_code, "blocks", storage_class="Uniform")
+        output_var = spirv_named_variable(
+            spv_code, "outputBlock", storage_class="Uniform"
+        )
+
+        assert f"OpDecorate {particle_block} BufferBlock" in spv_code
+        assert f"OpDecorate {output_block} BufferBlock" in spv_code
+        assert f"OpMemberDecorate {particle_block} 0 NonWritable" in spv_code
+        assert f"OpMemberDecorate {particle_block} 1 NonWritable" in spv_code
+        assert f"OpDecorate {blocks_var} DescriptorSet 1" in spv_code
+        assert f"OpDecorate {blocks_var} Binding 4" in spv_code
+        assert f"OpDecorate {output_var} Binding 5" in spv_code
+        assert re.search(rf"OpAccessChain %\d+ {re.escape(blocks_var)} %\d+", spv_code)
+        assert re.search(rf"OpAccessChain %\d+ {re.escape(output_var)} %\d+", spv_code)
+        assert "readMass" not in spv_code
+        assert "writeMass" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_glsl_buffer_block_helper_parameter_access_diagnostics(self):
+        source_code = """
+        shader StorageBuffers {
+            struct ReadBlock {
+                float values[];
+            };
+
+            struct WriteBlock {
+                float values[];
+            };
+
+            ReadBlock readOnlyBlock @glsl_buffer_block(std430) @readonly;
+            WriteBlock writeOnlyBlock @glsl_buffer_block(std430) @writeonly;
+
+            float readOne(
+                WriteBlock localBlock @glsl_buffer_block(std430) @writeonly,
+                uint index
+            ) {
+                return localBlock.values[index];
+            }
+
+            void writeOne(
+                ReadBlock localBlock @glsl_buffer_block(std430) @readonly,
+                uint index,
+                float value
+            ) {
+                localBlock.values[index] = value;
+            }
+
+            compute {
+                void main() {
+                    float rejectedRead = readOne(writeOnlyBlock, 0u);
+                    writeOne(readOnlyBlock, 1u, rejectedRead);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "readOne" not in spv_code
+        assert "writeOne" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING: storage buffer load requires a readable buffer" in spv_code
+        assert "WARNING: storage buffer store requires a writable buffer" in spv_code
+
     def test_storage_buffer_memory_qualifiers_emit_member_decorations(self):
         source_code = """
         shader StorageBuffers {
@@ -3471,6 +3590,105 @@ class TestVulkanSPIRVCodeGen:
         assert f"OpMemberDecorate {glsl_out_block} 0 NonReadable" in spv_code
         assert "WARNING: storage buffer load requires a readable buffer" in spv_code
         assert "WARNING: storage buffer store requires a writable buffer" in spv_code
+
+    def test_structured_buffer_helper_parameters_inline_with_accesses(self):
+        source_code = """
+        shader StorageBuffers {
+            RWStructuredBuffer<float> values @binding(0);
+            StructuredBuffer<float> weights @binding(1);
+
+            float readValue(StructuredBuffer<float> data, uint index) {
+                return buffer_load(data, index);
+            }
+
+            void writeValue(RWStructuredBuffer<float> data, uint index, float value) {
+                buffer_store(data, index, value);
+            }
+
+            compute {
+                void main() {
+                    float weight = readValue(weights, 0u);
+                    writeValue(values, 1u, weight);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        values_var = spirv_named_variable(spv_code, "values", storage_class="Uniform")
+        weights_var = spirv_named_variable(spv_code, "weights", storage_class="Uniform")
+
+        assert "Unknown type StructuredBuffer" not in spv_code
+        assert "Unknown type RWStructuredBuffer" not in spv_code
+        assert "readValue" not in spv_code
+        assert "writeValue" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(weights_var)} %\d+ %\d+", spv_code
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(values_var)} %\d+ %\d+", spv_code
+        )
+        assert "WARNING" not in spv_code
+
+    def test_structured_buffer_helper_parameter_access_contracts_emit_diagnostics(self):
+        source_code = """
+        shader StorageBuffers {
+            StructuredBuffer<float> readOnlyValues;
+            RWStructuredBuffer<float> writeOnlyValues @writeonly;
+
+            float readValue(StructuredBuffer<float> data, uint index) {
+                return buffer_load(data, index);
+            }
+
+            void writeValue(RWStructuredBuffer<float> data, uint index, float value) {
+                buffer_store(data, index, value);
+            }
+
+            float updateValue(RWStructuredBuffer<float> data, uint index) {
+                float oldValue = buffer_load(data, index);
+                buffer_store(data, index, oldValue + 1.0);
+                return oldValue;
+            }
+
+            compute {
+                void main() {
+                    float rejectedRead = readValue(writeOnlyValues, 0u);
+                    writeValue(readOnlyValues, 1u, rejectedRead);
+                    float rejectedUpdate = updateValue(readOnlyValues, 2u);
+                    float rejectedWriteOnlyUpdate = updateValue(writeOnlyValues, 3u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: function call 'readValue' requires read-capable "
+            "storage buffer access for argument writeOnlyValues passed to "
+            "parameter data: got writeonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'writeValue' requires write-capable "
+            "storage buffer access for argument readOnlyValues passed to "
+            "parameter data: got readonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'updateValue' requires read-write "
+            "storage buffer access for argument readOnlyValues passed to "
+            "parameter data: got readonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'updateValue' requires read-write "
+            "storage buffer access for argument writeOnlyValues passed to "
+            "parameter data: got writeonly"
+        ) in spv_code
 
     def test_storage_image_memory_qualifiers_emit_decorations_and_diagnostics(self):
         source_code = """
@@ -3516,6 +3734,60 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING: imageStore requires a writable storage image" in spv_code
         assert "WARNING: imageAtomicAdd requires a read-write storage image" in spv_code
         assert "OpAtomicIAdd" not in spv_code
+
+    def test_storage_image_helper_access_contracts_emit_diagnostics(self):
+        source_code = """
+        shader StorageImages {
+            image2D source @rgba32f @readonly;
+            image2D target @rgba32f @writeonly;
+            uimage2D counters @r32ui @readonly;
+
+            vec4 readLeaf(image2D image @rgba32f, ivec2 pixel) {
+                return imageLoad(image, pixel);
+            }
+
+            vec4 readForward(image2D image @rgba32f, ivec2 pixel) {
+                return readLeaf(image, pixel);
+            }
+
+            void writePixel(image2D image @rgba32f, ivec2 pixel, vec4 value) {
+                imageStore(image, pixel, value);
+            }
+
+            uint addCounter(uimage2D image @r32ui, ivec2 pixel) {
+                return imageAtomicAdd(image, pixel, 1u);
+            }
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(0, 1);
+                    vec4 rejectedRead = readForward(target, pixel);
+                    writePixel(source, pixel, rejectedRead);
+                    uint rejectedAtomic = addCounter(counters, pixel);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: function call 'readForward' requires read-capable "
+            "storage image access for argument target passed to parameter image: "
+            "got writeonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'writePixel' requires write-capable "
+            "storage image access for argument source passed to parameter image: "
+            "got readonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'addCounter' requires read-write "
+            "storage image access for argument counters passed to parameter image: "
+            "got readonly"
+        ) in spv_code
 
     def test_image_globals_emit_spirv_storage_image_types(self):
         source_code = """

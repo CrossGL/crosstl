@@ -168,8 +168,11 @@ SINGLE_VALUE_METADATA_NAMES = frozenset(
         "access",
         "binding",
         "buffer",
+        "builtin",
+        "constant_id",
         "component",
         "format",
+        "function_constant",
         "index",
         "location",
         "align",
@@ -179,6 +182,7 @@ SINGLE_VALUE_METADATA_NAMES = frozenset(
         "set",
         "texture",
         "uav",
+        "user",
     }
 )
 
@@ -192,6 +196,7 @@ HLSL_SEMANTIC_METADATA_BASE_NAMES = frozenset(
         "clipdistance",
         "color",
         "culldistance",
+        "depth",
         "fog",
         "normal",
         "position",
@@ -1307,6 +1312,7 @@ def _shader_metadata_nodes(shader):
         yield variable, _node_context("global variable", variable)
 
     for struct in getattr(shader, "structs", []) or []:
+        yield struct, _node_context("struct", struct)
         yield from _struct_member_metadata_nodes(struct, "struct")
 
     for cbuffer in getattr(shader, "cbuffers", []) or []:
@@ -1320,6 +1326,7 @@ def _shader_metadata_nodes(shader):
         for variable in getattr(stage, "local_variables", []) or []:
             yield variable, _node_context("stage variable", variable)
         for struct in getattr(stage, "local_structs", []) or []:
+            yield struct, _node_context("stage struct", struct)
             yield from _struct_member_metadata_nodes(struct, "stage struct")
         entry_point = getattr(stage, "entry_point", None)
         if entry_point is not None:

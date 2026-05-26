@@ -954,6 +954,67 @@ def test_structured_buffer_placeholders_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_typed_buffer_vector_alias_placeholders_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    StructuredBuffer<half3> halfVectors;
+    RWStructuredBuffer<short4> intVectors;
+    AppendStructuredBuffer<ushort3> appended;
+    ConsumeStructuredBuffer<ushort3> consumed;
+
+    half3 readHalf(uint index) {
+        return halfVectors.Load(index);
+    }
+
+    void writeInt(uint index, short4 value) {
+        intVectors.Store(index, value);
+    }
+
+    ushort3 roundTrip(ushort3 value) {
+        appended.Append(value);
+        return consumed.Consume();
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "StructuredBuffer[SIMD[DType.float16, 4]]" in generated_code
+    assert "RWStructuredBuffer[SIMD[DType.int16, 4]]" in generated_code
+    assert "AppendStructuredBuffer[SIMD[DType.uint16, 4]]" in generated_code
+    assert "ConsumeStructuredBuffer[SIMD[DType.uint16, 4]]" in generated_code
+    assert (
+        "fn buffer_load(buffer: StructuredBuffer[SIMD[DType.float16, 4]], "
+        "index: UInt32) -> SIMD[DType.float16, 4]:"
+    ) in generated_code
+    assert (
+        "fn buffer_store(buffer: RWStructuredBuffer[SIMD[DType.int16, 4]], "
+        "index: UInt32, value: SIMD[DType.int16, 4]):"
+    ) in generated_code
+    assert (
+        "fn buffer_append(buffer: AppendStructuredBuffer[SIMD[DType.uint16, 4]], "
+        "value: SIMD[DType.uint16, 4]):"
+    ) in generated_code
+    assert (
+        "fn buffer_consume(buffer: ConsumeStructuredBuffer[SIMD[DType.uint16, 4]]) "
+        "-> SIMD[DType.uint16, 4]:"
+    ) in generated_code
+    assert "half3" not in generated_code
+    assert "short4" not in generated_code
+    assert "ushort3" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "typed_buffer_vector_alias_placeholders.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_byte_address_buffer_placeholders_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -1792,7 +1853,7 @@ def test_else_if_statement():
                 void main() {
                     float result = add(1.0, 2.0);
                 }
-                
+
                 float add(float a, float b) {
                     return a + b;
                 }
@@ -2350,8 +2411,8 @@ def test_bitwise_and_operator():
         vertex {
             VSOutput main(VSInput input) {
                 VSOutput output;
-                output.color = vec4(float(int(input.texCoord.x * 100.0) & 15), 
-                                    float(int(input.texCoord.y * 100.0) & 15), 
+                output.color = vec4(float(int(input.texCoord.x * 100.0) & 15),
+                                    float(int(input.texCoord.y * 100.0) & 15),
                                     0.0, 1.0);
                 return output;
             }
@@ -2444,8 +2505,8 @@ def test_bitwise_or_operator():
         vertex {
             VSOutput main(VSInput input) {
                 VSOutput output;
-                output.color = vec4(float(int(input.texCoord.x * 100.0) | 15), 
-                                    float(int(input.texCoord.y * 100.0) | 15), 
+                output.color = vec4(float(int(input.texCoord.x * 100.0) | 15),
+                                    float(int(input.texCoord.y * 100.0) | 15),
                                     0.0, 1.0);
                 return output;
             }
@@ -3021,6 +3082,423 @@ fn main():
     assert "[8, 9, 10, 0]" in result.stdout
 
 
+def test_generic_scalar_alias_vector_constructors_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    vec3<half> makeHalf(vec2<half> pair, half z) {
+        return vec3<half>(pair, z);
+    }
+
+    vec4<min16float> makeMinFloat(
+        vec2<min16float> pair, min16float z, min16float w
+    ) {
+        return vec4<min16float>(pair, z, w);
+    }
+
+    vec3<int16> makeInt16(vec2<int16> pair, int16 z) {
+        return vec3<int16>(pair, z);
+    }
+
+    vec4<uint16> makeUInt16(vec2<uint16> pair, uint16 z, uint16 w) {
+        return vec4<uint16>(pair, z, w);
+    }
+
+    vec3<min12int> makeMinInt(vec2<min12int> pair, min12int z) {
+        return vec3<min12int>(pair, z);
+    }
+
+    vec3<min16uint> makeMinUInt(vec2<min16uint> pair, min16uint z) {
+        return vec3<min16uint>(pair, z);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fn makeHalf(pair: SIMD[DType.float16, 2], z: Float16)" in generated_code
+    assert "fn makeInt16(pair: SIMD[DType.int16, 2], z: Int16)" in generated_code
+    assert "fn makeUInt16(pair: SIMD[DType.uint16, 2], z: UInt16" in generated_code
+    assert "return SIMD[DType.float16, 4](pair[0], pair[1], z, 0.0)" in generated_code
+    assert "return SIMD[DType.int16, 4](pair[0], pair[1], z, 0)" in generated_code
+    assert "return SIMD[DType.uint16, 4](pair[0], pair[1], z, 0)" in generated_code
+    for raw_generic in (
+        "vec3<half>",
+        "vec4<min16float>",
+        "vec3<int16>",
+        "vec4<uint16>",
+        "vec3<min12int>",
+        "vec3<min16uint>",
+    ):
+        assert raw_generic not in generated_code
+
+    generated_code += """
+fn main():
+    print(makeHalf(SIMD[DType.float16, 2](1.0, 2.0), Float16(3.0)))
+    print(makeMinFloat(SIMD[DType.float16, 2](4.0, 5.0), Float16(6.0), Float16(7.0)))
+    print(makeInt16(SIMD[DType.int16, 2](8, 9), Int16(10)))
+    print(makeUInt16(SIMD[DType.uint16, 2](11, 12), UInt16(13), UInt16(14)))
+    print(makeMinInt(SIMD[DType.int16, 2](15, 16), Int16(17)))
+    print(makeMinUInt(SIMD[DType.uint16, 2](18, 19), UInt16(20)))
+"""
+
+    source_path = tmp_path / "generic_scalar_alias_vector_constructors.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[8, 9, 10, 0]" in result.stdout
+    assert "[11, 12, 13, 14]" in result.stdout
+    assert "[15, 16, 17, 0]" in result.stdout
+    assert "[18, 19, 20, 0]" in result.stdout
+
+
+def test_nested_generic_scalar_alias_vector_constructors_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    vec4<half> packHalf(half tail) {
+        return vec4<half>(vec3<half>(1.0, 2.0, 3.0), tail);
+    }
+
+    vec4<int16> packInt16(int16 tail) {
+        return vec4<int16>(vec3<int16>(1, 2, 3), tail);
+    }
+
+    vec4<uint16> packUInt16(uint16 tail) {
+        return vec4<uint16>(vec3<uint16>(4, 5, 6), tail);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "_crossgl_construct_f16_4_vf164_012_s" in generated_code
+    assert "_crossgl_construct_i16_4_vi164_012_s" in generated_code
+    assert "_crossgl_construct_u16_4_vu164_012_s" in generated_code
+    assert "SIMD[DType.float16, 4](SIMD[DType.float16" not in generated_code
+    assert "SIMD[DType.int16, 4](SIMD[DType.int16" not in generated_code
+    assert "SIMD[DType.uint16, 4](SIMD[DType.uint16" not in generated_code
+
+    generated_code += """
+fn main():
+    print(packHalf(Float16(4.0)))
+    print(packInt16(Int16(7)))
+    print(packUInt16(UInt16(8)))
+"""
+
+    source_path = tmp_path / "nested_generic_scalar_alias_vectors.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1, 2, 3, 7]" in result.stdout
+    assert "[4, 5, 6, 8]" in result.stdout
+
+
+def test_simd_and_packed_precision_vector_aliases_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct ExtraAliases {
+        simd_half3 halfValue;
+        simd_double2 preciseValue;
+        packed_short3 packedSigned;
+        simd_short4 simdSigned;
+        packed_ushort2 packedUnsigned;
+        simd_ushort3 simdUnsigned;
+    };
+
+    simd_half3 buildSimdHalf(simd_half2 pair, half z) {
+        return simd_half3(pair, z);
+    }
+
+    simd_double3 buildSimdDouble(simd_double2 pair, double z) {
+        return simd_double3(pair, z);
+    }
+
+    packed_short3 buildPackedShort(packed_short2 pair, short z) {
+        return packed_short3(pair, z);
+    }
+
+    simd_short4 buildSimdShort(simd_short2 pair, short z, short w) {
+        return simd_short4(pair, z, w);
+    }
+
+    packed_ushort3 buildPackedUShort(packed_ushort2 pair, ushort z) {
+        return packed_ushort3(pair, z);
+    }
+
+    simd_ushort4 buildSimdUShort(simd_ushort2 pair, ushort z, ushort w) {
+        return simd_ushort4(pair, z, w);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var halfValue: SIMD[DType.float16, 4]" in generated_code
+    assert "var preciseValue: SIMD[DType.float64, 2]" in generated_code
+    assert "var packedSigned: SIMD[DType.int16, 4]" in generated_code
+    assert "var simdSigned: SIMD[DType.int16, 4]" in generated_code
+    assert "var packedUnsigned: SIMD[DType.uint16, 2]" in generated_code
+    assert "var simdUnsigned: SIMD[DType.uint16, 4]" in generated_code
+    assert "return SIMD[DType.float16, 4](pair[0], pair[1], z, 0.0)" in generated_code
+    assert "return SIMD[DType.float64, 4](pair[0], pair[1], z, 0.0)" in generated_code
+    assert "return SIMD[DType.int16, 4](pair[0], pair[1], z, 0)" in generated_code
+    assert "return SIMD[DType.uint16, 4](pair[0], pair[1], z, 0)" in generated_code
+    for raw_alias in (
+        "simd_half2(",
+        "simd_half3(",
+        "simd_double2(",
+        "simd_double3(",
+        "packed_short2(",
+        "packed_short3(",
+        "simd_short2(",
+        "simd_short4(",
+        "packed_ushort2(",
+        "packed_ushort3(",
+        "simd_ushort2(",
+        "simd_ushort4(",
+    ):
+        assert raw_alias not in generated_code
+
+    generated_code += """
+fn main():
+    print(buildSimdHalf(SIMD[DType.float16, 2](1.0, 2.0), Float16(3.0)))
+    print(buildSimdDouble(SIMD[DType.float64, 2](4.0, 5.0), 6.0))
+    print(buildPackedShort(SIMD[DType.int16, 2](7, 8), Int16(9)))
+    print(buildSimdShort(SIMD[DType.int16, 2](10, 11), Int16(12), Int16(13)))
+    print(buildPackedUShort(SIMD[DType.uint16, 2](14, 15), UInt16(16)))
+    print(buildSimdUShort(SIMD[DType.uint16, 2](17, 18), UInt16(19), UInt16(20)))
+"""
+
+    source_path = tmp_path / "simd_and_packed_precision_vector_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[7, 8, 9, 0]" in result.stdout
+    assert "[10, 11, 12, 13]" in result.stdout
+    assert "[14, 15, 16, 0]" in result.stdout
+    assert "[17, 18, 19, 20]" in result.stdout
+
+
+def test_simd_precision_matrix_aliases_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    simd_half2x2 makeSimdHalfMatrix() {
+        return simd_half2x2(1.0, 2.0, 3.0, 4.0);
+    }
+
+    simd_double3x2 makeSimdDoubleMatrix() {
+        return simd_double3x2(1.0, 2.0, 3.0, 4.0, 5.0, 6.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fn makeSimdHalfMatrix() -> CrossGLMatrixF16C2R2:" in generated_code
+    assert "fn makeSimdDoubleMatrix() -> CrossGLMatrixF64C2R3:" in generated_code
+    assert "simd_half2x2(" not in generated_code
+    assert "simd_double3x2(" not in generated_code
+
+    generated_code += """
+fn main():
+    print(makeSimdHalfMatrix().c1)
+    print(makeSimdDoubleMatrix().c0)
+    print(makeSimdDoubleMatrix().c1)
+"""
+
+    source_path = tmp_path / "simd_precision_matrix_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[3.0, 4.0]" in result.stdout
+    assert "[1.0, 2.0, 3.0, 0.0]" in result.stdout
+    assert "[4.0, 5.0, 6.0, 0.0]" in result.stdout
+
+
+def test_integer_matrix_aliases_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    int2x2 makeIntMatrix() {
+        return int2x2(1, 2, 3, 4);
+    }
+
+    uint2x3 makeUIntMatrix() {
+        return uint2x3(1, 2, 3, 4, 5, 6);
+    }
+
+    short3x2 makeShortMatrix() {
+        return short3x2(1, 2, 3, 4, 5, 6);
+    }
+
+    min12int2x2 makeMinSignedMatrix() {
+        return min12int2x2(7, 8, 9, 10);
+    }
+
+    ushort2x2 makeUShortMatrix() {
+        return ushort2x2(11, 12, 13, 14);
+    }
+
+    min16uint3x2 makeMinUnsignedMatrix() {
+        return min16uint3x2(15, 16, 17, 18, 19, 20);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "fn makeIntMatrix() -> CrossGLMatrixI32C2R2:" in generated_code
+    assert "fn makeUIntMatrix() -> CrossGLMatrixU32C3R2:" in generated_code
+    assert "fn makeShortMatrix() -> CrossGLMatrixI16C2R3:" in generated_code
+    assert "fn makeMinSignedMatrix() -> CrossGLMatrixI16C2R2:" in generated_code
+    assert "fn makeUShortMatrix() -> CrossGLMatrixU16C2R2:" in generated_code
+    assert "fn makeMinUnsignedMatrix() -> CrossGLMatrixU16C2R3:" in generated_code
+    for raw_alias in (
+        "int2x2(",
+        "uint2x3(",
+        "short3x2(",
+        "min12int2x2(",
+        "ushort2x2(",
+        "min16uint3x2(",
+    ):
+        assert raw_alias not in generated_code
+
+    generated_code += """
+fn main():
+    print(makeIntMatrix().c1)
+    print(makeUIntMatrix().c2)
+    print(makeShortMatrix().c1)
+    print(makeMinSignedMatrix().c1)
+    print(makeUShortMatrix().c1)
+    print(makeMinUnsignedMatrix().c1)
+"""
+
+    source_path = tmp_path / "integer_matrix_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[3, 4]" in result.stdout
+    assert "[5, 6]" in result.stdout
+    assert "[4, 5, 6, 0]" in result.stdout
+    assert "[9, 10]" in result.stdout
+    assert "[13, 14]" in result.stdout
+    assert "[18, 19, 20, 0]" in result.stdout
+
+
+def test_integer_matrix_aliases_in_aggregates_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct PackedIntMatrices {
+        int2x2 signedMatrix;
+        short3x2 signedArray[2];
+        min16uint3x2 unsignedMatrix;
+    };
+
+    cbuffer MatrixParams {
+        min12int2x2 smallSigned;
+        ushort2x2 smallUnsigned[2];
+    };
+
+    PackedIntMatrices buildPacked(min16int index) {
+        PackedIntMatrices packed;
+        packed.signedMatrix = int2x2(1, 2, 3, 4);
+        packed.signedArray = {short3x2(5, 6, 7, 8, 9, 10)};
+        packed.signedArray[index] = short3x2(11, 12, 13, 14, 15, 16);
+        packed.unsignedMatrix = min16uint3x2(17, 18, 19, 20, 21, 22);
+        return packed;
+    }
+
+    short3x2 mutateMatrix(short3x2 value, min16uint column) {
+        value[column] = short3(23, 24, 25);
+        return value;
+    }
+
+    short columnValue(PackedIntMatrices packed, min16uint arrayIndex, min16uint row) {
+        return packed.signedArray[arrayIndex][1][row];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var signedMatrix: CrossGLMatrixI32C2R2" in generated_code
+    assert "var signedArray: InlineArray[CrossGLMatrixI16C2R3, 2]" in generated_code
+    assert "var unsignedMatrix: CrossGLMatrixU16C2R3" in generated_code
+    assert "var smallSigned: CrossGLMatrixI16C2R2" in generated_code
+    assert "var smallUnsigned: InlineArray[CrossGLMatrixU16C2R2, 2]" in generated_code
+    assert "packed.signedArray[int(index)]" in generated_code
+    assert "value[int(column)] = SIMD[DType.int16, 4](23, 24, 25, 0)" in generated_code
+    assert "packed.signedArray[int(arrayIndex)].c1[int(row)]" in generated_code
+
+    generated_code += """
+fn main():
+    var packed = buildPacked(Int16(1))
+    print(packed.signedMatrix.c1)
+    print(packed.signedArray[0].c1)
+    print(packed.signedArray[1].c1)
+    print(packed.unsignedMatrix.c1)
+    print(mutateMatrix(packed.signedArray[0], UInt16(1)).c1)
+    print(columnValue(packed, UInt16(1), UInt16(2)))
+"""
+
+    source_path = tmp_path / "integer_matrix_alias_aggregates.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[3, 4]" in result.stdout
+    assert "[8, 9, 10, 0]" in result.stdout
+    assert "[14, 15, 16, 0]" in result.stdout
+    assert "[20, 21, 22, 0]" in result.stdout
+    assert "[23, 24, 25, 0]" in result.stdout
+    assert "16" in result.stdout
+
+
 def test_hlsl_style_vector_aliases_emit_mojo_simd_names():
     code = """
     struct HlslVectors {
@@ -3396,6 +3874,87 @@ fn main():
     assert "[15, 16, 17, 0]" in result.stdout
     assert "[21, 22, 23, 24]" in result.stdout
     assert "25" in result.stdout
+
+
+def test_min_precision_integer_mod_and_indices_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    min12int signedMod(min12int a, min12int b) {
+        return mod(a, b);
+    }
+
+    min16uint unsignedMod(min16uint a, min16uint b) {
+        return mod(a, b);
+    }
+
+    i32 signedI32Mod(i32 a, i32 b) {
+        return mod(a, b);
+    }
+
+    u32 unsignedU32Mod(u32 a, u32 b) {
+        return mod(a, b);
+    }
+
+    float pickWithSignedIndex(min16int index) {
+        float values[2] = {1.0, 2.0};
+        return values[index];
+    }
+
+    float pickWithUnsignedIndex(uint16 index) {
+        float values[2] = {3.0, 4.0};
+        return values[index];
+    }
+
+    float pickWithI32Index(i32 index) {
+        float values[2] = {5.0, 6.0};
+        return values[index];
+    }
+
+    float pickWithU32Index(u32 index) {
+        float values[2] = {7.0, 8.0};
+        return values[index];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "return (a % b)" in generated_code
+    assert "fmod(a, b)" not in generated_code
+    assert "fn signedI32Mod(a: Int32, b: Int32) -> Int32:" in generated_code
+    assert "fn unsignedU32Mod(a: UInt32, b: UInt32) -> UInt32:" in generated_code
+    assert "return values[int(index)]" in generated_code
+    assert "return values[index]" not in generated_code
+
+    generated_code += """
+fn main():
+    print(signedMod(Int16(7), Int16(3)))
+    print(unsignedMod(UInt16(8), UInt16(3)))
+    print(signedI32Mod(Int32(9), Int32(4)))
+    print(unsignedU32Mod(UInt32(10), UInt32(4)))
+    print(pickWithSignedIndex(Int16(1)))
+    print(pickWithUnsignedIndex(UInt16(1)))
+    print(pickWithI32Index(Int32(1)))
+    print(pickWithU32Index(UInt32(1)))
+"""
+
+    source_path = tmp_path / "min_precision_integer_mod_indices.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "1" in result.stdout
+    assert "2.0" in result.stdout
+    assert "4.0" in result.stdout
+    assert "6.0" in result.stdout
+    assert "8.0" in result.stdout
 
 
 def test_three_component_vectors_emit_power_of_two_simd_storage():

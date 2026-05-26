@@ -21,6 +21,7 @@ from ..ast import (
     LiteralPatternNode,
     MatchNode,
     MemberAccessNode,
+    ParameterNode,
     RangeNode,
     ReturnNode,
     ShaderNode,
@@ -79,6 +80,7 @@ class SlangCodeGen:
         self.current_expression_expected_type = None
         self.user_function_names = set()
         self.user_function_return_types = {}
+        self.user_struct_names = set()
         self.stage_entry_name_overrides = {}
         self.identifier_aliases = {}
         self.current_hull_output_rewrite = None
@@ -146,6 +148,7 @@ class SlangCodeGen:
             self.user_function_return_types = self.collect_user_function_return_types(
                 ast
             )
+            self.user_struct_names = self.collect_user_struct_names(ast)
             self.stage_entry_name_overrides = {}
             self.identifier_aliases = {}
 
@@ -323,6 +326,34 @@ class SlangCodeGen:
         collect(node)
         return_types.pop(None, None)
         return return_types
+
+    def collect_user_struct_names(self, node):
+        names = set()
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, StructNode):
+                names.add(current.name)
+            for struct in getattr(current, "structs", []) or []:
+                collect(struct)
+            for function in getattr(current, "functions", []) or []:
+                collect(function)
+            for function in getattr(current, "local_functions", []) or []:
+                collect(function)
+            collect(getattr(current, "entry_point", None))
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        names.discard(None)
+        return names
 
     def generate_shader(self, node):
         """Render a full CrossGL shader AST as a Slang translation unit."""
@@ -1073,7 +1104,9 @@ class SlangCodeGen:
         result = f"// {stage_name.title()} Shader\n"
 
         local_variables = getattr(stage, "local_variables", [])
-        for local_var in local_variables:
+        for local_var in self.slang_stage_global_local_variables(
+            stage_name, local_variables
+        ):
             result += self.generate_global_variable(local_var)
 
         entry_point = getattr(stage, "entry_point", None)
@@ -1104,10 +1137,84 @@ class SlangCodeGen:
                 shader_type=stage_name,
                 execution_config=getattr(stage, "execution_config", None),
                 entry_name=self.stage_entry_name_overrides.get(id(entry_point)),
+                extra_parameters=self.slang_stage_interface_parameters(
+                    stage_name, local_variables
+                ),
             )
             result += "\n\n"
 
         return result
+
+    def slang_stage_interface_local_variables(self, stage_name, local_variables):
+        """Return stage-local declarations that lower to Slang entry parameters."""
+        shader_stage = self.slang_shader_stage_name(stage_name)
+        if shader_stage not in self.slang_ray_stage_types():
+            return []
+
+        return [
+            local_var
+            for local_var in local_variables or []
+            if self.slang_ray_semantic_role(local_var, stage_name) is not None
+        ]
+
+    def slang_stage_global_local_variables(self, stage_name, local_variables):
+        interface_ids = {
+            id(local_var)
+            for local_var in self.slang_stage_interface_local_variables(
+                stage_name, local_variables
+            )
+        }
+        return [
+            local_var
+            for local_var in local_variables or []
+            if id(local_var) not in interface_ids
+        ]
+
+    def slang_stage_interface_parameters(self, stage_name, local_variables):
+        parameters = []
+        for local_var in self.slang_stage_interface_local_variables(
+            stage_name, local_variables
+        ):
+            if getattr(local_var, "initial_value", None) is not None:
+                raise ValueError(
+                    "Slang ray stage interface variable "
+                    f"'{local_var.name}' cannot have an initializer"
+                )
+
+            parameter = ParameterNode(
+                name=local_var.name,
+                param_type=getattr(local_var, "var_type", getattr(local_var, "vtype")),
+                attributes=list(getattr(local_var, "attributes", []) or []),
+                qualifiers=list(getattr(local_var, "qualifiers", []) or []),
+                source_location=getattr(local_var, "source_location", None),
+            )
+            parameter.semantic = getattr(local_var, "semantic", None)
+            parameter.add_annotation("slang_stage_local_interface", True)
+            parameters.append(parameter)
+        return parameters
+
+    def slang_merge_function_parameters(
+        self, param_list, extra_parameters, shader_type=None
+    ):
+        if not extra_parameters:
+            return param_list
+
+        merged_parameters = list(param_list or [])
+        existing_names = {
+            getattr(param, "name", None)
+            for param in merged_parameters
+            if getattr(param, "name", None)
+        }
+        for parameter in extra_parameters:
+            if parameter.name in existing_names:
+                stage_name = shader_type or "function"
+                raise ValueError(
+                    f"Slang {stage_name} stage interface variable "
+                    f"'{parameter.name}' duplicates an entry parameter"
+                )
+            existing_names.add(parameter.name)
+            merged_parameters.append(parameter)
+        return merged_parameters
 
     def slang_stage_patch_constant_function_names(self, entry_point, stage_name):
         if entry_point is None or self.slang_shader_stage_name(stage_name) != "hull":
@@ -1341,6 +1448,7 @@ class SlangCodeGen:
         entry_name=None,
         emit_stage_decorations=True,
         stage_role=None,
+        extra_parameters=None,
     ):
         """Render one CrossGL function or shader entry point as Slang code."""
         saved_variable_types = self.variable_types.copy()
@@ -1359,6 +1467,9 @@ class SlangCodeGen:
         body = getattr(node, "body", [])
         body_statements = self.get_statements(body)
         param_list = getattr(node, "parameters", getattr(node, "params", []))
+        param_list = self.slang_merge_function_parameters(
+            param_list, extra_parameters, shader_type
+        )
         self.validate_slang_stage_return_semantic(shader_type, semantic, stage_role)
         hull_output_rewrite = None
         if stage_role != "patch_constant":
@@ -1385,6 +1496,9 @@ class SlangCodeGen:
             param_list, hull_output_rewrite
         )
         if shader_type:
+            self.validate_slang_ray_stage_parameters(
+                node, shader_type, effective_param_list
+            )
             self.validate_slang_stage_body_builtins(
                 body_statements,
                 shader_type,
@@ -1413,6 +1527,12 @@ class SlangCodeGen:
                     declaration = format_c_style_array_declaration(
                         param_type, param.name
                     )
+                    ray_declaration = self.slang_ray_stage_parameter_declaration(
+                        declaration, param, shader_type
+                    )
+                    if ray_declaration is not None:
+                        params.append(ray_declaration)
+                        continue
                     params.append(
                         declaration
                         + self.semantic_suffix(
@@ -1945,16 +2065,133 @@ class SlangCodeGen:
             return str(param.vtype)
         return ""
 
-    def slang_intrinsic_builtin_candidates(self, shader_type):
-        shader_stage = self.slang_shader_stage_name(shader_type)
-        if shader_stage not in {
+    def slang_ray_stage_types(self):
+        return {
             "raygeneration",
             "intersection",
             "closesthit",
             "anyhit",
             "miss",
             "callable",
-        }:
+        }
+
+    def slang_ray_role_from_name(self, name, shader_stage=None):
+        if not name:
+            return None
+
+        normalized = str(name).lower()
+        compact = normalized.replace("_", "")
+        if compact in {"payload", "raypayloadext", "raypayloadinext"}:
+            if shader_stage == "callable":
+                return "callable_data"
+            return "payload"
+        if compact in {"hitattribute", "hitattributeext"}:
+            return "hit_attribute"
+        if compact in {"callabledata", "callabledataext", "callabledatainext"}:
+            return "callable_data"
+        return None
+
+    def slang_ray_attribute_role_name(self, attr, shader_stage=None):
+        return self.slang_ray_role_from_name(getattr(attr, "name", None), shader_stage)
+
+    def slang_ray_semantic_role(self, parameter, shader_type=None):
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        semantic = getattr(parameter, "semantic", None)
+        if semantic:
+            role = self.slang_ray_role_from_name(semantic, shader_stage)
+            if role:
+                return role
+
+        for attr in getattr(parameter, "attributes", []) or []:
+            role = self.slang_ray_attribute_role_name(attr, shader_stage)
+            if role:
+                return role
+        return None
+
+    def slang_ray_role_parameters(self, parameters, shader_type):
+        role_parameters = {}
+        for parameter in parameters or []:
+            role = self.slang_ray_semantic_role(parameter, shader_type)
+            if role:
+                role_parameters.setdefault(role, []).append(parameter)
+        return role_parameters
+
+    def is_slang_stage_local_interface_parameter(self, parameter):
+        if hasattr(parameter, "get_annotation"):
+            return bool(parameter.get_annotation("slang_stage_local_interface"))
+        return bool(
+            getattr(parameter, "annotations", {}).get("slang_stage_local_interface")
+        )
+
+    def validate_slang_ray_parameter_type(self, parameter, role):
+        type_name = self.slang_parameter_type_name(parameter)
+        if not type_name:
+            return
+
+        mapped_type = self.convert_type(type_name)
+        base_type, array_suffix = split_array_type_suffix(mapped_type)
+        allowed_builtin_types = {
+            "hit_attribute": {"BuiltInTriangleIntersectionAttributes"},
+        }.get(role, set())
+        if role == "hit_attribute" and self.is_slang_stage_local_interface_parameter(
+            parameter
+        ):
+            allowed_builtin_types.update({"float2", "float3", "float4"})
+        if array_suffix or (
+            base_type not in self.user_struct_names
+            and base_type not in allowed_builtin_types
+        ):
+            raise ValueError(
+                f"Slang ray {role} parameter '{parameter.name}' must use a "
+                "user-defined struct type"
+            )
+
+    def validate_slang_ray_stage_parameters(self, func, shader_type, parameters):
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        if shader_stage not in self.slang_ray_stage_types():
+            return
+
+        role_parameters = self.slang_ray_role_parameters(parameters, shader_type)
+        allowed_stages = {
+            "payload": {"closesthit", "anyhit", "miss"},
+            "hit_attribute": {"closesthit", "anyhit"},
+            "callable_data": {"callable"},
+        }
+        for role, role_params in role_parameters.items():
+            if len(role_params) > 1:
+                raise ValueError(
+                    f"Slang {shader_type} stage must declare at most one "
+                    f"{role} parameter"
+                )
+            if shader_stage not in allowed_stages.get(role, set()):
+                if not (
+                    shader_stage == "raygeneration"
+                    and role in {"payload", "callable_data"}
+                    and self.is_slang_stage_local_interface_parameter(role_params[0])
+                ):
+                    raise ValueError(
+                        f"Slang {shader_type} stage cannot use {role} parameter "
+                        f"'{role_params[0].name}'"
+                    )
+            self.validate_slang_ray_parameter_type(role_params[0], role)
+
+    def slang_ray_stage_parameter_declaration(
+        self, declaration, parameter, shader_type
+    ):
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        if shader_stage not in self.slang_ray_stage_types():
+            return None
+
+        role = self.slang_ray_semantic_role(parameter, shader_type)
+        if role is None:
+            return None
+
+        qualifier = "in" if role == "hit_attribute" else "inout"
+        return f"{qualifier} {declaration}"
+
+    def slang_intrinsic_builtin_candidates(self, shader_type):
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        if shader_stage not in self.slang_ray_stage_types():
             return {}
 
         return {

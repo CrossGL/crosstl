@@ -389,6 +389,7 @@ class MetalCodeGen:
         self.current_metal_mesh_output_config = None
         self.current_metal_mesh_output_parameter = None
         self.current_metal_mesh_grid_properties_parameter = None
+        self.current_metal_non_thread_payload_parameters = set()
         self.lowered_glsl_buffer_block_struct_names = set()
         self.glsl_buffer_block_lowering_failures = {}
         self.glsl_buffer_block_struct_lowering_failures = {}
@@ -782,6 +783,7 @@ class MetalCodeGen:
         self.current_metal_mesh_output_config = None
         self.current_metal_mesh_output_parameter = None
         self.current_metal_mesh_grid_properties_parameter = None
+        self.current_metal_non_thread_payload_parameters = set()
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
@@ -1651,6 +1653,9 @@ class MetalCodeGen:
         previous_metal_mesh_grid_properties_parameter = (
             self.current_metal_mesh_grid_properties_parameter
         )
+        previous_metal_non_thread_payload_parameters = (
+            self.current_metal_non_thread_payload_parameters
+        )
         self.current_function_name = getattr(func, "name", None)
         self.current_function_return_wrapper = None
         self.current_generic_function_substitutions = (
@@ -1676,6 +1681,7 @@ class MetalCodeGen:
         unsupported_metal_ray_function_table_parameter_diagnostics = []
         self.current_structured_buffer_length_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
+        self.current_metal_non_thread_payload_parameters = set()
         self.local_variable_types = {}
         for p in param_list:
             if hasattr(p, "param_type"):
@@ -1689,6 +1695,9 @@ class MetalCodeGen:
             else:
                 raw_param_type = "float"
             self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
+
+            if self.is_metal_mesh_output_parameter(shader_type, p):
+                continue
 
             table_array_kind = self.metal_ray_function_table_array_parameter_kind(
                 raw_param_type, p
@@ -1719,6 +1728,13 @@ class MetalCodeGen:
             param_type = self.map_resource_type_with_format(raw_param_type, p)
 
             semantic = self.semantic_from_node(p)
+            if (
+                self.metal_ray_payload_parameter_declaration(
+                    param_type, p.name, p, shader_type
+                )
+                is not None
+            ):
+                self.current_metal_non_thread_payload_parameters.add(p.name)
 
             param_attr = self.parameter_attribute(
                 raw_param_type, semantic, shader_type, p
@@ -1844,6 +1860,9 @@ class MetalCodeGen:
             self.current_metal_mesh_grid_properties_parameter = (
                 previous_metal_mesh_grid_properties_parameter
             )
+            self.current_metal_non_thread_payload_parameters = (
+                previous_metal_non_thread_payload_parameters
+            )
             return code
 
         if shader_type == "vertex":
@@ -1899,7 +1918,8 @@ class MetalCodeGen:
                 shader_type, func, function_name, reserved_parameter_names
             )
             if mesh_output is not None:
-                code += self.generate_metal_mesh_vertex_output_struct(mesh_output)
+                if mesh_output.get("generated_vertex_struct", False):
+                    code += self.generate_metal_mesh_vertex_output_struct(mesh_output)
                 params_str = self.append_parameter_declaration(
                     params_str,
                     self.metal_mesh_stage_output_parameter_declaration(mesh_output),
@@ -1974,6 +1994,9 @@ class MetalCodeGen:
         self.current_metal_mesh_output_parameter = previous_metal_mesh_output_parameter
         self.current_metal_mesh_grid_properties_parameter = (
             previous_metal_mesh_grid_properties_parameter
+        )
+        self.current_metal_non_thread_payload_parameters = (
+            previous_metal_non_thread_payload_parameters
         )
         self.current_function_name = previous_function_name
         self.current_function_return_type = previous_function_return_type
@@ -3203,6 +3226,12 @@ class MetalCodeGen:
             )
             op = getattr(node, "operator", "=")
 
+        mesh_output_store = self.generate_metal_mesh_output_assignment(
+            target, rhs, op, getattr(node, "value", getattr(node, "right", None))
+        )
+        if mesh_output_store is not None:
+            return mesh_output_store
+
         block_store = self.generate_glsl_buffer_block_store(target, rhs, op)
         if block_store is not None:
             return block_store
@@ -3973,24 +4002,85 @@ class MetalCodeGen:
             intersect_args.append(instance_mask)
         if intersection_function_table is not None:
             intersect_args.append(intersection_function_table["name"])
+        payload_diagnostic = None
+        payload_argument = self.metal_trace_ray_payload_argument(
+            raw_args[10], rendered_args[10], intersection_function_table
+        )
+        if payload_argument["argument"] is not None:
+            intersect_args.append(payload_argument["argument"])
+        elif payload_argument["reason"] is not None:
+            payload_diagnostic = self.unsupported_metal_ray_tracing_intrinsic(
+                "TraceRay payload", payload_argument["reason"]
+            )
         intersector_type = f"intersector<{intersector_tags}>"
         intersection_type = f"intersection_result<{intersector_tags}>"
 
-        return "\n".join(
-            [
-                f"ray {ray_name}",
-                f"{ray_name}.origin = {origin}",
-                f"{ray_name}.direction = {direction}",
-                f"{ray_name}.min_distance = {min_distance}",
-                f"{ray_name}.max_distance = {max_distance}",
-                f"{intersector_type} {intersector_name}",
-                (
-                    f"{intersection_type} {intersection_name} = "
-                    f"{intersector_name}.intersect({', '.join(intersect_args)})"
+        lines = [
+            f"ray {ray_name}",
+            f"{ray_name}.origin = {origin}",
+            f"{ray_name}.direction = {direction}",
+            f"{ray_name}.min_distance = {min_distance}",
+            f"{ray_name}.max_distance = {max_distance}",
+            f"{intersector_type} {intersector_name}",
+            (
+                f"{intersection_type} {intersection_name} = "
+                f"{intersector_name}.intersect({', '.join(intersect_args)})"
+            ),
+        ]
+        if payload_diagnostic is not None:
+            lines.append(payload_diagnostic)
+        lines.append(f"(void){intersection_name}")
+        return "\n".join(lines)
+
+    def metal_trace_ray_payload_argument(
+        self, raw_payload_arg, rendered_payload_arg, intersection_function_table
+    ):
+        if self.is_metal_trace_ray_null_payload(raw_payload_arg):
+            return {"argument": None, "reason": None}
+        if intersection_function_table is None:
+            return {
+                "argument": None,
+                "reason": (
+                    "payload forwarding requires a compatible "
+                    "intersection_function_table"
                 ),
-                f"(void){intersection_name}",
-            ]
-        )
+            }
+        payload_name = self.expression_name(raw_payload_arg)
+        if not payload_name or payload_name not in self.local_variable_types:
+            return {
+                "argument": None,
+                "reason": "payload forwarding requires a thread-local payload lvalue",
+            }
+        if payload_name in self.current_metal_non_thread_payload_parameters:
+            return {
+                "argument": None,
+                "reason": (
+                    "payload forwarding requires a thread-local payload lvalue; "
+                    "ray payload parameters use a non-thread address space"
+                ),
+            }
+        payload_type = self.expression_result_type(raw_payload_arg)
+        if not self.is_metal_trace_ray_payload_struct_type(payload_type):
+            return {
+                "argument": None,
+                "reason": (
+                    "payload forwarding requires a thread-local struct payload "
+                    "lvalue"
+                ),
+            }
+        return {"argument": rendered_payload_arg, "reason": None}
+
+    def is_metal_trace_ray_null_payload(self, payload_arg):
+        literal_value = self.literal_int_value(payload_arg, self.literal_int_constants)
+        return literal_value == 0
+
+    def is_metal_trace_ray_payload_struct_type(self, payload_type):
+        if not payload_type:
+            return False
+        type_name = self.type_name_string(payload_type)
+        if "[" in type_name and "]" in type_name:
+            type_name, _ = split_array_type_suffix(type_name)
+        return type_name in self.structs_by_name
 
     def metal_acceleration_structure_argument_type(self, expr):
         name = self.expression_name(expr)
@@ -4181,8 +4271,118 @@ class MetalCodeGen:
 
         return None
 
+    def generate_metal_mesh_output_assignment(
+        self, target, rendered_value, operator, value_expr
+    ):
+        target_info = self.metal_mesh_output_assignment_target(target)
+        if target_info is None:
+            return None
+
+        if operator != "=":
+            return self.unsupported_metal_mesh_output_assignment_diagnostic(
+                target_info, "compound mesh output assignments are not supported"
+            )
+
+        role = target_info["role"]
+        index_expr = target_info["index"]
+        if role == "vertices":
+            if target_info["member"] is not None:
+                return self.generate_metal_mesh_single_member_output_assignment(
+                    target_info, rendered_value, "set_vertex"
+                )
+            value = self.metal_mesh_vertex_output_value_from_rendered(
+                value_expr, rendered_value, self.current_metal_mesh_output_config
+            )
+            index = self.generate_expression(index_expr)
+            return f"{self.current_metal_mesh_output_parameter}.set_vertex({index}, {value})"
+
+        if role == "indices":
+            if target_info["member"] is not None:
+                return self.unsupported_metal_mesh_output_assignment_diagnostic(
+                    target_info, "index vector components must be written as a whole"
+                )
+            return self.metal_mesh_index_output_write(
+                self.current_metal_mesh_output_parameter,
+                "SetPrimitive",
+                index_expr,
+                value_expr,
+            )
+
+        if role == "primitives":
+            if target_info["member"] is not None:
+                return self.generate_metal_mesh_single_member_output_assignment(
+                    target_info, rendered_value, "set_primitive"
+                )
+            index = self.generate_expression(index_expr)
+            return (
+                f"{self.current_metal_mesh_output_parameter}"
+                f".set_primitive({index}, {rendered_value})"
+            )
+
+        return None
+
+    def generate_metal_mesh_single_member_output_assignment(
+        self, target_info, rendered_value, setter
+    ):
+        output_info = target_info["output"]
+        member_name = target_info["member"]
+        element_type = output_info["element_type"]
+        member_types = self.struct_member_types.get(element_type, {})
+        if list(member_types) != [member_name]:
+            return self.unsupported_metal_mesh_output_assignment_diagnostic(
+                target_info,
+                "partial member writes require a single-member output struct",
+            )
+
+        index = self.generate_expression(target_info["index"])
+        value = f"{element_type}{{{rendered_value}}}"
+        return (
+            f"{self.current_metal_mesh_output_parameter}" f".{setter}({index}, {value})"
+        )
+
+    def metal_mesh_output_assignment_target(self, target):
+        mesh_output = self.current_metal_mesh_output_config
+        if not mesh_output:
+            return None
+        outputs = mesh_output.get("output_parameters", {})
+
+        member = None
+        access = target
+        if isinstance(target, MemberAccessNode):
+            member = str(target.member)
+            access = getattr(target, "object", None)
+
+        if not isinstance(access, ArrayAccessNode):
+            return None
+        array_expr = getattr(access, "array", None)
+        parameter_name = self.expression_name(array_expr)
+        output = outputs.get(parameter_name)
+        if output is None:
+            return None
+
+        return {
+            "name": parameter_name,
+            "role": output["role"],
+            "output": output,
+            "index": getattr(access, "index", None),
+            "member": member,
+        }
+
+    def unsupported_metal_mesh_output_assignment_diagnostic(self, target_info, reason):
+        name = target_info.get("name", "<unknown>")
+        role = target_info.get("role", "output")
+        return (
+            "/* unsupported Metal mesh output assignment: "
+            f"{role} output '{name}' - {reason} */"
+        )
+
     def metal_mesh_vertex_output_value(self, expr, mesh_output):
         value = self.generate_expression(expr)
+        return self.metal_mesh_vertex_output_value_from_rendered(
+            expr, value, mesh_output
+        )
+
+    def metal_mesh_vertex_output_value_from_rendered(self, expr, value, mesh_output):
         value_type = self.expression_result_type(expr)
         mapped_type = self.map_type(value_type) if value_type else None
         vertex_type = mesh_output["vertex_type"]
@@ -5441,6 +5641,12 @@ class MetalCodeGen:
         if shader_type != "mesh":
             return None
 
+        role_parameters = self.metal_mesh_output_role_parameters(func)
+        if role_parameters:
+            return self.explicit_metal_mesh_stage_output_config(
+                func, function_name, reserved_parameter_names, role_parameters
+            )
+
         max_vertices = self.metal_single_stage_attribute_argument(func, "max_vertices")
         max_primitives = self.metal_single_stage_attribute_argument(
             func, "max_primitives"
@@ -5462,7 +5668,147 @@ class MetalCodeGen:
             "max_vertices": max_vertices,
             "max_primitives": max_primitives,
             "topology": self.metal_mesh_topology(topology),
+            "primitive_type": "void",
+            "output_parameters": {},
+            "generated_vertex_struct": True,
         }
+
+    def explicit_metal_mesh_stage_output_config(
+        self, func, function_name, reserved_parameter_names, role_parameters
+    ):
+        missing_roles = {"vertices", "indices"} - set(role_parameters)
+        if missing_roles:
+            missing = ", ".join(sorted(missing_roles))
+            raise ValueError(
+                "Metal mesh output parameters require explicit "
+                f"{missing} output role(s)"
+            )
+
+        topology = self.metal_single_stage_attribute_argument(func, "outputtopology")
+        if not topology:
+            raise ValueError(
+                "Metal mesh output parameters require an outputtopology attribute"
+            )
+        topology = self.metal_mesh_topology(topology)
+
+        vertices = self.metal_mesh_output_array_parameter_info(
+            role_parameters["vertices"], "vertices"
+        )
+        indices = self.metal_mesh_output_array_parameter_info(
+            role_parameters["indices"], "indices"
+        )
+        primitives = None
+        if "primitives" in role_parameters:
+            primitives = self.metal_mesh_output_array_parameter_info(
+                role_parameters["primitives"], "primitives"
+            )
+            if primitives["count"] != indices["count"]:
+                raise ValueError(
+                    "Metal mesh primitives output count must match indices output count"
+                )
+
+        self.validate_metal_mesh_indices_output_type(indices, topology)
+        parameter_name = self.unique_metal_generated_name(
+            "_crossglMeshOut", reserved_parameter_names
+        )
+        output_parameters = {
+            vertices["name"]: {**vertices, "role": "vertices"},
+            indices["name"]: {**indices, "role": "indices"},
+        }
+        primitive_type = "void"
+        if primitives is not None:
+            primitive_type = primitives["element_type"]
+            output_parameters[primitives["name"]] = {
+                **primitives,
+                "role": "primitives",
+            }
+
+        return {
+            "parameter_name": parameter_name,
+            "vertex_type": vertices["element_type"],
+            "primitive_type": primitive_type,
+            "max_vertices": vertices["count"],
+            "max_primitives": indices["count"],
+            "topology": topology,
+            "output_parameters": output_parameters,
+            "generated_vertex_struct": False,
+            "function_name": function_name,
+        }
+
+    def metal_mesh_output_role_parameters(self, func):
+        role_parameters = {}
+        for parameter in getattr(func, "parameters", []) or []:
+            role = self.metal_mesh_output_parameter_role(parameter)
+            if role is None:
+                continue
+            if role in role_parameters:
+                raise ValueError(
+                    f"Metal mesh output role '{role}' can be used by only one parameter"
+                )
+            role_parameters[role] = parameter
+        return role_parameters
+
+    def is_metal_mesh_output_parameter(self, shader_type, parameter):
+        return (
+            shader_type == "mesh"
+            and self.metal_mesh_output_parameter_role(parameter) is not None
+        )
+
+    def metal_mesh_output_parameter_role(self, parameter):
+        for attr in getattr(parameter, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            normalized = str(attr_name).lower()
+            if normalized.startswith("metal_") or normalized.startswith("msl_"):
+                normalized = normalized.split("_", 1)[1]
+            if normalized in {"vertices", "indices", "primitives"}:
+                return normalized
+        return None
+
+    def metal_mesh_output_array_parameter_info(self, parameter, role):
+        raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        if hasattr(raw_type, "element_type") and hasattr(raw_type, "size"):
+            element_type = self.map_type(self.type_name_string(raw_type.element_type))
+            count = self.metal_mesh_output_array_size(raw_type.size)
+        else:
+            type_name = self.type_name_string(raw_type)
+            element_type, array_suffix = split_array_type_suffix(type_name)
+            element_type = self.map_type(element_type)
+            count = self.metal_mesh_output_array_suffix_size(array_suffix)
+
+        if not element_type or count is None:
+            raise ValueError(f"Metal mesh {role} output must be a fixed-size array")
+        return {
+            "name": parameter.name,
+            "element_type": element_type,
+            "count": count,
+        }
+
+    def metal_mesh_output_array_size(self, size):
+        if size is None:
+            return None
+        if isinstance(size, int):
+            return str(size)
+        return self.attribute_value_to_string(size)
+
+    def metal_mesh_output_array_suffix_size(self, array_suffix):
+        if not array_suffix:
+            return None
+        if not (array_suffix.startswith("[") and array_suffix.endswith("]")):
+            return None
+        size = array_suffix[1:-1].strip()
+        return size or None
+
+    def validate_metal_mesh_indices_output_type(self, indices, topology):
+        expected_width = {"point": 1, "line": 2, "triangle": 3}[topology]
+        expected_type = "uint" if expected_width == 1 else f"uint{expected_width}"
+        actual_type = indices["element_type"]
+        if actual_type != expected_type:
+            raise ValueError(
+                "Metal mesh indices output for "
+                f"{topology} topology requires {expected_type}, got {actual_type}"
+            )
 
     def metal_mesh_grid_properties_parameter(
         self, shader_type, func, reserved_parameter_names
@@ -5534,7 +5880,7 @@ class MetalCodeGen:
 
     def metal_mesh_stage_output_parameter_declaration(self, mesh_output):
         return (
-            f"mesh<{mesh_output['vertex_type']}, void, "
+            f"mesh<{mesh_output['vertex_type']}, {mesh_output['primitive_type']}, "
             f"{mesh_output['max_vertices']}, {mesh_output['max_primitives']}, "
             f"topology::{mesh_output['topology']}> {mesh_output['parameter_name']}"
         )

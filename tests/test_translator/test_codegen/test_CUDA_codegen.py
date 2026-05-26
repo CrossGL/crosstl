@@ -166,6 +166,14 @@ class TestCudaCodeGen:
             codegen.convert_crossgl_type_to_cuda("RWStructuredBuffer<uint>") == "uint*"
         )
         assert (
+            codegen.convert_crossgl_type_to_cuda("AppendStructuredBuffer<float4>")
+            == "float4*"
+        )
+        assert (
+            codegen.convert_crossgl_type_to_cuda("ConsumeStructuredBuffer<uint>")
+            == "const uint*"
+        )
+        assert (
             codegen.convert_crossgl_type_to_cuda("ByteAddressBuffer")
             == "const unsigned char*"
         )
@@ -2732,6 +2740,178 @@ class TestCudaCodeGen:
         assert "buffer_load(" not in cuda_code
         assert "buffer_store(" not in cuda_code
 
+    def test_structured_buffer_dimensions_emit_cuda_length_sidecars(self):
+        """Test CUDA lowers structured-buffer dimensions through length sidecars."""
+        source_code = """
+        shader StructuredBufferDimensionsCUDA {
+            RWStructuredBuffer<int> values;
+            StructuredBuffer<uint> readonlyCounts[2];
+            AppendStructuredBuffer<int> appendValues;
+
+            uint countOne(StructuredBuffer<uint> input) {
+                return buffer_dimensions(input);
+            }
+
+            uint countInner(RWStructuredBuffer<int> localValues, uint index) {
+                uint len = buffer_dimensions(localValues);
+                return len + index;
+            }
+
+            uint countValues(RWStructuredBuffer<int> localValues) {
+                uint len;
+                buffer_dimensions(localValues, len);
+                return countInner(localValues, 0);
+            }
+
+            void process(uint which) {
+                uint globalLen = buffer_dimensions(values);
+                uint arrayLen;
+                buffer_dimensions(readonlyCounts[which], arrayLen);
+                values.GetDimensions(globalLen);
+                uint helperLen = countValues(values);
+                uint oneLen = countOne(readonlyCounts[which]);
+                uint appendLen = buffer_dimensions(appendValues);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "int* values;" in cuda_code
+        assert "const uint* values_length;" in cuda_code
+        assert "const uint* readonlyCounts[2];" in cuda_code
+        assert "const uint* readonlyCounts_length[2];" in cuda_code
+        assert "int* appendValues;" in cuda_code
+        assert "const uint* appendValues_length;" in cuda_code
+        assert "uint* appendValues_counter;" in cuda_code
+        assert (
+            "__device__ uint countOne(const uint* input, " "const uint* input_length)"
+        ) in cuda_code
+        assert (
+            "__device__ uint countInner(int* localValues, "
+            "const uint* localValues_length, uint index)"
+        ) in cuda_code
+        assert (
+            "__device__ uint countValues(int* localValues, "
+            "const uint* localValues_length)"
+        ) in cuda_code
+        assert "return input_length[0];" in cuda_code
+        assert "uint len = localValues_length[0];" in cuda_code
+        assert "len = localValues_length[0];" in cuda_code
+        assert "return countInner(localValues, localValues_length, 0);" in cuda_code
+        assert "uint globalLen = values_length[0];" in cuda_code
+        assert "arrayLen = readonlyCounts_length[which][0];" in cuda_code
+        assert "globalLen = values_length[0];" in cuda_code
+        assert "uint helperLen = countValues(values, values_length);" in cuda_code
+        assert (
+            "uint oneLen = countOne(readonlyCounts[which], "
+            "readonlyCounts_length[which]);"
+        ) in cuda_code
+        assert "uint appendLen = appendValues_length[0];" in cuda_code
+        assert "buffer_dimensions(" not in cuda_code
+        assert ".GetDimensions(" not in cuda_code
+
+    def test_append_consume_structured_buffers_emit_cuda_counter_helpers(self):
+        """Test CUDA lowers append/consume buffers through explicit counters."""
+        source_code = """
+        shader AppendConsumeCUDA {
+            struct Particle {
+                float weight;
+            };
+
+            AppendStructuredBuffer<Particle> appendParticles;
+            ConsumeStructuredBuffer<Particle> consumeParticles;
+            AppendStructuredBuffer<Particle> appendQueues[2];
+
+            void helper(
+                AppendStructuredBuffer<Particle> outParticles,
+                ConsumeStructuredBuffer<Particle> inParticles,
+                Particle p
+            ) {
+                outParticles.Append(p);
+                Particle q = inParticles.Consume();
+                buffer_append(outParticles, q);
+                Particle r = buffer_consume(inParticles);
+            }
+
+            void process(uint which, Particle p) {
+                appendParticles.Append(p);
+                buffer_append(appendQueues[which], p);
+                Particle a = consumeParticles.Consume();
+                Particle b = buffer_consume(consumeParticles);
+                helper(appendParticles, consumeParticles, b);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "Particle* appendParticles;" in cuda_code
+        assert "uint* appendParticles_counter;" in cuda_code
+        assert "const Particle* consumeParticles;" in cuda_code
+        assert "uint* consumeParticles_counter;" in cuda_code
+        assert "Particle* appendQueues[2];" in cuda_code
+        assert "uint* appendQueues_counter[2];" in cuda_code
+        assert (
+            "__device__ void helper(Particle* outParticles, "
+            "uint* outParticles_counter, const Particle* inParticles, "
+            "uint* inParticles_counter, Particle p)"
+        ) in cuda_code
+        assert (
+            "template <typename T>\n"
+            "__device__ inline void cgl_append_structured_buffer"
+            "(T* buffer, uint* counter, const T& value)"
+        ) in cuda_code
+        assert (
+            "template <typename T>\n"
+            "__device__ inline T cgl_consume_structured_buffer"
+            "(const T* buffer, uint* counter)"
+        ) in cuda_code
+        assert "uint index = atomicAdd(counter, 1u);" in cuda_code
+        assert "uint index = atomicSub(counter, 1u) - 1u;" in cuda_code
+        assert (
+            "cgl_append_structured_buffer("
+            "appendParticles, appendParticles_counter, p);"
+        ) in cuda_code
+        assert (
+            "cgl_append_structured_buffer("
+            "appendQueues[which], appendQueues_counter[which], p);"
+        ) in cuda_code
+        assert (
+            "Particle a = cgl_consume_structured_buffer("
+            "consumeParticles, consumeParticles_counter);"
+        ) in cuda_code
+        assert (
+            "Particle b = cgl_consume_structured_buffer("
+            "consumeParticles, consumeParticles_counter);"
+        ) in cuda_code
+        assert (
+            "helper(appendParticles, appendParticles_counter, consumeParticles, "
+            "consumeParticles_counter, b);"
+        ) in cuda_code
+        assert "AppendStructuredBuffer<" not in cuda_code
+        assert "ConsumeStructuredBuffer<" not in cuda_code
+        assert ".Append(" not in cuda_code
+        assert ".Consume(" not in cuda_code
+        assert "buffer_append(" not in cuda_code
+        assert "buffer_consume(" not in cuda_code
+
     def test_byte_address_buffer_resources_emit_cuda_byte_pointer_helpers(self):
         """Test CUDA lowers byte-address buffers to typed byte-pointer helpers."""
         source_code = """
@@ -2826,10 +3006,81 @@ class TestCudaCodeGen:
         )
         assert "ByteAddressBuffer readBytes;" not in cuda_code
         assert "RWByteAddressBuffer writeBytes;" not in cuda_code
+        assert "readBytes_length" not in cuda_code
+        assert "writeBytes_length" not in cuda_code
         assert ".Load(" not in cuda_code
         assert ".Store(" not in cuda_code
         assert "buffer_load(" not in cuda_code
         assert "buffer_store(" not in cuda_code
+
+    def test_byte_address_buffer_dimensions_emit_cuda_length_sidecars(self):
+        """Test CUDA lowers byte-address dimensions through byte-length sidecars."""
+        source_code = """
+        shader ByteAddressBufferDimensionsCUDA {
+            ByteAddressBuffer rawBytes;
+            RWByteAddressBuffer rawOutput;
+            RWByteAddressBuffer rawArray[2];
+
+            uint countRaw(ByteAddressBuffer input) {
+                return buffer_dimensions(input);
+            }
+
+            uint countOutput(RWByteAddressBuffer output) {
+                uint count;
+                output.GetDimensions(count);
+                return count;
+            }
+
+            void process(uint which) {
+                uint globalBytes = buffer_dimensions(rawBytes);
+                uint writtenBytes;
+                buffer_dimensions(rawOutput, writtenBytes);
+                uint arrayBytes;
+                rawArray[which].GetDimensions(arrayBytes);
+                uint directBytes = rawOutput.GetDimensions();
+                uint helperBytes = countRaw(rawBytes);
+                uint helperArrayBytes = countOutput(rawArray[which]);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "const unsigned char* rawBytes;" in cuda_code
+        assert "const uint* rawBytes_length;" in cuda_code
+        assert "unsigned char* rawOutput;" in cuda_code
+        assert "const uint* rawOutput_length;" in cuda_code
+        assert "unsigned char* rawArray[2];" in cuda_code
+        assert "const uint* rawArray_length[2];" in cuda_code
+        assert (
+            "__device__ uint countRaw(const unsigned char* input, "
+            "const uint* input_length)"
+        ) in cuda_code
+        assert (
+            "__device__ uint countOutput(unsigned char* output, "
+            "const uint* output_length)"
+        ) in cuda_code
+        assert "return input_length[0];" in cuda_code
+        assert "count = output_length[0];" in cuda_code
+        assert "uint globalBytes = rawBytes_length[0];" in cuda_code
+        assert "writtenBytes = rawOutput_length[0];" in cuda_code
+        assert "arrayBytes = rawArray_length[which][0];" in cuda_code
+        assert "uint directBytes = rawOutput_length[0];" in cuda_code
+        assert "uint helperBytes = countRaw(rawBytes, rawBytes_length);" in cuda_code
+        assert (
+            "uint helperArrayBytes = countOutput("
+            "rawArray[which], rawArray_length[which]);"
+        ) in cuda_code
+        assert "buffer_dimensions(" not in cuda_code
+        assert ".GetDimensions(" not in cuda_code
 
     def test_array_and_3d_texture_calls_emit_cuda_texture_functions(self):
         """Test CUDA maps array and 3D sampled texture calls by resource type."""

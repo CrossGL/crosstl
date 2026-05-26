@@ -290,8 +290,17 @@ class GLSLCodeGen:
         "callable",
     }
     RAY_QUERY_METHOD_MAP = {
+        "Initialize": ("rayQueryInitializeEXT", None),
+        "TraceRayInline": ("rayQueryInitializeEXT", None),
         "Proceed": ("rayQueryProceedEXT", None),
         "Abort": ("rayQueryTerminateEXT", None),
+        "Terminate": ("rayQueryTerminateEXT", None),
+        "GenerateIntersection": ("rayQueryGenerateIntersectionEXT", None),
+        "ConfirmIntersection": ("rayQueryConfirmIntersectionEXT", None),
+        "RayTMin": ("rayQueryGetRayTMinEXT", None),
+        "RayFlags": ("rayQueryGetRayFlagsEXT", None),
+        "WorldRayOrigin": ("rayQueryGetWorldRayOriginEXT", None),
+        "WorldRayDirection": ("rayQueryGetWorldRayDirectionEXT", None),
         "CandidateType": ("rayQueryGetIntersectionTypeEXT", "false"),
         "CommittedType": ("rayQueryGetIntersectionTypeEXT", "true"),
         "CandidatePrimitiveIndex": (
@@ -312,6 +321,22 @@ class GLSLCodeGen:
             "rayQueryGetIntersectionGeometryIndexEXT",
             "true",
         ),
+        "CandidateInstanceCustomIndex": (
+            "rayQueryGetIntersectionInstanceCustomIndexEXT",
+            "false",
+        ),
+        "CommittedInstanceCustomIndex": (
+            "rayQueryGetIntersectionInstanceCustomIndexEXT",
+            "true",
+        ),
+        "CandidateInstanceShaderBindingTableRecordOffset": (
+            "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT",
+            "false",
+        ),
+        "CommittedInstanceShaderBindingTableRecordOffset": (
+            "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT",
+            "true",
+        ),
         "CandidateObjectRayOrigin": (
             "rayQueryGetIntersectionObjectRayOriginEXT",
             "false",
@@ -330,6 +355,67 @@ class GLSLCodeGen:
         ),
         "CandidateRayT": ("rayQueryGetIntersectionTEXT", "false"),
         "CommittedRayT": ("rayQueryGetIntersectionTEXT", "true"),
+        "CandidateTriangleBarycentrics": (
+            "rayQueryGetIntersectionBarycentricsEXT",
+            "false",
+        ),
+        "CommittedTriangleBarycentrics": (
+            "rayQueryGetIntersectionBarycentricsEXT",
+            "true",
+        ),
+        "CandidateTriangleFrontFace": (
+            "rayQueryGetIntersectionFrontFaceEXT",
+            "false",
+        ),
+        "CommittedTriangleFrontFace": (
+            "rayQueryGetIntersectionFrontFaceEXT",
+            "true",
+        ),
+        "CandidateTriangleVertexPositions": (
+            "rayQueryGetIntersectionTriangleVertexPositionsEXT",
+            "false",
+        ),
+        "CommittedTriangleVertexPositions": (
+            "rayQueryGetIntersectionTriangleVertexPositionsEXT",
+            "true",
+        ),
+        "CandidateAABBOpaque": ("rayQueryGetIntersectionCandidateAABBOpaqueEXT", None),
+        "CandidateObjectToWorld": (
+            "rayQueryGetIntersectionObjectToWorldEXT",
+            "false",
+        ),
+        "CommittedObjectToWorld": (
+            "rayQueryGetIntersectionObjectToWorldEXT",
+            "true",
+        ),
+        "CandidateObjectToWorld3x4": (
+            "rayQueryGetIntersectionObjectToWorldEXT",
+            "false",
+        ),
+        "CommittedObjectToWorld3x4": (
+            "rayQueryGetIntersectionObjectToWorldEXT",
+            "true",
+        ),
+        "CandidateWorldToObject": (
+            "rayQueryGetIntersectionWorldToObjectEXT",
+            "false",
+        ),
+        "CommittedWorldToObject": (
+            "rayQueryGetIntersectionWorldToObjectEXT",
+            "true",
+        ),
+        "CandidateWorldToObject3x4": (
+            "rayQueryGetIntersectionWorldToObjectEXT",
+            "false",
+        ),
+        "CommittedWorldToObject3x4": (
+            "rayQueryGetIntersectionWorldToObjectEXT",
+            "true",
+        ),
+    }
+    RAY_QUERY_POSITION_FETCH_METHODS = {
+        "CandidateTriangleVertexPositions",
+        "CommittedTriangleVertexPositions",
     }
     GLSL_RESERVED_IDENTIFIERS = {
         "active",
@@ -807,7 +893,7 @@ class GLSLCodeGen:
     def default_glsl_version_line(self, ast, target_stage=None):
         if self.glsl_stage_names(
             ast, target_stage
-        ) & self.RAY_STAGE_NAMES or self.uses_ray_query(ast, target_stage):
+        ) & self.RAY_STAGE_NAMES or self.uses_ray_extension_type(ast, target_stage):
             return "#version 460 core"
         return "#version 450 core"
 
@@ -817,21 +903,102 @@ class GLSLCodeGen:
         lines = []
         if stage_names & self.MESH_STAGE_NAMES:
             lines.append("#extension GL_EXT_mesh_shader : require")
-        if stage_names & self.RAY_STAGE_NAMES:
+        uses_ray_stage = bool(stage_names & self.RAY_STAGE_NAMES)
+        if uses_ray_stage:
             lines.append("#extension GL_EXT_ray_tracing : require")
-        if self.uses_ray_query(ast, target_stage):
+        if self.uses_ray_query(ast, target_stage) or (
+            self.uses_acceleration_structure(ast, target_stage) and not uses_ray_stage
+        ):
             lines.append("#extension GL_EXT_ray_query : require")
+        if self.uses_ray_tracing_position_fetch(ast, target_stage):
+            lines.append("#extension GL_EXT_ray_tracing_position_fetch : require")
         return lines
 
+    def uses_ray_extension_type(self, ast, target_stage=None):
+        return (
+            self.uses_ray_query(ast, target_stage)
+            or self.uses_acceleration_structure(ast, target_stage)
+            or self.uses_ray_tracing_position_fetch(ast, target_stage)
+        )
+
     def uses_ray_query(self, ast, target_stage=None):
-        for node in self.walk_ast(ast):
-            if isinstance(node, RayQueryOpNode):
-                return True
-            if not isinstance(node, VariableNode):
-                continue
-            if self.is_ray_query_type(getattr(node, "var_type", None)):
-                return True
+        for root in self.ray_query_search_roots(ast, target_stage):
+            for node in self.walk_ast(root):
+                if isinstance(node, RayQueryOpNode):
+                    return True
+                if any(
+                    self.is_ray_query_type(type_node)
+                    for type_node in self.ray_extension_type_nodes(node)
+                ):
+                    return True
         return False
+
+    def uses_ray_tracing_position_fetch(self, ast, target_stage=None):
+        for root in self.ray_query_search_roots(ast, target_stage):
+            for node in self.walk_ast(root):
+                if isinstance(node, RayQueryOpNode) and (
+                    node.operation in self.RAY_QUERY_POSITION_FETCH_METHODS
+                ):
+                    return True
+                if isinstance(node, FunctionCallNode):
+                    func_expr = getattr(node, "function", getattr(node, "name", None))
+                    if (
+                        isinstance(func_expr, MemberAccessNode)
+                        and func_expr.member in self.RAY_QUERY_POSITION_FETCH_METHODS
+                    ):
+                        return True
+                    if (
+                        self.function_call_name(node)
+                        == "rayQueryGetIntersectionTriangleVertexPositionsEXT"
+                    ):
+                        return True
+                if getattr(node, "name", None) == "gl_HitTriangleVertexPositionsEXT":
+                    return True
+        return False
+
+    def uses_acceleration_structure(self, ast, target_stage=None):
+        for root in self.ray_query_search_roots(ast, target_stage):
+            for node in self.walk_ast(root):
+                if any(
+                    self.is_acceleration_structure_type(type_node)
+                    for type_node in self.ray_extension_type_nodes(node)
+                ):
+                    return True
+        return False
+
+    def ray_extension_type_nodes(self, node):
+        return (
+            getattr(node, "var_type", None),
+            getattr(node, "vtype", None),
+            getattr(node, "param_type", None),
+            getattr(node, "return_type", None),
+        )
+
+    def ray_query_search_roots(self, ast, target_stage=None):
+        target_stage = normalize_stage_name(target_stage)
+        if target_stage is None:
+            return [ast]
+
+        roots = []
+        roots.extend(getattr(ast, "global_variables", []) or [])
+        roots.extend(getattr(ast, "constants", []) or [])
+
+        for func in getattr(ast, "functions", []) or []:
+            qualifier = (
+                func.qualifiers[0]
+                if getattr(func, "qualifiers", None)
+                else getattr(func, "qualifier", None)
+            )
+            stage_name = normalize_stage_name(qualifier)
+            if should_emit_qualified_function(target_stage, stage_name):
+                roots.append(func)
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if stage_matches(target_stage, stage_name):
+                roots.append(stage)
+
+        return roots
 
     def generate_program(self, ast, target_stage=None):
         """Render an AST to GLSL, optionally filtering stage entry points."""
@@ -4481,6 +4648,12 @@ class GLSLCodeGen:
                 callee = self.generate_expression(func_expr)
             original_func_name = func_name
 
+            ray_query_member_call = self.ray_query_member_function_call(
+                func_expr, expr.args
+            )
+            if ray_query_member_call is not None:
+                return ray_query_member_call
+
             synchronization_call = self.synchronization_function_call(
                 original_func_name, expr.args
             )
@@ -4568,6 +4741,13 @@ class GLSLCodeGen:
         if func_name == "workgroupBarrier":
             return "barrier()"
         return None
+
+    def ray_query_member_function_call(self, func_expr, args):
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+        query = self.generate_expression_with_expected(func_expr.object, None)
+        generated_args = [self.generate_expression(arg) for arg in args]
+        return self.map_ray_query_intrinsic(func_expr.member, query, generated_args)
 
     def generate_buffer_call(self, func_name, args):
         if func_name == "buffer_load" and len(args) >= 2:
@@ -7948,6 +8128,11 @@ class GLSLCodeGen:
         if vtype is None:
             return False
         return self.is_ray_query_type_name(self.type_name_string(vtype))
+
+    def is_acceleration_structure_type(self, vtype):
+        if vtype is None:
+            return False
+        return self.resource_base_type(vtype) == "accelerationStructureEXT"
 
     def is_ray_query_type_name(self, type_name):
         type_name = str(type_name)

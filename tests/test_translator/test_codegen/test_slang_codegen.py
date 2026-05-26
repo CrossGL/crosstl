@@ -2582,7 +2582,7 @@ def test_ray_stage_builtins_lower_to_slang_intrinsics():
                 uint customInstance = gl_InstanceCustomIndexEXT;
                 uint instance = gl_InstanceID;
                 uint primitive = gl_PrimitiveID;
-                uint geometry = gl_GeometryIndexEXT;
+                uint geometryIndex = gl_GeometryIndexEXT;
             }
         }
     }
@@ -2601,7 +2601,7 @@ def test_ray_stage_builtins_lower_to_slang_intrinsics():
     assert "uint customInstance = InstanceIndex();" in generated_code
     assert "uint instance = InstanceID();" in generated_code
     assert "uint primitive = PrimitiveIndex();" in generated_code
-    assert "uint geometry = GeometryIndex();" in generated_code
+    assert "uint geometryIndex = GeometryIndex();" in generated_code
     assert "gl_LaunchIDEXT" not in generated_code
     assert "gl_LaunchSizeEXT" not in generated_code
     assert "gl_WorldRayOriginEXT" not in generated_code
@@ -2627,6 +2627,228 @@ def test_ray_stage_intrinsic_builtins_respect_local_shadowing():
     assert "uint gl_HitKindEXT = 7;" in generated_code
     assert "uint hitKind = gl_HitKindEXT;" in generated_code
     assert "HitKind()" not in generated_code
+
+
+def test_ray_stage_semantic_parameters_emit_slang_directions():
+    code = """
+    shader RayStageSemantics {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute
+            ) {
+                payload.color = vec3(attributes.barycentrics, 1.0);
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) {
+                payload.color = vec3(0.0, 0.0, 0.0);
+            }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) {
+                data.value = 1u;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void ClosestHitMain(inout RayPayload payload, "
+        "in HitAttributes attributes)" in generated_code
+    )
+    assert "void MissMain(inout RayPayload payload)" in generated_code
+    assert "void CallableMain(inout CallableData data)" in generated_code
+    assert "payload.color = float3(attributes.barycentrics, 1.0);" in generated_code
+    assert "payload.color = float3(0.0, 0.0, 0.0);" in generated_code
+    assert "data.value = 1u;" in generated_code
+    assert " : payload" not in generated_code
+    assert " : hit_attribute" not in generated_code
+    assert "rayPayloadInEXT" not in generated_code
+    assert "callableDataInEXT" not in generated_code
+
+
+def test_ray_stage_local_interface_variables_become_slang_parameters():
+    code = """
+    shader RayStageLocalInterfaces {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        ray_generation {
+            layout(location = 0) @rayPayloadEXT RayPayload rayPayload;
+            layout(location = 1) @callableDataEXT CallableData callableData;
+
+            void main() {
+                rayPayload.color = vec3(1.0, 0.0, 0.0);
+                callableData.value = 7u;
+            }
+        }
+
+        ray_closest_hit {
+            layout(location = 0) @rayPayloadInEXT RayPayload closestPayload;
+            @hitAttributeEXT vec2 hitAttributes;
+
+            void main() {
+                closestPayload.color = vec3(hitAttributes, 1.0);
+            }
+        }
+
+        ray_miss {
+            @rayPayloadInEXT RayPayload missPayload;
+
+            void main() {
+                missPayload.color = vec3(0.0, 0.0, 0.0);
+            }
+        }
+
+        ray_callable {
+            @callableDataInEXT CallableData callableInput;
+
+            void main() {
+                callableInput.value = 1u;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void RayGenMain(inout RayPayload rayPayload, "
+        "inout CallableData callableData)" in generated_code
+    )
+    assert (
+        "void ClosestHitMain(inout RayPayload closestPayload, "
+        "in float2 hitAttributes)" in generated_code
+    )
+    assert "void MissMain(inout RayPayload missPayload)" in generated_code
+    assert "void CallableMain(inout CallableData callableInput)" in generated_code
+    assert "rayPayload.color = float3(1.0, 0.0, 0.0);" in generated_code
+    assert "callableData.value = 7u;" in generated_code
+    assert "closestPayload.color = float3(hitAttributes, 1.0);" in generated_code
+    assert "missPayload.color = float3(0.0, 0.0, 0.0);" in generated_code
+    assert "callableInput.value = 1u;" in generated_code
+    assert "RayPayload rayPayload;" not in generated_code
+    assert "CallableData callableData;" not in generated_code
+    assert "RayPayload closestPayload;" not in generated_code
+    assert "float2 hitAttributes;" not in generated_code
+    assert "rayPayloadEXT" not in generated_code
+    assert "rayPayloadInEXT" not in generated_code
+    assert "hitAttributeEXT" not in generated_code
+    assert "callableDataInEXT" not in generated_code
+
+
+def test_ray_stage_builtin_triangle_hit_attributes_emit_slang_input_parameter():
+    code = """
+    shader RayBuiltinHitAttributes {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                BuiltInTriangleIntersectionAttributes attributes @ hit_attribute
+            ) {
+                payload.color = vec3(attributes.barycentrics, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void main(inout RayPayload payload, "
+        "in BuiltInTriangleIntersectionAttributes attributes)" in generated_code
+    )
+    assert " : hit_attribute" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            ray_generation {
+                void main(RayPayload payload @ payload) { }
+            }
+            """,
+            "ray_generation stage cannot use payload parameter",
+        ),
+        (
+            """
+            ray_miss {
+                void main(HitAttributes attributes @ hit_attribute) { }
+            }
+            """,
+            "ray_miss stage cannot use hit_attribute parameter",
+        ),
+        (
+            """
+            ray_miss {
+                void main(float payload @ payload) { }
+            }
+            """,
+            "payload parameter 'payload' must use a user-defined struct type",
+        ),
+        (
+            """
+            ray_closest_hit {
+                @rayPayloadInEXT RayPayload payload;
+                void main(RayPayload payload @ payload) { }
+            }
+            """,
+            "interface variable 'payload' duplicates an entry parameter",
+        ),
+        (
+            """
+            ray_closest_hit {
+                void main(
+                    RayPayload first @ payload,
+                    RayPayload second @ rayPayloadInEXT,
+                    HitAttributes attributes @ hit_attribute
+                ) { }
+            }
+            """,
+            "must declare at most one payload parameter",
+        ),
+    ],
+)
+def test_invalid_slang_ray_stage_semantic_parameters_raise(stage_source, message):
+    code = f"""
+    shader InvalidRayStageSemantics {{
+        struct RayPayload {{
+            vec3 color;
+        }};
+
+        struct HitAttributes {{
+            vec2 barycentrics;
+        }};
+
+        {stage_source}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 @pytest.mark.parametrize(

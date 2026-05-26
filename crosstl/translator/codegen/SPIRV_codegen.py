@@ -4,6 +4,13 @@ import re
 from typing import List, Optional, Tuple, Union
 
 from .array_utils import parse_array_type, detect_array_element_type
+from .image_access_contracts import (
+    collect_function_image_access_requirements,
+    collect_function_parameter_names,
+    image_access_diagnostic_name,
+    image_access_requirement_label,
+    image_access_satisfies_requirement,
+)
 from ..ast import (
     AssignmentNode,
     ArrayAccessNode,
@@ -103,6 +110,7 @@ class VulkanSPIRVCodeGen:
         self.composite_constants = {}
         self.resource_type_metadata = {}
         self.structured_buffer_metadata = {}
+        self.storage_buffer_access_metadata = {}
         self.precise_global_variables = set()
         self.precise_local_variables = set()
         self.no_contraction_ids = set()
@@ -110,6 +118,10 @@ class VulkanSPIRVCodeGen:
 
         self.functions = {}
         self.function_signatures = {}
+        self.function_parameter_names = {}
+        self.function_image_access_requirements = {}
+        self.function_storage_buffer_access_requirements = {}
+        self.inline_storage_buffer_functions = {}
         self.function_resource_array_params = {}
         self.function_resource_array_type_hints = {}
         self.function_storage_image_pointer_params = {}
@@ -554,7 +566,7 @@ class VulkanSPIRVCodeGen:
 
     def store_to_variable(self, variable_id: SpirvId, value_id: SpirvId):
         """Store a value to a variable."""
-        metadata = self.structured_buffer_metadata_for_pointer(variable_id)
+        metadata = self.storage_buffer_access_metadata_for_pointer(variable_id)
         if metadata is not None and metadata.get("readonly"):
             self.emit("; WARNING: storage buffer store requires a writable buffer")
             return
@@ -564,7 +576,7 @@ class VulkanSPIRVCodeGen:
 
     def load_from_variable(self, variable_id: SpirvId, result_type: SpirvId) -> SpirvId:
         """Load a value from a variable."""
-        storage_metadata = self.structured_buffer_metadata_for_pointer(variable_id)
+        storage_metadata = self.storage_buffer_access_metadata_for_pointer(variable_id)
         if storage_metadata is not None and storage_metadata.get("writeonly"):
             self.emit("; WARNING: storage buffer load requires a readable buffer")
             return self.default_value_for_type(result_type)
@@ -900,6 +912,7 @@ class VulkanSPIRVCodeGen:
                 **metadata,
                 "_access_path": "member",
             }
+        self.propagate_storage_buffer_access_metadata(base_pointer, access)
         return access
 
     def create_function(
@@ -3901,6 +3914,30 @@ class VulkanSPIRVCodeGen:
 
         return self.map_crossgl_type(type_name)
 
+    def storage_buffer_parameter_type_name(self, param) -> Optional[str]:
+        param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        if param_type is None:
+            return None
+
+        type_name = self.type_name_from_value(param_type)
+        if self.is_structured_buffer_type_name(type_name):
+            return type_name
+        if self.has_attribute(param, "glsl_buffer_block"):
+            return type_name
+        return None
+
+    def function_storage_buffer_parameters(self, function_node) -> set:
+        return {
+            getattr(param, "name", None)
+            for param in getattr(
+                function_node, "parameters", getattr(function_node, "params", [])
+            )
+            if self.storage_buffer_parameter_type_name(param) is not None
+        } - {None}
+
+    def function_has_storage_buffer_parameters(self, function_node) -> bool:
+        return bool(self.function_storage_buffer_parameters(function_node))
+
     def format_array_size(self, size):
         if size is None:
             return None
@@ -4165,7 +4202,7 @@ class VulkanSPIRVCodeGen:
         qualifiers = {
             str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
         }
-        return "buffer" in qualifiers
+        return "buffer" in qualifiers or self.has_attribute(node, "glsl_buffer_block")
 
     def process_glsl_buffer_block_declaration(
         self, node: VariableNode, type_name: str
@@ -4203,6 +4240,7 @@ class VulkanSPIRVCodeGen:
         self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
 
         self.global_variables[node.name] = var_id
+        self.register_glsl_buffer_access_metadata(node, var_id, value_type, block_type)
         self.register_single_array_storage_buffer_metadata(
             node,
             var_id,
@@ -4251,6 +4289,24 @@ class VulkanSPIRVCodeGen:
         self.structured_buffer_metadata[block_type.id] = metadata
         if variable_member_type is not None:
             self.structured_buffer_metadata[variable_member_type.id] = metadata
+
+    def register_glsl_buffer_access_metadata(
+        self,
+        node: VariableNode,
+        var_id: SpirvId,
+        value_type: SpirvId,
+        block_type: SpirvId,
+    ):
+        memory_flags = self.storage_buffer_memory_flags(node)
+        metadata = {
+            "kind": "glsl_buffer_block",
+            **memory_flags,
+            "block_type": block_type,
+        }
+        self.storage_buffer_access_metadata[var_id.id] = metadata
+        self.storage_buffer_access_metadata[block_type.id] = metadata
+        if value_type.id != block_type.id:
+            self.storage_buffer_access_metadata[value_type.id] = metadata
 
     def storage_buffer_is_readonly(self, node: VariableNode) -> bool:
         return self.storage_buffer_memory_flags(node).get("readonly", False)
@@ -5302,6 +5358,313 @@ class VulkanSPIRVCodeGen:
             return callee
         return None
 
+    def collect_function_image_access_requirements_for_ast(self, ast):
+        functions = self.collect_ast_functions(ast)
+        self.function_parameter_names = collect_function_parameter_names(functions)
+        return collect_function_image_access_requirements(
+            functions,
+            self.function_parameter_names,
+            self.walk_ast_nodes,
+            self.function_call_name,
+            self.expression_name,
+        )
+
+    def buffer_operation_access_requirement(self, func_name):
+        if func_name == "buffer_load":
+            return "read"
+        if func_name == "buffer_store":
+            return "write"
+        return None
+
+    def collect_function_storage_buffer_access_requirements_for_ast(self, ast):
+        functions = self.collect_ast_functions(ast)
+        function_parameter_names = collect_function_parameter_names(functions)
+        parameter_sets = {
+            func_name: set(param_names)
+            for func_name, param_names in function_parameter_names.items()
+        }
+        requirements = {
+            getattr(func, "name", None): {}
+            for func in functions
+            if getattr(func, "name", None)
+        }
+
+        for func in functions:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+
+            parameter_set = parameter_sets.get(func_name, set())
+            for node in self.walk_ast_nodes(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+
+                required_access = self.buffer_operation_access_requirement(
+                    self.function_call_name(node)
+                )
+                if required_access is None:
+                    continue
+
+                args = getattr(node, "arguments", getattr(node, "args", []))
+                if not args:
+                    continue
+
+                target_name = self.expression_name(args[0])
+                if target_name not in parameter_set:
+                    continue
+
+                current = requirements[func_name].get(target_name)
+                requirements[func_name][target_name] = (
+                    self.merge_resource_access_requirement(current, required_access)
+                )
+
+        changed = True
+        while changed:
+            changed = False
+            for func in functions:
+                func_name = getattr(func, "name", None)
+                if not func_name:
+                    continue
+
+                parameter_set = parameter_sets.get(func_name, set())
+                if not parameter_set:
+                    continue
+
+                for node in self.walk_ast_nodes(getattr(func, "body", [])):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+
+                    callee_name = self.function_call_name(node)
+                    callee_requirements = requirements.get(callee_name)
+                    if not callee_requirements:
+                        continue
+
+                    callee_parameters = function_parameter_names.get(callee_name, [])
+                    args = getattr(node, "arguments", getattr(node, "args", []))
+                    for callee_param, required_access in callee_requirements.items():
+                        try:
+                            index = callee_parameters.index(callee_param)
+                        except ValueError:
+                            continue
+                        if index >= len(args):
+                            continue
+
+                        target_name = self.expression_name(args[index])
+                        if target_name not in parameter_set:
+                            continue
+
+                        current = requirements[func_name].get(target_name)
+                        merged = self.merge_resource_access_requirement(
+                            current, required_access
+                        )
+                        if merged != current:
+                            requirements[func_name][target_name] = merged
+                            changed = True
+
+        return {name: reqs for name, reqs in requirements.items() if reqs}
+
+    def merge_resource_access_requirement(self, current, incoming):
+        if incoming is None:
+            return current
+        if current is None or current == incoming:
+            return incoming
+        return "read_write"
+
+    def storage_image_access_for_expression(self, expr):
+        name = self.expression_name(expr)
+        if name is None:
+            return None
+
+        pointer = self.local_variables.get(name) or self.global_variables.get(name)
+        metadata = (
+            self.resource_metadata_for_pointer(pointer) if pointer is not None else None
+        )
+        if metadata is None:
+            return None
+        if metadata.get("kind") != "storage_image":
+            return None
+        if metadata.get("readonly"):
+            return "read"
+        if metadata.get("writeonly"):
+            return "write"
+        if metadata.get("readwrite"):
+            return "read_write"
+        return None
+
+    def storage_buffer_access_for_expression(self, expr):
+        name = self.expression_name(expr)
+        if name is None:
+            return None
+
+        pointer = self.local_variables.get(name) or self.global_variables.get(name)
+        metadata = (
+            self.storage_buffer_access_metadata_for_pointer(pointer)
+            if pointer is not None
+            else None
+        )
+        if metadata is None:
+            return None
+        if metadata.get("readonly"):
+            return "read"
+        if metadata.get("writeonly"):
+            return "write"
+        if metadata.get("readwrite"):
+            return "read_write"
+        return None
+
+    def expression_debug_name(self, expr) -> str:
+        name = self.expression_name(expr)
+        return name if name is not None else str(expr)
+
+    def validate_function_image_access_arguments(self, func_name, args) -> bool:
+        callee_requirements = self.function_image_access_requirements.get(func_name)
+        if not callee_requirements:
+            return True
+
+        param_names = self.function_parameter_names.get(func_name, [])
+        for index, param_name in enumerate(param_names):
+            required_access = callee_requirements.get(param_name)
+            if required_access is None or index >= len(args):
+                continue
+
+            actual_access = self.storage_image_access_for_expression(args[index])
+            if image_access_satisfies_requirement(required_access, actual_access):
+                continue
+
+            required_label = image_access_requirement_label(required_access)
+            actual_label = image_access_diagnostic_name(actual_access)
+            self.emit(
+                f"; WARNING: function call '{func_name}' requires {required_label} "
+                "storage image access for argument "
+                f"{self.expression_debug_name(args[index])} passed to parameter "
+                f"{param_name}: got {actual_label}"
+            )
+            return False
+
+        return True
+
+    def validate_function_storage_buffer_access_arguments(
+        self, func_name, args
+    ) -> bool:
+        callee_requirements = self.function_storage_buffer_access_requirements.get(
+            func_name
+        )
+        if not callee_requirements:
+            return True
+
+        param_names = self.function_parameter_names.get(func_name, [])
+        for index, param_name in enumerate(param_names):
+            required_access = callee_requirements.get(param_name)
+            if required_access is None or index >= len(args):
+                continue
+
+            actual_access = self.storage_buffer_access_for_expression(args[index])
+            if image_access_satisfies_requirement(required_access, actual_access):
+                continue
+
+            required_label = image_access_requirement_label(required_access)
+            actual_label = image_access_diagnostic_name(actual_access)
+            self.emit(
+                f"; WARNING: function call '{func_name}' requires {required_label} "
+                "storage buffer access for argument "
+                f"{self.expression_debug_name(args[index])} passed to parameter "
+                f"{param_name}: got {actual_label}"
+            )
+            return False
+
+        return True
+
+    def collect_inline_storage_buffer_functions(self, ast):
+        return {
+            func.name: func
+            for func in self.collect_ast_functions(ast)
+            if getattr(func, "name", None)
+            and self.function_has_storage_buffer_parameters(func)
+        }
+
+    def default_value_for_function(self, function_node) -> Optional[SpirvId]:
+        return_type = self.map_crossgl_type(function_node.return_type)
+        if return_type.type.base_type == "void":
+            return None
+        return self.default_value_for_type(return_type)
+
+    def inline_storage_buffer_function_call(self, function_node, call_args):
+        func_name = getattr(function_node, "name", "unknown")
+        if not self.validate_function_storage_buffer_access_arguments(
+            func_name, call_args
+        ):
+            return self.default_value_for_function(function_node)
+
+        parameters = getattr(
+            function_node, "parameters", getattr(function_node, "params", [])
+        )
+        if len(call_args) < len(parameters):
+            self.emit(
+                f"; WARNING: function call '{func_name}' requires "
+                f"{len(parameters)} arguments"
+            )
+            return self.default_value_for_function(function_node)
+
+        previous_locals = self.local_variables.copy()
+        previous_precise_locals = set(self.precise_local_variables)
+        previous_return_type = self.current_return_type
+        self.current_return_type = self.map_crossgl_type(function_node.return_type)
+
+        try:
+            for index, param in enumerate(parameters):
+                param_name = getattr(param, "name", f"param{index}")
+                if self.storage_buffer_parameter_type_name(param) is not None:
+                    pointer_arg = self.variable_pointer_from_expression(
+                        call_args[index]
+                    )
+                    if pointer_arg is None:
+                        self.emit(
+                            f"; WARNING: function call '{func_name}' requires a "
+                            f"storage buffer argument for parameter {param_name}"
+                        )
+                        return self.default_value_for_function(function_node)
+                    self.local_variables[param_name] = pointer_arg
+                    continue
+
+                arg_value = self.process_call_argument(
+                    func_name, call_args[index], index
+                )
+                if arg_value is None:
+                    self.emit(f"; WARNING: Failed to evaluate argument for {func_name}")
+                    return self.default_value_for_function(function_node)
+                self.local_variables[param_name] = arg_value
+
+            result = self.inline_function_body(function_node)
+            if result is not None:
+                return result
+            return self.default_value_for_function(function_node)
+        finally:
+            self.local_variables = previous_locals
+            self.precise_local_variables = previous_precise_locals
+            self.current_return_type = previous_return_type
+
+    def inline_function_body(self, function_node) -> Optional[SpirvId]:
+        body = getattr(function_node, "body", [])
+        statements = (
+            body.statements
+            if hasattr(body, "statements")
+            else body if isinstance(body, list) else [body]
+        )
+
+        for stmt in statements:
+            if isinstance(stmt, ReturnNode):
+                if getattr(stmt, "value", None) is None:
+                    return None
+                if isinstance(stmt.value, ArrayLiteralNode):
+                    return self.process_array_literal(
+                        stmt.value, self.current_return_type
+                    )
+                return self.process_expression(stmt.value)
+
+            self.process_statement(stmt)
+
+        return None
+
     def collect_function_execution_models(self, ast):
         functions = {
             getattr(func, "name", None): func
@@ -5588,6 +5951,31 @@ class VulkanSPIRVCodeGen:
             return self.structured_buffer_metadata.get(pointee_type.id)
 
         return None
+
+    def storage_buffer_access_metadata_for_pointer(self, pointer_id: SpirvId):
+        if pointer_id is None:
+            return None
+
+        metadata = self.storage_buffer_access_metadata.get(pointer_id.id)
+        if metadata is not None:
+            return metadata
+
+        metadata = self.structured_buffer_metadata_for_pointer(pointer_id)
+        if metadata is not None:
+            return metadata
+
+        pointee_type = self.variable_value_types.get(pointer_id.id)
+        if pointee_type is not None:
+            return self.storage_buffer_access_metadata.get(pointee_type.id)
+
+        return None
+
+    def propagate_storage_buffer_access_metadata(
+        self, source_pointer: SpirvId, target_pointer: SpirvId
+    ):
+        metadata = self.storage_buffer_access_metadata_for_pointer(source_pointer)
+        if metadata is not None:
+            self.storage_buffer_access_metadata[target_pointer.id] = metadata
 
     def structured_buffer_element_pointer(
         self, buffer_pointer: SpirvId, index_id: SpirvId
@@ -5964,6 +6352,7 @@ class VulkanSPIRVCodeGen:
             ptr_type = self.register_pointer_type(element_type, storage_class)
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
+            self.propagate_storage_buffer_access_metadata(array_variable, access)
             return access
         return None
 
@@ -6002,6 +6391,7 @@ class VulkanSPIRVCodeGen:
             ptr_type = self.register_pointer_type(element_type, storage_class)
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
+            self.propagate_storage_buffer_access_metadata(array_variable, access)
             return access, element_type
 
         array = self.process_expression(array_expr)
@@ -6022,12 +6412,14 @@ class VulkanSPIRVCodeGen:
             ptr_type = self.register_pointer_type(element_type, storage_class)
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
+            self.propagate_storage_buffer_access_metadata(array_variable, access)
             return access, element_type
 
         storage_class = array.type.storage_class or "Function"
         ptr_type = self.register_pointer_type(element_type, storage_class)
         access = self.access_chain(array, [index], ptr_type)
         self.variable_value_types[access.id] = element_type
+        self.propagate_storage_buffer_access_metadata(array, access)
         return access, element_type
 
     def process_assignment(self, node: AssignmentNode):
@@ -7177,6 +7569,14 @@ class VulkanSPIRVCodeGen:
                     result_type,
                 )
 
+            inline_storage_buffer_function = self.inline_storage_buffer_functions.get(
+                callee_name
+            )
+            if inline_storage_buffer_function is not None:
+                return self.inline_storage_buffer_function_call(
+                    inline_storage_buffer_function, expr.args
+                )
+
             # Evaluate arguments
             args = []
             has_errors = False
@@ -7213,6 +7613,16 @@ class VulkanSPIRVCodeGen:
                 self.emit("; WARNING: Unsupported callee expression in SPIR-V backend")
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
+
+            if not self.validate_function_image_access_arguments(
+                callee_name, expr.args
+            ):
+                result_type = None
+                if callee_name in self.function_signatures:
+                    result_type = self.function_signatures[callee_name][0]
+                if result_type is None or result_type.type.base_type == "void":
+                    return None
+                return self.default_value_for_type(result_type)
 
             if (
                 callee_name in self.resource_function_names()
@@ -7716,6 +8126,15 @@ class VulkanSPIRVCodeGen:
         self.function_resource_array_type_hints = (
             self.collect_resource_array_parameter_type_hints(ast)
         )
+        self.function_image_access_requirements = (
+            self.collect_function_image_access_requirements_for_ast(ast)
+        )
+        self.function_storage_buffer_access_requirements = (
+            self.collect_function_storage_buffer_access_requirements_for_ast(ast)
+        )
+        self.inline_storage_buffer_functions = (
+            self.collect_inline_storage_buffer_functions(ast)
+        )
         self.function_execution_models = self.collect_function_execution_models(ast)
         self.function_storage_image_pointer_params = (
             self.collect_storage_image_pointer_parameters(ast)
@@ -7746,6 +8165,8 @@ class VulkanSPIRVCodeGen:
                 helper_functions.append(func)
 
         for func in self.order_functions_by_dependencies(helper_functions):
+            if func.name in self.inline_storage_buffer_functions:
+                continue
             self.process_function_node(func)
 
         entry_points = []
@@ -7765,6 +8186,9 @@ class VulkanSPIRVCodeGen:
                 ]
                 for func in self.order_functions_by_dependencies(local_functions):
                     if id(func) not in processed_local_functions:
+                        if func.name in self.inline_storage_buffer_functions:
+                            processed_local_functions.add(id(func))
+                            continue
                         self.process_function_node(func, stage=stage)
                         processed_local_functions.add(id(func))
 

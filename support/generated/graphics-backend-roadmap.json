@@ -42,7 +42,7 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, and explicit mesh output signatures/topology for SetMeshOutputCounts primitive counts. Full mesh payload and vertex/primitive write semantics are not complete.",
+      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, and single-member output member writes. Multi-member partial output member writes emit compile-safe diagnostics because Metal mesh outputs require whole element setters. Full mesh payload validation and richer partial-write accumulation remain incomplete.",
       "status": "partial"
     },
     {
@@ -69,7 +69,7 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, and single compatible intersection_function_table dispatch; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
+      "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
       "status": "partial"
     },
     {
@@ -405,9 +405,14 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_mesh_object_stage_codegen",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_object_stage_attributes_and_threadgroup_limits",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_stage_output_signature_and_counts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_stage_vertex_and_index_writes_lower_to_mesh_output_methods",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_roles_lower_to_mesh_output_parameter",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_single_member_writes_lower_to_setters",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_multi_member_partial_write_is_diagnostic",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_output_signature_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_object_stages_compile_with_metal3"
           ],
-          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, and explicit mesh output signatures/topology for SetMeshOutputCounts primitive counts. Full mesh payload and vertex/primitive write semantics are not complete.",
+          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, and single-member output member writes. Multi-member partial output member writes emit compile-safe diagnostics because Metal mesh outputs require whole element setters. Full mesh payload validation and richer partial-write accumulation remain incomplete.",
           "status": "partial"
         },
         "opengl": {
@@ -443,6 +448,10 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_full_signature_lowers_to_intersector_query",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_uses_single_intersection_function_table",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_threads_intersection_function_table_through_helpers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_forwards_thread_local_payload_with_intersection_table",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_forwards_helper_parameter_payload",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_payload_without_intersection_table_emits_diagnostic",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_rejects_non_thread_payload_parameter",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_skips_incompatible_intersection_function_table",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_uses_primitive_acceleration_structure_shape",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_acceleration_structure_globals_thread_through_helpers",
@@ -450,6 +459,8 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_tracing_intersection_table_trace_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_primitive_acceleration_trace_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_payload_trace_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_payload_diagnostic_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_callshader_lowers_to_visible_function_table_call",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_callshader_visible_function_table_threads_through_helpers",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_callshader_accepts_explicit_visible_function_table_argument",
@@ -470,7 +481,7 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_accepts_bounding_box_result_struct",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
           ],
-          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, and single compatible intersection_function_table dispatch; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
+          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
           "status": "partial"
         },
         "opengl": {

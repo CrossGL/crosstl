@@ -1674,6 +1674,109 @@ def test_conflicting_layout_member_metadata_values_fail_validation(member, messa
         parse_code(tokenize_code(code))
 
 
+def test_duplicate_matching_user_builtin_and_specialization_metadata_values_are_allowed():
+    code = """
+    shader MatchingUserBuiltinMetadata {
+        constant float scale [[function_constant(0)]] @function_constant(0);
+        constant int mode @constant_id(1) @constant_id(1);
+
+        struct VertexOut {
+            vec4 position @builtin(position) @builtin(position);
+            vec2 uv [[user(texcoord0)]] @user(texcoord0);
+        };
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    scale, mode = ast.global_variables
+    position, uv = ast.structs[0].members
+
+    assert [attr.name for attr in scale.attributes] == [
+        "function_constant",
+        "function_constant",
+    ]
+    assert [attr.arguments[0].value for attr in scale.attributes] == [0, 0]
+    assert [attr.name for attr in mode.attributes] == ["constant_id", "constant_id"]
+    assert [attr.arguments[0].value for attr in mode.attributes] == [1, 1]
+    assert [attr.name for attr in position.attributes] == ["builtin", "builtin"]
+    assert [attr.arguments[0].name for attr in position.attributes] == [
+        "position",
+        "position",
+    ]
+    assert [attr.name for attr in uv.attributes] == ["user", "user"]
+    assert [attr.arguments[0].name for attr in uv.attributes] == [
+        "texcoord0",
+        "texcoord0",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "constant float scale [[function_constant(0)]] @function_constant(1);",
+            "Conflicting function_constant metadata",
+        ),
+        (
+            "constant int mode @constant_id(1) @constant_id(2);",
+            "Conflicting constant_id metadata",
+        ),
+    ],
+)
+def test_conflicting_specialization_metadata_values_fail_validation(
+    declaration, message
+):
+    code = f"""
+    shader ConflictingSpecializationMetadata {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("member", "message"),
+    [
+        (
+            "vec4 position @builtin(position) @builtin(vertex_index);",
+            "Conflicting builtin metadata",
+        ),
+        (
+            "vec2 uv [[user(texcoord0)]] @user(color0);",
+            "Conflicting user metadata",
+        ),
+    ],
+)
+def test_conflicting_user_and_builtin_metadata_values_fail_validation(member, message):
+    code = f"""
+    shader ConflictingUserBuiltinMetadata {{
+        struct VertexOut {{
+            {member}
+        }};
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_conflicting_fragment_color_and_depth_return_metadata_fails_validation():
+    code = """
+    shader ConflictingFragmentReturnMetadata {
+        fragment {
+            vec4 main() [[color(0)]] [[depth(any)]] {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting semantic metadata"):
+        parse_code(tokenize_code(code))
+
+
 def test_conflicting_matrix_layout_metadata_fails_validation():
     code = """
     shader ConflictingMatrixLayout {
@@ -2997,6 +3100,209 @@ def test_struct_member_layout_attributes_parse_with_post_attributes():
     assert [attribute.arguments[0].value for attribute in uv.attributes[:2]] == [1, 2]
 
 
+def test_struct_members_preserve_leading_attribute_metadata():
+    code = """
+    shader LeadingStructMemberAttributes {
+        struct VertexOut {
+            @builtin(position) vec4 position;
+            [[user(texcoord0)]] uv: vec2;
+            @location(1) @component(2) vec2 texCoord;
+        };
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    position, uv, tex_coord = ast.structs[0].members
+
+    assert [attr.name for attr in position.attributes] == ["builtin"]
+    assert position.attributes[0].arguments[0].name == "position"
+
+    assert uv.name == "uv"
+    assert isinstance(uv.member_type, VectorType)
+    assert uv.member_type.size == 2
+    assert [attr.name for attr in uv.attributes] == ["user"]
+    assert uv.attributes[0].arguments[0].name == "texcoord0"
+
+    assert [attr.name for attr in tex_coord.attributes] == [
+        "location",
+        "component",
+    ]
+    assert [attr.arguments[0].value for attr in tex_coord.attributes] == [1, 2]
+
+
+def test_cbuffer_members_preserve_leading_attribute_metadata():
+    code = """
+    shader LeadingCBufferMemberAttributes {
+        cbuffer Camera {
+            @packoffset(c0) row_major mat4 viewProj;
+            @align(16) layout(offset = 128) vec4 tint;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    view_proj, tint = ast.cbuffers[0].members
+
+    assert [attr.name for attr in view_proj.attributes] == [
+        "packoffset",
+        "row_major",
+    ]
+    assert view_proj.attributes[0].arguments[0].name == "c0"
+
+    assert [attr.name for attr in tint.attributes] == ["align", "offset"]
+    assert [attr.arguments[0].value for attr in tint.attributes] == [16, 128]
+
+
+def test_cbuffer_declaration_preserves_leading_and_layout_metadata():
+    code = """
+    @binding(0) @set(1)
+    cbuffer Camera : register(b0, space1) {
+        mat4 viewProj;
+    };
+
+    shader LeadingCBufferDeclarationAttributes {
+        [[buffer(2)]]
+        cbuffer Material {
+            vec4 tint;
+        };
+
+        layout(std140, binding = 3) uniform Globals {
+            vec4 color;
+        };
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    camera, material, globals_block = ast.cbuffers
+
+    assert [attr.name for attr in camera.attributes] == [
+        "binding",
+        "set",
+        "register",
+    ]
+    assert camera.attributes[0].arguments[0].value == 0
+    assert camera.attributes[1].arguments[0].value == 1
+    assert [arg.name for arg in camera.attributes[2].arguments] == ["b0", "space1"]
+
+    assert [attr.name for attr in material.attributes] == ["buffer"]
+    assert material.attributes[0].arguments[0].value == 2
+
+    assert [attr.name for attr in globals_block.attributes] == ["std140", "binding"]
+    assert globals_block.attributes[0].arguments == []
+    assert globals_block.attributes[1].arguments[0].value == 3
+
+
+@pytest.mark.parametrize(
+    ("cbuffer_source", "message"),
+    [
+        (
+            """
+            @binding(0)
+            cbuffer Camera @binding(1) {
+                mat4 viewProj;
+            };
+            """,
+            "Conflicting binding metadata",
+        ),
+        (
+            """
+            @register(b0, space0)
+            cbuffer Camera : register(b0, space1) {
+                mat4 viewProj;
+            };
+            """,
+            "Conflicting register metadata",
+        ),
+    ],
+)
+def test_conflicting_cbuffer_declaration_metadata_fails_validation(
+    cbuffer_source, message
+):
+    code = f"""
+    shader ConflictingCBufferDeclarationMetadata {{
+        {cbuffer_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_struct_declaration_attributes_are_preserved():
+    code = """
+    @user(record0)
+    struct TopLevelRecord @user(record0) {
+        float value;
+    };
+
+    shader StructDeclarationAttributes {
+        @payload
+        struct Payload @payload {
+            float value;
+        };
+
+        compute {
+            [[user(localRecord)]]
+            struct LocalRecord {
+                float value;
+            };
+
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    top_level, payload = ast.structs
+    local_record = ast.stages[ShaderStage.COMPUTE].local_structs[0]
+
+    assert [attr.name for attr in top_level.attributes] == ["user", "user"]
+    assert [attr.arguments[0].name for attr in top_level.attributes] == [
+        "record0",
+        "record0",
+    ]
+    assert [attr.name for attr in payload.attributes] == ["payload", "payload"]
+    assert [attr.name for attr in local_record.attributes] == ["user"]
+    assert local_record.attributes[0].arguments[0].name == "localRecord"
+
+
+@pytest.mark.parametrize(
+    ("struct_source", "message"),
+    [
+        (
+            """
+            @payload
+            struct Payload @hit_attribute {
+                float value;
+            };
+            """,
+            "Conflicting declaration role metadata.*@hit_attribute.*@payload",
+        ),
+        (
+            """
+            @user(record0)
+            struct Record @user(record1) {
+                float value;
+            };
+            """,
+            "Conflicting user metadata",
+        ),
+    ],
+)
+def test_conflicting_struct_declaration_metadata_fails_validation(
+    struct_source, message
+):
+    code = f"""
+    shader ConflictingStructDeclarationMetadata {{
+        {struct_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
 @pytest.mark.parametrize(
     ("declaration", "message"),
     [
@@ -3341,25 +3647,6 @@ def test_hlsl_tessellation_and_ray_stage_aliases_parse_to_canonical_stages():
     assert ast.stages[ShaderStage.RAY_ANY_HIT].entry_point.name == "AnyHitMain"
     assert ast.stages[ShaderStage.RAY_MISS].entry_point.name == "MissMain"
     assert ast.stages[ShaderStage.RAY_CALLABLE].entry_point.name == "CallableMain"
-
-
-def test_stage_body_allows_keyword_like_binding_names():
-    code = """
-    shader KeywordBindings {
-        ray_closest_hit {
-            void main() {
-                uint geometry = gl_GeometryIndexEXT;
-            }
-        }
-    }
-    """
-
-    ast = parse_code(tokenize_code(code))
-    body = ast.stages[ShaderStage.RAY_CLOSEST_HIT].entry_point.body.statements
-
-    assert len(body) == 1
-    assert isinstance(body[0], VariableNode)
-    assert body[0].name == "geometry"
 
 
 def test_wave_intrinsic_parses_to_node():

@@ -370,6 +370,10 @@ class Parser:
                 imports.append(self.parse_import())
             elif self.current_token[0] == "SHADER":
                 shader_node = self.parse_shader_declaration()
+            elif self.current_token_starts_attributed_cbuffer_declaration():
+                cbuffers.append(self.parse_attributed_cbuffer())
+            elif self.current_token_starts_attributed_struct_declaration():
+                structs.append(self.parse_attributed_struct())
             elif self.current_token[0] == "STRUCT":
                 structs.append(self.parse_struct())
             elif self.current_token[0] == "ENUM":
@@ -386,6 +390,8 @@ class Parser:
                     )
                     structs.append(struct_node)
                     global_variables.append(variable_node)
+                elif self.is_cbuffer_declaration():
+                    cbuffers.append(self.parse_cbuffer_as_struct(attributes))
                 elif self.is_variable_declaration():
                     global_variables.append(self.parse_variable_declaration(attributes))
                 else:
@@ -478,6 +484,10 @@ class Parser:
             ]:
                 stage_node = self.parse_shader_stage_block()
                 stages[stage_node.stage] = stage_node
+            elif self.current_token_starts_attributed_cbuffer_declaration():
+                cbuffers.append(self.parse_attributed_cbuffer())
+            elif self.current_token_starts_attributed_struct_declaration():
+                structs.append(self.parse_attributed_struct())
             elif self.current_token[0] == "STRUCT":
                 structs.append(self.parse_struct())
             elif self.is_generic_declaration():
@@ -516,6 +526,8 @@ class Parser:
                     )
                     structs.append(struct_node)
                     global_variables.append(variable_node)
+                elif self.is_cbuffer_declaration():
+                    cbuffers.append(self.parse_cbuffer_as_struct(attributes))
                 elif self.is_variable_declaration():
                     global_variables.append(self.parse_variable_declaration(attributes))
                 else:
@@ -634,6 +646,10 @@ class Parser:
                     local_variables.append(self.parse_variable_declaration(attributes))
                 else:
                     self.skip_unknown_token()
+            elif self.current_token_starts_attributed_struct_declaration():
+                struct_node = self.parse_attributed_struct()
+                if struct_node:
+                    local_structs.append(struct_node)
             elif self.current_token[0] == "STRUCT":
                 struct_node = self.parse_struct()
                 if struct_node:
@@ -1064,10 +1080,56 @@ class Parser:
         content = " ".join(parts).strip()
         return PreprocessorNode("precision", content)
 
-    def parse_struct(self):
+    def parse_attributed_cbuffer(self):
+        """Parse attributes that appear before a cbuffer declaration."""
+        attributes = self.parse_attribute_annotations()
+        return self.parse_cbuffer_as_struct(attributes)
+
+    def current_token_starts_attributed_cbuffer_declaration(self):
+        """Return whether leading attributes are followed by a cbuffer."""
+        if not (
+            self.current_token[0] in ["AT", "ATTRIBUTE"]
+            or self.current_token_starts_square_attribute()
+        ):
+            return False
+
+        saved_pos = self.pos
+        saved_token = self.current_token
+        try:
+            attributes = self.parse_attribute_annotations()
+            return bool(attributes and self.is_cbuffer_declaration())
+        finally:
+            self.pos = saved_pos
+            self.current_token = saved_token
+
+    def parse_attributed_struct(self):
+        """Parse attributes that appear before a struct declaration."""
+        attributes = self.parse_attribute_annotations()
+        return self.parse_struct(attributes)
+
+    def current_token_starts_attributed_struct_declaration(self):
+        """Return whether leading attributes are followed by ``struct``."""
+        if not (
+            self.current_token[0] in ["AT", "ATTRIBUTE"]
+            or self.current_token_starts_square_attribute()
+        ):
+            return False
+
+        saved_pos = self.pos
+        saved_token = self.current_token
+        try:
+            attributes = self.parse_attribute_annotations()
+            return bool(attributes and self.current_token[0] == "STRUCT")
+        finally:
+            self.pos = saved_pos
+            self.current_token = saved_token
+
+    def parse_struct(self, leading_attributes=None):
         """Parse a struct declaration and its member list."""
         if self.current_token[0] == "EOF":
             return None
+
+        attributes = list(leading_attributes or [])
 
         self.eat("STRUCT")
 
@@ -1080,6 +1142,8 @@ class Parser:
         generic_params = []
         if self.current_token[0] == "LESS_THAN":
             generic_params = self.parse_generic_parameters()
+
+        attributes.extend(self.parse_attribute_annotations(allow_single_square=False))
 
         if self.current_token[0] != "LBRACE":
             # Skip malformed struct
@@ -1105,7 +1169,12 @@ class Parser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
-        return StructNode(name=name, members=members, generic_params=generic_params)
+        return StructNode(
+            name=name,
+            members=members,
+            generic_params=generic_params,
+            attributes=attributes,
+        )
 
     def parse_struct_member(self):
         """Parse one struct member declaration."""
@@ -1133,8 +1202,17 @@ class Parser:
             return None
 
         leading_attributes = []
-        if self.current_token[0] == "LAYOUT":
-            leading_attributes = self.parse_layout_attributes()
+        while True:
+            if self.current_token[0] == "LAYOUT":
+                leading_attributes.extend(self.parse_layout_attributes())
+                continue
+
+            attributes = self.parse_attribute_annotations()
+            if attributes:
+                leading_attributes.extend(attributes)
+                continue
+
+            break
 
         if self.current_token[0] == "IDENTIFIER" and self.peek()[0] == "COLON":
             name = self.current_token[1]
@@ -1554,7 +1632,8 @@ class Parser:
         qualifiers = self.parse_variable_qualifiers()
 
         var_type = self.parse_type()
-        name = self.parse_binding_identifier()
+        name = self.current_token[1]
+        self.eat("IDENTIFIER")
 
         while self.current_token[
             0
@@ -1655,11 +1734,11 @@ class Parser:
 
             self.advance_over_pointer_suffix()
 
-            if not self.current_token_is_identifier_like():
+            if self.current_token[0] != "IDENTIFIER":
                 return False
 
             self.current_token[1]
-            self.eat(self.current_token[0])
+            self.eat("IDENTIFIER")
 
             next_token = self.current_token[0]
 
@@ -2384,11 +2463,6 @@ class Parser:
 
         self.eat(token_type)
         return token_value
-
-    def current_token_is_identifier_like(self):
-        """Return whether the current token can name a binding."""
-        _token_type, token_value = self.current_token
-        return isinstance(token_value, str) and token_value.isidentifier()
 
     def parse_if_statement(self):
         """Parse an if/else statement chain."""
@@ -3318,8 +3392,10 @@ class Parser:
             qualifiers=[stage_type],
         )
 
-    def parse_cbuffer_as_struct(self):
+    def parse_cbuffer_as_struct(self, leading_attributes=None):
         """Parse a constant/uniform buffer declaration as a struct node."""
+        attributes = list(leading_attributes or [])
+
         if self.current_token[0] == "CBUFFER":
             self.eat("CBUFFER")
         else:
@@ -3328,7 +3404,6 @@ class Parser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        attributes = []
         attributes.extend(self.parse_post_declaration_attributes())
 
         self.eat("LBRACE")
@@ -3696,6 +3771,12 @@ class Parser:
         if self.current_token[0] == "ENUM":
             return self.parse_enum()
 
+        if self.current_token_starts_attributed_cbuffer_declaration():
+            return self.parse_attributed_cbuffer()
+
+        if self.current_token_starts_attributed_struct_declaration():
+            return self.parse_attributed_struct()
+
         if self.current_token[0] == "STRUCT":
             return self.parse_struct()
 
@@ -3709,6 +3790,8 @@ class Parser:
             attributes = self.parse_layout_attributes()
             if self.is_layout_buffer_block_declaration():
                 return list(self.parse_layout_buffer_block(attributes))
+            if self.is_cbuffer_declaration():
+                return self.parse_cbuffer_as_struct(attributes)
             if self.is_variable_declaration():
                 return self.parse_variable_declaration(attributes)
             self.skip_unknown_token()

@@ -330,6 +330,7 @@ class HLSLCodeGen:
         self.current_expression_expected_type = None
         self.current_generic_function_substitutions = {}
         self.local_variable_types = {}
+        self.global_variable_types = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
         self.generic_struct_definitions = {}
@@ -604,6 +605,7 @@ class HLSLCodeGen:
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.local_variable_types = {}
+        self.global_variable_types = {}
         self.current_global_resource_declaration_nodes = None
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
@@ -677,6 +679,7 @@ class HLSLCodeGen:
         }
         global_vars = self.global_resource_declaration_nodes(ast, target_stage)
         self.current_global_resource_declaration_nodes = global_vars
+        self.global_variable_types = self.collect_global_variable_types(global_vars)
         functions = self.collect_functions(ast)
         self.function_return_types = {
             func.name: self.type_name_string(getattr(func, "return_type", "void"))
@@ -2301,7 +2304,7 @@ class HLSLCodeGen:
         if expr is None:
             return None
         if isinstance(expr, VariableNode):
-            return self.local_variable_types.get(getattr(expr, "name", None))
+            return self.variable_type_by_name(getattr(expr, "name", None))
         if isinstance(expr, (int, float)):
             return "float" if isinstance(expr, float) else "int"
         if isinstance(expr, BinaryOpNode):
@@ -2574,7 +2577,7 @@ class HLSLCodeGen:
             if literal_type:
                 return literal_type
         if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
-            return self.local_variable_types.get(getattr(expr, "name", None))
+            return self.variable_type_by_name(getattr(expr, "name", None))
         return None
 
     def generate_assignment(self, node):
@@ -3195,12 +3198,28 @@ class HLSLCodeGen:
             return str(expr)
 
     def synchronization_function_call(self, func_name, args):
-        if args or func_name in getattr(self, "function_return_types", {}):
+        if not func_name or func_name in getattr(self, "function_return_types", {}):
             return None
+
+        intrinsic = self.synchronization_intrinsic_name(func_name)
+        if intrinsic is None:
+            return None
+        if args:
+            raise ValueError(
+                f"DirectX synchronization builtin '{func_name}' requires 0 "
+                f"argument(s), got {len(args)}"
+            )
+        return f"{intrinsic}()"
+
+    def synchronization_intrinsic_name(self, func_name):
         return {
-            "barrier": "GroupMemoryBarrierWithGroupSync()",
-            "workgroupBarrier": "GroupMemoryBarrierWithGroupSync()",
-            "memoryBarrier": "AllMemoryBarrier()",
+            "barrier": "GroupMemoryBarrierWithGroupSync",
+            "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
+            "groupMemoryBarrier": "GroupMemoryBarrier",
+            "memoryBarrierShared": "GroupMemoryBarrier",
+            "deviceMemoryBarrier": "DeviceMemoryBarrier",
+            "memoryBarrier": "AllMemoryBarrier",
+            "allMemoryBarrier": "AllMemoryBarrier",
         }.get(func_name)
 
     def generate_buffer_call(self, func_name, args):
@@ -3502,6 +3521,35 @@ class HLSLCodeGen:
             variable_types[name] = self.type_name_string(vtype)
 
         return variable_types
+
+    def collect_global_variable_types(self, global_vars):
+        variable_types = {}
+        for node in global_vars or []:
+            name = getattr(node, "name", getattr(node, "variable_name", None))
+            if not name:
+                continue
+
+            vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+            if vtype is None:
+                vtype = getattr(node, "param_type", None)
+            type_name = self.type_name_string(vtype)
+            if not type_name:
+                continue
+
+            if "[" not in str(type_name):
+                array_size = self.hlsl_resource_array_size_expression(node, vtype)
+                if array_size is not None:
+                    type_name = f"{type_name}[{self.expression_to_string(array_size)}]"
+
+            variable_types[name] = type_name
+        return variable_types
+
+    def variable_type_by_name(self, name):
+        if not name:
+            return None
+        if name in self.local_variable_types:
+            return self.local_variable_types[name]
+        return self.global_variable_types.get(name)
 
     def sampler_struct_member_reference(self, expr):
         while isinstance(expr, ArrayAccessNode):
@@ -11085,17 +11133,21 @@ class HLSLCodeGen:
     def generate_glsl_buffer_block_atomic_call(self, func_name, args):
         operations = self.byteaddress_atomic_operations()
         operation_info = operations.get(func_name)
-        if operation_info is None or not args:
+        if (
+            operation_info is None
+            or func_name in getattr(self, "function_return_types", {})
+            or not args
+        ):
             return None
 
         operation, intrinsic, expected_args = operation_info
-        if len(args) < expected_args:
-            return None
-
         target = args[0]
         access, offset = self.glsl_buffer_block_atomic_access(target)
         if access is None:
             return None
+        self.validate_hlsl_byteaddress_atomic_argument_count(
+            func_name, args, expected_args
+        )
         if access.get("readonly"):
             return self.unsupported_glsl_buffer_block_atomic_call(
                 target,
@@ -11118,6 +11170,10 @@ class HLSLCodeGen:
                 access,
             )
 
+        self.validate_hlsl_byteaddress_atomic_value_arguments(
+            func_name, args, access, operation
+        )
+
         component_type = access["component_type"]
         helper_name = self.byteaddress_atomic_helper_name(operation, component_type)
         self.required_byteaddress_atomic_helpers.add(
@@ -11138,6 +11194,36 @@ class HLSLCodeGen:
 
         value = self.generate_expression_with_expected(args[1], access["type"])
         return f"{helper_name}({access['buffer']}, {offset}, {value})"
+
+    def validate_hlsl_byteaddress_atomic_argument_count(
+        self, func_name, args, expected_args
+    ):
+        if len(args) == expected_args:
+            return
+        raise ValueError(
+            f"DirectX GLSL buffer block atomic '{func_name}' requires "
+            f"{expected_args} argument(s), got {len(args)}"
+        )
+
+    def validate_hlsl_byteaddress_atomic_value_arguments(
+        self, func_name, args, access, operation
+    ):
+        expected_kind = access.get("component_type")
+        if expected_kind not in {"int", "uint"}:
+            return
+
+        if operation == "compare_exchange":
+            value_roles = ((1, "compare value"), (2, "replacement"))
+        else:
+            value_roles = ((1, "value"),)
+        for index, role in value_roles:
+            value_kind = self.scalar_expression_kind(args[index])
+            if value_kind is None or value_kind == expected_kind:
+                continue
+            raise ValueError(
+                f"DirectX GLSL buffer block atomic '{func_name}' {role} "
+                f"argument must be scalar {expected_kind}, got {value_kind}"
+            )
 
     def glsl_buffer_block_diagnostic(
         self, target, type_name, var_name=None, node=None, declaration_kind=None

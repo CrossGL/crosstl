@@ -75,6 +75,9 @@ MOJO_VECTOR_TYPES = {
     "packed_half2": ("DType.float16", 2, 2, None),
     "packed_half3": ("DType.float16", 3, 4, "0.0"),
     "packed_half4": ("DType.float16", 4, 4, None),
+    "simd_half2": ("DType.float16", 2, 2, None),
+    "simd_half3": ("DType.float16", 3, 4, "0.0"),
+    "simd_half4": ("DType.float16", 4, 4, None),
     "f16vec2": ("DType.float16", 2, 2, None),
     "f16vec3": ("DType.float16", 3, 4, "0.0"),
     "f16vec4": ("DType.float16", 4, 4, None),
@@ -90,6 +93,9 @@ MOJO_VECTOR_TYPES = {
     "double2": ("DType.float64", 2, 2, None),
     "double3": ("DType.float64", 3, 4, "0.0"),
     "double4": ("DType.float64", 4, 4, None),
+    "simd_double2": ("DType.float64", 2, 2, None),
+    "simd_double3": ("DType.float64", 3, 4, "0.0"),
+    "simd_double4": ("DType.float64", 4, 4, None),
     "vec2<i32>": ("DType.int32", 2, 2, None),
     "vec3<i32>": ("DType.int32", 3, 4, "0"),
     "vec4<i32>": ("DType.int32", 4, 4, None),
@@ -108,6 +114,12 @@ MOJO_VECTOR_TYPES = {
     "short2": ("DType.int16", 2, 2, None),
     "short3": ("DType.int16", 3, 4, "0"),
     "short4": ("DType.int16", 4, 4, None),
+    "packed_short2": ("DType.int16", 2, 2, None),
+    "packed_short3": ("DType.int16", 3, 4, "0"),
+    "packed_short4": ("DType.int16", 4, 4, None),
+    "simd_short2": ("DType.int16", 2, 2, None),
+    "simd_short3": ("DType.int16", 3, 4, "0"),
+    "simd_short4": ("DType.int16", 4, 4, None),
     "i16vec2": ("DType.int16", 2, 2, None),
     "i16vec3": ("DType.int16", 3, 4, "0"),
     "i16vec4": ("DType.int16", 4, 4, None),
@@ -135,6 +147,12 @@ MOJO_VECTOR_TYPES = {
     "ushort2": ("DType.uint16", 2, 2, None),
     "ushort3": ("DType.uint16", 3, 4, "0"),
     "ushort4": ("DType.uint16", 4, 4, None),
+    "packed_ushort2": ("DType.uint16", 2, 2, None),
+    "packed_ushort3": ("DType.uint16", 3, 4, "0"),
+    "packed_ushort4": ("DType.uint16", 4, 4, None),
+    "simd_ushort2": ("DType.uint16", 2, 2, None),
+    "simd_ushort3": ("DType.uint16", 3, 4, "0"),
+    "simd_ushort4": ("DType.uint16", 4, 4, None),
     "u16vec2": ("DType.uint16", 2, 2, None),
     "u16vec3": ("DType.uint16", 3, 4, "0"),
     "u16vec4": ("DType.uint16", 4, 4, None),
@@ -189,9 +207,22 @@ MOJO_MATRIX_TYPES = {
     **_matrix_aliases("float", "DType.float32", rows_first=True),
     **_matrix_aliases("simd_float", "DType.float32", rows_first=True),
     **_matrix_aliases("double", "DType.float64", rows_first=True),
+    **_matrix_aliases("simd_double", "DType.float64", rows_first=True),
     **_matrix_aliases("half", "DType.float16", rows_first=True),
+    **_matrix_aliases("simd_half", "DType.float16", rows_first=True),
     **_matrix_aliases("min16float", "DType.float16", rows_first=True),
     **_matrix_aliases("min10float", "DType.float16", rows_first=True),
+    **_matrix_aliases("int", "DType.int32", rows_first=True),
+    **_matrix_aliases("simd_int", "DType.int32", rows_first=True),
+    **_matrix_aliases("uint", "DType.uint32", rows_first=True),
+    **_matrix_aliases("simd_uint", "DType.uint32", rows_first=True),
+    **_matrix_aliases("short", "DType.int16", rows_first=True),
+    **_matrix_aliases("simd_short", "DType.int16", rows_first=True),
+    **_matrix_aliases("min16int", "DType.int16", rows_first=True),
+    **_matrix_aliases("min12int", "DType.int16", rows_first=True),
+    **_matrix_aliases("ushort", "DType.uint16", rows_first=True),
+    **_matrix_aliases("simd_ushort", "DType.uint16", rows_first=True),
+    **_matrix_aliases("min16uint", "DType.uint16", rows_first=True),
     **_square_matrix_aliases("f16mat", "DType.float16"),
     **_matrix_aliases("f16mat", "DType.float16", rows_first=False),
 }
@@ -231,6 +262,7 @@ MOJO_SCALAR_DTYPES = {
     "float": "DType.float32",
     "double": "DType.float64",
     "i16": "DType.int16",
+    "i32": "DType.int32",
     "int16": "DType.int16",
     "int16_t": "DType.int16",
     "int": "DType.int32",
@@ -238,6 +270,7 @@ MOJO_SCALAR_DTYPES = {
     "min16int": "DType.int16",
     "short": "DType.int16",
     "u16": "DType.uint16",
+    "u32": "DType.uint32",
     "uint": "DType.uint32",
     "uint16": "DType.uint16",
     "uint16_t": "DType.uint16",
@@ -471,7 +504,51 @@ MOJO_BYTE_ADDRESS_STORE_METHODS = {
     "Store4": 4,
 }
 
-MOJO_INTEGER_INDEX_TYPES = {"int", "uint", "short", "ushort", "long", "ulong"}
+MOJO_INTEGER_DTYPES = {
+    "DType.int16",
+    "DType.int32",
+    "DType.uint16",
+    "DType.uint32",
+}
+
+MOJO_INTEGER_INDEX_TYPES = {
+    "Int",
+    "Int16",
+    "Int32",
+    "Int64",
+    "UInt",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+    "i16",
+    "i32",
+    "int",
+    "int16",
+    "int16_t",
+    "long",
+    "min12int",
+    "min16int",
+    "min16uint",
+    "short",
+    "u16",
+    "u32",
+    "uint",
+    "uint16",
+    "uint16_t",
+    "ulong",
+    "ushort",
+}
+
+MOJO_MAPPED_INTEGER_TYPES = {
+    "Int",
+    "Int16",
+    "Int32",
+    "Int64",
+    "UInt",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+}
 
 MOJO_VECTOR_ARITHMETIC_OPS = {
     "+": "add",
@@ -535,6 +612,7 @@ class MojoCodeGen:
             "void": "None",
             "int": "Int32",
             "i16": "Int16",
+            "i32": "Int32",
             "int16": "Int16",
             "int16_t": "Int16",
             "min12int": "Int16",
@@ -543,6 +621,7 @@ class MojoCodeGen:
             "long": "Int64",
             "uint": "UInt32",
             "u16": "UInt16",
+            "u32": "UInt32",
             "uint16": "UInt16",
             "uint16_t": "UInt16",
             "min16uint": "UInt16",
@@ -849,12 +928,9 @@ class MojoCodeGen:
                 return f"dvec{size}"
             elif element_type == "bool":
                 return f"bvec{size}"
-            elif element_type == "f16":
-                return f"f16vec{size}"
-            elif element_type == "i16":
-                return f"i16vec{size}"
-            elif element_type == "u16":
-                return f"u16vec{size}"
+            dtype = MOJO_SCALAR_DTYPES.get(element_type)
+            if dtype in MOJO_DTYPE_INFO:
+                return self.vector_type_name_for_dtype_width(dtype, size)
             else:
                 return f"{element_type}{size}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
@@ -2238,8 +2314,11 @@ class MojoCodeGen:
                 func_name = self.scalar_constructor_map[func_name]
 
             # Handle vector constructors
-            if func_name in self.vector_constructor_info:
-                return self.generate_vector_constructor(func_name, expr.args)
+            vector_constructor_name = self.normalize_generic_vector_type_name(func_name)
+            if vector_constructor_name in self.vector_constructor_info:
+                return self.generate_vector_constructor(
+                    vector_constructor_name, expr.args
+                )
 
             if func_name in MOJO_MATRIX_TYPES:
                 return self.generate_matrix_constructor(func_name, expr.args)
@@ -2840,20 +2919,12 @@ class MojoCodeGen:
     def is_scalar_integer_type(self, type_name):
         if type_name is None or self.vector_type_info(type_name) is not None:
             return False
-        return str(type_name) in {
-            "int",
-            "uint",
-            "short",
-            "ushort",
-            "long",
-            "ulong",
-            "i32",
-            "u32",
-            "Int",
-            "UInt",
-            "Int32",
-            "UInt32",
-        }
+        type_name = self.type_name(type_name)
+        if type_name in MOJO_INTEGER_INDEX_TYPES:
+            return True
+        if MOJO_SCALAR_DTYPES.get(type_name) in MOJO_INTEGER_DTYPES:
+            return True
+        return self.type_mapping.get(type_name, type_name) in MOJO_MAPPED_INTEGER_TYPES
 
     def generate_matrix_constructor_helper_call(self, dtype, columns, rows, args):
         component_count = columns * rows
@@ -3742,6 +3813,20 @@ class MojoCodeGen:
             return self.convert_type_node_to_string(type_value)
         return str(type_value)
 
+    def normalize_generic_vector_type_name(self, type_name):
+        if not isinstance(type_name, str):
+            return type_name
+        match = re.fullmatch(r"vec([234])<\s*([^>]+)\s*>", type_name)
+        if match is None:
+            return type_name
+        dtype = MOJO_SCALAR_DTYPES.get(match.group(2).strip())
+        if dtype is None:
+            return type_name
+        canonical = f"vec{match.group(1)}<{MOJO_DTYPE_SUFFIX[dtype]}>"
+        if canonical in self.vector_constructor_info:
+            return canonical
+        return type_name
+
     def is_array_type_name(self, type_name):
         return type_name is not None and "[" in str(type_name) and "]" in str(type_name)
 
@@ -3884,8 +3969,12 @@ class MojoCodeGen:
         array = self.generate_expression(expr.array)
         index = self.generate_array_index_expression(
             expr.index,
-            cast_integer_index=vector_info is not None
+            cast_integer_index=matrix_info is not None
+            or vector_info is not None
             or array_element_type is not None,
+            preserve_integer_index_types=(
+                {"int", "i32", "Int32"} if matrix_info is not None else None
+            ),
         )
 
         if matrix_info is not None:
@@ -3895,12 +3984,19 @@ class MojoCodeGen:
 
         return f"{array}[{index}]"
 
-    def generate_array_index_expression(self, expr, cast_integer_index=False):
+    def generate_array_index_expression(
+        self,
+        expr,
+        cast_integer_index=False,
+        preserve_integer_index_types=None,
+    ):
         index = self.generate_expression(expr)
         if not cast_integer_index or self.literal_int_value(expr) is not None:
             return index
 
         index_type = self.expression_result_type(expr)
+        if preserve_integer_index_types and index_type in preserve_integer_index_types:
+            return index
         if index_type in MOJO_INTEGER_INDEX_TYPES:
             return f"int({index})"
         return index
@@ -3959,6 +4055,9 @@ class MojoCodeGen:
             func_name = self.function_call_name(expr)
             if func_name in self.vector_constructor_info:
                 return func_name
+            vector_func_name = self.normalize_generic_vector_type_name(func_name)
+            if vector_func_name in self.vector_constructor_info:
+                return vector_func_name
             if func_name in MOJO_MATRIX_TYPES:
                 return func_name
             if func_name in {"fract", "frac"} and expr.args:
@@ -4086,8 +4185,13 @@ class MojoCodeGen:
         return None
 
     def vector_type_info(self, type_name):
-        if type_name in self.vector_constructor_info:
-            return self.vector_constructor_info[type_name]
+        if type_name is None:
+            return None
+        normalized_type = self.normalize_generic_vector_type_name(
+            self.type_name(type_name)
+        )
+        if normalized_type in self.vector_constructor_info:
+            return self.vector_constructor_info[normalized_type]
         return None
 
     def matrix_type_info(self, type_name):
@@ -4258,6 +4362,8 @@ class MojoCodeGen:
                 return f"InlineArray[{base_mapped}, {size}]"
             else:
                 return f"List[{base_mapped}]"
+
+        vtype_str = self.normalize_generic_vector_type_name(vtype_str)
 
         buffer_info = self.buffer_resource_info(vtype_str)
         if buffer_info is not None:

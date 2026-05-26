@@ -2996,6 +2996,184 @@ def test_metal_trace_ray_threads_intersection_function_table_through_helpers():
     ) in generated
 
 
+def test_metal_trace_ray_forwards_thread_local_payload_with_intersection_table():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+
+        accelerationStructureEXT topLevelAS @binding(0);
+        intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+        ray_generation {
+            void main() {
+                Payload payload;
+                payload.color = vec3(1.0, 0.0, 0.0);
+                TraceRay(
+                    topLevelAS,
+                    0,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    payload
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Payload payload;" in generated
+    assert (
+        "intersection_result<instancing> __crossgl_intersection_2 = "
+        "__crossgl_intersector_1.intersect("
+        "__crossgl_ray_0, topLevelAS, 255, intersectionFunctions, payload);"
+    ) in generated
+    assert "unsupported Metal ray tracing intrinsic: TraceRay payload" not in generated
+
+
+def test_metal_trace_ray_forwards_helper_parameter_payload():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+
+        accelerationStructureEXT topLevelAS @binding(0);
+        intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+        void shoot(Payload payload, vec3 origin, vec3 direction) {
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                origin,
+                0.001,
+                direction,
+                1000.0,
+                payload
+            );
+        }
+
+        ray_generation {
+            void main() {
+                Payload payload;
+                shoot(payload, vec3(0.0), vec3(0.0, 0.0, 1.0));
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void shoot(Payload payload, float3 origin, float3 direction, "
+        "instance_acceleration_structure topLevelAS, "
+        "intersection_function_table<instancing> intersectionFunctions)"
+    ) in generated
+    assert (
+        "__crossgl_intersector_1.intersect("
+        "__crossgl_ray_0, topLevelAS, 255, intersectionFunctions, payload);"
+    ) in generated
+    assert (
+        "shoot(payload, float3(0.0), float3(0.0, 0.0, 1.0), "
+        "topLevelAS, intersectionFunctions);"
+    ) in generated
+
+
+def test_metal_trace_ray_payload_without_intersection_table_emits_diagnostic():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        ray_generation {
+            void main() {
+                Payload payload;
+                TraceRay(
+                    topLevelAS,
+                    0,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    payload
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "__crossgl_intersector_1.intersect(__crossgl_ray_0, topLevelAS, 255);"
+        in generated
+    )
+    assert (
+        "unsupported Metal ray tracing intrinsic: TraceRay payload - "
+        "payload forwarding requires a compatible intersection_function_table"
+    ) in generated
+    assert "intersectionFunctions, payload" not in generated
+
+
+def test_metal_trace_ray_rejects_non_thread_payload_parameter():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+
+        accelerationStructureEXT topLevelAS @binding(0);
+        intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+        ray_generation {
+            void main(Payload payload @payload) {
+                TraceRay(
+                    topLevelAS,
+                    0,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    payload
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "kernel void kernel_main(device Payload& payload" in generated
+    assert (
+        "__crossgl_intersector_1.intersect("
+        "__crossgl_ray_0, topLevelAS, 255, intersectionFunctions);"
+    ) in generated
+    assert (
+        "payload forwarding requires a thread-local payload lvalue; "
+        "ray payload parameters use a non-thread address space"
+    ) in generated
+    assert "intersectionFunctions, payload" not in generated
+
+
 def test_metal_trace_ray_skips_incompatible_intersection_function_table():
     code = """
     shader rt {
@@ -3675,6 +3853,116 @@ def test_metal_mesh_stage_vector_triangle_primitive_writes_expand_to_indices():
     assert "_crossglMeshOut.set_index(((0) * 3) + 2, tri.z);" in generated
     assert "_crossglMeshOut.set_indices((0) * 3" not in generated
     assert "SetPrimitive" not in generated
+
+
+def test_metal_mesh_output_signature_roles_lower_to_mesh_output_parameter():
+    code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct MeshPrimitive {
+            uint layer @ gl_PrimitiveID;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                MeshVertex outVertex;
+                outVertex.position = vec4(0.0, 0.0, 0.0, 1.0);
+                outVertex.uv = vec2(0.0);
+                MeshPrimitive outPrimitive;
+                outPrimitive.layer = 0u;
+
+                SetMeshOutputCounts(3, 1);
+                verts[0] = outVertex;
+                tris[0] = uvec3(0u, 1u, 2u);
+                prims[0] = outPrimitive;
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+    assert (
+        "mesh<MeshVertex, MeshPrimitive, 3, 1, topology::triangle> _crossglMeshOut"
+        in generated
+    )
+    assert "MeshVertex verts[3]" not in generated
+    assert "uint3 tris[1]" not in generated
+    assert "MeshPrimitive prims[1]" not in generated
+    assert "_crossglMeshOut.set_vertex(0, outVertex);" in generated
+    assert "_crossglMeshOut.set_index((0) * 3, uint3(0u, 1u, 2u).x);" in generated
+    assert "_crossglMeshOut.set_index(((0) * 3) + 1, uint3(0u, 1u, 2u).y);" in generated
+    assert "_crossglMeshOut.set_index(((0) * 3) + 2, uint3(0u, 1u, 2u).z);" in generated
+    assert "_crossglMeshOut.set_primitive(0, outPrimitive);" in generated
+    assert "[[vertices]]" not in generated
+    assert "[[indices]]" not in generated
+    assert "[[primitives]]" not in generated
+
+
+def test_metal_mesh_output_signature_single_member_writes_lower_to_setters():
+    code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+    assert (
+        "_crossglMeshOut.set_vertex(" "0, MeshVertex{float4(0.0, 0.0, 0.0, 1.0)});"
+    ) in generated
+    assert "_crossglMeshOut.set_index((0) * 3, uint3(0u, 1u, 2u).x);" in generated
+    assert "verts[0].position" not in generated
+    assert "tris[0]" not in generated
+
+
+def test_metal_mesh_output_signature_multi_member_partial_write_is_diagnostic():
+    code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+    assert (
+        "unsupported Metal mesh output assignment: vertices output 'verts' - "
+        "partial member writes require a single-member output struct"
+    ) in generated
+    assert "verts[0].position" not in generated
+    assert "_crossglMeshOut.set_index((0) * 3, uint3(0u, 1u, 2u).x);" in generated
 
 
 def test_metal_mesh_stage_output_signature_avoids_generated_name_collisions():

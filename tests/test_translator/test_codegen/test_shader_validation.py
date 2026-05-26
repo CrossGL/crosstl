@@ -343,6 +343,18 @@ shader SpirvGlslBufferBlockValidation {
         Particle particles[];
     } particleBlock;
 
+    float readMass(ParticleBlock block @glsl_buffer_block(std430), uint index) {
+        return block.particles[index].mass;
+    }
+
+    void writeMass(
+        ParticleBlock block @glsl_buffer_block(std430),
+        uint index,
+        float value
+    ) {
+        block.particles[index].mass = value;
+    }
+
     compute {
         layout(std430, binding = 2) readonly buffer float values[];
         layout(std430, binding = 3) writeonly buffer float outValues[];
@@ -350,7 +362,8 @@ shader SpirvGlslBufferBlockValidation {
         void main() {
             float mass = particleBlock.particles[0u].mass;
             float value = buffer_load(values, 1u);
-            particleBlock.particles[1u].mass = mass + value;
+            float helperMass = readMass(particleBlock, 0u);
+            writeMass(particleBlock, 1u, mass + value + helperMass);
             buffer_store(outValues, 0u, mass);
         }
     }
@@ -365,15 +378,42 @@ shader SpirvResourceMemoryQualifierValidation {
     RWStructuredBuffer<float> coherentValues @binding(2) @coherent;
     StructuredBuffer<float> readOnlyValues @binding(3);
     RWStructuredBuffer<float> writeOnlyValues @binding(4) @writeonly;
+    uimage2D counters @r32ui @binding(5);
+
+    vec4 readLeaf(image2D image @rgba32f, ivec2 pixel) {
+        return imageLoad(image, pixel);
+    }
+
+    vec4 readForward(image2D image @rgba32f, ivec2 pixel) {
+        return readLeaf(image, pixel);
+    }
+
+    void writePixel(image2D image @rgba32f, ivec2 pixel, vec4 value) {
+        imageStore(image, pixel, value);
+    }
+
+    uint addCounter(uimage2D image @r32ui, ivec2 pixel, uint value) {
+        return imageAtomicAdd(image, pixel, value);
+    }
+
+    float readBuffer(StructuredBuffer<float> data, uint index) {
+        return buffer_load(data, index);
+    }
+
+    void writeBuffer(RWStructuredBuffer<float> data, uint index, float value) {
+        buffer_store(data, index, value);
+    }
 
     compute {
         void main() {
             ivec2 pixel = ivec2(0, 1);
-            vec4 texel = imageLoad(inputImage, pixel);
-            imageStore(outputImage, pixel, texel);
-            float value = buffer_load(readOnlyValues, 0u);
-            buffer_store(writeOnlyValues, 1u, value + texel.x);
-            buffer_store(coherentValues, 2u, value);
+            vec4 texel = readForward(inputImage, pixel);
+            writePixel(outputImage, pixel, texel);
+            uint oldCounter = addCounter(counters, pixel, 1u);
+            imageStore(counters, pixel, oldCounter);
+            float value = readBuffer(readOnlyValues, 0u);
+            writeBuffer(writeOnlyValues, 1u, value + texel.x);
+            writeBuffer(coherentValues, 2u, value);
         }
     }
 }
@@ -1416,6 +1456,39 @@ shader MetalMeshObjectValidation {
 """
 
 
+METAL_MESH_OUTPUT_SIGNATURE_SHADER = """
+shader MetalMeshOutputSignatureValidation {
+    struct MeshVertex {
+        vec4 position @ gl_Position;
+        vec2 uv @ TEXCOORD0;
+    };
+
+    struct MeshPrimitive {
+        uint layer @ gl_PrimitiveID;
+    };
+
+    mesh {
+        void main(
+            @vertices out MeshVertex verts[3],
+            @indices out uvec3 tris[1],
+            @primitives out MeshPrimitive prims[1]
+        ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+            MeshVertex outVertex;
+            outVertex.position = vec4(0.0, 0.0, 0.0, 1.0);
+            outVertex.uv = vec2(0.0);
+            MeshPrimitive outPrimitive;
+            outPrimitive.layer = 0u;
+
+            SetMeshOutputCounts(3, 1);
+            verts[0] = outVertex;
+            tris[0] = uvec3(0u, 1u, 2u);
+            prims[0] = outPrimitive;
+        }
+    }
+}
+"""
+
+
 METAL_RAY_TRACING_HELPER_SHADER = """
 shader MetalRayTracingHelperValidation {
     accelerationStructureEXT topLevelAS @binding(0);
@@ -1494,6 +1567,68 @@ shader MetalRayTracingPrimitiveAccelerationValidation {
                 vec3(0.0, 0.0, 1.0),
                 1000.0,
                 0
+            );
+        }
+    }
+}
+"""
+
+
+METAL_RAY_TRACING_PAYLOAD_TRACE_SHADER = """
+shader MetalRayTracingPayloadTraceValidation {
+    struct Payload {
+        vec3 color;
+    };
+
+    accelerationStructureEXT topLevelAS @binding(0);
+    intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+    ray_generation {
+        void main() {
+            Payload payload;
+            payload.color = vec3(1.0, 0.0, 0.0);
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                payload
+            );
+        }
+    }
+}
+"""
+
+
+METAL_RAY_TRACING_PAYLOAD_DIAGNOSTIC_SHADER = """
+shader MetalRayTracingPayloadDiagnosticValidation {
+    struct Payload {
+        vec3 color;
+    };
+
+    accelerationStructureEXT topLevelAS @binding(0);
+
+    ray_generation {
+        void main() {
+            Payload payload;
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                payload
             );
         }
     }
@@ -3292,6 +3427,47 @@ def test_generated_metal_mesh_object_stages_compile_with_metal3(tmp_path):
     )
 
 
+def test_generated_metal_mesh_output_signature_compiles_with_metal3(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "mesh_output_signature.metal"
+    output = tmp_path / "mesh_output_signature.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_MESH_OUTPUT_SIGNATURE_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "mesh<MeshVertex, MeshPrimitive, 3, 1, topology::triangle>" in code
+    assert "MeshVertex verts[3]" not in code
+    assert "uint3 tris[1]" not in code
+    assert "MeshPrimitive prims[1]" not in code
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
 def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3(
     tmp_path,
 ):
@@ -3366,6 +3542,70 @@ def test_generated_metal_primitive_acceleration_trace_compiles_with_metal3(
         crosstl.translator.parse(METAL_RAY_TRACING_PRIMITIVE_ACCELERATION_SHADER)
     )
     assert "intersect(__crossgl_ray_0, primitiveAS, intersectionFunctions)" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_payload_trace_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_tracing_payload_trace.metal"
+    output = tmp_path / "ray_tracing_payload_trace.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_TRACING_PAYLOAD_TRACE_SHADER)
+    )
+    assert (
+        "intersect(" "__crossgl_ray_0, topLevelAS, 255, intersectionFunctions, payload)"
+    ) in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_payload_diagnostic_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_tracing_payload_diagnostic.metal"
+    output = tmp_path / "ray_tracing_payload_diagnostic.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_TRACING_PAYLOAD_DIAGNOSTIC_SHADER)
+    )
+    assert "payload forwarding requires a compatible intersection_function_table" in (
+        code
+    )
     source.write_text(code, encoding="utf-8")
 
     run_validator(

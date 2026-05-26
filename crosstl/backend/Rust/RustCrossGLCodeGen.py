@@ -253,6 +253,28 @@ class RustToCrossGLConverter:
             "greater_than_equal": "greaterThanEqual",
             "equal": "equal",
             "not_equal": "notEqual",
+            "bit_count": "bitCount",
+            "bitfield_reverse": "bitfieldReverse",
+            "find_lsb": "findLSB",
+            "find_msb": "findMSB",
+            "bitfield_extract": "bitfieldExtract",
+            "bitfield_insert": "bitfieldInsert",
+            "float_bits_to_int": "floatBitsToInt",
+            "float_bits_to_uint": "floatBitsToUint",
+            "int_bits_to_float": "intBitsToFloat",
+            "uint_bits_to_float": "uintBitsToFloat",
+            "pack_unorm_2x16": "packUnorm2x16",
+            "pack_snorm_2x16": "packSnorm2x16",
+            "pack_unorm_4x8": "packUnorm4x8",
+            "pack_snorm_4x8": "packSnorm4x8",
+            "pack_half_2x16": "packHalf2x16",
+            "pack_double_2x32": "packDouble2x32",
+            "unpack_unorm_2x16": "unpackUnorm2x16",
+            "unpack_snorm_2x16": "unpackSnorm2x16",
+            "unpack_unorm_4x8": "unpackUnorm4x8",
+            "unpack_snorm_4x8": "unpackSnorm4x8",
+            "unpack_half_2x16": "unpackHalf2x16",
+            "unpack_double_2x32": "unpackDouble2x32",
             "sin": "sin",
             "cos": "cos",
             "tan": "tan",
@@ -2466,7 +2488,6 @@ class RustToCrossGLConverter:
             constructor = self.format_path_constructor_call_parts(
                 expression.name,
                 args,
-                expression.args,
             )
             if constructor is not None:
                 return args_code, constructor
@@ -2559,7 +2580,7 @@ class RustToCrossGLConverter:
 
         return None
 
-    def format_path_constructor_call_parts(self, function_name, args, arg_nodes=None):
+    def format_path_constructor_call_parts(self, function_name, args):
         if not function_name.endswith("::new"):
             return None
 
@@ -2568,40 +2589,7 @@ class RustToCrossGLConverter:
         if mapped_type == type_name:
             return None
 
-        mapped_type = self.constructor_type_from_args(mapped_type, args, arg_nodes)
         return f"{mapped_type}({', '.join(args)})"
-
-    def constructor_type_from_args(self, mapped_type, args, arg_nodes=None):
-        if mapped_type not in {"vec2", "vec3", "vec4"}:
-            return mapped_type
-
-        size = int(mapped_type[-1])
-        if len(args) != size:
-            return mapped_type
-
-        if all(
-            self.constructor_arg_is_bool(arg, arg_nodes, index)
-            for index, arg in enumerate(args)
-        ):
-            return f"bvec{size}"
-
-        return mapped_type
-
-    def constructor_arg_is_bool(self, arg, arg_nodes, index):
-        if arg in {"true", "false"}:
-            return True
-
-        if arg_nodes is None or index >= len(arg_nodes):
-            return False
-
-        node = arg_nodes[index]
-        if isinstance(getattr(node, "value", None), bool):
-            return True
-
-        if isinstance(arg, str) and self.lookup_value_type(arg) == "bool":
-            return True
-
-        return False
 
     def generate_try_ternary_expression(self, expression, indent, loop_contexts=None):
         indent_str = "    " * indent
@@ -7076,7 +7064,7 @@ class RustToCrossGLConverter:
 
     def format_path_constructor_call(self, function_name, args):
         arg_values = [self.generate_expression(arg) for arg in args]
-        return self.format_path_constructor_call_parts(function_name, arg_values, args)
+        return self.format_path_constructor_call_parts(function_name, arg_values)
 
     def map_type(self, rust_type):
         """Map a Rust type name to the closest CrossGL type name."""

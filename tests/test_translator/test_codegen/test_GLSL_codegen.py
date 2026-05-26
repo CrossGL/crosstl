@@ -3907,6 +3907,7 @@ def test_glsl_ray_stage_entries_use_distinct_names():
     assert "void main()" not in combined_code
     assert combined_code.lstrip().startswith("#version 460 core")
     assert "#extension GL_EXT_ray_tracing : require" in combined_code
+    assert "#extension GL_EXT_ray_query : require" not in combined_code
     assert (
         "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;"
         in combined_code
@@ -3954,6 +3955,7 @@ def test_glsl_ray_stage_entries_use_distinct_names():
     assert "void ray_miss_main()" not in ray_miss_code
     assert ray_miss_code.lstrip().startswith("#version 460 core")
     assert "#extension GL_EXT_ray_tracing : require" in ray_miss_code
+    assert "#extension GL_EXT_ray_query : require" not in ray_miss_code
     assert (
         "layout(location = 0) rayPayloadInEXT RayPayload missPayload;" in ray_miss_code
     )
@@ -4040,6 +4042,169 @@ def test_glsl_ray_query_methods_lower_to_ext_functions():
     assert ".Proceed(" not in generated_code
     assert ".CandidateType(" not in generated_code
     assert ".Abort(" not in generated_code
+
+
+def test_glsl_target_stage_ray_query_extensions_are_scoped_to_emitted_stage():
+    shader = """
+    shader ScopedRayQueryExtensions {
+        vertex {
+            void main() { }
+        }
+
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                bool active = rq.Proceed();
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+
+    vertex_code = GLSLCodeGen().generate_stage(ast, "vertex")
+    compute_code = GLSLCodeGen().generate_stage(ast, "compute")
+    combined_code = GLSLCodeGen().generate(ast)
+
+    assert vertex_code.lstrip().startswith("#version 450 core")
+    assert "#extension GL_EXT_ray_query : require" not in vertex_code
+    assert "rayQueryEXT" not in vertex_code
+    assert "rayQueryProceedEXT" not in vertex_code
+
+    assert compute_code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_query : require" in compute_code
+    assert "rayQueryEXT rq;" in compute_code
+    assert "bool active_ = rayQueryProceedEXT(rq);" in compute_code
+    assert "bool active =" not in compute_code
+
+    assert combined_code.lstrip().startswith("#version 460 core")
+    assert combined_code.count("#extension GL_EXT_ray_query : require") == 1
+    assert "void vertex_main()" in combined_code
+    assert "void compute_main()" in combined_code
+
+
+def test_glsl_acceleration_structure_globals_emit_extension_for_non_ray_stage():
+    shader = """
+    shader AccelerationStructureHeader {
+        accelerationStructureEXT topLevelAS @binding(3);
+
+        vertex {
+            void main() { }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "vertex"
+    )
+
+    assert generated_code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_query : require" in generated_code
+    assert "#extension GL_EXT_ray_tracing : require" not in generated_code
+    assert (
+        "layout(binding = 3) uniform accelerationStructureEXT topLevelAS;"
+        in generated_code
+    )
+
+
+def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
+    shader = """
+    shader RayQueryGenericMethods {
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.Initialize(
+                    topLevelAS,
+                    gl_RayFlagsNoneEXT,
+                    255u,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0
+                );
+                vec3 worldOrigin = rq.WorldRayOrigin();
+                vec3 worldDirection = rq.WorldRayDirection();
+                uint rayFlags = rq.RayFlags();
+                float tMin = rq.RayTMin();
+                uint customIndex = rq.CommittedInstanceCustomIndex();
+                uint sbtOffset =
+                    rq.CandidateInstanceShaderBindingTableRecordOffset();
+                vec2 barycentrics = rq.CandidateTriangleBarycentrics();
+                bool frontFace = rq.CommittedTriangleFrontFace();
+                bool aabbOpaque = rq.CandidateAABBOpaque();
+                mat3x4 objectToWorld = rq.CommittedObjectToWorld();
+                mat3x4 worldToObject = rq.CandidateWorldToObject3x4();
+                vec3 trianglePositions[3];
+                rq.CandidateTriangleVertexPositions(trianglePositions);
+                rq.CommittedTriangleVertexPositions(trianglePositions);
+                rq.GenerateIntersection(1.0);
+                rq.ConfirmIntersection();
+                rq.Terminate();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "#extension GL_EXT_ray_query : require" in generated_code
+    assert "#extension GL_EXT_ray_tracing_position_fetch : require" in generated_code
+    assert "rayQueryEXT rq;" in generated_code
+    assert "rayQueryInitializeEXT(" in generated_code
+    assert "vec3 worldOrigin = rayQueryGetWorldRayOriginEXT(rq);" in generated_code
+    assert (
+        "vec3 worldDirection = rayQueryGetWorldRayDirectionEXT(rq);" in generated_code
+    )
+    assert "uint rayFlags = rayQueryGetRayFlagsEXT(rq);" in generated_code
+    assert "float tMin = rayQueryGetRayTMinEXT(rq);" in generated_code
+    assert (
+        "uint customIndex = "
+        "rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);" in generated_code
+    )
+    assert (
+        "uint sbtOffset = "
+        "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, false);"
+        in generated_code
+    )
+    assert (
+        "vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(rq, false);"
+        in generated_code
+    )
+    assert (
+        "bool frontFace = rayQueryGetIntersectionFrontFaceEXT(rq, true);"
+        in generated_code
+    )
+    assert (
+        "bool aabbOpaque = rayQueryGetIntersectionCandidateAABBOpaqueEXT(rq);"
+        in generated_code
+    )
+    assert (
+        "mat4x3 objectToWorld = "
+        "rayQueryGetIntersectionObjectToWorldEXT(rq, true);" in generated_code
+    )
+    assert (
+        "mat4x3 worldToObject = "
+        "rayQueryGetIntersectionWorldToObjectEXT(rq, false);" in generated_code
+    )
+    assert "vec3 trianglePositions[3];" in generated_code
+    assert (
+        "rayQueryGetIntersectionTriangleVertexPositionsEXT("
+        "rq, false, trianglePositions);" in generated_code
+    )
+    assert (
+        "rayQueryGetIntersectionTriangleVertexPositionsEXT("
+        "rq, true, trianglePositions);" in generated_code
+    )
+    assert "rayQueryGenerateIntersectionEXT(rq, 1.0);" in generated_code
+    assert "rayQueryConfirmIntersectionEXT(rq);" in generated_code
+    assert "rayQueryTerminateEXT(rq);" in generated_code
+    assert ".WorldRayOrigin(" not in generated_code
+    assert ".CandidateTriangleVertexPositions(" not in generated_code
+    assert ".GenerateIntersection(" not in generated_code
+    assert ".ConfirmIntersection(" not in generated_code
 
 
 def test_glsl_shader_record_buffer_rejects_binding_layout():

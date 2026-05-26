@@ -552,6 +552,76 @@ class HLSLToCrossGLConverter:
             rendered_value = f"{current_value} {binary_op} {rendered_value}"
         return f"imageStore({image}, {coord}, {rendered_value})"
 
+    def storage_image_component_type(self, access):
+        raw_type = self.expression_raw_type(access)
+        if raw_type is None:
+            return None
+        type_name = str(raw_type)
+        if "<" not in type_name or ">" not in type_name:
+            return None
+        return type_name.split("<", 1)[1].rsplit(">", 1)[0].strip()
+
+    def generate_storage_image_atomic_value(self, arg, component_type, is_main):
+        if (
+            component_type == "uint"
+            and isinstance(arg, int)
+            and not isinstance(arg, bool)
+            and arg >= 0
+        ):
+            return f"{arg}u"
+        return self.generate_expression(arg, is_main)
+
+    def interlocked_storage_image_atomic_expression(self, func_name, args, is_main):
+        operation_map = {
+            "InterlockedAdd": "imageAtomicAdd",
+            "InterlockedAnd": "imageAtomicAnd",
+            "InterlockedOr": "imageAtomicOr",
+            "InterlockedXor": "imageAtomicXor",
+            "InterlockedMin": "imageAtomicMin",
+            "InterlockedMax": "imageAtomicMax",
+            "InterlockedExchange": "imageAtomicExchange",
+            "InterlockedCompareExchange": "imageAtomicCompSwap",
+        }
+        operation = operation_map.get(func_name)
+        if (
+            operation is None
+            or not args
+            or not self.is_storage_image_texel_access(args[0])
+        ):
+            return None
+
+        expected_min_args = 3 if func_name == "InterlockedCompareExchange" else 2
+        if len(args) < expected_min_args:
+            return None
+
+        image, coord = self.generate_storage_image_access_parts(args[0], is_main)
+        component_type = self.storage_image_component_type(args[0])
+        if func_name == "InterlockedCompareExchange":
+            value_args = [
+                self.generate_storage_image_atomic_value(
+                    args[1], component_type, is_main
+                ),
+                self.generate_storage_image_atomic_value(
+                    args[2], component_type, is_main
+                ),
+            ]
+            original_index = 3
+        else:
+            value_args = [
+                self.generate_storage_image_atomic_value(
+                    args[1], component_type, is_main
+                )
+            ]
+            original_index = 2
+
+        atomic_call = f"{operation}({image}, {coord}, {', '.join(value_args)})"
+        if len(args) > original_index:
+            original = self.generate_without_storage_index_lowering(
+                args[original_index], is_main
+            )
+            return f"{original} = {atomic_call}"
+        return atomic_call
+
     def iter_ast_children(self, node):
         if node is None or isinstance(node, (str, int, float, bool)):
             return
@@ -1085,6 +1155,11 @@ class HLSLToCrossGLConverter:
                 if isinstance(expr.name, str)
                 else self.generate_expression(expr.name, is_main)
             )
+            interlocked_image_atomic = self.interlocked_storage_image_atomic_expression(
+                func_name, expr.args, is_main
+            )
+            if interlocked_image_atomic is not None:
+                return interlocked_image_atomic
             if func_name in self.interlocked_map:
                 rendered_args = [
                     self.generate_without_storage_index_lowering(arg, is_main)

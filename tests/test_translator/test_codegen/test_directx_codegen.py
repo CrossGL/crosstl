@@ -74,6 +74,10 @@ def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
                 barrier();
                 memoryBarrier();
                 workgroupBarrier();
+                groupMemoryBarrier();
+                memoryBarrierShared();
+                deviceMemoryBarrier();
+                allMemoryBarrier();
             }
         }
     }
@@ -82,10 +86,16 @@ def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert generated_code.count("GroupMemoryBarrierWithGroupSync();") == 2
-    assert "AllMemoryBarrier();" in generated_code
+    assert generated_code.count("GroupMemoryBarrier();") == 2
+    assert "DeviceMemoryBarrier();" in generated_code
+    assert generated_code.count("AllMemoryBarrier();") == 2
     assert "barrier();" not in generated_code
     assert "memoryBarrier();" not in generated_code
     assert "workgroupBarrier();" not in generated_code
+    assert "groupMemoryBarrier();" not in generated_code
+    assert "memoryBarrierShared();" not in generated_code
+    assert "deviceMemoryBarrier();" not in generated_code
+    assert "allMemoryBarrier();" not in generated_code
 
 
 def test_directx_user_defined_synchronization_names_are_not_lowered():
@@ -104,10 +114,15 @@ def test_directx_user_defined_synchronization_names_are_not_lowered():
                 return;
             }
 
+            void groupMemoryBarrier() {
+                return;
+            }
+
             void main() {
                 barrier();
                 memoryBarrier();
                 workgroupBarrier();
+                groupMemoryBarrier();
             }
         }
     }
@@ -118,11 +133,32 @@ def test_directx_user_defined_synchronization_names_are_not_lowered():
     assert "void barrier()" in generated_code
     assert "void memoryBarrier()" in generated_code
     assert "void workgroupBarrier()" in generated_code
+    assert "void groupMemoryBarrier()" in generated_code
     assert "barrier();" in generated_code
     assert "memoryBarrier();" in generated_code
     assert "workgroupBarrier();" in generated_code
+    assert "groupMemoryBarrier();" in generated_code
     assert "GroupMemoryBarrierWithGroupSync();" not in generated_code
+    assert "GroupMemoryBarrier();" not in generated_code
     assert "AllMemoryBarrier();" not in generated_code
+
+
+def test_directx_synchronization_builtins_reject_arguments():
+    shader = """
+    shader BadSynchronizationBuiltinArgs {
+        compute {
+            void main() {
+                barrier(1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="synchronization builtin 'barrier' requires 0 argument",
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
 
 
 def test_hlsl_float16_ir_aliases_map_to_half_and_min_precision_names():
@@ -951,6 +987,100 @@ def test_hlsl_glsl_buffer_block_fixed_width_aliases_lower_to_byteaddressbuffer()
     assert "unsupported HLSL GLSL buffer block" not in generated_code
     assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
+
+
+def test_directx_glsl_buffer_block_atomics_lower_to_byteaddress_helpers():
+    shader = """
+    shader GlslBufferBlockAtomicsHLSL {
+        struct AtomicBlock {
+            uint counter;
+            uint bins[4];
+            int signedCounter;
+        };
+
+        AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(17);
+
+        uint update(uint value) {
+            uint oldCounter = atomicAdd(atomicBlock.counter, value);
+            uint swapped = atomicCompSwap(atomicBlock.bins[1], oldCounter, 7u);
+            return oldCounter + swapped;
+        }
+
+        int updateSigned(int value) {
+            return atomicMin(atomicBlock.signedCounter, value);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "RWByteAddressBuffer atomicBlock : register(u17);" in generated_code
+    assert (
+        "uint __crossgl_byteaddress_atomic_add_uint("
+        "RWByteAddressBuffer buffer, uint offset, uint value)"
+    ) in generated_code
+    assert (
+        "uint __crossgl_byteaddress_atomic_compare_exchange_uint("
+        "RWByteAddressBuffer buffer, uint offset, uint compareValue, uint value)"
+    ) in generated_code
+    assert (
+        "int __crossgl_byteaddress_atomic_min_int("
+        "RWByteAddressBuffer buffer, uint offset, int value)"
+    ) in generated_code
+    assert (
+        "uint oldCounter = __crossgl_byteaddress_atomic_add_uint("
+        "atomicBlock, 0, value);"
+    ) in generated_code
+    assert (
+        "uint swapped = __crossgl_byteaddress_atomic_compare_exchange_uint("
+        "atomicBlock, 8, oldCounter, 7u);"
+    ) in generated_code
+    assert (
+        "return __crossgl_byteaddress_atomic_min_int(atomicBlock, 20, value);"
+        in generated_code
+    )
+    assert "atomicAdd(atomicBlock" not in generated_code
+    assert "atomicCompSwap(atomicBlock" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("call", "match"),
+    [
+        (
+            "atomicAdd(atomicBlock.counter, 1u, 2u)",
+            "atomic 'atomicAdd' requires 2 argument\\(s\\), got 3",
+        ),
+        (
+            "atomicCompSwap(atomicBlock.counter, 1u)",
+            "atomic 'atomicCompSwap' requires 3 argument\\(s\\), got 2",
+        ),
+        (
+            "atomicAdd(atomicBlock.counter, 1.0)",
+            "atomic 'atomicAdd' value argument must be scalar uint, got float",
+        ),
+        (
+            "atomicCompSwap(atomicBlock.counter, 1u, -1)",
+            "atomic 'atomicCompSwap' replacement argument must be scalar uint, got int",
+        ),
+    ],
+)
+def test_directx_glsl_buffer_block_atomics_validate_arguments(call, match):
+    shader = f"""
+    shader BadGlslBufferBlockAtomicHLSL {{
+        struct AtomicBlock {{
+            uint counter;
+        }};
+
+        AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(17);
+
+        uint update() {{
+            return {call};
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        generate_code(parse_code(tokenize_code(shader)))
 
 
 def test_structured_buffer_dimensions_lower_to_get_dimensions():
@@ -7098,6 +7228,100 @@ def test_directx_ray_acceleration_structure_rejects_non_srv_register_prefix():
         match="RaytracingAccelerationStructure resource 'accel'.*t-register.*u",
     ):
         HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+
+def test_directx_trace_ray_validates_global_acceleration_structure_arguments():
+    code = """
+    shader GlobalTraceRayAccelerationStructure {
+        RaytracingAccelerationStructure scene @binding(2);
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "ray_generation"
+    )
+
+    assert "RaytracingAccelerationStructure scene : register(t2);" in generated
+    assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, payload);" in generated
+
+    bad_code = """
+    shader BadGlobalTraceRayAccelerationStructure {
+        Texture2D scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="TraceRay acceleration structure.*RaytracingAccelerationStructure",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(bad_code), "ray_generation"
+        )
+
+
+def test_directx_ray_query_validates_global_acceleration_structure_arguments():
+    code = """
+    shader GlobalRayQueryAccelerationStructure {
+        RaytracingAccelerationStructure scene @binding(1);
+
+        compute {
+            void main() {
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(scene, 0, 0xFF, ray);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert "RaytracingAccelerationStructure scene : register(t1);" in generated
+    assert "rq.TraceRayInline(scene, 0, 255, ray);" in generated
+
+    bad_code = """
+    shader BadGlobalRayQueryAccelerationStructure {
+        Texture2D scene;
+
+        compute {
+            void main() {
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(scene, 0, 0xFF, ray);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="TraceRayInline acceleration structure.*RaytracingAccelerationStructure",
+    ):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(bad_code), "compute")
 
 
 def test_else_if_statement():

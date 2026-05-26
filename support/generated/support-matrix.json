@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 501
+        "test_count": 506
       },
       "translator_codegen": {
         "exists": true,
@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 698
+        "test_count": 701
       },
       "translator_codegen": {
         "exists": true,
@@ -260,7 +260,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 351,
+        "unsupported_marker_count": 358,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 458
+        "test_count": 465
       },
       "translator_codegen": {
         "exists": true,
@@ -433,7 +433,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 345
+        "test_count": 350
       },
       "translator_codegen": {
         "exists": true,
@@ -457,8 +457,24 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 23,
+        "unsupported_marker_count": 28,
         "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_structured_buffer_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_structured_buffer_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_structured_buffer_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_structured_buffer_call("
+          },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_structured_buffer_call("
@@ -505,6 +521,10 @@
           },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "\"\"\"Return a CUDA fallback expression for unsupported value-producing calls.\"\"\""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_resource_query_call("
           },
           {
@@ -518,26 +538,6 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_shadow_resource_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_multisample_resource_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_sampled_resource_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_image_atomic_resource_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_multisample_resource_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_multisample_resource_call("
           }
         ]
       },
@@ -547,7 +547,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 242
+        "test_count": 245
       },
       "translator_codegen": {
         "exists": true,
@@ -683,7 +683,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 250
+        "test_count": 258
       },
       "translator_codegen": {
         "exists": true,
@@ -797,7 +797,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 459
+        "test_count": 465
       },
       "translator_codegen": {
         "exists": true,
@@ -911,7 +911,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 279
+        "test_count": 283
       },
       "translator_codegen": {
         "exists": true,
@@ -971,8 +971,8 @@
       "category": "source",
       "feature": "Native preprocessor handling",
       "feature_id": "source.preprocessing",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, and payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
+      "status": "partial"
     },
     {
       "backend": "CUDA",
@@ -1196,7 +1196,7 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, and explicit mesh output signatures/topology for SetMeshOutputCounts primitive counts. Full mesh payload and vertex/primitive write semantics are not complete.",
+      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, and single-member output member writes. Multi-member partial output member writes emit compile-safe diagnostics because Metal mesh outputs require whole element setters. Full mesh payload validation and richer partial-write accumulation remain incomplete.",
       "status": "partial"
     },
     {
@@ -1277,7 +1277,7 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, and single compatible intersection_function_table dispatch; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
+      "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
       "status": "partial"
     },
     {
@@ -1763,7 +1763,7 @@
       "category": "resources",
       "feature": "GLSL buffer block lowering",
       "feature_id": "resources.glsl_buffer_blocks",
-      "notes": "GLSL-style layout(...) buffer blocks and buffer-qualified runtime-array declarations lower to SPIR-V BufferBlock Uniform descriptors with descriptor set/binding decorations, std430-style member offsets, runtime-array strides, direct block member access, buffer_load/buffer_store helper lowering, and spirv-as/spirv-val coverage. Full std140/scalar layout parity, block arrays, atomics, and complete memory-qualifier decorations remain incomplete.",
+      "notes": "GLSL-style layout(...) buffer blocks, explicit @glsl_buffer_block declarations, and buffer-qualified runtime-array declarations lower to SPIR-V BufferBlock Uniform descriptors with descriptor set/binding decorations, std430-style member offsets, runtime-array strides, direct block member access, inlined helper parameters, buffer_load/buffer_store helper lowering, and spirv-as/spirv-val coverage. Full std140/scalar layout parity, broader block-array coverage, atomics, and complete memory-qualifier decorations remain incomplete.",
       "status": "partial"
     },
     {
@@ -1817,7 +1817,7 @@
       "category": "resources",
       "feature": "Resource memory qualifiers",
       "feature_id": "resources.memory_qualifiers",
-      "notes": "Storage-image readonly/writeonly/coherent/volatile/restrict qualifiers lower to validated SPIR-V variable decorations with invalid read/write/atomic diagnostics; StructuredBuffer, RWStructuredBuffer, and GLSL buffer-block qualifiers lower to BufferBlock member decorations with direct/helper access diagnostics. Complete interprocedural resource access-contract validation remains incomplete.",
+      "notes": "Storage-image readonly/writeonly/coherent/volatile/restrict qualifiers lower to validated SPIR-V variable decorations with direct and interprocedural invalid read/write/atomic diagnostics; StructuredBuffer, RWStructuredBuffer, and GLSL buffer-block helper parameters inline to avoid invalid Uniform pointer calls while preserving read/write access diagnostics; GLSL buffer-block qualifiers lower to BufferBlock member decorations with direct/helper access diagnostics. Remaining gaps are std140/scalar layout parity and broader block-array/atomic coverage.",
       "status": "partial"
     },
     {
@@ -2952,9 +2952,14 @@
           "status": "unknown"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_builtins_lower_to_slang_intrinsics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_local_interface_variables_become_slang_parameters"
+          ],
+          "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, and payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
+          "status": "partial"
         },
         "vulkan": {
           "evidence": [],
@@ -3264,9 +3269,14 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_mesh_object_stage_codegen",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_object_stage_attributes_and_threadgroup_limits",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_stage_output_signature_and_counts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_stage_vertex_and_index_writes_lower_to_mesh_output_methods",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_roles_lower_to_mesh_output_parameter",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_single_member_writes_lower_to_setters",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_multi_member_partial_write_is_diagnostic",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_output_signature_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_object_stages_compile_with_metal3"
           ],
-          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, and explicit mesh output signatures/topology for SetMeshOutputCounts primitive counts. Full mesh payload and vertex/primitive write semantics are not complete.",
+          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, and single-member output member writes. Multi-member partial output member writes emit compile-safe diagnostics because Metal mesh outputs require whole element setters. Full mesh payload validation and richer partial-write accumulation remain incomplete.",
           "status": "partial"
         },
         "mojo": {
@@ -3332,6 +3342,10 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_full_signature_lowers_to_intersector_query",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_uses_single_intersection_function_table",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_threads_intersection_function_table_through_helpers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_forwards_thread_local_payload_with_intersection_table",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_forwards_helper_parameter_payload",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_payload_without_intersection_table_emits_diagnostic",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_rejects_non_thread_payload_parameter",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_skips_incompatible_intersection_function_table",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_uses_primitive_acceleration_structure_shape",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_acceleration_structure_globals_thread_through_helpers",
@@ -3339,6 +3353,8 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_tracing_intersection_table_trace_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_primitive_acceleration_trace_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_payload_trace_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_payload_diagnostic_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_callshader_lowers_to_visible_function_table_call",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_callshader_visible_function_table_threads_through_helpers",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_callshader_accepts_explicit_visible_function_table_argument",
@@ -3359,7 +3375,7 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_accepts_bounding_box_result_struct",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
           ],
-          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, and single compatible intersection_function_table dispatch; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
+          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
           "status": "partial"
         },
         "mojo": {
@@ -3990,9 +4006,10 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_blocks_emit_spirv_buffer_block_layout",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_array_declarations_lower_to_buffer_blocks",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_parameters_inline_with_accesses",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_glsl_buffer_block_compute_validates_with_spirv_tools"
           ],
-          "notes": "GLSL-style layout(...) buffer blocks and buffer-qualified runtime-array declarations lower to SPIR-V BufferBlock Uniform descriptors with descriptor set/binding decorations, std430-style member offsets, runtime-array strides, direct block member access, buffer_load/buffer_store helper lowering, and spirv-as/spirv-val coverage. Full std140/scalar layout parity, block arrays, atomics, and complete memory-qualifier decorations remain incomplete.",
+          "notes": "GLSL-style layout(...) buffer blocks, explicit @glsl_buffer_block declarations, and buffer-qualified runtime-array declarations lower to SPIR-V BufferBlock Uniform descriptors with descriptor set/binding decorations, std430-style member offsets, runtime-array strides, direct block member access, inlined helper parameters, buffer_load/buffer_store helper lowering, and spirv-as/spirv-val coverage. Full std140/scalar layout parity, broader block-array coverage, atomics, and complete memory-qualifier decorations remain incomplete.",
           "status": "partial"
         }
       }
@@ -4058,10 +4075,14 @@
         "vulkan": {
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_storage_image_memory_qualifiers_emit_decorations_and_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_storage_image_helper_access_contracts_emit_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_storage_buffer_memory_qualifiers_emit_member_decorations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_helper_parameters_inline_with_accesses",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_helper_parameter_access_contracts_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_parameter_access_diagnostics",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_resource_memory_qualifiers_validate_with_spirv_tools"
           ],
-          "notes": "Storage-image readonly/writeonly/coherent/volatile/restrict qualifiers lower to validated SPIR-V variable decorations with invalid read/write/atomic diagnostics; StructuredBuffer, RWStructuredBuffer, and GLSL buffer-block qualifiers lower to BufferBlock member decorations with direct/helper access diagnostics. Complete interprocedural resource access-contract validation remains incomplete.",
+          "notes": "Storage-image readonly/writeonly/coherent/volatile/restrict qualifiers lower to validated SPIR-V variable decorations with direct and interprocedural invalid read/write/atomic diagnostics; StructuredBuffer, RWStructuredBuffer, and GLSL buffer-block helper parameters inline to avoid invalid Uniform pointer calls while preserving read/write access diagnostics; GLSL buffer-block qualifiers lower to BufferBlock member decorations with direct/helper access diagnostics. Remaining gaps are std140/scalar layout parity and broader block-array/atomic coverage.",
           "status": "partial"
         }
       }
@@ -5471,9 +5492,9 @@
       },
       "slang": {
         "diagnostic": 0,
-        "partial": 8,
+        "partial": 9,
         "supported": 13,
-        "unknown": 21,
+        "unknown": 20,
         "unsupported": 0,
         "validated_rejection": 0
       },

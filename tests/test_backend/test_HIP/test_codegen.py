@@ -1127,15 +1127,28 @@ class TestHipCodeGen:
             size_t freeMem;
             size_t totalMem;
             size_t ptrSize;
+            size_t granularity;
             float symbol;
             hipStream_t stream;
             unsigned int flags;
+            unsigned long long accessFlags;
             int pointerAttrValue;
             hipPointerAttribute_t pointerAttrs;
+            hipDeviceptr_t devicePtr;
+            hipDeviceptr_t devicePtr2;
+            hipDeviceptr_t basePtr;
+            void* driverHost;
+            void* virtualAddress;
+            void* preferredAddress;
+            void* shareableHandle;
+            void* mappedPointer;
             void* resourceDesc;
             void* textureDesc;
             void* viewDesc;
             void* copyParams;
+            unsigned int glBuffer;
+            unsigned int glImage;
+            unsigned int glTarget;
             hipArray_t array;
             hipChannelFormatDesc desc;
             hipPitchedPtr pitched;
@@ -1144,8 +1157,27 @@ class TestHipCodeGen:
             hipMemPoolProps poolProps;
             hipMemAccessDesc accessDesc;
             hipMemLocation location;
+            hipMemGenericAllocationHandle_t allocationHandle;
+            hipMemGenericAllocationHandle_t importedHandle;
+            hipMemAllocationProp allocationProp;
+            hipMemAllocationHandleType handleType;
+            hipExternalMemory_t externalMemory;
+            hipExternalMemoryHandleDesc memoryHandleDesc;
+            hipExternalMemoryBufferDesc bufferDesc;
+            hipExternalMemoryMipmappedArrayDesc mipmapDesc;
+            hipMipmappedArray_t mipmappedArray;
+            hipExternalSemaphore_t externalSemaphore;
+            hipExternalSemaphoreHandleDesc semaphoreHandleDesc;
+            hipExternalSemaphoreSignalParams signalParams;
+            hipExternalSemaphoreWaitParams waitParams;
+            hipGraphicsResource_t graphicsResource;
+            hipGraphicsResource_t imageResource;
             hipTextureObject_t texObj;
             hipSurfaceObject_t surfObj;
+            hipIpcMemHandle_t ipcMemHandle;
+            hipIpcEventHandle_t ipcEventHandle;
+            hipEvent_t ipcEvent;
+            hipProfilerStart();
             hipMalloc((void**)&d, n * sizeof(float));
             hipMallocAsync((void**)&d, n * sizeof(float), stream);
             hipMemPoolCreate(&pool, &poolProps);
@@ -1157,6 +1189,84 @@ class TestHipCodeGen:
             hipMemPoolGetAttribute(pool, hipMemPoolAttrReleaseThreshold, &ptrSize);
             hipMemPoolSetAccess(pool, &accessDesc, 1);
             hipMemPoolGetAccess(&flags, pool, &location);
+            hipMemAlloc(&devicePtr, n * sizeof(float));
+            hipMemAllocPitch(&devicePtr2, &pitch, n * sizeof(float), 4, 4);
+            hipMemAllocHost(&driverHost, n * sizeof(float));
+            hipMemHostAlloc(&driverHost, n * sizeof(float), hipHostMallocDefault);
+            hipMemHostGetDevicePointer(&devicePtr, driverHost, 0);
+            hipMemGetAddressRange(&basePtr, &ptrSize, devicePtr);
+            hipMemcpyHtoD(devicePtr, h, n * sizeof(float));
+            hipMemcpyHtoDAsync(devicePtr, h, n * sizeof(float), stream);
+            hipMemcpyDtoH(h, devicePtr, n * sizeof(float));
+            hipMemcpyDtoHAsync(h, devicePtr, n * sizeof(float), stream);
+            hipMemcpyDtoD(devicePtr2, devicePtr, n * sizeof(float));
+            hipMemcpyDtoDAsync(devicePtr2, devicePtr, n * sizeof(float), stream);
+            hipMemcpyAtoH(h, array, 0, n * sizeof(float));
+            hipMemcpyAtoHAsync(h, array, 0, n * sizeof(float), stream);
+            hipMemcpyHtoA(array, 4, h, n * sizeof(float));
+            hipMemcpyHtoAAsync(array, 4, h, n * sizeof(float), stream);
+            hipMemcpyAtoD(devicePtr, array, 8, n * sizeof(float));
+            hipMemcpyDtoA(array, 12, devicePtr, n * sizeof(float));
+            hipMemcpyAtoA(array, 16, array, 20, n * sizeof(float));
+            hipMemsetD8(devicePtr, 0, n);
+            hipMemsetD8Async(devicePtr, 1, n, stream);
+            hipMemsetD16(devicePtr, 0, n);
+            hipMemsetD16Async(devicePtr, 1, n, stream);
+            hipMemsetD32(devicePtr, 0, n);
+            hipMemsetD32Async(devicePtr, 1, n, stream);
+            hipIpcGetMemHandle(&ipcMemHandle, d);
+            hipIpcOpenMemHandle(
+                &mappedPointer, ipcMemHandle, hipIpcMemLazyEnablePeerAccess
+            );
+            hipIpcCloseMemHandle(mappedPointer);
+            hipIpcGetEventHandle(&ipcEventHandle, ipcEvent);
+            hipIpcOpenEventHandle(&ipcEvent, ipcEventHandle);
+            hipMemGetAllocationGranularity(
+                &granularity, &allocationProp, hipMemAllocationGranularityMinimum
+            );
+            hipMemCreate(&allocationHandle, n * sizeof(float), &allocationProp, 0);
+            hipMemAddressReserve(
+                &virtualAddress, n * sizeof(float), granularity, preferredAddress, 0
+            );
+            hipMemMap(virtualAddress, n * sizeof(float), 0, allocationHandle, 0);
+            hipMemSetAccess(virtualAddress, n * sizeof(float), &accessDesc, 1);
+            hipMemGetAccess(&accessFlags, &location, virtualAddress);
+            hipMemGetAllocationPropertiesFromHandle(
+                &allocationProp, allocationHandle
+            );
+            hipMemRetainAllocationHandle(&importedHandle, virtualAddress);
+            hipMemExportToShareableHandle(
+                &shareableHandle, allocationHandle, handleType, 0
+            );
+            hipMemImportFromShareableHandle(
+                &importedHandle, shareableHandle, handleType
+            );
+            hipImportExternalMemory(&externalMemory, &memoryHandleDesc);
+            hipExternalMemoryGetMappedBuffer(
+                &mappedPointer, externalMemory, &bufferDesc
+            );
+            hipExternalMemoryGetMappedMipmappedArray(
+                &mipmappedArray, externalMemory, &mipmapDesc
+            );
+            hipImportExternalSemaphore(&externalSemaphore, &semaphoreHandleDesc);
+            hipSignalExternalSemaphoresAsync(
+                &externalSemaphore, &signalParams, 1, stream
+            );
+            hipWaitExternalSemaphoresAsync(
+                &externalSemaphore, &waitParams, 1, stream
+            );
+            hipGraphicsGLRegisterBuffer(
+                &graphicsResource, glBuffer, hipGraphicsRegisterFlagsWriteDiscard
+            );
+            hipGraphicsGLRegisterImage(
+                &imageResource, glImage, glTarget, hipGraphicsRegisterFlagsSurfaceLoadStore
+            );
+            hipGraphicsMapResources(1, &graphicsResource, stream);
+            hipGraphicsResourceGetMappedPointer(
+                &mappedPointer, &ptrSize, graphicsResource
+            );
+            hipGraphicsSubResourceGetMappedArray(&array, imageResource, 0, 0);
+            hipGraphicsUnmapResources(1, &graphicsResource, stream);
             hipHostMalloc((void**)&h, n * sizeof(float), hipHostMallocMapped);
             hipHostAlloc((void**)&h, n * sizeof(float), hipHostMallocDefault);
             hipHostRegister(h, n * sizeof(float), hipHostRegisterMapped);
@@ -1194,6 +1304,11 @@ class TestHipCodeGen:
             hipCreateSurfaceObject(&surfObj, resourceDesc);
             hipDestroyTextureObject(texObj);
             hipDestroySurfaceObject(surfObj);
+            hipGraphicsUnregisterResource(imageResource);
+            hipGraphicsUnregisterResource(graphicsResource);
+            hipDestroyExternalSemaphore(externalSemaphore);
+            hipFreeMipmappedArray(mipmappedArray);
+            hipDestroyExternalMemory(externalMemory);
             hipMemset(d, 0, n * sizeof(float));
             hipMemset2D(d2, pitch, 0, n * sizeof(float), 4);
             hipMemset2DAsync(d2, pitch, 1, n * sizeof(float), 4, 0);
@@ -1207,10 +1322,31 @@ class TestHipCodeGen:
             hipFreeHost(h);
             hipFreeArray(array);
             hipArrayDestroy(array);
+            hipMemFreeHost(driverHost);
+            hipMemFree(devicePtr2);
+            hipMemFree(devicePtr);
+            hipMemUnmap(virtualAddress, n * sizeof(float));
+            hipMemRelease(importedHandle);
+            hipMemRelease(allocationHandle);
+            hipMemAddressFree(virtualAddress, n * sizeof(float));
+            hipProfilerStop();
             hipMemPoolDestroy(pool);
             hipError_t err = hipMalloc((void**)&d, n * sizeof(float));
             err = hipMallocAsync((void**)&d, n * sizeof(float), stream);
             err = hipMemPoolCreate(&pool, &poolProps);
+            err = hipProfilerStart();
+            err = hipMemAlloc(&devicePtr, n * sizeof(float));
+            err = hipMemcpyHtoD(devicePtr, h, n * sizeof(float));
+            err = hipMemsetD32(devicePtr, 0, n);
+            err = hipIpcOpenMemHandle(
+                &mappedPointer, ipcMemHandle, hipIpcMemLazyEnablePeerAccess
+            );
+            err = hipMemCreate(&allocationHandle, n * sizeof(float), &allocationProp, 0);
+            err = hipMemMap(virtualAddress, n * sizeof(float), 0, allocationHandle, 0);
+            err = hipMemSetAccess(virtualAddress, n * sizeof(float), &accessDesc, 1);
+            err = hipMemAddressFree(virtualAddress, n * sizeof(float));
+            err = hipImportExternalMemory(&externalMemory, &memoryHandleDesc);
+            err = hipGraphicsMapResources(1, &graphicsResource, stream);
             err = hipFreeAsync(d2, stream);
             err = hipHostRegister(h, n * sizeof(float), hipHostRegisterMapped);
             err = hipMallocPitch((void**)&d2, &pitch, n * sizeof(float), 4);
@@ -1235,6 +1371,7 @@ class TestHipCodeGen:
 
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
+        result_lines = [line.strip() for line in result.splitlines()]
 
         assert (
             result.count("// HIP memory allocate: d, bytes: (n * sizeof(float))") == 2
@@ -1278,6 +1415,253 @@ class TestHipCodeGen:
             "// HIP memory pool get access: output: flags, pool: pool, "
             "location: (&location)"
         ) in result
+        assert (
+            result.count(
+                "// HIP driver memory allocate: output: devicePtr, "
+                "bytes: (n * sizeof(float))"
+            )
+            == 2
+        )
+        assert (
+            "// HIP driver pitched memory allocate: output: devicePtr2, "
+            "pitch output: pitch, width: (n * sizeof(float)), height: 4, "
+            "element bytes: 4"
+        ) in result
+        assert (
+            "// HIP driver host memory allocate: output: driverHost, "
+            "bytes: (n * sizeof(float))"
+        ) in result
+        assert (
+            "// HIP driver host memory allocate: output: driverHost, "
+            "bytes: (n * sizeof(float)), flags: hipHostMallocDefault"
+        ) in result
+        assert (
+            "// HIP driver host device pointer: output: devicePtr, "
+            "host: driverHost, flags: 0"
+        ) in result
+        assert (
+            "// HIP driver memory address range: base output: basePtr, "
+            "size output: ptrSize, pointer: devicePtr"
+        ) in result
+        assert (
+            result_lines.count(
+                "// HIP driver memory copy host to device: source: h, "
+                "destination: devicePtr, bytes: (n * sizeof(float))"
+            )
+            == 2
+        )
+        assert (
+            "// HIP driver memory copy host to device: source: h, "
+            "destination: devicePtr, bytes: (n * sizeof(float)), stream: stream"
+        ) in result
+        assert (
+            "// HIP driver memory copy device to host: source: devicePtr, "
+            "destination: h, bytes: (n * sizeof(float))"
+        ) in result
+        assert (
+            "// HIP driver memory copy device to host: source: devicePtr, "
+            "destination: h, bytes: (n * sizeof(float)), stream: stream"
+        ) in result
+        assert (
+            "// HIP driver memory copy device to device: source: devicePtr, "
+            "destination: devicePtr2, bytes: (n * sizeof(float))"
+        ) in result
+        assert (
+            "// HIP driver memory copy device to device: source: devicePtr, "
+            "destination: devicePtr2, bytes: (n * sizeof(float)), stream: stream"
+        ) in result
+        assert (
+            "// HIP driver memory copy array to host: source array: array, "
+            "source offset: 0, destination host: h, bytes: (n * sizeof(float))"
+        ) in result
+        assert (
+            "// HIP driver memory copy array to host: source array: array, "
+            "source offset: 0, destination host: h, bytes: (n * sizeof(float)), "
+            "stream: stream"
+        ) in result
+        assert (
+            "// HIP driver memory copy host to array: source host: h, "
+            "destination array: array, destination offset: 4, "
+            "bytes: (n * sizeof(float))"
+        ) in result
+        assert (
+            "// HIP driver memory copy host to array: source host: h, "
+            "destination array: array, destination offset: 4, "
+            "bytes: (n * sizeof(float)), stream: stream"
+        ) in result
+        assert (
+            "// HIP driver memory copy array to device: source array: array, "
+            "source offset: 8, destination device: devicePtr, "
+            "bytes: (n * sizeof(float))"
+        ) in result
+        assert (
+            "// HIP driver memory copy device to array: source device: devicePtr, "
+            "destination array: array, destination offset: 12, "
+            "bytes: (n * sizeof(float))"
+        ) in result
+        assert (
+            "// HIP driver memory copy array to array: source array: array, "
+            "source offset: 20, destination array: array, "
+            "destination offset: 16, bytes: (n * sizeof(float))"
+        ) in result
+        assert (
+            "// HIP driver memory set 8-bit: pointer: devicePtr, value: 0, count: n"
+            in result
+        )
+        assert (
+            "// HIP driver memory set 8-bit: pointer: devicePtr, value: 1, "
+            "count: n, stream: stream"
+        ) in result
+        assert (
+            "// HIP driver memory set 16-bit: pointer: devicePtr, value: 0, count: n"
+            in result
+        )
+        assert (
+            "// HIP driver memory set 16-bit: pointer: devicePtr, value: 1, "
+            "count: n, stream: stream"
+        ) in result
+        assert (
+            result.count(
+                "// HIP driver memory set 32-bit: pointer: devicePtr, "
+                "value: 0, count: n"
+            )
+            == 2
+        )
+        assert (
+            "// HIP driver memory set 32-bit: pointer: devicePtr, value: 1, "
+            "count: n, stream: stream"
+        ) in result
+        assert (
+            "// HIP IPC get memory handle: output: ipcMemHandle, pointer: d" in result
+        )
+        assert (
+            result.count(
+                "// HIP IPC open memory handle: output: mappedPointer, "
+                "handle: ipcMemHandle, flags: hipIpcMemLazyEnablePeerAccess"
+            )
+            == 2
+        )
+        assert "// HIP IPC close memory handle: pointer: mappedPointer" in result
+        assert (
+            "// HIP IPC get event handle: output: ipcEventHandle, event: ipcEvent"
+            in result
+        )
+        assert (
+            "// HIP IPC open event handle: output: ipcEvent, handle: ipcEventHandle"
+            in result
+        )
+        assert (
+            "// HIP virtual memory allocation granularity: output: granularity, "
+            "properties: (&allocationProp), option: hipMemAllocationGranularityMinimum"
+        ) in result
+        assert (
+            result.count(
+                "// HIP virtual memory create allocation: output: allocationHandle, "
+                "bytes: (n * sizeof(float)), properties: (&allocationProp), flags: 0"
+            )
+            == 2
+        )
+        assert (
+            "// HIP virtual memory reserve address: output: virtualAddress, "
+            "bytes: (n * sizeof(float)), alignment: granularity, "
+            "address: preferredAddress, flags: 0"
+        ) in result
+        assert (
+            result.count(
+                "// HIP virtual memory map: pointer: virtualAddress, "
+                "bytes: (n * sizeof(float)), offset: 0, handle: allocationHandle, "
+                "flags: 0"
+            )
+            == 2
+        )
+        assert (
+            result.count(
+                "// HIP virtual memory set access: pointer: virtualAddress, "
+                "bytes: (n * sizeof(float)), descriptors: (&accessDesc), count: 1"
+            )
+            == 2
+        )
+        assert (
+            "// HIP virtual memory get access: output: accessFlags, "
+            "location: (&location), pointer: virtualAddress"
+        ) in result
+        assert (
+            "// HIP virtual memory allocation properties: output: allocationProp, "
+            "handle: allocationHandle"
+        ) in result
+        assert (
+            "// HIP virtual memory retain allocation handle: output: importedHandle, "
+            "address: virtualAddress"
+        ) in result
+        assert (
+            "// HIP virtual memory export shareable handle: output: shareableHandle, "
+            "handle: allocationHandle, handle type: handleType, flags: 0"
+        ) in result
+        assert (
+            "// HIP virtual memory import shareable handle: output: importedHandle, "
+            "shareable handle: shareableHandle, handle type: handleType"
+        ) in result
+        assert result.count("// HIP profiler start") == 2
+        assert "// HIP profiler stop" in result
+        assert (
+            result.count(
+                "// HIP import external memory: output: externalMemory, "
+                "descriptor: (&memoryHandleDesc)"
+            )
+            == 2
+        )
+        assert (
+            "// HIP external memory mapped buffer: output: mappedPointer, "
+            "memory: externalMemory, descriptor: (&bufferDesc)"
+        ) in result
+        assert (
+            "// HIP external memory mapped mipmapped array: output: mipmappedArray, "
+            "memory: externalMemory, descriptor: (&mipmapDesc)"
+        ) in result
+        assert (
+            "// HIP import external semaphore: output: externalSemaphore, "
+            "descriptor: (&semaphoreHandleDesc)"
+        ) in result
+        assert (
+            "// HIP signal external semaphores: semaphores: (&externalSemaphore), "
+            "params: (&signalParams), count: 1, stream: stream"
+        ) in result
+        assert (
+            "// HIP wait external semaphores: semaphores: (&externalSemaphore), "
+            "params: (&waitParams), count: 1, stream: stream"
+        ) in result
+        assert (
+            "// HIP OpenGL register buffer: output: graphicsResource, "
+            "buffer: glBuffer, flags: hipGraphicsRegisterFlagsWriteDiscard"
+        ) in result
+        assert (
+            "// HIP OpenGL register image: output: imageResource, image: glImage, "
+            "target: glTarget, flags: hipGraphicsRegisterFlagsSurfaceLoadStore"
+        ) in result
+        assert (
+            result.count(
+                "// HIP graphics map resources: count: 1, "
+                "resources: (&graphicsResource), stream: stream"
+            )
+            == 2
+        )
+        assert (
+            "// HIP graphics mapped pointer: pointer output: mappedPointer, "
+            "size output: ptrSize, resource: graphicsResource"
+        ) in result
+        assert (
+            "// HIP graphics mapped subresource array: output: array, "
+            "resource: imageResource, array index: 0, mip level: 0"
+        ) in result
+        assert (
+            "// HIP graphics unmap resources: count: 1, "
+            "resources: (&graphicsResource), stream: stream"
+        ) in result
+        assert "// HIP graphics unregister resource: imageResource" in result
+        assert "// HIP graphics unregister resource: graphicsResource" in result
+        assert "// HIP destroy external semaphore: externalSemaphore" in result
+        assert "// HIP free mipmapped array: mipmappedArray" in result
+        assert "// HIP destroy external memory: externalMemory" in result
         assert (
             "// HIP host memory allocate: h, bytes: (n * sizeof(float)), "
             "flags: hipHostMallocMapped"
@@ -1391,6 +1775,22 @@ class TestHipCodeGen:
         assert "// HIP memory free: d" in result
         assert result.count("// HIP async memory free: d2, stream: stream") == 2
         assert result.count("// HIP array free: array") == 2
+        assert "// HIP driver host memory free: driverHost" in result
+        assert "// HIP driver memory free: devicePtr2" in result
+        assert "// HIP driver memory free: devicePtr" in result
+        assert (
+            "// HIP virtual memory unmap: pointer: virtualAddress, "
+            "bytes: (n * sizeof(float))"
+        ) in result
+        assert "// HIP virtual memory release allocation: importedHandle" in result
+        assert "// HIP virtual memory release allocation: allocationHandle" in result
+        assert (
+            result.count(
+                "// HIP virtual memory free address: pointer: virtualAddress, "
+                "bytes: (n * sizeof(float))"
+            )
+            == 2
+        )
         assert "// HIP memory pool destroy: pool" in result
         assert "workgroupBarrier();" not in result
         assert "var err: hipError_t = hipSuccess;" in result
@@ -1409,6 +1809,62 @@ class TestHipCodeGen:
         assert "hipMemPoolGetAccess(" not in result
         assert "hipDeviceGetDefaultMemPool(" not in result
         assert "hipDeviceSetMemPool(" not in result
+        assert "hipMemAlloc(" not in result
+        assert "hipMemAllocPitch(" not in result
+        assert "hipMemFree(" not in result
+        assert "hipMemAllocHost(" not in result
+        assert "hipMemHostAlloc(" not in result
+        assert "hipMemFreeHost(" not in result
+        assert "hipMemHostGetDevicePointer(" not in result
+        assert "hipMemGetAddressRange(" not in result
+        assert "hipMemcpyHtoD(" not in result
+        assert "hipMemcpyHtoDAsync(" not in result
+        assert "hipMemcpyDtoH(" not in result
+        assert "hipMemcpyDtoHAsync(" not in result
+        assert "hipMemcpyDtoD(" not in result
+        assert "hipMemcpyDtoDAsync(" not in result
+        assert "hipMemsetD8(" not in result
+        assert "hipMemsetD8Async(" not in result
+        assert "hipMemsetD16(" not in result
+        assert "hipMemsetD16Async(" not in result
+        assert "hipMemsetD32(" not in result
+        assert "hipMemsetD32Async(" not in result
+        assert "hipIpcGetMemHandle(" not in result
+        assert "hipIpcOpenMemHandle(" not in result
+        assert "hipIpcCloseMemHandle(" not in result
+        assert "hipIpcGetEventHandle(" not in result
+        assert "hipIpcOpenEventHandle(" not in result
+        assert "hipMemGetAllocationGranularity(" not in result
+        assert "hipMemCreate(" not in result
+        assert "hipMemRelease(" not in result
+        assert "hipMemAddressReserve(" not in result
+        assert "hipMemAddressFree(" not in result
+        assert "hipMemMap(" not in result
+        assert "hipMemUnmap(" not in result
+        assert "hipMemSetAccess(" not in result
+        assert "hipMemGetAccess(" not in result
+        assert "hipMemGetAllocationPropertiesFromHandle(" not in result
+        assert "hipMemRetainAllocationHandle(" not in result
+        assert "hipMemExportToShareableHandle(" not in result
+        assert "hipMemImportFromShareableHandle(" not in result
+        assert "hipProfilerStart(" not in result
+        assert "hipProfilerStop(" not in result
+        assert "hipImportExternalMemory(" not in result
+        assert "hipDestroyExternalMemory(" not in result
+        assert "hipExternalMemoryGetMappedBuffer(" not in result
+        assert "hipExternalMemoryGetMappedMipmappedArray(" not in result
+        assert "hipFreeMipmappedArray(" not in result
+        assert "hipImportExternalSemaphore(" not in result
+        assert "hipDestroyExternalSemaphore(" not in result
+        assert "hipSignalExternalSemaphoresAsync(" not in result
+        assert "hipWaitExternalSemaphoresAsync(" not in result
+        assert "hipGraphicsGLRegisterBuffer(" not in result
+        assert "hipGraphicsGLRegisterImage(" not in result
+        assert "hipGraphicsMapResources(" not in result
+        assert "hipGraphicsUnmapResources(" not in result
+        assert "hipGraphicsResourceGetMappedPointer(" not in result
+        assert "hipGraphicsSubResourceGetMappedArray(" not in result
+        assert "hipGraphicsUnregisterResource(" not in result
         assert "hipHostMalloc(" not in result
         assert "hipHostAlloc(" not in result
         assert "hipHostRegister(" not in result
@@ -1422,6 +1878,13 @@ class TestHipCodeGen:
         assert "hipMemcpy2DAsync(" not in result
         assert "hipMemcpy3D(" not in result
         assert "hipMemcpy3DAsync(" not in result
+        assert "hipMemcpyAtoH(" not in result
+        assert "hipMemcpyAtoHAsync(" not in result
+        assert "hipMemcpyHtoA(" not in result
+        assert "hipMemcpyHtoAAsync(" not in result
+        assert "hipMemcpyAtoD(" not in result
+        assert "hipMemcpyDtoA(" not in result
+        assert "hipMemcpyAtoA(" not in result
         assert "hipMemcpyToSymbol(" not in result
         assert "hipMemcpyFromSymbol(" not in result
         assert "hipMemGetInfo(" not in result
@@ -1547,13 +2010,17 @@ class TestHipCodeGen:
             int priority = 0;
             unsigned int flags = 0;
             size_t total = 0;
+            size_t limitValue = 0;
             size_t numDeps = 0;
             unsigned long long captureId = 0;
             char name[64];
+            char pciBusId[32];
             hipStreamCaptureStatus captureStatus;
             hipGraph_t graph;
             hipGraphNode_t* deps;
             hipDeviceProp_t props;
+            hipFuncCache_t cacheConfig;
+            hipSharedMemConfig sharedConfig;
             void* kernel;
             void* callback;
             void* hostFn;
@@ -1569,6 +2036,15 @@ class TestHipCodeGen:
             hipDeviceTotalMem(&total, device);
             hipDeviceComputeCapability(&major, &minor, device);
             hipChooseDevice(&device, &props);
+            hipDeviceGetPCIBusId(pciBusId, 32, device);
+            hipDeviceGetByPCIBusId(&device, pciBusId);
+            hipDeviceGetCacheConfig(&cacheConfig);
+            hipDeviceSetCacheConfig(hipFuncCachePreferShared);
+            hipDeviceGetSharedMemConfig(&sharedConfig);
+            hipDeviceSetSharedMemConfig(hipSharedMemBankSizeFourByte);
+            hipDeviceGetLimit(&limitValue, hipLimitMallocHeapSize);
+            hipDeviceSetLimit(hipLimitMallocHeapSize, limitValue);
+            hipDeviceReset();
             hipGetDeviceFlags(&flags);
             hipSetDeviceFlags(hipDeviceScheduleAuto);
             hipOccupancyMaxPotentialBlockSize(
@@ -1616,6 +2092,9 @@ class TestHipCodeGen:
             err = hipDeviceGetAttribute(
                 &attr, hipDeviceAttributeMaxThreadsPerBlock, device
             );
+            err = hipDeviceGetPCIBusId(pciBusId, 32, device);
+            err = hipDeviceSetLimit(hipLimitMallocHeapSize, limitValue);
+            err = hipDeviceReset();
             err = hipOccupancyMaxPotentialBlockSize(
                 &gridSize, &blockSize, kernel, 0, 0
             );
@@ -1703,6 +2182,36 @@ class TestHipCodeGen:
             "minor output: minor, device: device"
         ) in result
         assert "// HIP choose device: output: device, properties: (&props)" in result
+        assert (
+            result.count(
+                "// HIP get device PCI bus id: output: pciBusId, "
+                "length: 32, device: device"
+            )
+            == 2
+        )
+        assert (
+            "// HIP get device by PCI bus id: output: device, bus id: pciBusId"
+            in result
+        )
+        assert "// HIP get device cache config: output: cacheConfig" in result
+        assert "// HIP set device cache config: hipFuncCachePreferShared" in result
+        assert "// HIP get device shared memory config: output: sharedConfig" in result
+        assert (
+            "// HIP set device shared memory config: hipSharedMemBankSizeFourByte"
+            in result
+        )
+        assert (
+            "// HIP get device limit: output: limitValue, limit: hipLimitMallocHeapSize"
+            in result
+        )
+        assert (
+            result.count(
+                "// HIP set device limit: limit: hipLimitMallocHeapSize, "
+                "value: limitValue"
+            )
+            == 2
+        )
+        assert result.count("// HIP device reset") == 2
         assert "// HIP get device flags: output: flags" in result
         assert "// HIP set device flags: hipDeviceScheduleAuto" in result
         assert (
@@ -1757,6 +2266,15 @@ class TestHipCodeGen:
         assert "hipDeviceTotalMem(" not in result
         assert "hipDeviceComputeCapability(" not in result
         assert "hipChooseDevice(" not in result
+        assert "hipDeviceGetPCIBusId(" not in result
+        assert "hipDeviceGetByPCIBusId(" not in result
+        assert "hipDeviceGetCacheConfig(" not in result
+        assert "hipDeviceSetCacheConfig(" not in result
+        assert "hipDeviceGetSharedMemConfig(" not in result
+        assert "hipDeviceSetSharedMemConfig(" not in result
+        assert "hipDeviceGetLimit(" not in result
+        assert "hipDeviceSetLimit(" not in result
+        assert "hipDeviceReset(" not in result
         assert "hipGetDeviceFlags(" not in result
         assert "hipSetDeviceFlags(" not in result
         assert "hipOccupancyMaxPotentialBlockSize(" not in result

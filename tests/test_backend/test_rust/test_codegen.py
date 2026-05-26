@@ -1044,7 +1044,7 @@ def test_relational_intrinsic_calls_convert_to_crossgl_intrinsics():
         let le = less_than_equal(left, threshold);
         let gt = crate::math::greater_than(threshold, right);
         let ge = crate::math::greater_than_equal(left, right);
-        let eq = equal(mask, Vec3::new(true, false, true));
+        let eq = equal(mask, Vec3::<bool>::new(true, false, true));
         let ne = not_equal(left, right);
         let scalar_eq = equal(threshold, 1.0);
         return any(lt) || any(le) || any(gt) || any(ge) || any(eq) || any(ne) || scalar_eq;
@@ -1066,6 +1066,113 @@ def test_relational_intrinsic_calls_convert_to_crossgl_intrinsics():
     assert "scalar_eq = equal(threshold, 1.0);" in result
     assert "crate::math::greater_than" not in result
     assert "crate::math::greater_than_equal" not in result
+
+
+def test_integer_bit_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn bit_ops(mask: Vec3<u32>, signed_mask: Vec3<i32>, scalar: u32, offset: i32, bits: i32) -> Vec3<u32> {
+        let reversed = bitfield_reverse(mask);
+        let signed_reversed = bitfield_reverse(signed_mask);
+        let counts = bit_count(mask);
+        let signed_counts = crate::math::bit_count(signed_mask);
+        let lsb = find_lsb(mask);
+        let msb = crate::math::find_msb(signed_mask);
+        let extracted = bitfield_extract(mask, offset, bits);
+        let inserted = crate::math::bitfield_insert(mask, extracted, offset, bits);
+        let scalar_count = bit_count(scalar);
+        return inserted;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "uvec3 bit_ops(uvec3 mask, ivec3 signed_mask, uint scalar, int offset, int bits)"
+        in result
+    )
+    assert "reversed = bitfieldReverse(mask);" in result
+    assert "signed_reversed = bitfieldReverse(signed_mask);" in result
+    assert "counts = bitCount(mask);" in result
+    assert "signed_counts = bitCount(signed_mask);" in result
+    assert "lsb = findLSB(mask);" in result
+    assert "msb = findMSB(signed_mask);" in result
+    assert "extracted = bitfieldExtract(mask, offset, bits);" in result
+    assert "inserted = bitfieldInsert(mask, extracted, offset, bits);" in result
+    assert "scalar_count = bitCount(scalar);" in result
+    assert "crate::math::bit_count" not in result
+    assert "crate::math::find_msb" not in result
+    assert "crate::math::bitfield_insert" not in result
+
+
+def test_bit_reinterpret_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn reinterpret_ops(value: Vec3<f32>, scalar: f32, signed_bits: Vec3<i32>, unsigned_bits: Vec3<u32>) -> Vec3<f32> {
+        let signed_from_vector = float_bits_to_int(value);
+        let unsigned_from_vector = crate::math::float_bits_to_uint(value);
+        let signed_from_scalar = float_bits_to_int(scalar);
+        let unsigned_from_scalar = float_bits_to_uint(scalar);
+        let float_from_signed = int_bits_to_float(signed_bits);
+        let float_from_unsigned = crate::math::uint_bits_to_float(unsigned_bits);
+        return float_from_signed + float_from_unsigned;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "vec3 reinterpret_ops(vec3 value, float scalar, ivec3 signed_bits, uvec3 unsigned_bits)"
+        in result
+    )
+    assert "signed_from_vector = floatBitsToInt(value);" in result
+    assert "unsigned_from_vector = floatBitsToUint(value);" in result
+    assert "signed_from_scalar = floatBitsToInt(scalar);" in result
+    assert "unsigned_from_scalar = floatBitsToUint(scalar);" in result
+    assert "float_from_signed = intBitsToFloat(signed_bits);" in result
+    assert "float_from_unsigned = uintBitsToFloat(unsigned_bits);" in result
+    assert "crate::math::float_bits_to_uint" not in result
+    assert "crate::math::uint_bits_to_float" not in result
+
+
+def test_pack_unpack_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn pack_unpack_ops(pair: Vec2<f32>, color: Vec4<f32>, packed2: u32, packed4: u32, double_bits: Vec2<u32>, packed_double: f64) -> Vec4<f32> {
+        let packed_unorm2 = pack_unorm_2x16(pair);
+        let packed_snorm2 = crate::math::pack_snorm_2x16(pair);
+        let packed_unorm4 = pack_unorm_4x8(color);
+        let packed_snorm4 = pack_snorm_4x8(color);
+        let packed_half = crate::math::pack_half_2x16(pair);
+        let packed_double_value = pack_double_2x32(double_bits);
+        let unpacked_unorm2 = unpack_unorm_2x16(packed2);
+        let unpacked_snorm2 = crate::math::unpack_snorm_2x16(packed2);
+        let unpacked_unorm4 = unpack_unorm_4x8(packed4);
+        let unpacked_snorm4 = unpack_snorm_4x8(packed4);
+        let unpacked_half = unpack_half_2x16(packed2);
+        let unpacked_double = crate::math::unpack_double_2x32(packed_double);
+        return unpacked_unorm4 + unpacked_snorm4;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "vec4 pack_unpack_ops(vec2 pair, vec4 color, uint packed2, uint packed4, uvec2 double_bits, double packed_double)"
+        in result
+    )
+    assert "packed_unorm2 = packUnorm2x16(pair);" in result
+    assert "packed_snorm2 = packSnorm2x16(pair);" in result
+    assert "packed_unorm4 = packUnorm4x8(color);" in result
+    assert "packed_snorm4 = packSnorm4x8(color);" in result
+    assert "packed_half = packHalf2x16(pair);" in result
+    assert "packed_double_value = packDouble2x32(double_bits);" in result
+    assert "unpacked_unorm2 = unpackUnorm2x16(packed2);" in result
+    assert "unpacked_snorm2 = unpackSnorm2x16(packed2);" in result
+    assert "unpacked_unorm4 = unpackUnorm4x8(packed4);" in result
+    assert "unpacked_snorm4 = unpackSnorm4x8(packed4);" in result
+    assert "unpacked_half = unpackHalf2x16(packed2);" in result
+    assert "unpacked_double = unpackDouble2x32(packed_double);" in result
+    assert "crate::math::pack_snorm_2x16" not in result
+    assert "crate::math::unpack_snorm_2x16" not in result
+    assert "crate::math::unpack_double_2x32" not in result
 
 
 def test_lerp_function_converts_to_crossgl_mix():

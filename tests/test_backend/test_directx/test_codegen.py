@@ -598,10 +598,19 @@ def test_codegen_rw_texture_indexing_uses_image_operations():
     ) in output
     assert "vec4 d = imageLoad(images[0], tid.xy);" in output
     assert "imageStore(images[1], tid.xy, d);" in output
-    assert "atomicAdd(counters[uvec2(tid.x, 0)], 1, original);" in output
+    assert "original = imageAtomicAdd(counters, uvec2(tid.x, 0), 1u);" in output
 
     shader_ast = parse_crossgl(output)
     assert ShaderStage.COMPUTE in shader_ast.stages
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(shader_ast)
+    assert (
+        "uint imageAtomicAdd_uimage1DArray("
+        "RWTexture1DArray<uint> image, int2 coord, uint value)" in regenerated_hlsl
+    )
+    assert (
+        "original = imageAtomicAdd_uimage1DArray(counters, uint2(tid.x, 0), 1u);"
+        in regenerated_hlsl
+    )
 
 
 def test_codegen_preserves_uav_coherency_and_register_space():
@@ -1143,7 +1152,8 @@ def test_codegen_interlocked_compare_exchange_mapping():
     """).strip()
 
     output = generate_crossgl(code)
-    assert "atomicCompareExchange" in output
+    assert "original = imageAtomicCompSwap(tex, dtid.xy, 1u, 0u);" in output
+    assert "atomicCompareExchange(buf[dtid.x], 2, 1, original);" in output
 
 
 def test_codegen_invalid_hlsl_raises():

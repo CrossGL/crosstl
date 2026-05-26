@@ -293,6 +293,28 @@ class RustCodeGen:
             "greaterThanEqual": "greater_than_equal",
             "equal": "equal",
             "notEqual": "not_equal",
+            "bitCount": "bit_count",
+            "bitfieldReverse": "bitfield_reverse",
+            "findLSB": "find_lsb",
+            "findMSB": "find_msb",
+            "bitfieldExtract": "bitfield_extract",
+            "bitfieldInsert": "bitfield_insert",
+            "floatBitsToInt": "float_bits_to_int",
+            "floatBitsToUint": "float_bits_to_uint",
+            "intBitsToFloat": "int_bits_to_float",
+            "uintBitsToFloat": "uint_bits_to_float",
+            "packUnorm2x16": "pack_unorm_2x16",
+            "packSnorm2x16": "pack_snorm_2x16",
+            "packUnorm4x8": "pack_unorm_4x8",
+            "packSnorm4x8": "pack_snorm_4x8",
+            "packHalf2x16": "pack_half_2x16",
+            "packDouble2x32": "pack_double_2x32",
+            "unpackUnorm2x16": "unpack_unorm_2x16",
+            "unpackSnorm2x16": "unpack_snorm_2x16",
+            "unpackUnorm4x8": "unpack_unorm_4x8",
+            "unpackSnorm4x8": "unpack_snorm_4x8",
+            "unpackHalf2x16": "unpack_half_2x16",
+            "unpackDouble2x32": "unpack_double_2x32",
             "min": "min",
             "max": "max",
             "clamp": "clamp",
@@ -5537,6 +5559,47 @@ class RustCodeGen:
                 arg_types[0], arg_types[1], relational_operator
             )
 
+        if mapped_name in {"bit_count", "find_lsb", "find_msb"} and arg_types:
+            return self.integer_index_value_type(arg_types[0])
+
+        if mapped_name in {"bitfield_reverse", "bitfield_extract"} and arg_types:
+            return arg_types[0]
+
+        if mapped_name == "bitfield_insert" and len(arg_types) >= 2:
+            return self.promoted_value_type(arg_types[0], arg_types[1]) or arg_types[0]
+
+        bitcast_component_type = {
+            "float_bits_to_int": "int",
+            "float_bits_to_uint": "uint",
+            "int_bits_to_float": "float",
+            "uint_bits_to_float": "float",
+        }.get(mapped_name)
+        if bitcast_component_type is not None and arg_types:
+            return self.bitcast_value_type(arg_types[0], bitcast_component_type)
+
+        if mapped_name in {
+            "pack_unorm_2x16",
+            "pack_snorm_2x16",
+            "pack_unorm_4x8",
+            "pack_snorm_4x8",
+            "pack_half_2x16",
+        }:
+            return "uint"
+
+        if mapped_name == "pack_double_2x32":
+            return "double"
+
+        unpack_vector_type = {
+            "unpack_unorm_2x16": "vec2",
+            "unpack_snorm_2x16": "vec2",
+            "unpack_half_2x16": "vec2",
+            "unpack_double_2x32": "uvec2",
+            "unpack_unorm_4x8": "vec4",
+            "unpack_snorm_4x8": "vec4",
+        }.get(mapped_name)
+        if unpack_vector_type is not None:
+            return unpack_vector_type
+
         if (
             mapped_name in {"min", "max", "pow", "modulo", "atan2"}
             and len(arg_types) >= 2
@@ -5720,6 +5783,22 @@ class RustCodeGen:
         }:
             return None
         return "bool"
+
+    def integer_index_value_type(self, type_name):
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            return self.vector_type_for_components("int", vector_info["size"])
+        if self.normalize_scalar_type(type_name) is not None:
+            return "int"
+        return None
+
+    def bitcast_value_type(self, type_name, component_type):
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            return self.vector_type_for_components(component_type, vector_info["size"])
+        if self.normalize_scalar_type(type_name) is not None:
+            return component_type
+        return None
 
     def promoted_argument_type(self, arg_types):
         result_type = None

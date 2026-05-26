@@ -273,6 +273,7 @@ def test_parse_ray_query_type_and_functions_roundtrip():
     code = """
     #version 460 core
     #extension GL_EXT_ray_query : require
+    #extension GL_EXT_ray_tracing_position_fetch : require
 
     layout(binding = 0) uniform accelerationStructureEXT topLevelAS;
 
@@ -296,6 +297,25 @@ def test_parse_ray_query_type_and_functions_roundtrip():
         vec3 committedOrigin = rayQueryGetIntersectionObjectRayOriginEXT(rq, true);
         vec3 candidateDirection = rayQueryGetIntersectionObjectRayDirectionEXT(rq, false);
         float committedT = rayQueryGetIntersectionTEXT(rq, true);
+        vec3 worldOrigin = rayQueryGetWorldRayOriginEXT(rq);
+        vec3 worldDirection = rayQueryGetWorldRayDirectionEXT(rq);
+        uint rayFlags = rayQueryGetRayFlagsEXT(rq);
+        float rayTMin = rayQueryGetRayTMinEXT(rq);
+        uint customIndex = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        uint sbtOffset =
+            rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, false);
+        vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(rq, false);
+        bool frontFace = rayQueryGetIntersectionFrontFaceEXT(rq, true);
+        bool aabbOpaque = rayQueryGetIntersectionCandidateAABBOpaqueEXT(rq);
+        vec3 trianglePositions[3];
+        rayQueryGetIntersectionTriangleVertexPositionsEXT(
+            rq, false, trianglePositions
+        );
+        rayQueryGetIntersectionTriangleVertexPositionsEXT(
+            rq, true, trianglePositions
+        );
+        rayQueryGenerateIntersectionEXT(rq, 1.0);
+        rayQueryConfirmIntersectionEXT(rq);
         rayQueryTerminateEXT(rq);
     }
     """
@@ -304,7 +324,7 @@ def test_parse_ray_query_type_and_functions_roundtrip():
 
     assert "accelerationStructureEXT topLevelAS @binding(0);" in crossgl
     assert "rayQueryEXT rq;" in crossgl
-    assert "rayQueryInitializeEXT(" in crossgl
+    assert "rq.Initialize(" in crossgl
     assert "bool active = rq.Proceed();" in crossgl
     assert "uint hitType = rq.CommittedType();" in crossgl
     assert "uint candidatePrimitive = rq.CandidatePrimitiveIndex();" in crossgl
@@ -313,7 +333,25 @@ def test_parse_ray_query_type_and_functions_roundtrip():
     assert "vec3 committedOrigin = rq.CommittedObjectRayOrigin();" in crossgl
     assert "vec3 candidateDirection = rq.CandidateObjectRayDirection();" in crossgl
     assert "float committedT = rq.CommittedRayT();" in crossgl
+    assert "vec3 worldOrigin = rq.WorldRayOrigin();" in crossgl
+    assert "vec3 worldDirection = rq.WorldRayDirection();" in crossgl
+    assert "uint rayFlags = rq.RayFlags();" in crossgl
+    assert "float rayTMin = rq.RayTMin();" in crossgl
+    assert "uint customIndex = rq.CommittedInstanceCustomIndex();" in crossgl
+    assert (
+        "uint sbtOffset = rq.CandidateInstanceShaderBindingTableRecordOffset();"
+        in crossgl
+    )
+    assert "vec2 barycentrics = rq.CandidateTriangleBarycentrics();" in crossgl
+    assert "bool frontFace = rq.CommittedTriangleFrontFace();" in crossgl
+    assert "bool aabbOpaque = rq.CandidateAABBOpaque();" in crossgl
+    assert "vec3 trianglePositions[3];" in crossgl
+    assert "rq.CandidateTriangleVertexPositions(trianglePositions);" in crossgl
+    assert "rq.CommittedTriangleVertexPositions(trianglePositions);" in crossgl
+    assert "rq.GenerateIntersection(1.0);" in crossgl
+    assert "rq.ConfirmIntersection();" in crossgl
     assert "rq.Abort();" in crossgl
+    assert "rayQueryInitializeEXT(" not in crossgl
     assert "rayQueryProceedEXT(rq)" not in crossgl
     assert "rayQueryGetIntersectionTypeEXT(rq, true)" not in crossgl
 
@@ -321,6 +359,7 @@ def test_parse_ray_query_type_and_functions_roundtrip():
 
     assert glsl.lstrip().startswith("#version 460 core")
     assert "#extension GL_EXT_ray_query : require" in glsl
+    assert "#extension GL_EXT_ray_tracing_position_fetch : require" in glsl
     assert "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;" in glsl
     assert "rayQueryEXT rq;" in glsl
     assert "rayQueryInitializeEXT(" in glsl
@@ -348,6 +387,37 @@ def test_parse_ray_query_type_and_functions_roundtrip():
         "rayQueryGetIntersectionObjectRayDirectionEXT(rq, false);" in glsl
     )
     assert "float committedT = rayQueryGetIntersectionTEXT(rq, true);" in glsl
+    assert "vec3 worldOrigin = rayQueryGetWorldRayOriginEXT(rq);" in glsl
+    assert "vec3 worldDirection = rayQueryGetWorldRayDirectionEXT(rq);" in glsl
+    assert "uint rayFlags = rayQueryGetRayFlagsEXT(rq);" in glsl
+    assert "float rayTMin = rayQueryGetRayTMinEXT(rq);" in glsl
+    assert (
+        "uint customIndex = "
+        "rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);" in glsl
+    )
+    assert (
+        "uint sbtOffset = "
+        "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, false);"
+        in glsl
+    )
+    assert (
+        "vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(rq, false);" in glsl
+    )
+    assert "bool frontFace = rayQueryGetIntersectionFrontFaceEXT(rq, true);" in glsl
+    assert (
+        "bool aabbOpaque = rayQueryGetIntersectionCandidateAABBOpaqueEXT(rq);" in glsl
+    )
+    assert "vec3 trianglePositions[3];" in glsl
+    assert (
+        "rayQueryGetIntersectionTriangleVertexPositionsEXT("
+        "rq, false, trianglePositions);" in glsl
+    )
+    assert (
+        "rayQueryGetIntersectionTriangleVertexPositionsEXT("
+        "rq, true, trianglePositions);" in glsl
+    )
+    assert "rayQueryGenerateIntersectionEXT(rq, 1.0);" in glsl
+    assert "rayQueryConfirmIntersectionEXT(rq);" in glsl
     assert "rayQueryTerminateEXT(rq);" in glsl
     assert ".Proceed(" not in glsl
     assert ".CommittedType(" not in glsl

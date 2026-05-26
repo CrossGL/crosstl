@@ -72,8 +72,16 @@ class GLSLToCrossGLConverter:
         "ray_callable",
     }
     RAY_QUERY_SIMPLE_METHODS = {
+        "rayQueryInitializeEXT": "Initialize",
         "rayQueryProceedEXT": "Proceed",
         "rayQueryTerminateEXT": "Abort",
+        "rayQueryGenerateIntersectionEXT": "GenerateIntersection",
+        "rayQueryConfirmIntersectionEXT": "ConfirmIntersection",
+        "rayQueryGetRayTMinEXT": "RayTMin",
+        "rayQueryGetRayFlagsEXT": "RayFlags",
+        "rayQueryGetWorldRayOriginEXT": "WorldRayOrigin",
+        "rayQueryGetWorldRayDirectionEXT": "WorldRayDirection",
+        "rayQueryGetIntersectionCandidateAABBOpaqueEXT": "CandidateAABBOpaque",
     }
     RAY_QUERY_COMMITTED_METHODS = {
         "rayQueryGetIntersectionTypeEXT": ("CandidateType", "CommittedType"),
@@ -89,6 +97,14 @@ class GLSLToCrossGLConverter:
             "CandidateGeometryIndex",
             "CommittedGeometryIndex",
         ),
+        "rayQueryGetIntersectionInstanceCustomIndexEXT": (
+            "CandidateInstanceCustomIndex",
+            "CommittedInstanceCustomIndex",
+        ),
+        "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT": (
+            "CandidateInstanceShaderBindingTableRecordOffset",
+            "CommittedInstanceShaderBindingTableRecordOffset",
+        ),
         "rayQueryGetIntersectionObjectRayOriginEXT": (
             "CandidateObjectRayOrigin",
             "CommittedObjectRayOrigin",
@@ -98,6 +114,26 @@ class GLSLToCrossGLConverter:
             "CommittedObjectRayDirection",
         ),
         "rayQueryGetIntersectionTEXT": ("CandidateRayT", "CommittedRayT"),
+        "rayQueryGetIntersectionBarycentricsEXT": (
+            "CandidateTriangleBarycentrics",
+            "CommittedTriangleBarycentrics",
+        ),
+        "rayQueryGetIntersectionFrontFaceEXT": (
+            "CandidateTriangleFrontFace",
+            "CommittedTriangleFrontFace",
+        ),
+        "rayQueryGetIntersectionTriangleVertexPositionsEXT": (
+            "CandidateTriangleVertexPositions",
+            "CommittedTriangleVertexPositions",
+        ),
+        "rayQueryGetIntersectionObjectToWorldEXT": (
+            "CandidateObjectToWorld",
+            "CommittedObjectToWorld",
+        ),
+        "rayQueryGetIntersectionWorldToObjectEXT": (
+            "CandidateWorldToObject",
+            "CommittedWorldToObject",
+        ),
     }
 
     def __init__(self, shader_type="vertex"):
@@ -1251,12 +1287,13 @@ class GLSLToCrossGLConverter:
         return f"{mapped_name}({args})"
 
     def generate_ray_query_method_call(self, name, args):
-        if name in self.RAY_QUERY_SIMPLE_METHODS and len(args) == 1:
+        if name in self.RAY_QUERY_SIMPLE_METHODS and args:
             query = self.generate_expression(args[0])
             method = self.RAY_QUERY_SIMPLE_METHODS[name]
-            return f"{query}.{method}()"
+            method_args = ", ".join(self.generate_expression(arg) for arg in args[1:])
+            return f"{query}.{method}({method_args})"
 
-        if name not in self.RAY_QUERY_COMMITTED_METHODS or len(args) != 2:
+        if name not in self.RAY_QUERY_COMMITTED_METHODS or len(args) < 2:
             return None
 
         committed = self.ray_query_committed_argument(args[1])
@@ -1266,7 +1303,8 @@ class GLSLToCrossGLConverter:
         query = self.generate_expression(args[0])
         candidate_method, committed_method = self.RAY_QUERY_COMMITTED_METHODS[name]
         method = committed_method if committed else candidate_method
-        return f"{query}.{method}()"
+        method_args = ", ".join(self.generate_expression(arg) for arg in args[2:])
+        return f"{query}.{method}({method_args})"
 
     def ray_query_committed_argument(self, arg):
         if isinstance(arg, str):

@@ -867,6 +867,460 @@ mod math {
         }
     }
 
+    pub trait BitCount {
+        type Output;
+
+        fn bit_count_value(self) -> Self::Output;
+    }
+
+    pub fn bit_count<T: BitCount>(value: T) -> T::Output {
+        value.bit_count_value()
+    }
+
+    impl BitCount for u32 {
+        type Output = i32;
+
+        fn bit_count_value(self) -> Self::Output {
+            self.count_ones() as i32
+        }
+    }
+
+    impl BitCount for i32 {
+        type Output = i32;
+
+        fn bit_count_value(self) -> Self::Output {
+            self.count_ones() as i32
+        }
+    }
+
+    impl BitCount for Vec3<u32> {
+        type Output = Vec3<i32>;
+
+        fn bit_count_value(self) -> Self::Output {
+            Vec3::new(
+                self.x.count_ones() as i32,
+                self.y.count_ones() as i32,
+                self.z.count_ones() as i32,
+            )
+        }
+    }
+
+    impl BitCount for Vec3<i32> {
+        type Output = Vec3<i32>;
+
+        fn bit_count_value(self) -> Self::Output {
+            Vec3::new(
+                self.x.count_ones() as i32,
+                self.y.count_ones() as i32,
+                self.z.count_ones() as i32,
+            )
+        }
+    }
+
+    pub trait BitfieldReverse {
+        type Output;
+
+        fn bitfield_reverse_value(self) -> Self::Output;
+    }
+
+    pub fn bitfield_reverse<T: BitfieldReverse>(value: T) -> T::Output {
+        value.bitfield_reverse_value()
+    }
+
+    impl BitfieldReverse for u32 {
+        type Output = u32;
+
+        fn bitfield_reverse_value(self) -> Self::Output {
+            self.reverse_bits()
+        }
+    }
+
+    impl BitfieldReverse for i32 {
+        type Output = i32;
+
+        fn bitfield_reverse_value(self) -> Self::Output {
+            self.reverse_bits()
+        }
+    }
+
+    impl BitfieldReverse for Vec3<u32> {
+        type Output = Vec3<u32>;
+
+        fn bitfield_reverse_value(self) -> Self::Output {
+            Vec3::new(
+                self.x.reverse_bits(),
+                self.y.reverse_bits(),
+                self.z.reverse_bits(),
+            )
+        }
+    }
+
+    impl BitfieldReverse for Vec3<i32> {
+        type Output = Vec3<i32>;
+
+        fn bitfield_reverse_value(self) -> Self::Output {
+            Vec3::new(
+                self.x.reverse_bits(),
+                self.y.reverse_bits(),
+                self.z.reverse_bits(),
+            )
+        }
+    }
+
+    pub trait FindLsb {
+        type Output;
+
+        fn find_lsb_value(self) -> Self::Output;
+    }
+
+    pub fn find_lsb<T: FindLsb>(value: T) -> T::Output {
+        value.find_lsb_value()
+    }
+
+    impl FindLsb for u32 {
+        type Output = i32;
+
+        fn find_lsb_value(self) -> Self::Output {
+            if self == 0 { -1 } else { self.trailing_zeros() as i32 }
+        }
+    }
+
+    impl FindLsb for i32 {
+        type Output = i32;
+
+        fn find_lsb_value(self) -> Self::Output {
+            if self == 0 { -1 } else { self.trailing_zeros() as i32 }
+        }
+    }
+
+    impl FindLsb for Vec3<u32> {
+        type Output = Vec3<i32>;
+
+        fn find_lsb_value(self) -> Self::Output {
+            Vec3::new(find_lsb(self.x), find_lsb(self.y), find_lsb(self.z))
+        }
+    }
+
+    impl FindLsb for Vec3<i32> {
+        type Output = Vec3<i32>;
+
+        fn find_lsb_value(self) -> Self::Output {
+            Vec3::new(find_lsb(self.x), find_lsb(self.y), find_lsb(self.z))
+        }
+    }
+
+    pub trait FindMsb {
+        type Output;
+
+        fn find_msb_value(self) -> Self::Output;
+    }
+
+    pub fn find_msb<T: FindMsb>(value: T) -> T::Output {
+        value.find_msb_value()
+    }
+
+    impl FindMsb for u32 {
+        type Output = i32;
+
+        fn find_msb_value(self) -> Self::Output {
+            if self == 0 { -1 } else { 31 - self.leading_zeros() as i32 }
+        }
+    }
+
+    impl FindMsb for i32 {
+        type Output = i32;
+
+        fn find_msb_value(self) -> Self::Output {
+            if self == 0 { -1 } else { 31 - self.leading_zeros() as i32 }
+        }
+    }
+
+    impl FindMsb for Vec3<u32> {
+        type Output = Vec3<i32>;
+
+        fn find_msb_value(self) -> Self::Output {
+            Vec3::new(find_msb(self.x), find_msb(self.y), find_msb(self.z))
+        }
+    }
+
+    impl FindMsb for Vec3<i32> {
+        type Output = Vec3<i32>;
+
+        fn find_msb_value(self) -> Self::Output {
+            Vec3::new(find_msb(self.x), find_msb(self.y), find_msb(self.z))
+        }
+    }
+
+    pub trait BitfieldExtract {
+        type Output;
+
+        fn bitfield_extract_value(self, offset: i32, bits: i32) -> Self::Output;
+    }
+
+    pub fn bitfield_extract<T: BitfieldExtract>(value: T, offset: i32, bits: i32) -> T::Output {
+        value.bitfield_extract_value(offset, bits)
+    }
+
+    impl BitfieldExtract for u32 {
+        type Output = u32;
+
+        fn bitfield_extract_value(self, _offset: i32, _bits: i32) -> Self::Output {
+            self
+        }
+    }
+
+    impl BitfieldExtract for i32 {
+        type Output = i32;
+
+        fn bitfield_extract_value(self, _offset: i32, _bits: i32) -> Self::Output {
+            self
+        }
+    }
+
+    impl BitfieldExtract for Vec3<u32> {
+        type Output = Vec3<u32>;
+
+        fn bitfield_extract_value(self, _offset: i32, _bits: i32) -> Self::Output {
+            self
+        }
+    }
+
+    impl BitfieldExtract for Vec3<i32> {
+        type Output = Vec3<i32>;
+
+        fn bitfield_extract_value(self, _offset: i32, _bits: i32) -> Self::Output {
+            self
+        }
+    }
+
+    pub trait BitfieldInsert<Insert> {
+        type Output;
+
+        fn bitfield_insert_value(self, insert: Insert, offset: i32, bits: i32) -> Self::Output;
+    }
+
+    pub fn bitfield_insert<Base, Insert>(
+        base: Base,
+        insert: Insert,
+        offset: i32,
+        bits: i32,
+    ) -> <Base as BitfieldInsert<Insert>>::Output
+    where
+        Base: BitfieldInsert<Insert>,
+    {
+        base.bitfield_insert_value(insert, offset, bits)
+    }
+
+    impl BitfieldInsert<u32> for u32 {
+        type Output = u32;
+
+        fn bitfield_insert_value(self, _insert: u32, _offset: i32, _bits: i32) -> Self::Output {
+            self
+        }
+    }
+
+    impl BitfieldInsert<i32> for i32 {
+        type Output = i32;
+
+        fn bitfield_insert_value(self, _insert: i32, _offset: i32, _bits: i32) -> Self::Output {
+            self
+        }
+    }
+
+    impl BitfieldInsert<Vec3<u32>> for Vec3<u32> {
+        type Output = Vec3<u32>;
+
+        fn bitfield_insert_value(
+            self,
+            _insert: Vec3<u32>,
+            _offset: i32,
+            _bits: i32,
+        ) -> Self::Output {
+            self
+        }
+    }
+
+    impl BitfieldInsert<Vec3<i32>> for Vec3<i32> {
+        type Output = Vec3<i32>;
+
+        fn bitfield_insert_value(
+            self,
+            _insert: Vec3<i32>,
+            _offset: i32,
+            _bits: i32,
+        ) -> Self::Output {
+            self
+        }
+    }
+
+    pub trait FloatBitsToInt {
+        type Output;
+
+        fn float_bits_to_int_value(self) -> Self::Output;
+    }
+
+    pub fn float_bits_to_int<T: FloatBitsToInt>(value: T) -> T::Output {
+        value.float_bits_to_int_value()
+    }
+
+    impl FloatBitsToInt for f32 {
+        type Output = i32;
+
+        fn float_bits_to_int_value(self) -> Self::Output {
+            i32::from_ne_bytes(self.to_bits().to_ne_bytes())
+        }
+    }
+
+    impl FloatBitsToInt for Vec3<f32> {
+        type Output = Vec3<i32>;
+
+        fn float_bits_to_int_value(self) -> Self::Output {
+            Vec3::new(
+                float_bits_to_int(self.x),
+                float_bits_to_int(self.y),
+                float_bits_to_int(self.z),
+            )
+        }
+    }
+
+    pub trait FloatBitsToUint {
+        type Output;
+
+        fn float_bits_to_uint_value(self) -> Self::Output;
+    }
+
+    pub fn float_bits_to_uint<T: FloatBitsToUint>(value: T) -> T::Output {
+        value.float_bits_to_uint_value()
+    }
+
+    impl FloatBitsToUint for f32 {
+        type Output = u32;
+
+        fn float_bits_to_uint_value(self) -> Self::Output {
+            self.to_bits()
+        }
+    }
+
+    impl FloatBitsToUint for Vec3<f32> {
+        type Output = Vec3<u32>;
+
+        fn float_bits_to_uint_value(self) -> Self::Output {
+            Vec3::new(
+                float_bits_to_uint(self.x),
+                float_bits_to_uint(self.y),
+                float_bits_to_uint(self.z),
+            )
+        }
+    }
+
+    pub trait IntBitsToFloat {
+        type Output;
+
+        fn int_bits_to_float_value(self) -> Self::Output;
+    }
+
+    pub fn int_bits_to_float<T: IntBitsToFloat>(value: T) -> T::Output {
+        value.int_bits_to_float_value()
+    }
+
+    impl IntBitsToFloat for i32 {
+        type Output = f32;
+
+        fn int_bits_to_float_value(self) -> Self::Output {
+            f32::from_bits(u32::from_ne_bytes(self.to_ne_bytes()))
+        }
+    }
+
+    impl IntBitsToFloat for Vec3<i32> {
+        type Output = Vec3<f32>;
+
+        fn int_bits_to_float_value(self) -> Self::Output {
+            Vec3::new(
+                int_bits_to_float(self.x),
+                int_bits_to_float(self.y),
+                int_bits_to_float(self.z),
+            )
+        }
+    }
+
+    pub trait UintBitsToFloat {
+        type Output;
+
+        fn uint_bits_to_float_value(self) -> Self::Output;
+    }
+
+    pub fn uint_bits_to_float<T: UintBitsToFloat>(value: T) -> T::Output {
+        value.uint_bits_to_float_value()
+    }
+
+    impl UintBitsToFloat for u32 {
+        type Output = f32;
+
+        fn uint_bits_to_float_value(self) -> Self::Output {
+            f32::from_bits(self)
+        }
+    }
+
+    impl UintBitsToFloat for Vec3<u32> {
+        type Output = Vec3<f32>;
+
+        fn uint_bits_to_float_value(self) -> Self::Output {
+            Vec3::new(
+                uint_bits_to_float(self.x),
+                uint_bits_to_float(self.y),
+                uint_bits_to_float(self.z),
+            )
+        }
+    }
+
+    pub fn pack_unorm_2x16(_value: Vec2<f32>) -> u32 {
+        0
+    }
+
+    pub fn pack_snorm_2x16(_value: Vec2<f32>) -> u32 {
+        0
+    }
+
+    pub fn pack_unorm_4x8(_value: Vec4<f32>) -> u32 {
+        0
+    }
+
+    pub fn pack_snorm_4x8(_value: Vec4<f32>) -> u32 {
+        0
+    }
+
+    pub fn pack_half_2x16(_value: Vec2<f32>) -> u32 {
+        0
+    }
+
+    pub fn pack_double_2x32(_value: Vec2<u32>) -> f64 {
+        0.0
+    }
+
+    pub fn unpack_unorm_2x16(_value: u32) -> Vec2<f32> {
+        Default::default()
+    }
+
+    pub fn unpack_snorm_2x16(_value: u32) -> Vec2<f32> {
+        Default::default()
+    }
+
+    pub fn unpack_unorm_4x8(_value: u32) -> Vec4<f32> {
+        Default::default()
+    }
+
+    pub fn unpack_snorm_4x8(_value: u32) -> Vec4<f32> {
+        Default::default()
+    }
+
+    pub fn unpack_half_2x16(_value: u32) -> Vec2<f32> {
+        Default::default()
+    }
+
+    pub fn unpack_double_2x32(_value: f64) -> Vec2<u32> {
+        Default::default()
+    }
+
     pub trait Fma<Multiplier, Addend> {
         type Output;
 
@@ -5369,6 +5823,188 @@ def test_relational_intrinsics_infer_bool_vectors_and_smoke_compile(tmp_path):
     assert "let scalar_eq: bool = equal(threshold, 1.0);" in generated_code
     assert "let lt: bool = less_than" not in generated_code
     assert "let scalar_eq: Vec3<bool> = equal" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_integer_bit_intrinsics_infer_result_types_and_smoke_compile(tmp_path):
+    code = """
+    shader IntegerBitIntrinsicInference {
+        fragment {
+            vec4 main(uvec3 mask, ivec3 signedMask, uint scalarMask, int offset, int bits) {
+                let reversed = bitfieldReverse(mask);
+                let signedReversed = bitfieldReverse(signedMask);
+                let scalarReversed = bitfieldReverse(scalarMask);
+                let counts = bitCount(mask);
+                let signedCounts = bitCount(signedMask);
+                let scalarCount = bitCount(scalarMask);
+                let lsb = findLSB(mask);
+                let msb = findMSB(signedMask);
+                let extracted = bitfieldExtract(mask, offset, bits);
+                let signedExtracted = bitfieldExtract(signedMask, offset, bits);
+                let inserted = bitfieldInsert(mask, extracted, offset, bits);
+                let signedInserted = bitfieldInsert(signedMask, signedExtracted, offset, bits);
+                let scalarExtract = bitfieldExtract(scalarMask, offset, bits);
+                let scalarInsert = bitfieldInsert(scalarMask, scalarExtract, offset, bits);
+                int total = counts.x + signedCounts.y + lsb.z + msb.x + scalarCount;
+                uint mixed = reversed.x + inserted.y + scalarReversed + scalarInsert;
+                int signedMixed = signedReversed.x + signedInserted.y;
+                return vec4(vec3(float(total + signedMixed)), float(mixed));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let reversed: Vec3<u32> = bitfield_reverse(mask);" in generated_code
+    assert (
+        "let signedReversed: Vec3<i32> = bitfield_reverse(signedMask);"
+        in generated_code
+    )
+    assert "let scalarReversed: u32 = bitfield_reverse(scalarMask);" in generated_code
+    assert "let counts: Vec3<i32> = bit_count(mask);" in generated_code
+    assert "let signedCounts: Vec3<i32> = bit_count(signedMask);" in generated_code
+    assert "let scalarCount: i32 = bit_count(scalarMask);" in generated_code
+    assert "let lsb: Vec3<i32> = find_lsb(mask);" in generated_code
+    assert "let msb: Vec3<i32> = find_msb(signedMask);" in generated_code
+    assert (
+        "let extracted: Vec3<u32> = bitfield_extract(mask, offset, bits);"
+        in generated_code
+    )
+    assert (
+        "let signedExtracted: Vec3<i32> = bitfield_extract(signedMask, offset, bits);"
+        in generated_code
+    )
+    assert (
+        "let inserted: Vec3<u32> = bitfield_insert(mask, extracted, offset, bits);"
+        in generated_code
+    )
+    assert (
+        "let signedInserted: Vec3<i32> = "
+        "bitfield_insert(signedMask, signedExtracted, offset, bits);" in generated_code
+    )
+    assert (
+        "let scalarExtract: u32 = bitfield_extract(scalarMask, offset, bits);"
+        in generated_code
+    )
+    assert (
+        "let scalarInsert: u32 = "
+        "bitfield_insert(scalarMask, scalarExtract, offset, bits);" in generated_code
+    )
+    assert "let counts: Vec3<u32> = bit_count" not in generated_code
+    assert "let lsb: Vec3<u32> = find_lsb" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_bit_reinterpret_intrinsics_preserve_shape_and_smoke_compile(tmp_path):
+    code = """
+    shader BitReinterpretIntrinsicInference {
+        fragment {
+            vec4 main(vec3 value, float scalar, ivec3 signedBits, uvec3 unsignedBits, int signedScalar, uint unsignedScalar) {
+                let signedFromVector = floatBitsToInt(value);
+                let unsignedFromVector = floatBitsToUint(value);
+                let signedFromScalar = floatBitsToInt(scalar);
+                let unsignedFromScalar = floatBitsToUint(scalar);
+                let floatFromSigned = intBitsToFloat(signedBits);
+                let floatFromUnsigned = uintBitsToFloat(unsignedBits);
+                let scalarFromSigned = intBitsToFloat(signedScalar);
+                let scalarFromUnsigned = uintBitsToFloat(unsignedScalar);
+                int signedMix = signedFromVector.x + signedFromScalar;
+                uint unsignedMix = unsignedFromVector.y + unsignedFromScalar;
+                vec3 restored = floatFromSigned + floatFromUnsigned;
+                return vec4(restored, float(signedMix) + float(unsignedMix)
+                    + scalarFromSigned + scalarFromUnsigned);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "let signedFromVector: Vec3<i32> = float_bits_to_int(value);" in generated_code
+    )
+    assert (
+        "let unsignedFromVector: Vec3<u32> = float_bits_to_uint(value);"
+        in generated_code
+    )
+    assert "let signedFromScalar: i32 = float_bits_to_int(scalar);" in generated_code
+    assert "let unsignedFromScalar: u32 = float_bits_to_uint(scalar);" in generated_code
+    assert (
+        "let floatFromSigned: Vec3<f32> = int_bits_to_float(signedBits);"
+        in generated_code
+    )
+    assert (
+        "let floatFromUnsigned: Vec3<f32> = uint_bits_to_float(unsignedBits);"
+        in generated_code
+    )
+    assert (
+        "let scalarFromSigned: f32 = int_bits_to_float(signedScalar);" in generated_code
+    )
+    assert (
+        "let scalarFromUnsigned: f32 = uint_bits_to_float(unsignedScalar);"
+        in generated_code
+    )
+    assert "let signedFromVector: Vec3<u32> = float_bits_to_int" not in generated_code
+    assert "let floatFromSigned: Vec3<i32> = int_bits_to_float" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_pack_unpack_intrinsics_infer_result_types_and_smoke_compile(tmp_path):
+    code = """
+    shader PackUnpackIntrinsicInference {
+        fragment {
+            vec4 main(vec2 pair, vec4 color, uint packed2, uint packed4, uvec2 doubleBits, double packedDoubleInput) {
+                let packedUnorm2 = packUnorm2x16(pair);
+                let packedSnorm2 = packSnorm2x16(pair);
+                let packedUnorm4 = packUnorm4x8(color);
+                let packedSnorm4 = packSnorm4x8(color);
+                let packedHalf = packHalf2x16(pair);
+                let packedDouble = packDouble2x32(doubleBits);
+                let unpackedUnorm2 = unpackUnorm2x16(packed2);
+                let unpackedSnorm2 = unpackSnorm2x16(packed2);
+                let unpackedUnorm4 = unpackUnorm4x8(packed4);
+                let unpackedSnorm4 = unpackSnorm4x8(packed4);
+                let unpackedHalf = unpackHalf2x16(packed2);
+                let unpackedDouble = unpackDouble2x32(packedDoubleInput);
+                uint packedMix = packedUnorm2 + packedSnorm2 + packedUnorm4
+                    + packedSnorm4 + packedHalf;
+                return unpackedUnorm4 + unpackedSnorm4
+                    + vec4(unpackedUnorm2, unpackedSnorm2)
+                    + vec4(unpackedHalf, vec2(float(unpackedDouble.x), float(unpackedDouble.y)))
+                    + vec4(vec3(float(packedMix)), float(packedDouble));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let packedUnorm2: u32 = pack_unorm_2x16(pair);" in generated_code
+    assert "let packedSnorm2: u32 = pack_snorm_2x16(pair);" in generated_code
+    assert "let packedUnorm4: u32 = pack_unorm_4x8(color);" in generated_code
+    assert "let packedSnorm4: u32 = pack_snorm_4x8(color);" in generated_code
+    assert "let packedHalf: u32 = pack_half_2x16(pair);" in generated_code
+    assert "let packedDouble: f64 = pack_double_2x32(doubleBits);" in generated_code
+    assert (
+        "let unpackedUnorm2: Vec2<f32> = unpack_unorm_2x16(packed2);" in generated_code
+    )
+    assert (
+        "let unpackedSnorm2: Vec2<f32> = unpack_snorm_2x16(packed2);" in generated_code
+    )
+    assert (
+        "let unpackedUnorm4: Vec4<f32> = unpack_unorm_4x8(packed4);" in generated_code
+    )
+    assert (
+        "let unpackedSnorm4: Vec4<f32> = unpack_snorm_4x8(packed4);" in generated_code
+    )
+    assert "let unpackedHalf: Vec2<f32> = unpack_half_2x16(packed2);" in generated_code
+    assert (
+        "let unpackedDouble: Vec2<u32> = unpack_double_2x32(packedDoubleInput);"
+        in generated_code
+    )
+    assert "let packedUnorm2: f32 = pack_unorm_2x16" not in generated_code
+    assert "let unpackedUnorm4: Vec2<f32> = unpack_unorm_4x8" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

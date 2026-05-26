@@ -587,6 +587,91 @@ class HipToCrossGLConverter:
                 return [
                     f"// HIP set device memory pool: device: {args[0]}, pool: {args[1]}"
                 ]
+        elif name == "hipMemGetAllocationGranularity":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP virtual memory allocation granularity: output: {output}, "
+                    f"properties: {args[1]}, option: {args[2]}"
+                ]
+        elif name == "hipMemCreate":
+            if len(args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP virtual memory create allocation: output: {output}, "
+                    f"bytes: {args[1]}, properties: {args[2]}, flags: {args[3]}"
+                ]
+        elif name == "hipMemRelease":
+            if args:
+                return [f"// HIP virtual memory release allocation: {args[0]}"]
+        elif name == "hipMemAddressReserve":
+            if len(args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP virtual memory reserve address: output: {output}, "
+                    f"bytes: {args[1]}, alignment: {args[2]}, address: {args[3]}, "
+                    f"flags: {args[4]}"
+                ]
+        elif name == "hipMemAddressFree":
+            if len(args) >= 2:
+                return [
+                    f"// HIP virtual memory free address: pointer: {args[0]}, "
+                    f"bytes: {args[1]}"
+                ]
+        elif name == "hipMemMap":
+            if len(args) >= 5:
+                return [
+                    f"// HIP virtual memory map: pointer: {args[0]}, "
+                    f"bytes: {args[1]}, offset: {args[2]}, handle: {args[3]}, "
+                    f"flags: {args[4]}"
+                ]
+        elif name == "hipMemUnmap":
+            if len(args) >= 2:
+                return [
+                    f"// HIP virtual memory unmap: pointer: {args[0]}, "
+                    f"bytes: {args[1]}"
+                ]
+        elif name == "hipMemSetAccess":
+            if len(args) >= 4:
+                return [
+                    f"// HIP virtual memory set access: pointer: {args[0]}, "
+                    f"bytes: {args[1]}, descriptors: {args[2]}, count: {args[3]}"
+                ]
+        elif name == "hipMemGetAccess":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP virtual memory get access: output: {output}, "
+                    f"location: {args[1]}, pointer: {args[2]}"
+                ]
+        elif name == "hipMemGetAllocationPropertiesFromHandle":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP virtual memory allocation properties: output: {output}, "
+                    f"handle: {args[1]}"
+                ]
+        elif name == "hipMemRetainAllocationHandle":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP virtual memory retain allocation handle: output: {output}, "
+                    f"address: {args[1]}"
+                ]
+        elif name == "hipMemExportToShareableHandle":
+            if len(args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP virtual memory export shareable handle: output: {output}, "
+                    f"handle: {args[1]}, handle type: {args[2]}, flags: {args[3]}"
+                ]
+        elif name == "hipMemImportFromShareableHandle":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP virtual memory import shareable handle: output: {output}, "
+                    f"shareable handle: {args[1]}, handle type: {args[2]}"
+                ]
         elif name == "hipHostRegister":
             if len(args) >= 3:
                 return [
@@ -686,6 +771,173 @@ class HipToCrossGLConverter:
                 if len(args) >= 4:
                     comment += f", stream: {args[3]}"
                 return [comment]
+        elif name == "hipMemAlloc":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP driver memory allocate: output: {output}, "
+                    f"bytes: {args[1]}"
+                ]
+        elif name == "hipMemAllocPitch":
+            if len(args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                pitch = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// HIP driver pitched memory allocate: output: {output}, "
+                    f"pitch output: {pitch}, width: {args[2]}, height: {args[3]}, "
+                    f"element bytes: {args[4]}"
+                ]
+        elif name == "hipMemFree":
+            if args:
+                return [f"// HIP driver memory free: {args[0]}"]
+        elif name in {"hipMemAllocHost", "hipMemHostAlloc"}:
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                comment = (
+                    f"// HIP driver host memory allocate: output: {output}, "
+                    f"bytes: {args[1]}"
+                )
+                if len(args) >= 3:
+                    comment += f", flags: {args[2]}"
+                return [comment]
+        elif name == "hipMemFreeHost":
+            if args:
+                return [f"// HIP driver host memory free: {args[0]}"]
+        elif name == "hipMemHostGetDevicePointer":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP driver host device pointer: output: {output}, "
+                    f"host: {args[1]}, flags: {args[2]}"
+                ]
+        elif name == "hipMemGetAddressRange":
+            if len(args) >= 3:
+                base_output = self.format_runtime_pointer_target(node.args[0])
+                size_output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// HIP driver memory address range: base output: {base_output}, "
+                    f"size output: {size_output}, pointer: {args[2]}"
+                ]
+        elif name in {
+            "hipMemcpyHtoD",
+            "hipMemcpyHtoDAsync",
+            "hipMemcpyDtoH",
+            "hipMemcpyDtoHAsync",
+            "hipMemcpyDtoD",
+            "hipMemcpyDtoDAsync",
+        }:
+            if len(args) >= 3:
+                copy_kind = {
+                    "hipMemcpyHtoD": "host to device",
+                    "hipMemcpyHtoDAsync": "host to device",
+                    "hipMemcpyDtoH": "device to host",
+                    "hipMemcpyDtoHAsync": "device to host",
+                    "hipMemcpyDtoD": "device to device",
+                    "hipMemcpyDtoDAsync": "device to device",
+                }[name]
+                comment = (
+                    f"// HIP driver memory copy {copy_kind}: "
+                    f"source: {args[1]}, destination: {args[0]}, bytes: {args[2]}"
+                )
+                if len(args) >= 4:
+                    comment += f", stream: {args[3]}"
+                return [comment]
+        elif name in {"hipMemcpyAtoH", "hipMemcpyAtoHAsync"}:
+            if len(args) >= 4:
+                comment = (
+                    "// HIP driver memory copy array to host: "
+                    f"source array: {args[1]}, source offset: {args[2]}, "
+                    f"destination host: {args[0]}, bytes: {args[3]}"
+                )
+                if len(args) >= 5:
+                    comment += f", stream: {args[4]}"
+                return [comment]
+        elif name in {"hipMemcpyHtoA", "hipMemcpyHtoAAsync"}:
+            if len(args) >= 4:
+                comment = (
+                    "// HIP driver memory copy host to array: "
+                    f"source host: {args[2]}, destination array: {args[0]}, "
+                    f"destination offset: {args[1]}, bytes: {args[3]}"
+                )
+                if len(args) >= 5:
+                    comment += f", stream: {args[4]}"
+                return [comment]
+        elif name == "hipMemcpyAtoD":
+            if len(args) >= 4:
+                return [
+                    "// HIP driver memory copy array to device: "
+                    f"source array: {args[1]}, source offset: {args[2]}, "
+                    f"destination device: {args[0]}, bytes: {args[3]}"
+                ]
+        elif name == "hipMemcpyDtoA":
+            if len(args) >= 4:
+                return [
+                    "// HIP driver memory copy device to array: "
+                    f"source device: {args[2]}, destination array: {args[0]}, "
+                    f"destination offset: {args[1]}, bytes: {args[3]}"
+                ]
+        elif name == "hipMemcpyAtoA":
+            if len(args) >= 5:
+                return [
+                    "// HIP driver memory copy array to array: "
+                    f"source array: {args[2]}, source offset: {args[3]}, "
+                    f"destination array: {args[0]}, destination offset: {args[1]}, "
+                    f"bytes: {args[4]}"
+                ]
+        elif name in {
+            "hipMemsetD8",
+            "hipMemsetD8Async",
+            "hipMemsetD16",
+            "hipMemsetD16Async",
+            "hipMemsetD32",
+            "hipMemsetD32Async",
+        }:
+            if len(args) >= 3:
+                width = {
+                    "hipMemsetD8": "8-bit",
+                    "hipMemsetD8Async": "8-bit",
+                    "hipMemsetD16": "16-bit",
+                    "hipMemsetD16Async": "16-bit",
+                    "hipMemsetD32": "32-bit",
+                    "hipMemsetD32Async": "32-bit",
+                }[name]
+                comment = (
+                    f"// HIP driver memory set {width}: pointer: {args[0]}, "
+                    f"value: {args[1]}, count: {args[2]}"
+                )
+                if len(args) >= 4:
+                    comment += f", stream: {args[3]}"
+                return [comment]
+        elif name == "hipIpcGetMemHandle":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP IPC get memory handle: output: {output}, "
+                    f"pointer: {args[1]}"
+                ]
+        elif name == "hipIpcOpenMemHandle":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP IPC open memory handle: output: {output}, "
+                    f"handle: {args[1]}, flags: {args[2]}"
+                ]
+        elif name == "hipIpcCloseMemHandle":
+            if args:
+                return [f"// HIP IPC close memory handle: pointer: {args[0]}"]
+        elif name == "hipIpcGetEventHandle":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP IPC get event handle: output: {output}, event: {args[1]}"
+                ]
+        elif name == "hipIpcOpenEventHandle":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP IPC open event handle: output: {output}, "
+                    f"handle: {args[1]}"
+                ]
         elif name in {"hipStreamSynchronize"}:
             if args:
                 return [f"// HIP synchronize: {args[0]}"]
@@ -879,6 +1131,42 @@ class HipToCrossGLConverter:
                 return [
                     f"// HIP choose device: output: {output}, properties: {args[1]}"
                 ]
+        elif name == "hipDeviceGetPCIBusId":
+            if len(args) >= 3:
+                return [
+                    f"// HIP get device PCI bus id: output: {args[0]}, "
+                    f"length: {args[1]}, device: {args[2]}"
+                ]
+        elif name == "hipDeviceGetByPCIBusId":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP get device by PCI bus id: output: {output}, "
+                    f"bus id: {args[1]}"
+                ]
+        elif name == "hipDeviceGetCacheConfig":
+            if args:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// HIP get device cache config: output: {output}"]
+        elif name == "hipDeviceSetCacheConfig":
+            if args:
+                return [f"// HIP set device cache config: {args[0]}"]
+        elif name == "hipDeviceGetSharedMemConfig":
+            if args:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// HIP get device shared memory config: output: {output}"]
+        elif name == "hipDeviceSetSharedMemConfig":
+            if args:
+                return [f"// HIP set device shared memory config: {args[0]}"]
+        elif name == "hipDeviceGetLimit":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// HIP get device limit: output: {output}, limit: {args[1]}"]
+        elif name == "hipDeviceSetLimit":
+            if len(args) >= 2:
+                return [f"// HIP set device limit: limit: {args[0]}, value: {args[1]}"]
+        elif name == "hipDeviceReset":
+            return ["// HIP device reset"]
         elif name == "hipGetDeviceFlags":
             if args:
                 output = self.format_runtime_pointer_target(node.args[0])
@@ -1066,6 +1354,10 @@ class HipToCrossGLConverter:
         if rtc_comments is not None:
             return rtc_comments
 
+        interop_comments = self.format_hip_interop_runtime_call(name, node.args, args)
+        if interop_comments is not None:
+            return interop_comments
+
         driver_comments = self.format_hip_driver_runtime_call(name, node.args, args)
         if driver_comments is not None:
             return driver_comments
@@ -1092,6 +1384,101 @@ class HipToCrossGLConverter:
             if args:
                 return [f"// HIP surface object destroy: {args[0]}"]
 
+        return None
+
+    def format_hip_interop_runtime_call(self, name, raw_args, args):
+        if name == "hipProfilerStart":
+            return ["// HIP profiler start"]
+        if name == "hipProfilerStop":
+            return ["// HIP profiler stop"]
+        if name == "hipImportExternalMemory":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP import external memory: output: {output}, "
+                    f"descriptor: {args[1]}"
+                ]
+        if name == "hipDestroyExternalMemory":
+            if args:
+                return [f"// HIP destroy external memory: {args[0]}"]
+        if name == "hipExternalMemoryGetMappedBuffer":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP external memory mapped buffer: output: {output}, "
+                    f"memory: {args[1]}, descriptor: {args[2]}"
+                ]
+        if name == "hipExternalMemoryGetMappedMipmappedArray":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP external memory mapped mipmapped array: output: {output}, "
+                    f"memory: {args[1]}, descriptor: {args[2]}"
+                ]
+        if name == "hipFreeMipmappedArray":
+            if args:
+                return [f"// HIP free mipmapped array: {args[0]}"]
+        if name == "hipImportExternalSemaphore":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP import external semaphore: output: {output}, "
+                    f"descriptor: {args[1]}"
+                ]
+        if name == "hipDestroyExternalSemaphore":
+            if args:
+                return [f"// HIP destroy external semaphore: {args[0]}"]
+        if name in {
+            "hipSignalExternalSemaphoresAsync",
+            "hipWaitExternalSemaphoresAsync",
+        }:
+            if len(args) >= 4:
+                action = (
+                    "signal" if name == "hipSignalExternalSemaphoresAsync" else "wait"
+                )
+                return [
+                    f"// HIP {action} external semaphores: semaphores: {args[0]}, "
+                    f"params: {args[1]}, count: {args[2]}, stream: {args[3]}"
+                ]
+        if name == "hipGraphicsGLRegisterBuffer":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP OpenGL register buffer: output: {output}, "
+                    f"buffer: {args[1]}, flags: {args[2]}"
+                ]
+        if name == "hipGraphicsGLRegisterImage":
+            if len(args) >= 4:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP OpenGL register image: output: {output}, "
+                    f"image: {args[1]}, target: {args[2]}, flags: {args[3]}"
+                ]
+        if name == "hipGraphicsUnregisterResource":
+            if args:
+                return [f"// HIP graphics unregister resource: {args[0]}"]
+        if name in {"hipGraphicsMapResources", "hipGraphicsUnmapResources"}:
+            if len(args) >= 3:
+                action = "map" if name == "hipGraphicsMapResources" else "unmap"
+                return [
+                    f"// HIP graphics {action} resources: count: {args[0]}, "
+                    f"resources: {args[1]}, stream: {args[2]}"
+                ]
+        if name == "hipGraphicsResourceGetMappedPointer":
+            if len(args) >= 3:
+                pointer_output = self.format_runtime_pointer_target(raw_args[0])
+                size_output = self.format_runtime_pointer_target(raw_args[1])
+                return [
+                    f"// HIP graphics mapped pointer: pointer output: {pointer_output}, "
+                    f"size output: {size_output}, resource: {args[2]}"
+                ]
+        if name == "hipGraphicsSubResourceGetMappedArray":
+            if len(args) >= 4:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP graphics mapped subresource array: output: {output}, "
+                    f"resource: {args[1]}, array index: {args[2]}, mip level: {args[3]}"
+                ]
         return None
 
     def format_hip_rtc_runtime_call(self, name, raw_args, args):
