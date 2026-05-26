@@ -46,6 +46,22 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+HLSL_SCALAR_VECTOR_ZERO_DIAGNOSTIC = re.compile(
+    r"(?:(?:\b(?:float|double|half|min16float|min10float|int|uint|"
+    r"min16int|min16uint|bool)[234]\((?:0(?:\.0)?|0u|false|true)\)"
+    r"\s*/\*\s*unsupported\s+(?:HLSL|DirectX)\b)|"
+    r"(?:/\*\s*unsupported\s+(?:HLSL|DirectX)\b[^*]*\*/\s*"
+    r"\b(?:float|double|half|min16float|min10float|int|uint|"
+    r"min16int|min16uint|bool)[234]\((?:0(?:\.0)?|0u|false|true)\)))"
+)
+
+
+def hlsl_scalar_vector_zero_diagnostics(code: str):
+    return [
+        match.group(0) for match in HLSL_SCALAR_VECTOR_ZERO_DIAGNOSTIC.finditer(code)
+    ]
+
+
 def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
     shader = """
     shader SynchronizationBuiltins {
@@ -192,6 +208,83 @@ def test_hlsl_vector_constructor_scalar_splats_expand_for_dxc():
     assert "int3 cell = int3(1, 1, 1);" in generated_code
     assert "uint4 mask = uint4(2u, 2u, 2u, 2u);" in generated_code
     assert "bool2 flags = bool2(true, true);" in generated_code
+
+
+def test_hlsl_diagnostic_scalar_vector_zero_scanner_flags_single_arg_fallbacks():
+    bad_hlsl = """
+    float4 color = float4(0.0) /* unsupported HLSL GLSL buffer block access block */;
+    float2 lod = /* unsupported DirectX texture query: textureQueryLod */ float2(0.0);
+    uint3 counts = uint3(0u) /* unsupported HLSL GLSL buffer block access block */;
+    """
+
+    assert hlsl_scalar_vector_zero_diagnostics(bad_hlsl) == [
+        "float4(0.0) /* unsupported HLSL",
+        "/* unsupported DirectX texture query: textureQueryLod */ float2(0.0)",
+        "uint3(0u) /* unsupported HLSL",
+    ]
+
+
+def test_hlsl_diagnostic_vector_zero_fallbacks_expand_for_dxc():
+    shader = """
+    shader DiagnosticVectorFallbacks {
+        struct UnsupportedDiagnosticBlock {
+            double flag;
+            vec2 uv;
+            dvec2 precise;
+            vec3 normal;
+            vec4 color;
+            ivec2 pixel;
+            ivec3 voxel;
+            uvec2 counts;
+            uvec4 mask;
+            bvec2 predicates;
+        };
+
+        UnsupportedDiagnosticBlock block @glsl_buffer_block(std430) @binding(77);
+
+        vec3 readNormal(UnsupportedDiagnosticBlock localBlock @glsl_buffer_block(std430)) {
+            return localBlock.normal;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                vec2 uv = block.uv;
+                dvec2 precise = block.precise;
+                vec3 normal = readNormal(block);
+                vec4 color = block.color;
+                ivec2 pixel = block.pixel;
+                ivec3 voxel = block.voxel;
+                uvec2 counts = block.counts;
+                uvec4 mask = block.mask;
+                bvec2 predicates = block.predicates;
+                float boolValue = predicates.x ? 1.0 : 0.0;
+                return color + vec4(
+                    uv.x + float(precise.x) + normal.x +
+                    float(pixel.x + voxel.x) + float(counts.x + mask.x) +
+                    boolValue
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float2 uv = float2(0.0, 0.0) /* unsupported HLSL" in generated_code
+    assert "double2 precise = double2(0.0, 0.0) /* unsupported HLSL" in generated_code
+    assert "float3 normal = float3(0.0, 0.0, 0.0) /* unsupported HLSL" in generated_code
+    assert (
+        "float4 color = float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL"
+        in generated_code
+    )
+    assert "int2 pixel = int2(0, 0) /* unsupported HLSL" in generated_code
+    assert "int3 voxel = int3(0, 0, 0) /* unsupported HLSL" in generated_code
+    assert "uint2 counts = uint2(0u, 0u) /* unsupported HLSL" in generated_code
+    assert "uint4 mask = uint4(0u, 0u, 0u, 0u) /* unsupported HLSL" in generated_code
+    assert (
+        "bool2 predicates = bool2(false, false) /* unsupported HLSL" in generated_code
+    )
+    assert hlsl_scalar_vector_zero_diagnostics(generated_code) == []
 
 
 def test_hlsl_narrow_integer_aliases_map_to_valid_hlsl_integer_types():
