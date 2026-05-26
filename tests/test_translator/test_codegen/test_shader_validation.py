@@ -778,8 +778,8 @@ shader TextureSampleOffsetValidation {
 """
 
 
-METAL_TEXTURE_3D_SAMPLE_OFFSET_FRAGMENT_SHADER = """
-shader MetalTexture3DSampleOffsetValidation {
+TEXTURE_3D_SAMPLE_OFFSET_FRAGMENT_SHADER = """
+shader Texture3DSampleOffsetValidation {
     sampler3D volumeMap;
     sampler linearSampler;
 
@@ -2308,7 +2308,7 @@ def test_generated_metal_fragment_texture_3d_sample_offset_compiles_with_metal(
     source = tmp_path / "fragment_texture_3d_sample_offset.metal"
     output = tmp_path / "fragment_texture_3d_sample_offset.air"
     code = MetalCodeGen().generate_stage(
-        crosstl.translator.parse(METAL_TEXTURE_3D_SAMPLE_OFFSET_FRAGMENT_SHADER),
+        crosstl.translator.parse(TEXTURE_3D_SAMPLE_OFFSET_FRAGMENT_SHADER),
         "fragment",
     )
     source.write_text(code, encoding="utf-8")
@@ -3036,6 +3036,23 @@ def test_generated_glsl_fragment_texture_sample_offset_validates_with_glslang(
     run_validator([glslang, "-S", "frag", str(source)])
 
 
+def test_generated_glsl_fragment_texture_3d_sample_offset_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "fragment_texture_3d_sample_offset.frag"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(TEXTURE_3D_SAMPLE_OFFSET_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "frag", str(source)])
+
+
 def test_generated_glsl_fragment_texture_projection_validates_with_glslang(
     tmp_path,
 ):
@@ -3706,6 +3723,26 @@ def test_generated_hlsl_fragment_texture_sample_offset_validates_with_dxc(
     output = tmp_path / "fragment_texture_sample_offset.dxil"
     code = HLSLCodeGen().generate_stage(
         crosstl.translator.parse(TEXTURE_SAMPLE_OFFSET_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fragment_texture_3d_sample_offset_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fragment_texture_3d_sample_offset.hlsl"
+    output = tmp_path / "fragment_texture_3d_sample_offset.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(TEXTURE_3D_SAMPLE_OFFSET_FRAGMENT_SHADER),
         "fragment",
     )
     source.write_text(code, encoding="utf-8")

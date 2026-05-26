@@ -202,33 +202,6 @@
       "backend": "DirectX / HLSL",
       "backend_id": "directx",
       "category": "textures",
-      "feature": "Texture LOD, gradient, and offset operations",
-      "feature_id": "texture.lod_grad_offset",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "textures",
-      "feature": "Texture LOD, gradient, and offset operations",
-      "feature_id": "texture.lod_grad_offset",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "textures",
-      "feature": "Texture LOD, gradient, and offset operations",
-      "feature_id": "texture.lod_grad_offset",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
-      "category": "textures",
       "feature": "Projected texture operations",
       "feature_id": "texture.projected",
       "notes": "Covers planar projected texture and shadow compare forms plus non-offset cube color and cube-shadow projection. Cube-array projection and target-invalid offset forms remain deterministic diagnostics.",
@@ -256,87 +229,6 @@
       "backend": "DirectX / HLSL",
       "backend_id": "directx",
       "category": "textures",
-      "feature": "Texture gather operations",
-      "feature_id": "texture.gather",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "textures",
-      "feature": "Texture gather operations",
-      "feature_id": "texture.gather",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "textures",
-      "feature": "Texture gather operations",
-      "feature_id": "texture.gather",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
-      "category": "textures",
-      "feature": "Shadow compare texture operations",
-      "feature_id": "texture.shadow_compare",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "textures",
-      "feature": "Shadow compare texture operations",
-      "feature_id": "texture.shadow_compare",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "textures",
-      "feature": "Shadow compare texture operations",
-      "feature_id": "texture.shadow_compare",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
-      "category": "textures",
-      "feature": "Multisample texture operations",
-      "feature_id": "texture.multisample",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "textures",
-      "feature": "Multisample texture operations",
-      "feature_id": "texture.multisample",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "textures",
-      "feature": "Multisample texture operations",
-      "feature_id": "texture.multisample",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
-      "category": "textures",
       "feature": "Advanced texture operations",
       "feature_id": "texture.advanced_sampling",
       "notes": "Several unsupported combinations intentionally emit diagnostics.",
@@ -358,87 +250,6 @@
       "feature": "Advanced texture operations",
       "feature_id": "texture.advanced_sampling",
       "notes": "Several unsupported combinations intentionally emit diagnostics.",
-      "status": "partial"
-    },
-    {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
-      "category": "images",
-      "feature": "Storage image load/store",
-      "feature_id": "image.storage",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "images",
-      "feature": "Storage image load/store",
-      "feature_id": "image.storage",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "images",
-      "feature": "Storage image load/store",
-      "feature_id": "image.storage",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
-      "category": "images",
-      "feature": "Image atomics",
-      "feature_id": "image.atomics",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "images",
-      "feature": "Image atomics",
-      "feature_id": "image.atomics",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "images",
-      "feature": "Image atomics",
-      "feature_id": "image.atomics",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
-      "category": "images",
-      "feature": "Multisample storage images",
-      "feature_id": "image.multisample_storage",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "images",
-      "feature": "Multisample storage images",
-      "feature_id": "image.multisample_storage",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "images",
-      "feature": "Multisample storage images",
-      "feature_id": "image.multisample_storage",
-      "notes": "",
       "status": "partial"
     },
     {
@@ -1016,19 +827,34 @@
       "name": "Texture LOD, gradient, and offset operations",
       "support": {
         "directx": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_texture_sample_offset_variants_use_sample_offsets",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_cube_array_texture_grad_gather_keep_sampler_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_cube_texture_sample_offsets_emit_diagnostics_without_samplers",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fragment_texture_3d_sample_offset_validates_with_dxc"
+          ],
+          "notes": "Covers explicit LOD, gradient, bias, 2D/array offsets, cube/cube-array gradients, 3D offsets, resource arrays, and deterministic diagnostics for target-invalid offset forms.",
+          "status": "supported"
         },
         "metal": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_sample_offset_variants_use_sample_offsets",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_cube_array_texture_grad_gather_uses_cube_gradients",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_cube_texture_sample_offsets_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_fragment_texture_3d_sample_offset_compiles_with_metal"
+          ],
+          "notes": "Covers explicit LOD, gradient, bias, 2D/array offsets, cube/cube-array gradients, 3D offsets, resource arrays, and deterministic diagnostics for target-invalid offset forms.",
+          "status": "supported"
         },
         "opengl": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_texture_lod_grad_offsets_filter_sampler_arguments",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_cube_array_texture_grad_gather_filter_sampler_arguments",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_cube_texture_sample_offsets_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fragment_texture_3d_sample_offset_validates_with_glslang"
+          ],
+          "notes": "Covers explicit LOD, gradient, bias, 2D/array offsets, cube/cube-array gradients, 3D offsets, resource arrays, and deterministic diagnostics for target-invalid offset forms.",
+          "status": "supported"
         }
       }
     },
@@ -1075,19 +901,31 @@
       "name": "Texture gather operations",
       "support": {
         "directx": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_texture_gather_offset_variants_keep_sampler_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_cube_texture_gather_offsets_emit_diagnostics_without_samplers",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fragment_texture_gather_offset_validates_with_dxc"
+          ],
+          "notes": "Covers gather, gather-offset, gather-offsets, dynamic component selection, resource arrays, cube/cube-array gather, and deterministic diagnostics for unsupported dimensions and offset forms.",
+          "status": "supported"
         },
         "metal": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_gather_offset_variants_use_metal_overloads",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_cube_texture_gather_offsets_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_fragment_texture_gather_offset_compiles_with_metal"
+          ],
+          "notes": "Covers gather, gather-offset, gather-offsets, dynamic component selection, resource arrays, cube/cube-array gather, and deterministic diagnostics for unsupported dimensions and offset forms.",
+          "status": "supported"
         },
         "opengl": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_texture_gather_offset_variants_filter_sampler_arguments",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_cube_texture_gather_offsets_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fragment_texture_gather_offset_validates_with_glslang"
+          ],
+          "notes": "Covers gather, gather-offset, gather-offsets, dynamic component selection, resource arrays, cube/cube-array gather, and deterministic diagnostics for unsupported dimensions and offset forms.",
+          "status": "supported"
         }
       }
     },
@@ -1098,19 +936,31 @@
       "name": "Shadow compare texture operations",
       "support": {
         "directx": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_shadow_gather_compare_offsets_use_comparison_samplers",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_shadow_compare_lod_grad_use_comparison_samplers",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fragment_shadow_compare_lod_grad_validates_with_dxc"
+          ],
+          "notes": "Covers comparison samplers, shadow resource arrays, compare offsets, gather-compare, LOD/gradient compare variants where HLSL permits them, and deterministic diagnostics for target-invalid combinations.",
+          "status": "supported"
         },
         "metal": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_shadow_gather_compare_offsets_use_depth_overloads",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_shadow_compare_lod_grad_use_depth_overloads",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_fragment_shadow_compare_lod_grad_compiles_with_metal"
+          ],
+          "notes": "Covers depth textures, shadow resource arrays, compare offsets, gather-compare, LOD/gradient compare variants where Metal permits them, and deterministic diagnostics for target-invalid combinations.",
+          "status": "supported"
         },
         "opengl": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_shadow_compare_lod_grad_filter_sampler_arguments",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fragment_shadow_compare_lod_grad_validates_with_glslang"
+          ],
+          "notes": "Covers shadow samplers, shadow resource arrays, compare offsets, gather-compare, LOD/gradient compare variants where GLSL permits them, and deterministic diagnostics for target-invalid combinations.",
+          "status": "supported"
         }
       }
     },
@@ -1197,19 +1047,34 @@
       "name": "Multisample texture operations",
       "support": {
         "directx": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_texture_samples_queries_use_helpers",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_sampling_operations_emit_diagnostics_without_samplers",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_compare_operations_emit_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types"
+          ],
+          "notes": "Covers 2D and 2D-array multisample fetches, sample-count and level queries, resource arrays, and deterministic diagnostics for unsupported sample, offset, LOD, compare, and gather combinations.",
+          "status": "supported"
         },
         "metal": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_multisample_texture_samples_queries_use_get_num_samples",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_multisample_sampling_operations_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_multisample_compare_operations_emit_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types"
+          ],
+          "notes": "Covers 2D and 2D-array multisample fetches, sample-count and level queries, resource arrays, and deterministic diagnostics for unsupported sample, offset, LOD, compare, and gather combinations.",
+          "status": "supported"
         },
         "opengl": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_multisample_texture_samples_queries_keep_builtin",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_multisample_sampling_operations_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_multisample_compare_operations_emit_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types"
+          ],
+          "notes": "Covers 2D and 2D-array multisample fetches, sample-count and level queries, resource arrays, and deterministic diagnostics for unsupported sample, offset, LOD, compare, and gather combinations.",
+          "status": "supported"
         }
       }
     },
@@ -1243,19 +1108,31 @@
       "name": "Storage image load/store",
       "support": {
         "directx": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_storage_image_load_store",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_explicit_rg_image_formats",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_compute_rg_image_validates_with_dxc"
+          ],
+          "notes": "Covers typed RWTexture load/store for scalar, vector, narrow, explicit-format, array, and access-qualified images, with deterministic diagnostics for incompatible access.",
+          "status": "supported"
         },
         "metal": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_storage_image_load_store",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_explicit_rg_image_formats",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_compute_rg_image_compiles_with_metal"
+          ],
+          "notes": "Covers texture read/write for scalar, vector, narrow, explicit-format, array, and access-qualified images, with deterministic diagnostics for incompatible access.",
+          "status": "supported"
         },
         "opengl": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_storage_image_load_store",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_explicit_rg_image_formats",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_compute_rg_image_validates_with_glslang"
+          ],
+          "notes": "Covers image load/store for scalar, vector, narrow, explicit-format, array, and access-qualified images, with deterministic diagnostics for incompatible access.",
+          "status": "supported"
         }
       }
     },
@@ -1266,19 +1143,31 @@
       "name": "Image atomics",
       "support": {
         "directx": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_integer_image_atomic_operations",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_integer_image_atomic_compare_swap",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_compute_integer_image_atomics_validates_with_dxc"
+          ],
+          "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported dimensions and emits deterministic diagnostics for unsupported formats and multisample atomics.",
+          "status": "supported"
         },
         "metal": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_integer_image_atomic_operations",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_integer_image_atomic_compare_swap",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_compute_integer_image_atomics_compiles_with_metal"
+          ],
+          "notes": "Covers integer texture atomics add/min/max/bitwise/exchange/compare-exchange across supported dimensions and emits deterministic diagnostics for unsupported formats and multisample atomics.",
+          "status": "supported"
         },
         "opengl": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_integer_image_atomic_operations",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_integer_image_atomic_compare_swap",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_compute_integer_image_atomics_validates_with_glslang"
+          ],
+          "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported dimensions and emits deterministic diagnostics for unsupported formats and argument shapes.",
+          "status": "supported"
         }
       }
     },
@@ -1289,19 +1178,31 @@
       "name": "Multisample storage images",
       "support": {
         "directx": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_storage_images_emit_srv_reads_and_diagnostics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_storage_image_arrays_emit_srv_reads_and_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types"
+          ],
+          "notes": "Represents multisample storage images as read-capable SRVs, preserves size/sample queries and arrays, and emits deterministic diagnostics for DirectX-unsupported stores and atomics.",
+          "status": "supported"
         },
         "metal": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_multisample_storage_images_emit_read_textures_and_diagnostics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types"
+          ],
+          "notes": "Represents multisample storage images as read-capable textures, preserves size/sample queries and arrays, and emits deterministic diagnostics for Metal-unsupported stores and atomics.",
+          "status": "supported"
         },
         "opengl": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_multisample_image_query_helpers_cover_vector_integer_formats",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_glsl_multisample_storage_validates_with_glslangvalidator"
+          ],
+          "notes": "Covers multisample image load/store, sample-count and size queries, arrays, typed formats, and integer atomics where GLSL permits them.",
+          "status": "supported"
         }
       }
     },
@@ -1495,22 +1396,21 @@
   "summary": {
     "backend_count": 3,
     "backlog": {
-      "backlog_count": 52,
+      "backlog_count": 31,
       "by_backend": {
-        "directx": 17,
-        "metal": 19,
-        "opengl": 16
+        "directx": 10,
+        "metal": 12,
+        "opengl": 9
       },
       "by_category": {
-        "images": 9,
         "language": 3,
         "resources": 14,
         "stages": 8,
-        "textures": 18
+        "textures": 6
       },
       "by_status": {
         "diagnostic": 0,
-        "partial": 50,
+        "partial": 29,
         "supported": 0,
         "unknown": 0,
         "unsupported": 2,
@@ -1521,24 +1421,24 @@
     "status_counts": {
       "directx": {
         "diagnostic": 0,
-        "partial": 17,
-        "supported": 24,
+        "partial": 10,
+        "supported": 31,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "metal": {
         "diagnostic": 0,
-        "partial": 17,
-        "supported": 22,
+        "partial": 10,
+        "supported": 29,
         "unknown": 0,
         "unsupported": 2,
         "validated_rejection": 0
       },
       "opengl": {
         "diagnostic": 0,
-        "partial": 16,
-        "supported": 25,
+        "partial": 9,
+        "supported": 32,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
