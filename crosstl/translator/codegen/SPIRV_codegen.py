@@ -3249,9 +3249,14 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         if args or function_name not in {
+            "allMemoryBarrier",
             "barrier",
+            "groupMemoryBarrier",
             "workgroupBarrier",
             "memoryBarrier",
+            "memoryBarrierBuffer",
+            "memoryBarrierImage",
+            "memoryBarrierShared",
         }:
             return None
 
@@ -3266,11 +3271,28 @@ class VulkanSPIRVCodeGen:
             )
             return self.register_constant(0, self.register_primitive_type("int"))
 
-        device_scope = self.spirv_scope_constant("Device")
-        device_semantics = self.spirv_memory_semantics_constant(
-            "AcquireRelease", "UniformMemory", "WorkgroupMemory", "ImageMemory"
-        )
-        self.emit(f"OpMemoryBarrier %{device_scope.id} %{device_semantics.id}")
+        if function_name in {"groupMemoryBarrier", "memoryBarrierShared"}:
+            scope = self.spirv_scope_constant("Workgroup")
+            semantics = self.spirv_memory_semantics_constant(
+                "AcquireRelease", "WorkgroupMemory"
+            )
+        elif function_name == "memoryBarrierBuffer":
+            scope = self.spirv_scope_constant("Device")
+            semantics = self.spirv_memory_semantics_constant(
+                "AcquireRelease", "UniformMemory"
+            )
+        elif function_name == "memoryBarrierImage":
+            scope = self.spirv_scope_constant("Device")
+            semantics = self.spirv_memory_semantics_constant(
+                "AcquireRelease", "ImageMemory"
+            )
+        else:
+            scope = self.spirv_scope_constant("Device")
+            semantics = self.spirv_memory_semantics_constant(
+                "AcquireRelease", "UniformMemory", "WorkgroupMemory", "ImageMemory"
+            )
+
+        self.emit(f"OpMemoryBarrier %{scope.id} %{semantics.id}")
         return self.register_constant(0, self.register_primitive_type("int"))
 
     def call_builtin_function(
@@ -5874,7 +5896,420 @@ class VulkanSPIRVCodeGen:
             return "read"
         if func_name == "buffer_store":
             return "write"
+        if func_name in self.buffer_atomic_function_names():
+            return "read_write"
         return None
+
+    def storage_buffer_parameter_root_name(self, expr, storage_buffer_parameters):
+        if isinstance(expr, str):
+            return expr if expr in storage_buffer_parameters else None
+        if isinstance(expr, (IdentifierNode, VariableNode)):
+            name = getattr(expr, "name", None)
+            return name if name in storage_buffer_parameters else None
+        if isinstance(expr, ArrayAccessNode):
+            return self.storage_buffer_parameter_root_name(
+                getattr(expr, "array", getattr(expr, "array_expr", None)),
+                storage_buffer_parameters,
+            )
+        if isinstance(expr, MemberAccessNode):
+            return self.storage_buffer_parameter_root_name(
+                getattr(expr, "object", getattr(expr, "object_expr", None)),
+                storage_buffer_parameters,
+            )
+        return None
+
+    def function_storage_buffer_parameter_indices(self, function_node) -> set:
+        return {
+            index
+            for index, param in enumerate(
+                getattr(
+                    function_node, "parameters", getattr(function_node, "params", [])
+                )
+            )
+            if self.storage_buffer_parameter_type_name(param) is not None
+        }
+
+    def scan_storage_buffer_access_path_indices(
+        self,
+        expr,
+        func_name,
+        storage_buffer_parameters,
+        callee_storage_buffer_parameter_indices,
+        requirements,
+        visited,
+    ):
+        if isinstance(expr, ArrayAccessNode):
+            self.scan_storage_buffer_requirement_node(
+                getattr(expr, "index", getattr(expr, "index_expr", None)),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            self.scan_storage_buffer_access_path_indices(
+                getattr(expr, "array", getattr(expr, "array_expr", None)),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+        elif isinstance(expr, MemberAccessNode):
+            self.scan_storage_buffer_access_path_indices(
+                getattr(expr, "object", getattr(expr, "object_expr", None)),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+
+    def merge_storage_buffer_access_requirement_for_parameter(
+        self, requirements, func_name, parameter_name, required_access
+    ):
+        if parameter_name is None:
+            return
+        current = requirements[func_name].get(parameter_name)
+        requirements[func_name][parameter_name] = (
+            self.merge_resource_access_requirement(current, required_access)
+        )
+
+    def scan_storage_buffer_requirement_expression(
+        self,
+        expr,
+        func_name,
+        storage_buffer_parameters,
+        callee_storage_buffer_parameter_indices,
+        requirements,
+        visited,
+    ):
+        if expr is None or isinstance(expr, (str, int, float, bool)):
+            return
+
+        if isinstance(expr, FunctionCallNode):
+            callee_name = self.function_call_name(expr)
+            args = getattr(expr, "arguments", getattr(expr, "args", []))
+            required_access = self.buffer_operation_access_requirement(callee_name)
+            if required_access is not None and args:
+                target_name = self.storage_buffer_parameter_root_name(
+                    args[0], storage_buffer_parameters
+                )
+                self.merge_storage_buffer_access_requirement_for_parameter(
+                    requirements, func_name, target_name, required_access
+                )
+                self.scan_storage_buffer_access_path_indices(
+                    args[0],
+                    func_name,
+                    storage_buffer_parameters,
+                    callee_storage_buffer_parameter_indices,
+                    requirements,
+                    visited,
+                )
+                for arg in args[1:]:
+                    self.scan_storage_buffer_requirement_node(
+                        arg,
+                        func_name,
+                        storage_buffer_parameters,
+                        callee_storage_buffer_parameter_indices,
+                        requirements,
+                        visited,
+                    )
+                return
+
+            storage_buffer_indices = callee_storage_buffer_parameter_indices.get(
+                callee_name, set()
+            )
+            for arg_index, arg in enumerate(args):
+                if (
+                    arg_index in storage_buffer_indices
+                    and self.storage_buffer_parameter_root_name(
+                        arg, storage_buffer_parameters
+                    )
+                    is not None
+                ):
+                    self.scan_storage_buffer_access_path_indices(
+                        arg,
+                        func_name,
+                        storage_buffer_parameters,
+                        callee_storage_buffer_parameter_indices,
+                        requirements,
+                        visited,
+                    )
+                    continue
+                self.scan_storage_buffer_requirement_node(
+                    arg,
+                    func_name,
+                    storage_buffer_parameters,
+                    callee_storage_buffer_parameter_indices,
+                    requirements,
+                    visited,
+                )
+            return
+
+        target_name = self.storage_buffer_parameter_root_name(
+            expr, storage_buffer_parameters
+        )
+        if target_name is not None:
+            self.merge_storage_buffer_access_requirement_for_parameter(
+                requirements, func_name, target_name, "read"
+            )
+            self.scan_storage_buffer_access_path_indices(
+                expr,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        if isinstance(expr, ArrayAccessNode):
+            self.scan_storage_buffer_requirement_node(
+                getattr(expr, "array", getattr(expr, "array_expr", None)),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            self.scan_storage_buffer_requirement_node(
+                getattr(expr, "index", getattr(expr, "index_expr", None)),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+        if isinstance(expr, MemberAccessNode):
+            self.scan_storage_buffer_requirement_node(
+                getattr(expr, "object", getattr(expr, "object_expr", None)),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        if isinstance(expr, BinaryOpNode):
+            self.scan_storage_buffer_requirement_node(
+                expr.left,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            self.scan_storage_buffer_requirement_node(
+                expr.right,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+        if isinstance(expr, UnaryOpNode):
+            self.scan_storage_buffer_requirement_node(
+                expr.operand,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+        if isinstance(expr, TernaryOpNode):
+            for child in (expr.condition, expr.true_expr, expr.false_expr):
+                self.scan_storage_buffer_requirement_node(
+                    child,
+                    func_name,
+                    storage_buffer_parameters,
+                    callee_storage_buffer_parameter_indices,
+                    requirements,
+                    visited,
+                )
+            return
+        if isinstance(expr, ArrayLiteralNode):
+            for element in getattr(expr, "elements", []):
+                self.scan_storage_buffer_requirement_node(
+                    element,
+                    func_name,
+                    storage_buffer_parameters,
+                    callee_storage_buffer_parameter_indices,
+                    requirements,
+                    visited,
+                )
+
+    def scan_storage_buffer_assignment_target_requirement(
+        self,
+        target,
+        operator,
+        func_name,
+        storage_buffer_parameters,
+        callee_storage_buffer_parameter_indices,
+        requirements,
+        visited,
+    ):
+        target_name = self.storage_buffer_parameter_root_name(
+            target, storage_buffer_parameters
+        )
+        if target_name is not None:
+            required_access = "write" if operator == "=" else "read_write"
+            self.merge_storage_buffer_access_requirement_for_parameter(
+                requirements, func_name, target_name, required_access
+            )
+            self.scan_storage_buffer_access_path_indices(
+                target,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        self.scan_storage_buffer_requirement_node(
+            target,
+            func_name,
+            storage_buffer_parameters,
+            callee_storage_buffer_parameter_indices,
+            requirements,
+            visited,
+        )
+
+    def scan_storage_buffer_requirement_node(
+        self,
+        node,
+        func_name,
+        storage_buffer_parameters,
+        callee_storage_buffer_parameter_indices,
+        requirements,
+        visited,
+    ):
+        if node is None or isinstance(node, (str, int, float, bool)):
+            return
+        if isinstance(node, dict):
+            for value in node.values():
+                self.scan_storage_buffer_requirement_node(
+                    value,
+                    func_name,
+                    storage_buffer_parameters,
+                    callee_storage_buffer_parameter_indices,
+                    requirements,
+                    visited,
+                )
+            return
+        if isinstance(node, (list, tuple, set)):
+            for value in node:
+                self.scan_storage_buffer_requirement_node(
+                    value,
+                    func_name,
+                    storage_buffer_parameters,
+                    callee_storage_buffer_parameter_indices,
+                    requirements,
+                    visited,
+                )
+            return
+
+        node_id = id(node)
+        if node_id in visited:
+            return
+        visited.add(node_id)
+
+        if isinstance(node, AssignmentNode):
+            target = getattr(
+                node, "target", getattr(node, "left", getattr(node, "name", None))
+            )
+            operator = getattr(node, "operator", "=")
+            self.scan_storage_buffer_assignment_target_requirement(
+                target,
+                operator,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            self.scan_storage_buffer_requirement_node(
+                getattr(node, "value", getattr(node, "right", None)),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        if isinstance(node, ReturnNode):
+            self.scan_storage_buffer_requirement_node(
+                getattr(node, "value", None),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        if isinstance(node, VariableNode):
+            self.scan_storage_buffer_requirement_node(
+                getattr(node, "initial_value", None),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        if isinstance(
+            node,
+            (
+                ArrayAccessNode,
+                ArrayLiteralNode,
+                BinaryOpNode,
+                FunctionCallNode,
+                MemberAccessNode,
+                TernaryOpNode,
+                UnaryOpNode,
+            ),
+        ):
+            self.scan_storage_buffer_requirement_expression(
+                node,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        if hasattr(node, "expression"):
+            self.scan_storage_buffer_requirement_node(
+                node.expression,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        if hasattr(node, "__dict__"):
+            for field_name, child in vars(node).items():
+                if field_name in {"annotations", "parent"}:
+                    continue
+                self.scan_storage_buffer_requirement_node(
+                    child,
+                    func_name,
+                    storage_buffer_parameters,
+                    callee_storage_buffer_parameter_indices,
+                    requirements,
+                    visited,
+                )
 
     def collect_function_storage_buffer_access_requirements_for_ast(self, ast):
         functions = self.collect_ast_functions(ast)
@@ -5888,35 +6323,32 @@ class VulkanSPIRVCodeGen:
             for func in functions
             if getattr(func, "name", None)
         }
+        storage_buffer_parameter_sets = {
+            getattr(func, "name", None): self.function_storage_buffer_parameters(func)
+            for func in functions
+            if getattr(func, "name", None)
+        }
+        storage_buffer_parameter_indices = {
+            getattr(func, "name", None): self.function_storage_buffer_parameter_indices(
+                func
+            )
+            for func in functions
+            if getattr(func, "name", None)
+        }
 
         for func in functions:
             func_name = getattr(func, "name", None)
             if not func_name:
                 continue
 
-            parameter_set = parameter_sets.get(func_name, set())
-            for node in self.walk_ast_nodes(getattr(func, "body", [])):
-                if not isinstance(node, FunctionCallNode):
-                    continue
-
-                required_access = self.buffer_operation_access_requirement(
-                    self.function_call_name(node)
-                )
-                if required_access is None:
-                    continue
-
-                args = getattr(node, "arguments", getattr(node, "args", []))
-                if not args:
-                    continue
-
-                target_name = self.expression_name(args[0])
-                if target_name not in parameter_set:
-                    continue
-
-                current = requirements[func_name].get(target_name)
-                requirements[func_name][target_name] = (
-                    self.merge_resource_access_requirement(current, required_access)
-                )
+            self.scan_storage_buffer_requirement_node(
+                getattr(func, "body", []),
+                func_name,
+                storage_buffer_parameter_sets.get(func_name, set()),
+                storage_buffer_parameter_indices,
+                requirements,
+                set(),
+            )
 
         changed = True
         while changed:

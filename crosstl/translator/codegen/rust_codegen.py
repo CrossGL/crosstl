@@ -372,6 +372,7 @@ class RustCodeGen:
         self.trait_methods = {}
         self.enum_variant_names = {}
         self.enum_variant_field_types = {}
+        self.non_copy_type_names = set()
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
         self.swizzle_temp_counter = 0
@@ -406,6 +407,7 @@ class RustCodeGen:
         self.trait_methods = self.collect_trait_methods(ast)
         self.enum_variant_names = self.collect_enum_variant_names(ast)
         self.enum_variant_field_types = self.collect_enum_variant_field_types(ast)
+        self.non_copy_type_names = self.collect_non_copy_type_names(ast)
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
         self.swizzle_temp_counter = 0
@@ -852,7 +854,7 @@ class RustCodeGen:
 
     def derive_traits_for_members(self, members, include_default=False):
         traits = ["Debug", "Clone"]
-        if not self.members_have_unsized_arrays(members):
+        if self.members_are_copy_derivable(members):
             traits.append("Copy")
         if include_default:
             traits.append("Default")
@@ -867,10 +869,120 @@ class RustCodeGen:
             traits.append("Default")
         return ", ".join(traits)
 
-    def enum_payloads_are_copy_derivable(self, node, generic_names):
+    def collect_non_copy_type_names(self, node):
+        declarations = []
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+
+            if isinstance(current, EnumNode):
+                declarations.append((current.name, "enum", current, current))
+            elif isinstance(current, StructNode):
+                wrapper_enum = self.struct_enum_wrapper(current)
+                if wrapper_enum is not None:
+                    declarations.append((current.name, "enum", wrapper_enum, current))
+                    declarations.append(
+                        (wrapper_enum.name, "enum", wrapper_enum, current)
+                    )
+                else:
+                    declarations.append((current.name, "struct", current, current))
+                    for member in getattr(current, "members", []) or []:
+                        if isinstance(member, EnumNode):
+                            collect(member)
+
+            for struct in getattr(current, "structs", []):
+                collect(struct)
+            for struct in getattr(current, "local_structs", []):
+                collect(struct)
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        for cbuffer in self.get_cbuffer_nodes(node):
+            collect(cbuffer)
+
+        non_copy_type_names = set()
+        changed = True
+        while changed:
+            changed = False
+            for name, declaration_kind, declaration, generic_owner in declarations:
+                if not name or name in non_copy_type_names:
+                    continue
+                generic_names = set(self.generic_param_names(generic_owner))
+                if declaration_kind == "enum":
+                    copy_derivable = self.enum_payloads_are_copy_derivable(
+                        declaration,
+                        generic_names,
+                        non_copy_type_names,
+                    )
+                else:
+                    copy_derivable = self.members_are_copy_derivable(
+                        getattr(declaration, "members", []),
+                        generic_names,
+                        non_copy_type_names,
+                    )
+                if not copy_derivable:
+                    non_copy_type_names.add(name)
+                    changed = True
+
+        return non_copy_type_names
+
+    def members_are_copy_derivable(
+        self,
+        members,
+        generic_names=None,
+        non_copy_type_names=None,
+    ):
+        generic_names = generic_names or set()
+        for member in members:
+            if isinstance(member, EnumNode):
+                continue
+            member_type = self.member_type_for_copy_check(member)
+            if member_type is None:
+                continue
+            if not self.type_is_copy_derivable(
+                member_type,
+                generic_names,
+                non_copy_type_names,
+            ):
+                return False
+        return True
+
+    def member_type_for_copy_check(self, member):
+        if isinstance(member, ArrayNode):
+            element_type = getattr(
+                member, "element_type", getattr(member, "vtype", None)
+            )
+            element_type = self.convert_type_node_to_string(element_type)
+            size = self.format_array_size(getattr(member, "size", None))
+            return (
+                f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
+            )
+
+        if not hasattr(member, "member_type") and not hasattr(member, "vtype"):
+            return None
+        return self.get_member_type(member)
+
+    def enum_payloads_are_copy_derivable(
+        self,
+        node,
+        generic_names,
+        non_copy_type_names=None,
+    ):
         for variant in getattr(node, "variants", []) or []:
             for field_type in self.enum_variant_payload_types(variant):
-                if not self.type_is_copy_derivable(field_type, generic_names):
+                if not self.type_is_copy_derivable(
+                    field_type,
+                    generic_names,
+                    non_copy_type_names,
+                ):
                     return False
         return True
 
@@ -883,8 +995,14 @@ class RustCodeGen:
                 field_types.append(item)
         return field_types
 
-    def type_is_copy_derivable(self, type_name, generic_names=None):
+    def type_is_copy_derivable(
+        self,
+        type_name,
+        generic_names=None,
+        non_copy_type_names=None,
+    ):
         generic_names = generic_names or set()
+        non_copy_type_names = non_copy_type_names or self.non_copy_type_names
         type_name = self.convert_type_node_to_string(type_name)
 
         if type_name in generic_names:
@@ -895,6 +1013,7 @@ class RustCodeGen:
             return size is not None and self.type_is_copy_derivable(
                 base_type,
                 generic_names,
+                non_copy_type_names,
             )
 
         rust_type = self.unqualify_runtime_type_name(self.map_type(type_name))
@@ -902,9 +1021,15 @@ class RustCodeGen:
             return False
 
         base_type, generic_args = self.generic_type_parts(type_name)
+        if base_type in non_copy_type_names:
+            return False
         if generic_args:
             return all(
-                self.type_is_copy_derivable(generic_arg, generic_names)
+                self.type_is_copy_derivable(
+                    generic_arg,
+                    generic_names,
+                    non_copy_type_names,
+                )
                 for generic_arg in generic_args
             )
 

@@ -66,6 +66,43 @@ def test_parse_layout_locations_and_components():
     assert "fragColor = fragColor;" not in glsl
 
 
+def test_parse_fragment_multiple_outputs_roundtrip():
+    code = """
+    #version 450 core
+    layout(location = 0) in vec2 uv;
+    layout(location = 0, index = 0) out vec4 accum;
+    layout(location = 0, index = 1) out vec4 revealage;
+    layout(location = 2) out vec4 normal;
+
+    void main() {
+        accum = vec4(uv, 0.0, 1.0);
+        revealage = vec4(1.0);
+        normal = vec4(0.0);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "out vec4 accum @location(0) @index(0);" in crossgl
+    assert "out vec4 revealage @location(0) @index(1);" in crossgl
+    assert "out vec4 normal @location(2);" in crossgl
+    assert "void main(FragmentInput input)" in crossgl
+    assert "return accum;" not in crossgl
+    assert "\n        vec4 accum;" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "layout(location = 0) in vec2 uv;" in glsl
+    assert "layout(location = 0, index = 0) out vec4 accum;" in glsl
+    assert "layout(location = 0, index = 1) out vec4 revealage;" in glsl
+    assert "layout(location = 2) out vec4 normal;" in glsl
+    assert "accum = vec4(uv, 0.0, 1.0);" in glsl
+    assert "revealage = vec4(1.0);" in glsl
+    assert "normal = vec4(0.0);" in glsl
+    assert "fragColor" not in glsl
+    assert "\n    vec4 accum;" not in glsl
+
+
 def test_parse_vertex_struct_layout_qualifiers_roundtrip():
     code = """
     #version 450 core

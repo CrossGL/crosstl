@@ -87,6 +87,7 @@ from .enum_utils import (
     collect_generic_enum_variant_constants,
     collect_plain_enums,
     collect_struct_payload_enums,
+    default_value_expression,
     enum_value_expression,
     generate_enum_constructor_expression,
     generate_generic_enum_constructor_functions,
@@ -103,6 +104,7 @@ from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
     collect_generic_struct_specializations,
+    format_struct_constructor_expression,
     generate_generic_structs,
     generate_struct_constructor_expression,
     generic_struct_specialized_type_name,
@@ -2244,14 +2246,22 @@ class HLSLCodeGen:
                     )
                     if atomic_assignment is not None:
                         return atomic_assignment
+                    return self.generate_statement_code(
+                        self.generate_assignment(stmt.expression), indent
+                    )
                 atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(
                     stmt.expression
                 )
                 if atomic_statement is not None:
                     return self.generate_statement_code(atomic_statement, indent)
+                if self.hlsl_expression_contains_typed_buffer_atomic(stmt.expression):
+                    atomic_code, expression = (
+                        self.render_hlsl_typed_buffer_atomic_value_expression(
+                            stmt.expression, None, indent
+                        )
+                    )
+                    return f"{atomic_code}{indent_str}{expression};\n"
                 expression = self.generate_expression(stmt.expression)
-                if isinstance(getattr(stmt, "expression", None), AssignmentNode):
-                    return self.generate_statement_code(expression, indent)
                 return f"{indent_str}{expression};\n"
             else:
                 return f"{indent_str}{self.generate_expression(stmt)};\n"
@@ -2261,6 +2271,13 @@ class HLSLCodeGen:
             atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(stmt)
             if atomic_statement is not None:
                 return self.generate_statement_code(atomic_statement, indent)
+            if self.hlsl_expression_contains_typed_buffer_atomic(stmt):
+                atomic_code, expression = (
+                    self.render_hlsl_typed_buffer_atomic_value_expression(
+                        stmt, None, indent
+                    )
+                )
+                return f"{atomic_code}{indent_str}{expression};\n"
             return f"{indent_str}{self.generate_expression(stmt)};\n"
 
     def generate_tail_expression_statement(self, stmt, indent=0):
@@ -7976,12 +7993,18 @@ class HLSLCodeGen:
         return texture_name, sampler_name, coord, extra_args
 
     def generate_call_arguments(self, func_name, args):
+        rendered_args = [self.generate_expression(arg) for arg in args]
+        return self.generate_call_arguments_from_rendered(
+            func_name, args, rendered_args
+        )
+
+    def generate_call_arguments_from_rendered(self, func_name, args, rendered_args):
         generated_args = []
         implicit_samplers = self.implicit_texture_sampler_parameters.get(func_name, {})
         param_names = self.function_parameter_names.get(func_name, [])
 
         for index, arg in enumerate(args):
-            generated_args.append(self.generate_expression(arg))
+            generated_args.append(rendered_args[index])
             if index >= len(param_names):
                 continue
             texture_param = param_names[index]
@@ -10211,6 +10234,70 @@ class HLSLCodeGen:
         code += f"{indent_str}{parts['intrinsic']}({', '.join(call_args)});\n"
         return code, original
 
+    def hlsl_struct_constructor_fields(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+        member_types = self.struct_member_types.get(type_name)
+        if member_types is None:
+            mapped_type = self.map_type(type_name)
+            member_types = self.struct_member_types.get(mapped_type)
+        if member_types is None:
+            return None
+        return list(member_types.items())
+
+    def render_hlsl_typed_buffer_atomic_struct_constructor(
+        self, type_name, args, named_args, indent
+    ):
+        fields = self.hlsl_struct_constructor_fields(type_name)
+        if fields is None:
+            return None
+
+        positional_args = list(args or [])
+        named_args = dict(named_args or {})
+        field_names = [field_name for field_name, _field_type in fields]
+        if len(positional_args) > len(fields):
+            raise ValueError(
+                f"Struct constructor {type_name} expects at most {len(fields)} "
+                f"arguments, got {len(positional_args)}"
+            )
+        unknown_names = sorted(set(named_args) - set(field_names))
+        if unknown_names:
+            raise ValueError(
+                f"Struct constructor {type_name} has no field "
+                f"{', '.join(unknown_names)}"
+            )
+
+        code = ""
+        rendered_args = []
+        changed = False
+        for index, (field_name, field_type) in enumerate(fields):
+            if index < len(positional_args):
+                field_expr = positional_args[index]
+            elif field_name in named_args:
+                field_expr = named_args[field_name]
+            else:
+                rendered_args.append(default_value_expression(self, field_type))
+                continue
+
+            field_code, rendered_field = (
+                self.render_hlsl_typed_buffer_atomic_value_expression(
+                    field_expr, field_type, indent
+                )
+            )
+            code += field_code
+            rendered_args.append(rendered_field)
+            changed = changed or bool(field_code)
+
+        if not changed:
+            return None
+
+        mapped_type = self.map_type(type_name)
+        return (
+            code,
+            format_struct_constructor_expression(self, mapped_type, rendered_args),
+        )
+
     def render_hlsl_typed_buffer_atomic_embedded_expression(
         self, expr, expected_type, indent
     ):
@@ -10230,6 +10317,23 @@ class HLSLCodeGen:
                 expr, temp_name, "=", temp_type, indent
             )
             return code, temp_name
+
+        if isinstance(expr, ConstructorNode):
+            constructor_type = (
+                self.expression_result_type(expr)
+                or self.type_name_string(getattr(expr, "constructor_type", None))
+                or self.type_name_string(expected_type)
+            )
+            rendered_constructor = (
+                self.render_hlsl_typed_buffer_atomic_struct_constructor(
+                    constructor_type,
+                    getattr(expr, "arguments", []),
+                    getattr(expr, "named_arguments", {}),
+                    indent,
+                )
+            )
+            if rendered_constructor is not None:
+                return rendered_constructor
 
         if isinstance(expr, FunctionCallNode) or (
             hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__)
@@ -10263,6 +10367,37 @@ class HLSLCodeGen:
                                 func_name, args, rendered_args
                             ),
                         )
+
+                rendered_constructor = (
+                    self.render_hlsl_typed_buffer_atomic_struct_constructor(
+                        func_name, args, {}, indent
+                    )
+                )
+                if rendered_constructor is not None:
+                    return rendered_constructor
+
+                if func_name in getattr(self, "function_return_types", {}):
+                    code = ""
+                    rendered_args = []
+                    changed = False
+                    for arg in args:
+                        arg_code, rendered_arg = (
+                            self.render_hlsl_typed_buffer_atomic_value_expression(
+                                arg, self.expression_result_type(arg), indent
+                            )
+                        )
+                        code += arg_code
+                        rendered_args.append(rendered_arg)
+                        changed = changed or bool(arg_code)
+                    if changed:
+                        specialized_func_name = generic_function_call_name(
+                            self, func_name, args
+                        )
+                        callee = specialized_func_name or func_name
+                        call_args = self.generate_call_arguments_from_rendered(
+                            func_name, args, rendered_args
+                        )
+                        return code, f"{callee}({', '.join(call_args)})"
 
         if hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
             left_expr = getattr(expr, "left", "")
@@ -10356,7 +10491,11 @@ class HLSLCodeGen:
             )
             is not None
         ):
-            return None
+            atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(
+                value,
+                self.generate_expression(target),
+            )
+            return self.generate_statement_code(atomic_statement, indent)
 
         return self.generate_hlsl_typed_buffer_atomic_assignment_from_expression(
             value,
@@ -10580,10 +10719,9 @@ class HLSLCodeGen:
         parts = self.hlsl_typed_buffer_atomic_parts(func_name, args)
         if parts is None:
             return None
-        zero_value = "0u" if parts["target_kind"] == "uint" else "0"
-        return (
-            "/* unsupported HLSL typed buffer atomic expression: "
-            f"{func_name} requires statement lowering */ {zero_value}"
+        raise ValueError(
+            f"DirectX typed buffer atomic '{func_name}' requires statement "
+            "lowering in this expression context"
         )
 
     def byteaddress_atomic_operations(self):

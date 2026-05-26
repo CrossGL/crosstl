@@ -1532,7 +1532,15 @@ class SlangCodeGen:
             return None
         if base_type == "SamplerState":
             return "s"
-        if base_type.startswith(("RWTexture", "RWBuffer", "RWStructuredBuffer")):
+        if base_type.startswith(
+            (
+                "RWTexture",
+                "RWBuffer",
+                "RWStructuredBuffer",
+                "AppendStructuredBuffer",
+                "ConsumeStructuredBuffer",
+            )
+        ):
             return "u"
         if base_type.startswith(
             (
@@ -3770,6 +3778,10 @@ class SlangCodeGen:
                     self.image_resource_type(expr.args[0])
                 )
             if func_name == "buffer_load" and getattr(expr, "args", None):
+                return self.structured_buffer_element_type(
+                    self.structured_buffer_resource_type(expr.args[0])
+                )
+            if func_name == "buffer_consume" and getattr(expr, "args", None):
                 return self.structured_buffer_element_type(
                     self.structured_buffer_resource_type(expr.args[0])
                 )

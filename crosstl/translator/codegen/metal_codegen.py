@@ -5165,6 +5165,10 @@ class MetalCodeGen:
             namespace = "texture"
             attribute_names = {"binding", "texture"}
             prefixes = ("t", "u")
+        elif self.is_raw_buffer_parameter_type(raw_param_type, node):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
         else:
             return None
 
@@ -5372,6 +5376,11 @@ class MetalCodeGen:
                 node, {"binding", "texture"}, ("t", "u")
             )
             return f" [[texture({binding})]]" if binding is not None else ""
+        if self.is_raw_buffer_parameter_type(raw_param_type, node):
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer"}, ("b", "u", "t")
+            )
+            return f" [[buffer({binding})]]" if binding is not None else ""
         return ""
 
     def format_parameter_declaration(
@@ -5410,11 +5419,123 @@ class MetalCodeGen:
             return self.format_intersection_function_table_parameter(
                 raw_param_type, name
             )
+        address_space_declaration = self.format_address_space_parameter_declaration(
+            raw_param_type, mapped_type, name, node, shader_type
+        )
+        if address_space_declaration is not None:
+            return address_space_declaration
         array_type = self.resource_array_parameter(raw_param_type, node)
         if array_type is not None:
             resource_type, array_size = array_type
             return self.format_resource_parameter(resource_type, name, array_size)
         return format_c_style_array_declaration(mapped_type, name)
+
+    def format_address_space_parameter_declaration(
+        self, raw_param_type, mapped_type, name, node=None, shader_type=None
+    ):
+        if isinstance(raw_param_type, PointerType):
+            default_space = self.default_parameter_address_space(
+                raw_param_type, node, shader_type
+            )
+            address_space = self.parameter_address_space(node, default=default_space)
+            pointee_type = self.map_resource_type_with_format(
+                raw_param_type.pointee_type, node
+            )
+            return f"{address_space} {pointee_type}* {name}"
+
+        if isinstance(raw_param_type, ReferenceType):
+            default_space = self.default_parameter_address_space(
+                raw_param_type, node, shader_type
+            )
+            address_space = self.parameter_address_space(node, default=default_space)
+            referenced_type = self.map_resource_type_with_format(
+                raw_param_type.referenced_type, node
+            )
+            return f"{address_space} {referenced_type}& {name}"
+
+        if self.is_array_type_node(raw_param_type):
+            binding = self.explicit_buffer_binding_index(node)
+            default_space = (
+                self.default_parameter_address_space(raw_param_type, node, shader_type)
+                if shader_type in {"vertex", "fragment", "compute", "ray_generation"}
+                and binding is not None
+                else None
+            )
+            address_space = self.parameter_address_space(node, default=default_space)
+            if address_space is None:
+                return None
+            if binding is not None and shader_type in {
+                "vertex",
+                "fragment",
+                "compute",
+                "ray_generation",
+            }:
+                element_type = self.map_resource_type_with_format(
+                    raw_param_type.element_type, node
+                )
+                return f"{address_space} {element_type}* {name}"
+            declaration = format_c_style_array_declaration(mapped_type, name)
+            return f"{address_space} {declaration}"
+
+        return None
+
+    def default_parameter_address_space(
+        self, raw_param_type, node=None, shader_type=None
+    ):
+        if shader_type in {"vertex", "fragment", "compute", "ray_generation"}:
+            binding = self.explicit_buffer_binding_index(node)
+            if binding is not None:
+                if isinstance(raw_param_type, ReferenceType):
+                    return "constant"
+                return "device"
+        return "thread"
+
+    def explicit_buffer_binding_index(self, node):
+        return self.explicit_resource_binding_index(
+            node, {"binding", "buffer"}, ("b", "u", "t")
+        )
+
+    def parameter_address_space(self, node=None, default=None):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        address_spaces = []
+        if "constant" in qualifiers:
+            address_spaces.append("constant")
+        if qualifiers & {"device", "global", "storage"}:
+            address_spaces.append("device")
+        if qualifiers & {"threadgroup", "workgroup", "shared", "groupshared"}:
+            address_spaces.append("threadgroup")
+        if qualifiers & {"thread", "function", "local", "private"}:
+            address_spaces.append("thread")
+
+        address_spaces = list(dict.fromkeys(address_spaces))
+        if len(address_spaces) > 1:
+            name = getattr(node, "name", "<anonymous>")
+            raise ValueError(
+                f"Metal parameter '{name}' has conflicting address-space qualifiers: "
+                f"{', '.join(sorted(qualifiers))}"
+            )
+        if address_spaces:
+            return address_spaces[0]
+        return default
+
+    def is_array_type_node(self, vtype):
+        return (
+            hasattr(vtype, "element_type") and str(type(vtype)).find("ArrayType") != -1
+        )
+
+    def is_raw_buffer_parameter_type(self, raw_param_type, node=None):
+        if isinstance(
+            raw_param_type, (PointerType, ReferenceType)
+        ) or self.is_array_type_node(raw_param_type):
+            address_space = self.parameter_address_space(node)
+            return address_space in {"device", "constant"} or (
+                address_space is None
+                and self.explicit_buffer_binding_index(node) is not None
+            )
+        return False
 
     def metal_mesh_payload_parameter_declaration(
         self, mapped_type, name, node=None, shader_type=None
@@ -7581,6 +7702,9 @@ class MetalCodeGen:
         if vtype is None:
             return self.map_type(vtype)
 
+        if isinstance(vtype, (PointerType, ReferenceType)):
+            return self.map_type(vtype)
+
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
@@ -7662,7 +7786,11 @@ class MetalCodeGen:
     def resource_base_type(self, vtype):
         if vtype is None:
             return ""
-        if hasattr(vtype, "element_type") and str(type(vtype)).find("ArrayType") != -1:
+        if isinstance(vtype, PointerType):
+            return self.resource_base_type(vtype.pointee_type)
+        if isinstance(vtype, ReferenceType):
+            return self.resource_base_type(vtype.referenced_type)
+        if self.is_array_type_node(vtype):
             return self.resource_base_type(vtype.element_type)
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype = self.convert_type_node_to_string(vtype)
@@ -11272,6 +11400,14 @@ class MetalCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if isinstance(type_node, PointerType):
+            pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
+            return f"{pointee_type}*"
+        if isinstance(type_node, ReferenceType):
+            referenced_type = self.convert_type_node_to_string(
+                type_node.referenced_type
+            )
+            return f"{referenced_type}&"
         generic_args = getattr(type_node, "generic_args", [])
         if hasattr(type_node, "name") and generic_args:
             args = ", ".join(
@@ -11377,6 +11513,11 @@ class MetalCodeGen:
         """Map types to Metal equivalents, handling both strings and TypeNode objects."""
         if vtype is None:
             return "float"
+
+        if isinstance(vtype, PointerType):
+            return f"{self.map_type(vtype.pointee_type)}*"
+        if isinstance(vtype, ReferenceType):
+            return f"{self.map_type(vtype.referenced_type)}&"
 
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)

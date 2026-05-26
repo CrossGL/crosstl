@@ -1284,6 +1284,32 @@ class HipToCrossGLConverter:
                     f"// HIP driver launch kernel ex: config: {args[0]}, "
                     f"function: {args[1]}, params: {args[2]}, extra: {args[3]}"
                 ]
+        elif name == "hipExtLaunchKernel":
+            if len(args) >= 9:
+                function = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP extended kernel launch: function: {function}, "
+                    f"grid: {args[1]}, block: {args[2]}, args: {args[3]}, "
+                    f"shared memory: {args[4]}, stream: {args[5]}, "
+                    f"start event: {args[6]}, stop event: {args[7]}, "
+                    f"flags: {args[8]}"
+                ]
+        elif name == "hipExtLaunchKernelGGL":
+            if len(args) >= 8:
+                call_args = ", ".join(args[8:]) if len(args) > 8 else "<none>"
+                return [
+                    f"// HIP extended kernel launch GGL: function: {args[0]}, "
+                    f"grid: {args[1]}, block: {args[2]}, "
+                    f"shared memory: {args[3]}, stream: {args[4]}, "
+                    f"start event: {args[5]}, stop event: {args[6]}, "
+                    f"flags: {args[7]}, args: {call_args}"
+                ]
+        elif name == "hipExtLaunchMultiKernelMultiDevice":
+            if len(args) >= 3:
+                return [
+                    f"// HIP extended multi-kernel multi-device launch: "
+                    f"params: {args[0]}, devices: {args[1]}, flags: {args[2]}"
+                ]
         elif name == "hipDeviceGetStreamPriorityRange":
             if len(args) >= 2:
                 least_output = self.format_runtime_pointer_target(node.args[0])
@@ -1836,14 +1862,17 @@ class HipToCrossGLConverter:
         elif name in {"hipExtModuleLaunchKernel", "hipHccModuleLaunchKernel"}:
             if len(args) >= 13:
                 label = "extended" if name == "hipExtModuleLaunchKernel" else "HCC"
-                return [
+                comment = (
                     f"// HIP {label} module launch kernel: function: {args[0]}, "
                     f"global work size: ({args[1]}, {args[2]}, {args[3]}), "
                     f"local work size: ({args[4]}, {args[5]}, {args[6]}), "
                     f"shared memory: {args[7]}, stream: {args[8]}, "
                     f"params: {args[9]}, extra: {args[10]}, "
                     f"start event: {args[11]}, stop event: {args[12]}"
-                ]
+                )
+                if len(args) >= 14:
+                    comment += f", flags: {args[13]}"
+                return [comment]
         elif name == "hipLaunchCooperativeKernel":
             if len(args) >= 6:
                 return [

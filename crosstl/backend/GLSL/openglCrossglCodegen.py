@@ -702,6 +702,9 @@ class GLSLToCrossGLConverter:
             + self.variable_qualifier_attribute_suffix(var)
         )
 
+    def fragment_uses_direct_output_declarations(self):
+        return self.shader_type == "fragment" and len(self.outputs) > 1
+
     def generate_stage_struct_member(self, var):
         var_type = self.convert_type(var.vtype)
         var_name = var.name
@@ -942,6 +945,15 @@ class GLSLToCrossGLConverter:
         if getattr(node, "global_variables", []):
             result += "\n"
 
+        if self.fragment_uses_direct_output_declarations():
+            for output_var in self.outputs:
+                result += (
+                    self.indent_str
+                    + self.generate_variable_declaration(output_var)
+                    + ";\n"
+                )
+            result += "\n"
+
         if self.shader_type in self.NON_STRUCT_STAGE_TYPES and (
             self.inputs or self.outputs
         ):
@@ -992,21 +1004,27 @@ class GLSLToCrossGLConverter:
                     + f"{self.stage_struct_name()}Output main({self.stage_struct_name()}Input input)"
                 )
             elif self.shader_type == "fragment":
-                output_type = "vec4"
-                output_name = "gl_FragColor"
-                output_attributes = ""
-                if self.outputs:
-                    output_var = self.outputs[0]
-                    output_type = self.convert_type(output_var.vtype)
-                    output_name = output_var.name
-                    output_attributes = self.fragment_return_attribute_suffix(
-                        output_var
+                if self.fragment_uses_direct_output_declarations():
+                    result += (
+                        self.indent()
+                        + f"void main({self.stage_struct_name()}Input input)"
                     )
-                result += (
-                    self.indent()
-                    + f"{output_type} main({self.stage_struct_name()}Input input)"
-                    + f"{output_attributes} @ {output_name}"
-                )
+                else:
+                    output_type = "vec4"
+                    output_name = "gl_FragColor"
+                    output_attributes = ""
+                    if self.outputs:
+                        output_var = self.outputs[0]
+                        output_type = self.convert_type(output_var.vtype)
+                        output_name = output_var.name
+                        output_attributes = self.fragment_return_attribute_suffix(
+                            output_var
+                        )
+                    result += (
+                        self.indent()
+                        + f"{output_type} main({self.stage_struct_name()}Input input)"
+                        + f"{output_attributes} @ {output_name}"
+                    )
             elif self.shader_type in self.NON_STRUCT_STAGE_TYPES:
                 result += self.indent() + "void main()"
             else:
@@ -1024,7 +1042,11 @@ class GLSLToCrossGLConverter:
                 result += self.indent() + f"{self.stage_struct_name()}Output output;\n"
 
             # For fragment shaders, declare a local output if assignments are used
-            if self.shader_type == "fragment" and self.outputs:
+            if (
+                self.shader_type == "fragment"
+                and self.outputs
+                and not self.fragment_uses_direct_output_declarations()
+            ):
                 output_type = self.convert_type(self.outputs[0].vtype)
                 output_name = self.outputs[0].name
                 result += self.indent() + f"{output_type} {output_name};\n"
@@ -1040,8 +1062,10 @@ class GLSLToCrossGLConverter:
                 result += self.indent() + "return output;\n"
 
             # Add implicit return for fragment shaders if not present
-            if self.shader_type == "fragment" and not any(
-                isinstance(stmt, ReturnNode) for stmt in main_function.body
+            if (
+                self.shader_type == "fragment"
+                and not self.fragment_uses_direct_output_declarations()
+                and not any(isinstance(stmt, ReturnNode) for stmt in main_function.body)
             ):
                 output_name = self.outputs[0].name if self.outputs else "gl_FragColor"
                 result += self.indent() + f"return {output_name};\n"

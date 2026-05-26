@@ -199,7 +199,15 @@
           "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"]
         },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, read-only store diagnostics, and Slang vector alias mapping inside buffer element types. Append/consume, byte-address buffers, and GLSL buffer-block round-trips are not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
+            "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
+          ]
+        }
       }
     },
     {
@@ -220,7 +228,15 @@
           "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"]
         },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, read-only store diagnostics, and Slang vector alias mapping inside buffer element types. Append/consume, byte-address buffers, and GLSL buffer-block round-trips are not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
+            "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
+          ]
+        }
       }
     },
     {
@@ -407,8 +423,11 @@
         "hip": {"status": "unknown"},
         "mojo": {
           "status": "partial",
-          "notes": "Return values lower for staged functions, but return semantic wrapper/validation behavior is not complete.",
-          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader"]
+          "notes": "Direct staged function return semantics are preserved as deterministic Mojo metadata comments, and builtin return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen"
+          ]
         },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
@@ -428,8 +447,11 @@
         "hip": {"status": "partial"},
         "mojo": {
           "status": "partial",
-          "notes": "Struct member semantics are preserved as Mojo field comments while builtin type validation remains incomplete.",
-          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader"]
+          "notes": "Struct member semantics are preserved as Mojo field comments, builtin output semantic types are validated, and struct-return builtin semantics validate stage compatibility. Target-native shader I/O ABI lowering remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo"
+          ]
         },
         "rust": {"status": "partial"},
         "slang": {"status": "partial"}
@@ -569,7 +591,15 @@
           ]
         },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, read-only store diagnostics, and Slang vector alias mapping inside buffer element types. Append/consume, byte-address buffers, and GLSL buffer-block round-trips are not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
+            "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
+          ]
+        }
       }
     },
     {
@@ -836,9 +866,11 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_helper_parameters_inline_with_accesses",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_helper_parameter_access_contracts_emit_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_parameter_access_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_direct_member_contracts_propagate",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_single_member_descriptor_arrays_preserve_accesses",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_single_member_descriptor_arrays_access_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_atomics_emit_diagnostics_for_invalid_targets",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_atomics_require_read_write_access",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_resource_memory_qualifiers_validate_with_spirv_tools"
           ]
         },
@@ -1701,9 +1733,11 @@
         "hip": {"status": "partial"},
         "mojo": {
           "status": "partial",
-          "notes": "Mojo codegen validates several unsupported enum, buffer, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
+          "notes": "Mojo codegen validates several unsupported enum, semantic, buffer, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_payload_enums_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_buffer_operations_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_guarded_arm_is_rejected_for_mojo_codegen"

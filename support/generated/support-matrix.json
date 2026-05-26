@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 278,
+        "unsupported_marker_count": 277,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 514
+        "test_count": 517
       },
       "translator_codegen": {
         "exists": true,
@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 714
+        "test_count": 715
       },
       "translator_codegen": {
         "exists": true,
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 479
+        "test_count": 482
       },
       "translator_codegen": {
         "exists": true,
@@ -433,7 +433,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 364
+        "test_count": 366
       },
       "translator_codegen": {
         "exists": true,
@@ -547,7 +547,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 252
+        "test_count": 254
       },
       "translator_codegen": {
         "exists": true,
@@ -727,7 +727,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 269
+        "test_count": 271
       },
       "translator_codegen": {
         "exists": true,
@@ -841,7 +841,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 480
+        "test_count": 482
       },
       "translator_codegen": {
         "exists": true,
@@ -1150,8 +1150,8 @@
       "category": "stages",
       "feature": "Geometry stage",
       "feature_id": "stage.geometry",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, read-only store diagnostics, and Slang vector alias mapping inside buffer element types. Append/consume, byte-address buffers, and GLSL buffer-block round-trips are not implemented yet.",
+      "status": "partial"
     },
     {
       "backend": "Metal",
@@ -1213,8 +1213,8 @@
       "category": "stages",
       "feature": "Tessellation stages",
       "feature_id": "stage.tessellation",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, read-only store diagnostics, and Slang vector alias mapping inside buffer element types. Append/consume, byte-address buffers, and GLSL buffer-block round-trips are not implemented yet.",
+      "status": "partial"
     },
     {
       "backend": "DirectX / HLSL",
@@ -1456,7 +1456,7 @@
       "category": "stage I/O",
       "feature": "Direct function return semantics",
       "feature_id": "io.return_semantics",
-      "notes": "Return values lower for staged functions, but return semantic wrapper/validation behavior is not complete.",
+      "notes": "Direct staged function return semantics are preserved as deterministic Mojo metadata comments, and builtin return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete.",
       "status": "partial"
     },
     {
@@ -1510,7 +1510,7 @@
       "category": "stage I/O",
       "feature": "Struct member semantics",
       "feature_id": "io.struct_semantics",
-      "notes": "Struct member semantics are preserved as Mojo field comments while builtin type validation remains incomplete.",
+      "notes": "Struct member semantics are preserved as Mojo field comments, builtin output semantic types are validated, and struct-return builtin semantics validate stage compatibility. Target-native shader I/O ABI lowering remains incomplete.",
       "status": "partial"
     },
     {
@@ -1663,8 +1663,8 @@
       "category": "resources",
       "feature": "Structured/storage buffers",
       "feature_id": "resources.structured_buffers",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, read-only store diagnostics, and Slang vector alias mapping inside buffer element types. Append/consume, byte-address buffers, and GLSL buffer-block round-trips are not implemented yet.",
+      "status": "partial"
     },
     {
       "backend": "Vulkan SPIR-V",
@@ -2698,7 +2698,7 @@
       "category": "validation",
       "feature": "Invalid shader shape validation",
       "feature_id": "validation.invalid_shapes",
-      "notes": "Mojo codegen validates several unsupported enum, buffer, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
+      "notes": "Mojo codegen validates several unsupported enum, semantic, buffer, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
       "status": "partial"
     },
     {
@@ -3220,9 +3220,13 @@
           "status": "unknown"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
+            "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
+          ],
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, read-only store diagnostics, and Slang vector alias mapping inside buffer element types. Append/consume, byte-address buffers, and GLSL buffer-block round-trips are not implemented yet.",
+          "status": "partial"
         },
         "vulkan": {
           "evidence": [],
@@ -3277,9 +3281,13 @@
           "status": "unknown"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
+            "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
+          ],
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, read-only store diagnostics, and Slang vector alias mapping inside buffer element types. Append/consume, byte-address buffers, and GLSL buffer-block round-trips are not implemented yet.",
+          "status": "partial"
         },
         "vulkan": {
           "evidence": [],
@@ -3562,9 +3570,10 @@
         },
         "mojo": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen"
           ],
-          "notes": "Return values lower for staged functions, but return semantic wrapper/validation behavior is not complete.",
+          "notes": "Direct staged function return semantics are preserved as deterministic Mojo metadata comments, and builtin return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete.",
           "status": "partial"
         },
         "opengl": {
@@ -3617,9 +3626,10 @@
         },
         "mojo": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo"
           ],
-          "notes": "Struct member semantics are preserved as Mojo field comments while builtin type validation remains incomplete.",
+          "notes": "Struct member semantics are preserved as Mojo field comments, builtin output semantic types are validated, and struct-return builtin semantics validate stage compatibility. Target-native shader I/O ABI lowering remains incomplete.",
           "status": "partial"
         },
         "opengl": {
@@ -3834,9 +3844,13 @@
           "status": "unknown"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
+            "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
+          ],
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, read-only store diagnostics, and Slang vector alias mapping inside buffer element types. Append/consume, byte-address buffers, and GLSL buffer-block round-trips are not implemented yet.",
+          "status": "partial"
         },
         "vulkan": {
           "evidence": [
@@ -4201,9 +4215,11 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_helper_parameters_inline_with_accesses",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_helper_parameter_access_contracts_emit_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_parameter_access_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_direct_member_contracts_propagate",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_single_member_descriptor_arrays_preserve_accesses",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_single_member_descriptor_arrays_access_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_atomics_emit_diagnostics_for_invalid_targets",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_atomics_require_read_write_access",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_resource_memory_qualifiers_validate_with_spirv_tools"
           ],
           "notes": "Storage-image readonly/writeonly/coherent/volatile/restrict qualifiers lower to validated SPIR-V variable decorations with direct and interprocedural invalid read/write/atomic diagnostics; StructuredBuffer, RWStructuredBuffer, and GLSL buffer-block helper parameters inline to avoid invalid Uniform pointer calls while preserving read/write access diagnostics; GLSL buffer-block qualifiers lower to BufferBlock member decorations with direct/helper/atomic access diagnostics.",
@@ -5551,11 +5567,13 @@
         "mojo": {
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_payload_enums_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_buffer_operations_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_guarded_arm_is_rejected_for_mojo_codegen"
           ],
-          "notes": "Mojo codegen validates several unsupported enum, buffer, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
+          "notes": "Mojo codegen validates several unsupported enum, semantic, buffer, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
           "status": "partial"
         },
         "opengl": {
@@ -5662,9 +5680,9 @@
       },
       "slang": {
         "diagnostic": 0,
-        "partial": 8,
+        "partial": 11,
         "supported": 14,
-        "unknown": 20,
+        "unknown": 17,
         "unsupported": 0,
         "validated_rejection": 0
       },

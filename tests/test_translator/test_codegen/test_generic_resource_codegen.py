@@ -88,3 +88,13 @@ def test_structured_buffer_parameters_preserve_element_type_for_core_backends():
     assert "float value = input[index];" in glsl
     assert "data[index] = (value * 2.0);" in glsl
     assert "StructuredBuffer" not in glsl
+
+    slang = SlangCodeGen().generate(ast)
+    assert (
+        "void scale(RWStructuredBuffer<float> data, "
+        "StructuredBuffer<float> input, uint index)" in slang
+    )
+    assert "float value = input.Load(index);" in slang
+    assert "data.Store(index, value * 2.0);" in slang
+    assert "buffer_load(" not in slang
+    assert "buffer_store(" not in slang

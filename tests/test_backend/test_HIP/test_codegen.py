@@ -927,6 +927,9 @@ class TestHipCodeGen:
             dim3 outBlock;
             size_t sharedMem;
             hipStream_t outStream;
+            hipEvent_t startEvent;
+            hipEvent_t stopEvent;
+            hipLaunchParams* launchParams;
             int value = 7;
             size_t offset = 0;
 
@@ -937,6 +940,19 @@ class TestHipCodeGen:
             hipLaunchByPtr(kernel);
             hipLaunchKernelExC(config, kernel, args);
             hipDrvLaunchKernelEx(driverConfig, function, args, NULL);
+            hipExtLaunchKernel(
+                (const void*)kernel, grid, block, args, 0, stream, startEvent,
+                stopEvent, hipExtAnyOrderLaunch
+            );
+            hipExtLaunchKernelGGL(
+                kernel, grid, block, 0, stream, startEvent, stopEvent,
+                hipExtAnyOrderLaunch, kernel, args
+            );
+            hipExtLaunchMultiKernelMultiDevice(launchParams, 2, hipExtAnyOrderLaunch);
+            hipExtModuleLaunchKernel(
+                function, 512, 1, 1, 64, 1, 1, 0, stream, args, NULL, startEvent,
+                stopEvent, hipExtAnyOrderLaunch
+            );
 
             hipError_t err = hipConfigureCall(grid, block, 0, stream);
             err = __hipPushCallConfiguration(grid, block, 0, stream);
@@ -947,6 +963,13 @@ class TestHipCodeGen:
             err = hipLaunchByPtr(kernel);
             err = hipLaunchKernelExC(config, kernel, args);
             err = hipDrvLaunchKernelEx(driverConfig, function, args, NULL);
+            err = hipExtLaunchKernel(
+                (const void*)kernel, grid, block, args, 0, stream, startEvent,
+                stopEvent, hipExtAnyOrderLaunch
+            );
+            err = hipExtLaunchMultiKernelMultiDevice(
+                launchParams, 2, hipExtAnyOrderLaunch
+            );
         }
         """
         lexer = HipLexer(code)
@@ -1001,6 +1024,35 @@ class TestHipCodeGen:
             )
             == 2
         )
+        assert (
+            result.count(
+                "// HIP extended kernel launch: function: kernel, grid: grid, "
+                "block: block, args: args, shared memory: 0, stream: stream, "
+                "start event: startEvent, stop event: stopEvent, "
+                "flags: hipExtAnyOrderLaunch"
+            )
+            == 2
+        )
+        assert (
+            "// HIP extended kernel launch GGL: function: kernel, grid: grid, "
+            "block: block, shared memory: 0, stream: stream, "
+            "start event: startEvent, stop event: stopEvent, "
+            "flags: hipExtAnyOrderLaunch, args: kernel, args"
+        ) in result
+        assert (
+            result.count(
+                "// HIP extended multi-kernel multi-device launch: "
+                "params: launchParams, devices: 2, flags: hipExtAnyOrderLaunch"
+            )
+            == 2
+        )
+        assert (
+            "// HIP extended module launch kernel: function: function, "
+            "global work size: (512, 1, 1), local work size: (64, 1, 1), "
+            "shared memory: 0, stream: stream, params: args, extra: NULL, "
+            "start event: startEvent, stop event: stopEvent, "
+            "flags: hipExtAnyOrderLaunch"
+        ) in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert "err = hipSuccess;" in result
 
@@ -1012,6 +1064,10 @@ class TestHipCodeGen:
             "hipLaunchByPtr",
             "hipLaunchKernelExC",
             "hipDrvLaunchKernelEx",
+            "hipExtLaunchKernel",
+            "hipExtLaunchKernelGGL",
+            "hipExtLaunchMultiKernelMultiDevice",
+            "hipExtModuleLaunchKernel",
         ]:
             assert f"{function_name}(" not in result
 

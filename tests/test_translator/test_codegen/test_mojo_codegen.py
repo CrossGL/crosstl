@@ -329,6 +329,185 @@ def test_basic_shader():
         pytest.fail("Mojo basic shader codegen not implemented.")
 
 
+def test_return_semantic_metadata_and_validation_for_mojo_codegen():
+    vertex_code = """
+    shader ReturnPosition {
+        vertex {
+            vec4 main() @ gl_Position {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    vertex_output = generate_code(parse_code(tokenize_code(vertex_code)))
+
+    assert (
+        "# CrossGL return semantic: stage=vertex semantic=position "
+        "source=gl_Position" in vertex_output
+    )
+
+    color_code = """
+    shader ReturnColor {
+        fragment {
+            vec4 main() @ SV_Target1 {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+    color_output = generate_code(parse_code(tokenize_code(color_code)))
+
+    assert (
+        "# CrossGL return semantic: stage=fragment semantic=color(1) "
+        "source=SV_Target1" in color_output
+    )
+
+    depth_code = """
+    shader ReturnDepth {
+        fragment {
+            float main() @ gl_FragDepth {
+                return 0.5;
+            }
+        }
+    }
+    """
+    depth_output = generate_code(parse_code(tokenize_code(depth_code)))
+
+    assert (
+        "# CrossGL return semantic: stage=fragment semantic=depth(any) "
+        "source=gl_FragDepth" in depth_output
+    )
+
+    invalid_cases = [
+        (
+            """
+            shader BadPositionType {
+                vertex {
+                    float main() @ gl_Position {
+                        return 0.0;
+                    }
+                }
+            }
+            """,
+            "gl_Position.*vec4",
+        ),
+        (
+            """
+            shader BadColorType {
+                fragment {
+                    vec3 main() @ gl_FragColor {
+                        return vec3(0.0);
+                    }
+                }
+            }
+            """,
+            "gl_FragColor.*vec4",
+        ),
+        (
+            """
+            shader BadDepthType {
+                fragment {
+                    vec4 main() @ gl_FragDepth {
+                        return vec4(0.0);
+                    }
+                }
+            }
+            """,
+            "gl_FragDepth.*float",
+        ),
+        (
+            """
+            shader BadStage {
+                vertex {
+                    vec4 main() @ gl_FragColor {
+                        return vec4(0.0);
+                    }
+                }
+            }
+            """,
+            "gl_FragColor.*vertex stage",
+        ),
+        (
+            """
+            shader BadVoidSemantic {
+                fragment {
+                    void main() @ SV_Target0 {
+                    }
+                }
+            }
+            """,
+            "SV_Target0.*void return type",
+        ),
+        (
+            """
+            shader BadInputOnlyReturn {
+                vertex {
+                    uint main() @ gl_VertexID {
+                        return uint(0);
+                    }
+                }
+            }
+            """,
+            "gl_VertexID.*input-only",
+        ),
+    ]
+
+    for shader, message in invalid_cases:
+        with pytest.raises(ValueError, match=message):
+            generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo():
+    valid_code = """
+    shader StructSemantics {
+        struct FSOutput {
+            vec4 color @ SV_Target1;
+            float depth @ gl_FragDepth;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            FSOutput main() {
+                FSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(valid_code)))
+
+    assert "var color: SIMD[DType.float32, 4]  # color(1)" in generated_code
+    assert "var depth: Float32  # depth(any)" in generated_code
+    assert "var uv: SIMD[DType.float32, 2]  # texcoord0" in generated_code
+
+    invalid_type = """
+    shader BadStructSemanticType {
+        struct FSOutput {
+            vec3 color @ gl_FragColor;
+        };
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragColor.*vec4"):
+        generate_code(parse_code(tokenize_code(invalid_type)))
+
+    invalid_stage = """
+    shader BadStructSemanticStage {
+        struct FSOutput {
+            vec4 position @ gl_Position;
+        };
+
+        fragment {
+            FSOutput main() {
+                FSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_Position.*fragment stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+
 def test_compute_stage_local_helper_functions_emit_before_entry_point():
     code = """
     shader StageLocalMojo {

@@ -1608,6 +1608,29 @@ shader MetalComputeBuiltinsValidation {
 """
 
 
+METAL_ADDRESS_SPACE_PARAMETER_SHADER = """
+shader MetalAddressSpaceParameterValidation {
+    struct Payload {
+        float value;
+    };
+
+    void update(threadgroup Payload& scratch, device float values[], constant uint& count) {
+        if (count > 0u) {
+            scratch.value = values[0] + 1.0;
+            values[0] = scratch.value;
+        }
+    }
+
+    compute {
+        void main(device float values[] @buffer(0), constant uint& count @buffer(1)) {
+            threadgroup Payload scratch;
+            update(scratch, values, count);
+        }
+    }
+}
+"""
+
+
 METAL_MESH_OBJECT_SHADER = """
 shader MetalMeshObjectValidation {
     object {
@@ -4061,6 +4084,23 @@ def test_generated_metal_compute_stage_with_builtins_compiles_with_metal(tmp_pat
     output = tmp_path / "compute_builtins.air"
     code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(METAL_COMPUTE_BUILTINS_SHADER), "compute"
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_address_space_parameters_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "address_space_parameters.metal"
+    output = tmp_path / "address_space_parameters.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_ADDRESS_SPACE_PARAMETER_SHADER), "compute"
     )
     source.write_text(code, encoding="utf-8")
 

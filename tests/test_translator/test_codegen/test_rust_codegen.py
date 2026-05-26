@@ -3453,6 +3453,49 @@ def test_unsized_struct_arrays_do_not_derive_copy():
     assert "pub colors: [Vec3<f32>; 2]," in generated_code
 
 
+def test_struct_and_enum_derives_track_nested_non_copy_members_and_compile(tmp_path):
+    code = """
+    shader TransitiveNonCopyDerives {
+        struct Payload {
+            float weights[];
+            int count;
+        };
+
+        struct Wrapper {
+            Payload payload;
+            int id;
+        };
+
+        enum Command {
+            Submit(Wrapper),
+            Skip
+        }
+
+        fn choose(command: Command) -> int {
+            match command {
+                Command::Submit(wrapper) => wrapper.id,
+                Command::Skip => 0,
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "#[derive(Debug, Clone, Default)]\npub struct Payload" in generated_code
+    assert "#[derive(Debug, Clone, Default)]\npub struct Wrapper" in generated_code
+    assert "#[derive(Debug, Clone, Default)]\npub enum Command" in generated_code
+    assert (
+        "#[derive(Debug, Clone, Copy, Default)]\npub struct Wrapper"
+        not in generated_code
+    )
+    assert (
+        "#[derive(Debug, Clone, Copy, Default)]\npub enum Command" not in generated_code
+    )
+    assert "Submit(Wrapper)," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_legacy_generic_wrappers_emit_rust_generic_params():
     code = """
     shader GenericWrappers {
@@ -3755,6 +3798,36 @@ def test_top_level_enums_emit_rust_variants():
     assert "TextureError(&'static str)," in generated_code
     assert "    #[default]\n    InvalidState," in generated_code
     assert "InvalidState," in generated_code
+
+
+def test_enum_variants_with_dynamic_array_payloads_do_not_derive_copy_and_compile(
+    tmp_path,
+):
+    code = """
+    shader NonCopyEnumPayload {
+        enum Command {
+            Draw { weights: float[], amount: int },
+            Skip
+        }
+
+        fn choose(command: Command) -> int {
+            match command {
+                Command::Draw { weights, amount } => amount,
+                Command::Skip => 0,
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "#[derive(Debug, Clone, Default)]\npub enum Command {" in generated_code
+    assert (
+        "#[derive(Debug, Clone, Copy, Default)]\npub enum Command" not in generated_code
+    )
+    assert "Draw { weights: Vec<f32>, amount: i32 }," in generated_code
+    assert "Command::Draw { weights: _weights, amount } =>" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_top_level_enum_discriminants_emit_rust_values():

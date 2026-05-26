@@ -5430,6 +5430,156 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
         assert "imageStore(" not in cuda_code
 
+    def test_typed_hlsl_writable_resource_arrays_forward_cuda_image_metadata(self):
+        """Test CUDA forwards imageSize metadata for typed HLSL writable arrays."""
+        source_code = """
+        shader TypedWritableArrayQueriesCUDA {
+            RWTexture2D<float4> imageGrid[2][3];
+            RWTexture2D<uint> counterGrid[2][2];
+
+            vec4 leafImage(
+                RWTexture2D<float4> dynImages[][3],
+                int layer,
+                int slot,
+                ivec2 pixel
+            ) {
+                vec4 color = imageLoad(dynImages[layer][slot], pixel);
+                imageStore(dynImages[layer][slot], pixel, color);
+                return color;
+            }
+
+            uint leafCounter(
+                RWTexture2D<uint> dynCounters[][2],
+                int layer,
+                int slot,
+                ivec2 pixel
+            ) {
+                uint count = imageLoad(dynCounters[layer][slot], pixel);
+                imageStore(dynCounters[layer][slot], pixel, count);
+                return count;
+            }
+
+            void leafQuery(
+                RWTexture2D<float4> dynImages[][3],
+                RWTexture2D<float4> fixedImages[3],
+                RWTexture2D<uint> dynCounters[][2],
+                int layer,
+                int slot,
+                int counterSlot
+            ) {
+                ivec2 dynamicImageSize = imageSize(dynImages[layer][slot]);
+                ivec2 fixedImageSize = imageSize(fixedImages[slot]);
+                ivec2 counterSize = imageSize(dynCounters[layer][counterSlot]);
+            }
+
+            void forwardQuery(
+                RWTexture2D<float4> dynImages[][3],
+                RWTexture2D<float4> fixedImages[3],
+                RWTexture2D<uint> dynCounters[][2],
+                int layer,
+                int slot,
+                int counterSlot
+            ) {
+                leafQuery(
+                    dynImages,
+                    fixedImages,
+                    dynCounters,
+                    layer,
+                    slot,
+                    counterSlot
+                );
+            }
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(0, 0);
+                    vec4 color = leafImage(imageGrid, 1, 2, pixel);
+                    uint count = leafCounter(counterGrid, 1, 1, pixel);
+                    forwardQuery(imageGrid, imageGrid[1], counterGrid, 1, 2, 1);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "struct CglResourceQueryInfo" in cuda_code
+        assert "cudaSurfaceObject_t imageGrid[2][3];" in cuda_code
+        assert "CglResourceQueryInfo imageGrid_metadata[2][3] = {};" in cuda_code
+        assert "cudaSurfaceObject_t counterGrid[2][2];" in cuda_code
+        assert "CglResourceQueryInfo counterGrid_metadata[2][2] = {};" in cuda_code
+        assert (
+            "__device__ float4 leafImage(cudaSurfaceObject_t (*dynImages)[3], "
+            "int layer, int slot, int2 pixel)" in cuda_code
+        )
+        assert (
+            "__device__ uint leafCounter(cudaSurfaceObject_t (*dynCounters)[2], "
+            "int layer, int slot, int2 pixel)" in cuda_code
+        )
+        assert (
+            "__device__ void leafQuery(cudaSurfaceObject_t (*dynImages)[3], "
+            "CglResourceQueryInfo (*dynImages_metadata)[3], "
+            "cudaSurfaceObject_t fixedImages[3], "
+            "CglResourceQueryInfo fixedImages_metadata[3], "
+            "cudaSurfaceObject_t (*dynCounters)[2], "
+            "CglResourceQueryInfo (*dynCounters_metadata)[2], "
+            "int layer, int slot, int counterSlot)" in cuda_code
+        )
+        assert (
+            "__device__ void forwardQuery(cudaSurfaceObject_t (*dynImages)[3], "
+            "CglResourceQueryInfo (*dynImages_metadata)[3], "
+            "cudaSurfaceObject_t fixedImages[3], "
+            "CglResourceQueryInfo fixedImages_metadata[3], "
+            "cudaSurfaceObject_t (*dynCounters)[2], "
+            "CglResourceQueryInfo (*dynCounters_metadata)[2], "
+            "int layer, int slot, int counterSlot)" in cuda_code
+        )
+        assert (
+            "float4 color = surf2Dread<float4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(color, dynImages[layer][slot], "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "uint count = surf2Dread<uint>"
+            "(dynCounters[layer][slot], pixel.x * sizeof(uint), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(count, dynCounters[layer][slot], "
+            "pixel.x * sizeof(uint), pixel.y);" in cuda_code
+        )
+        assert (
+            "int2 dynamicImageSize = cgl_imageSize_image2D"
+            "(dynImages_metadata[layer][slot]);" in cuda_code
+        )
+        assert (
+            "int2 fixedImageSize = cgl_imageSize_image2D"
+            "(fixedImages_metadata[slot]);" in cuda_code
+        )
+        assert (
+            "int2 counterSize = cgl_imageSize_uimage2D"
+            "(dynCounters_metadata[layer][counterSlot]);" in cuda_code
+        )
+        assert "float4 color = leafImage(imageGrid, 1, 2, pixel);" in cuda_code
+        assert "uint count = leafCounter(counterGrid, 1, 1, pixel);" in cuda_code
+        assert (
+            "forwardQuery(imageGrid, imageGrid_metadata, imageGrid[1], "
+            "imageGrid_metadata[1], counterGrid, counterGrid_metadata, 1, 2, 1);"
+            in cuda_code
+        )
+        assert "leafImage(imageGrid, imageGrid_metadata" not in cuda_code
+        assert "leafCounter(counterGrid, counterGrid_metadata" not in cuda_code
+        assert "RWTexture2D<" not in cuda_code
+        assert "imageSize(" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+
     def test_forwarded_dynamic_resource_arrays_emit_cuda_metadata_arguments(self):
         """Test CUDA forwards query metadata sidecars through dynamic arrays."""
         source_code = """
@@ -8281,6 +8431,246 @@ class TestCudaCodeGen:
         assert "cgl_imageSize_image2D(imageGrid_metadata)" not in cuda_code
         assert "cgl_imageSize_image1DArray(dynamicLineGrid_metadata)" not in cuda_code
         assert "cgl_imageSize_imageCubeArray(dynamicCubeGrid_metadata)" not in cuda_code
+
+    def test_typed_hlsl_multisample_aliases_emit_cuda_queries_and_diagnostics(
+        self, tmp_path
+    ):
+        """Test CUDA maps typed HLSL multisample aliases to explicit behavior."""
+        source_code = """
+        shader TypedMultisampleCUDA {
+            Texture2DMS<float4> msTex;
+            Texture2DMSArray<float4> msLayers;
+            RWTexture2DMS<float4> msImage;
+            RWTexture2DMSArray<float4> msImageLayers;
+            RWTexture2DMS<uint> msCounters;
+            RWTexture2DMSArray<int> msSignedLayers;
+            Texture2DMS<float4> msTextures[2];
+            RWTexture2DMS<float4> msImageGrid[2];
+            RWTexture2DMS<uint> msCounterGrid[2];
+
+            void forwardArrays(
+                Texture2DMS<float4> dynTextures[],
+                RWTexture2DMS<float4> dynImages[],
+                RWTexture2DMS<uint> dynCounters[],
+                int i
+            ) {
+                ivec2 texSize = textureSize(dynTextures[i], 0);
+                int texSamples = textureSamples(dynTextures[i]);
+                ivec2 imageSizeValue = imageSize(dynImages[i]);
+                int counterSamples = imageSamples(dynCounters[i]);
+            }
+
+            void process(
+                Texture2DMS<float4> paramTex,
+                Texture2DMSArray<float4> paramLayers,
+                RWTexture2DMS<float4> paramImage,
+                RWTexture2DMS<uint> paramCounters,
+                int i,
+                vec2 uv,
+                ivec2 pixel,
+                ivec3 pixelLayer,
+                int sampleIndex
+            ) {
+                ivec2 texSize = textureSize(paramTex, 0);
+                ivec3 layerSize = textureSize(paramLayers, 0);
+                int texSamples = textureSamples(paramTex);
+                int layerSamples = textureSamples(paramLayers);
+                ivec2 imageSizeValue = imageSize(paramImage);
+                ivec2 counterSize = imageSize(paramCounters);
+                int imageSamplesValue = imageSamples(paramImage);
+                int counterSamples = imageSamples(paramCounters);
+                ivec2 arrayTexSize = textureSize(msTextures[i], 0);
+                int arrayTexSamples = textureSamples(msTextures[i]);
+                ivec2 arrayImageSize = imageSize(msImageGrid[i]);
+                int arrayCounterSamples = imageSamples(msCounterGrid[i]);
+                vec4 sampled = texture(paramTex, uv);
+                vec4 fetched = texelFetch(paramTex, pixel, sampleIndex);
+                vec4 fetchedLayer = texelFetch(paramLayers, pixelLayer, sampleIndex);
+                vec4 loaded = imageLoad(paramImage, pixel, sampleIndex);
+                imageStore(paramImage, pixel, sampleIndex, loaded);
+                uint loadedCounter = imageLoad(paramCounters, pixel, sampleIndex);
+                imageStore(paramCounters, pixel, sampleIndex, loadedCounter);
+                int loadedSignedLayer = imageLoad(
+                    msSignedLayers,
+                    pixelLayer,
+                    sampleIndex
+                );
+                imageStore(
+                    msSignedLayers,
+                    pixelLayer,
+                    sampleIndex,
+                    loadedSignedLayer
+                );
+                uint atomicValue = imageAtomicAdd(
+                    paramCounters,
+                    pixel,
+                    sampleIndex,
+                    1u
+                );
+                forwardArrays(msTextures, msImageGrid, msCounterGrid, i);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "struct CglResourceQueryInfo" in cuda_code
+        assert "cudaTextureObject_t msTex;" in cuda_code
+        assert "cudaTextureObject_t msLayers;" in cuda_code
+        assert "cudaSurfaceObject_t msImage;" in cuda_code
+        assert "cudaSurfaceObject_t msImageLayers;" in cuda_code
+        assert "cudaSurfaceObject_t msCounters;" in cuda_code
+        assert "cudaSurfaceObject_t msSignedLayers;" in cuda_code
+        assert "cudaTextureObject_t msTextures[2];" in cuda_code
+        assert "CglResourceQueryInfo msTextures_metadata[2] = {};" in cuda_code
+        assert "cudaSurfaceObject_t msImageGrid[2];" in cuda_code
+        assert "CglResourceQueryInfo msImageGrid_metadata[2] = {};" in cuda_code
+        assert "cudaSurfaceObject_t msCounterGrid[2];" in cuda_code
+        assert "CglResourceQueryInfo msCounterGrid_metadata[2] = {};" in cuda_code
+        assert (
+            "__device__ void forwardArrays("
+            "cudaTextureObject_t* dynTextures, "
+            "CglResourceQueryInfo* dynTextures_metadata, "
+            "cudaSurfaceObject_t* dynImages, "
+            "CglResourceQueryInfo* dynImages_metadata, "
+            "cudaSurfaceObject_t* dynCounters, "
+            "CglResourceQueryInfo* dynCounters_metadata, int i)" in cuda_code
+        )
+        assert (
+            "__device__ void process(cudaTextureObject_t paramTex, "
+            "CglResourceQueryInfo paramTex_metadata, "
+            "cudaTextureObject_t paramLayers, "
+            "CglResourceQueryInfo paramLayers_metadata, "
+            "cudaSurfaceObject_t paramImage, "
+            "CglResourceQueryInfo paramImage_metadata, "
+            "cudaSurfaceObject_t paramCounters, "
+            "CglResourceQueryInfo paramCounters_metadata, int i"
+        ) in cuda_code
+        assert (
+            "int2 texSize = cgl_textureSize_sampler2DMS(paramTex_metadata);"
+            in cuda_code
+        )
+        assert (
+            "int3 layerSize = cgl_textureSize_sampler2DMSArray"
+            "(paramLayers_metadata);" in cuda_code
+        )
+        assert (
+            "int texSamples = cgl_textureSamples_sampler2DMS"
+            "(paramTex_metadata);" in cuda_code
+        )
+        assert (
+            "int layerSamples = cgl_textureSamples_sampler2DMSArray"
+            "(paramLayers_metadata);" in cuda_code
+        )
+        assert (
+            "int2 imageSizeValue = cgl_imageSize_image2DMS"
+            "(paramImage_metadata);" in cuda_code
+        )
+        assert (
+            "int2 counterSize = cgl_imageSize_uimage2DMS"
+            "(paramCounters_metadata);" in cuda_code
+        )
+        assert (
+            "int imageSamplesValue = cgl_imageSamples_image2DMS"
+            "(paramImage_metadata);" in cuda_code
+        )
+        assert (
+            "int counterSamples = cgl_imageSamples_uimage2DMS"
+            "(paramCounters_metadata);" in cuda_code
+        )
+        assert (
+            "int2 arrayTexSize = cgl_textureSize_sampler2DMS"
+            "(msTextures_metadata[i]);" in cuda_code
+        )
+        assert (
+            "int arrayTexSamples = cgl_textureSamples_sampler2DMS"
+            "(msTextures_metadata[i]);" in cuda_code
+        )
+        assert (
+            "int2 arrayImageSize = cgl_imageSize_image2DMS"
+            "(msImageGrid_metadata[i]);" in cuda_code
+        )
+        assert (
+            "int arrayCounterSamples = cgl_imageSamples_uimage2DMS"
+            "(msCounterGrid_metadata[i]);" in cuda_code
+        )
+        assert (
+            "int2 texSize = cgl_textureSize_sampler2DMS"
+            "(dynTextures_metadata[i]);" in cuda_code
+        )
+        assert (
+            "int texSamples = cgl_textureSamples_sampler2DMS"
+            "(dynTextures_metadata[i]);" in cuda_code
+        )
+        assert (
+            "int2 imageSizeValue = cgl_imageSize_image2DMS"
+            "(dynImages_metadata[i]);" in cuda_code
+        )
+        assert (
+            "int counterSamples = cgl_imageSamples_uimage2DMS"
+            "(dynCounters_metadata[i]);" in cuda_code
+        )
+        assert (
+            "float4 sampled = /* unsupported CUDA multisample resource call: "
+            "texture on sampler2DMS */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 fetched = /* unsupported CUDA multisample resource call: "
+            "texelFetch on sampler2DMS */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 fetchedLayer = /* unsupported CUDA multisample resource call: "
+            "texelFetch on sampler2DMSArray */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 loaded = /* unsupported CUDA multisample resource call: "
+            "imageLoad on image2DMS */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert "imageStore on image2DMS */ ((void)0);" in cuda_code
+        assert (
+            "uint loadedCounter = /* unsupported CUDA multisample resource call: "
+            "imageLoad on uimage2DMS */ 0u;" in cuda_code
+        )
+        assert "imageStore on uimage2DMS */ ((void)0);" in cuda_code
+        assert (
+            "int loadedSignedLayer = /* unsupported CUDA multisample resource call: "
+            "imageLoad on iimage2DMSArray */ 0;" in cuda_code
+        )
+        assert "imageStore on iimage2DMSArray */ ((void)0);" in cuda_code
+        assert (
+            "uint atomicValue = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicAdd on uimage2DMS */ 0u;" in cuda_code
+        )
+        assert (
+            "forwardArrays(msTextures, msTextures_metadata, msImageGrid, "
+            "msImageGrid_metadata, msCounterGrid, msCounterGrid_metadata, i);"
+            in cuda_code
+        )
+        assert "Texture2DMS<" not in cuda_code
+        assert "RWTexture2DMS<" not in cuda_code
+        assert "textureSamples(" not in cuda_code
+        assert "imageSamples(" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+        assert "texture(paramTex" not in cuda_code
+        assert "texelFetch(paramTex" not in cuda_code
+        assert "imageLoad(paramImage" not in cuda_code
+        assert "imageStore(paramImage" not in cuda_code
+        assert "surf2Dread" not in cuda_code
+        assert "surf2Dwrite" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_multisample_resource_builtins_emit_cuda_diagnostics(self, tmp_path):
         """Test CUDA does not silently lower MS resource calls to non-MS functions."""

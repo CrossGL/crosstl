@@ -4086,11 +4086,96 @@ class TestVulkanSPIRVCodeGen:
             Parser(Lexer(source_code).tokens).parse()
         )
 
-        assert "readOne" not in spv_code
-        assert "writeOne" not in spv_code
         assert "OpFunctionCall" not in spv_code
-        assert "WARNING: storage buffer load requires a readable buffer" in spv_code
-        assert "WARNING: storage buffer store requires a writable buffer" in spv_code
+        assert (
+            "WARNING: function call 'readOne' requires read-capable "
+            "storage buffer access for argument writeOnlyBlock passed to "
+            "parameter localBlock: got writeonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'writeOne' requires write-capable "
+            "storage buffer access for argument readOnlyBlock passed to "
+            "parameter localBlock: got readonly"
+        ) in spv_code
+        assert "WARNING: storage buffer load requires a readable buffer" not in spv_code
+        assert (
+            "WARNING: storage buffer store requires a writable buffer" not in spv_code
+        )
+
+    def test_glsl_buffer_block_helper_direct_member_contracts_propagate(self):
+        source_code = """
+        shader StorageBuffers {
+            struct DataBlock {
+                float values[];
+            };
+
+            DataBlock readOnlyBlock @glsl_buffer_block(std430) @readonly;
+            DataBlock writeOnlyBlock @glsl_buffer_block(std430) @writeonly;
+
+            float readLeaf(
+                DataBlock block @glsl_buffer_block(std430),
+                uint index
+            ) {
+                return block.values[index];
+            }
+
+            float readForward(
+                DataBlock block @glsl_buffer_block(std430),
+                uint index
+            ) {
+                return readLeaf(block, index);
+            }
+
+            void writeLeaf(
+                DataBlock block @glsl_buffer_block(std430),
+                uint index,
+                float value
+            ) {
+                block.values[index] = value;
+            }
+
+            void writeForward(
+                DataBlock block @glsl_buffer_block(std430),
+                uint index,
+                float value
+            ) {
+                writeLeaf(block, index, value);
+            }
+
+            compute {
+                void main() {
+                    float value = readForward(readOnlyBlock, 0u);
+                    writeForward(writeOnlyBlock, 1u, value);
+                    float rejectedRead = readForward(writeOnlyBlock, 0u);
+                    writeForward(readOnlyBlock, 1u, rejectedRead);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpFunctionCall" not in spv_code
+        assert (
+            "WARNING: function call 'readForward' requires read-capable "
+            "storage buffer access for argument writeOnlyBlock passed to "
+            "parameter block: got writeonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'writeForward' requires write-capable "
+            "storage buffer access for argument readOnlyBlock passed to "
+            "parameter block: got readonly"
+        ) in spv_code
+        assert (
+            "function call 'writeForward' requires read-write storage buffer "
+            "access for argument writeOnlyBlock"
+        ) not in spv_code
+        assert "WARNING: storage buffer load requires a readable buffer" not in spv_code
+        assert (
+            "WARNING: storage buffer store requires a writable buffer" not in spv_code
+        )
 
     def test_glsl_buffer_block_single_member_descriptor_arrays_preserve_accesses(self):
         source_code = """
@@ -4213,11 +4298,21 @@ class TestVulkanSPIRVCodeGen:
 
         assert (
             spv_code.count("WARNING: storage buffer load requires a readable buffer")
-            == 2
+            == 1
         )
         assert (
             spv_code.count("WARNING: storage buffer store requires a writable buffer")
-            == 2
+            == 1
+        )
+        assert (
+            "WARNING: function call 'readFromBlocks' requires read-capable "
+            "storage buffer access for argument writeBlocks passed to parameter "
+            "blocks: got writeonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'writeToBlocks' requires write-capable "
+            "storage buffer access for argument readBlocks passed to parameter "
+            "blocks: got readonly"
         )
         assert "Could not find member values in float" not in spv_code
         assert "Could not determine array element type" not in spv_code
@@ -4300,6 +4395,59 @@ class TestVulkanSPIRVCodeGen:
         assert "atomicAdd" not in spv_code
         assert "atomicCompSwap" not in spv_code
         assert "WARNING" not in spv_code
+
+    def test_glsl_buffer_block_helper_atomics_require_read_write_access(self):
+        source_code = """
+        shader StorageBufferAtomics {
+            struct AtomicBlock {
+                uint counters[];
+            };
+
+            AtomicBlock mutableBlock @glsl_buffer_block(std430);
+            AtomicBlock readOnlyBlock @glsl_buffer_block(std430) @readonly;
+            AtomicBlock writeOnlyBlock @glsl_buffer_block(std430) @writeonly;
+
+            uint bump(
+                AtomicBlock block @glsl_buffer_block(std430),
+                uint index
+            ) {
+                return atomicAdd(block.counters[index], 1u);
+            }
+
+            uint bumpForward(
+                AtomicBlock block @glsl_buffer_block(std430),
+                uint index
+            ) {
+                return bump(block, index);
+            }
+
+            compute {
+                void main() {
+                    uint ok = bumpForward(mutableBlock, 0u);
+                    uint rejectedRead = bumpForward(readOnlyBlock, 1u);
+                    uint rejectedWrite = bumpForward(writeOnlyBlock, 2u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpAtomicIAdd" in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert (
+            "WARNING: function call 'bumpForward' requires read-write "
+            "storage buffer access for argument readOnlyBlock passed to "
+            "parameter block: got readonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'bumpForward' requires read-write "
+            "storage buffer access for argument writeOnlyBlock passed to "
+            "parameter block: got writeonly"
+        ) in spv_code
+        assert "WARNING: atomicAdd requires a read-write storage buffer" not in spv_code
 
     def test_glsl_buffer_block_atomics_emit_diagnostics_for_invalid_targets(self):
         source_code = """

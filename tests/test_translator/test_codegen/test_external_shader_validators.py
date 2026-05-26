@@ -217,6 +217,21 @@ void main() {
 """
 
 
+MIXED_GLSL_FRAGMENT_MULTIPLE_OUTPUTS_SHADER = """
+#version 450 core
+layout(location = 0) in vec2 uv;
+layout(location = 0, index = 0) out vec4 accum;
+layout(location = 0, index = 1) out vec4 revealage;
+layout(location = 2) out vec4 normal;
+
+void main() {
+    accum = vec4(uv, 0.0, 1.0);
+    revealage = vec4(1.0);
+    normal = vec4(0.0);
+}
+"""
+
+
 GLSL_GEOMETRY_INTERFACE_BLOCK_VALIDATOR_SHADER = """
 shader GLSLGeometryInterfaceBlockValidator {
     @glsl_interface_block(in) @glsl_interface_instance(vertexIn) @glsl_interface_array
@@ -939,6 +954,30 @@ def test_generated_glsl_fragment_validates_with_glslangvalidator(tmp_path):
         GLSLCodeGen().generate_stage(_fragment_ast(), "fragment"),
         encoding="utf-8",
     )
+
+    _run_validator([glslang, "-S", "frag", str(shader_path)])
+
+
+def test_mixed_glsl_fragment_multiple_outputs_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "mixed_glsl_fragment_multiple_outputs.frag"
+
+    code = GLSLCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_FRAGMENT_MULTIPLE_OUTPUTS_SHADER, "fragment")
+    )
+    assert "layout(location = 0) in vec2 uv;" in code
+    assert "layout(location = 0, index = 0) out vec4 accum;" in code
+    assert "layout(location = 0, index = 1) out vec4 revealage;" in code
+    assert "layout(location = 2) out vec4 normal;" in code
+    assert "accum = vec4(uv, 0.0, 1.0);" in code
+    assert "revealage = vec4(1.0);" in code
+    assert "normal = vec4(0.0);" in code
+    assert "fragColor" not in code
+    assert "return accum" not in code
+    assert "\n    vec4 accum;" not in code
+    shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "frag", str(shader_path)])
 

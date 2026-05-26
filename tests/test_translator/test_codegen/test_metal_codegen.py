@@ -119,6 +119,79 @@ def test_metal_shared_local_variables_use_threadgroup_address_space():
     assert "\n    int scratch[4];" not in generated_code
 
 
+def test_metal_parameter_address_space_qualifiers_lower_for_pointer_reference_and_array_types():
+    shader = """
+    shader MetalAddressSpaceParameters {
+        struct Payload {
+            float value;
+        };
+
+        void update(
+            threadgroup Payload* payload,
+            device float values[],
+            constant int& count,
+            constant Payload& payloadRef,
+            device Payload& mut payloadOut
+        ) {
+            float tmp = values[count] + payloadRef.value;
+            payloadOut.value = tmp;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "void update(threadgroup Payload* payload, device float values[], "
+        "constant int& count, constant Payload& payloadRef, "
+        "device Payload& payloadOut)"
+    ) in generated_code
+    assert "float tmp = values[count] + payloadRef.value;" in generated_code
+    assert "payloadOut.value = tmp;" in generated_code
+    assert "PointerType" not in generated_code
+    assert "ReferenceType" not in generated_code
+
+
+def test_metal_raw_address_space_stage_buffers_lower_to_bindable_pointers():
+    shader = """
+    shader MetalRawAddressSpaceBuffers {
+        void update(device float values[], constant uint& count) {
+            if (count > 0u) {
+                values[0] = values[0] + 1.0;
+            }
+        }
+
+        compute {
+            void main(device float values[] @buffer(0), constant uint& count @buffer(1)) {
+                update(values, count);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "void update(device float values[], constant uint& count)" in generated_code
+    assert (
+        "kernel void kernel_main(device float* values [[buffer(0)]], "
+        "constant uint& count [[buffer(1)]])"
+    ) in generated_code
+    assert "device float values[] [[buffer(0)]]" not in generated_code
+
+
+def test_metal_parameter_address_space_qualifiers_reject_conflicts():
+    shader = """
+    shader MetalConflictingAddressSpaceParameters {
+        void update(device threadgroup float* values) { }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting address space"):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 def test_metal_precision_aliases_map_to_native_metal_types():
     shader = """
     shader PrecisionAliasSmoke {
