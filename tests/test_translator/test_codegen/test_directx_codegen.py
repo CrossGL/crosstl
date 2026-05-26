@@ -3020,6 +3020,31 @@ def test_ray_and_mesh_shader_attributes():
     assert "void MSMain()" in generated
 
 
+def test_directx_mesh_task_stages_emit_numthreads_layouts():
+    shader = """
+    shader MeshTaskLocalSizes {
+        task {
+            layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
+            void main() { }
+        }
+
+        mesh {
+            void main() @numthreads(32, 1, 1) @outputtopology(triangle) { }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        '[numthreads(8, 4, 1)]\n[shader("amplification")]\nvoid ASMain()' in generated
+    )
+    assert (
+        '[numthreads(32, 1, 1)]\n[outputtopology("triangle")]\n'
+        '[shader("mesh")]\nvoid MSMain()'
+    ) in generated
+
+
 def test_directx_advanced_stage_entries_use_stage_specific_names():
     code = """
     shader advanced {

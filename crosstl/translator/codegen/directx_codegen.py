@@ -1660,6 +1660,25 @@ class HLSLCodeGen:
         x, y, z = compute_local_size(execution_config)
         return f"[numthreads({x}, {y}, {z})]\n"
 
+    def generate_stage_numthreads(self, func, shader_type, execution_config=None):
+        if shader_type not in {"mesh", "task", "amplification", "object"}:
+            return ""
+
+        arguments = self.hlsl_stage_attribute_arguments(func, "numthreads")
+        if arguments:
+            if len(arguments) != 3:
+                raise ValueError(
+                    f"DirectX {shader_type} stage numthreads requires exactly "
+                    "three arguments"
+                )
+            values = [
+                self.hlsl_stage_attribute_value_to_string(argument)
+                for argument in arguments
+            ]
+            return f"[numthreads({', '.join(values)})]\n"
+
+        return self.generate_compute_numthreads(execution_config)
+
     def generate_function(
         self,
         func,
@@ -1900,6 +1919,9 @@ class HLSLCodeGen:
         else:
             shader_attr = shader_attr_map.get(effective_shader_type)
             self.validate_hlsl_stage_requirements(func, effective_shader_type)
+            code += self.generate_stage_numthreads(
+                func, effective_shader_type, execution_config
+            )
             code += self.generate_hlsl_stage_attributes(func, effective_shader_type)
             if shader_attr:
                 code += f'[shader("{shader_attr}")]\n'
@@ -4442,6 +4464,7 @@ class HLSLCodeGen:
             "domain",
             "maxvertexcount",
             "maxtessfactor",
+            "numthreads",
             "outputcontrolpoints",
             "outputtopology",
             "partitioning",
@@ -4469,6 +4492,14 @@ class HLSLCodeGen:
             if arguments:
                 return self.hlsl_stage_attribute_value_to_string(arguments[0])
         return None
+
+    def hlsl_stage_attribute_arguments(self, func, expected_name):
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = self.hlsl_stage_attribute_name(attr)
+            if attr_name != expected_name:
+                continue
+            return getattr(attr, "arguments", []) or []
+        return []
 
     def normalized_hlsl_stage_attribute_argument(self, func, expected_name):
         value = self.hlsl_stage_attribute_argument(func, expected_name)
@@ -5508,6 +5539,7 @@ class HLSLCodeGen:
             "geometry",
             "tessellation_control",
             "tessellation_evaluation",
+            "mesh",
         }:
             return ""
 
@@ -5521,6 +5553,8 @@ class HLSLCodeGen:
         for attr in getattr(func, "attributes", []) or []:
             attr_name = self.hlsl_stage_attribute_name(attr)
             if not attr_name:
+                continue
+            if attr_name == "numthreads":
                 continue
 
             arguments = getattr(attr, "arguments", []) or []

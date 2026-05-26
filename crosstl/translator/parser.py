@@ -509,7 +509,14 @@ class Parser:
 
         while self.current_token[0] != "RBRACE":
             if (
-                stage_enum == ShaderStage.COMPUTE
+                stage_enum
+                in {
+                    ShaderStage.COMPUTE,
+                    ShaderStage.MESH,
+                    ShaderStage.TASK,
+                    ShaderStage.AMPLIFICATION,
+                    ShaderStage.OBJECT,
+                }
                 and self.current_token[0] == "LAYOUT"
                 and self.is_compute_execution_layout()
             ):

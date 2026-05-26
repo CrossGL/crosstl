@@ -716,6 +716,43 @@ class GLSLCodeGen:
         """Generate GLSL source for a single requested shader stage."""
         return self.generate_program(ast, target_stage=shader_type)
 
+    def glsl_stage_extension_lines(self, ast, target_stage=None):
+        stage_names = set()
+
+        for func in getattr(ast, "functions", []) or []:
+            qualifier = (
+                func.qualifiers[0]
+                if getattr(func, "qualifiers", None)
+                else getattr(func, "qualifier", None)
+            )
+            stage_name = normalize_stage_name(qualifier)
+            if should_emit_qualified_function(target_stage, stage_name):
+                stage_names.add(stage_name)
+
+        for stage_type in getattr(ast, "stages", {}) or {}:
+            stage_name = normalize_stage_name(stage_type)
+            if stage_matches(target_stage, stage_name):
+                stage_names.add(stage_name)
+
+        lines = []
+        if stage_names & {"mesh", "task", "amplification", "object"}:
+            lines.append("#extension GL_EXT_mesh_shader : require")
+        if stage_names & {
+            "ray_generation",
+            "ray_intersection",
+            "ray_any_hit",
+            "ray_closest_hit",
+            "ray_miss",
+            "ray_callable",
+            "intersection",
+            "anyhit",
+            "closesthit",
+            "miss",
+            "callable",
+        }:
+            lines.append("#extension GL_EXT_ray_tracing : require")
+        return lines
+
     def generate_program(self, ast, target_stage=None):
         """Render an AST to GLSL, optionally filtering stage entry points."""
         target_stage = normalize_stage_name(target_stage)
@@ -911,6 +948,9 @@ class GLSLCodeGen:
         if version_line is None:
             version_line = "#version 450 core"
         code += f"{version_line}\n"
+        for line in self.glsl_stage_extension_lines(ast, target_stage):
+            if line not in extra_lines:
+                code += f"{line}\n"
         if extra_lines:
             code += "\n".join(extra_lines) + "\n"
         code += generate_enum_constants(
@@ -1971,7 +2011,7 @@ class GLSLCodeGen:
         if stage_output and stage_output["declaration"]:
             code += f"{stage_output['declaration']}\n"
 
-        if shader_type == "compute":
+        if shader_type in {"compute", "mesh", "task"}:
             code += self.generate_compute_layout(execution_config)
 
         if shader_type in stage_entry_types:

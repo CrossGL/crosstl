@@ -3691,6 +3691,45 @@ def test_glsl_mesh_task_stage_entries_use_distinct_names():
     assert "void mesh_main()" not in mesh_code
 
 
+def test_glsl_mesh_task_stage_extensions_and_local_size_layouts():
+    shader = """
+    shader MeshTaskLocalSizes {
+        task {
+            layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
+            void main() { }
+        }
+
+        mesh {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            void main() { }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    combined_code = GLSLCodeGen().generate(ast)
+    mesh_code = GLSLCodeGen().generate_stage(ast, "mesh")
+
+    assert "#extension GL_EXT_mesh_shader : require" in combined_code
+    assert combined_code.count("#extension GL_EXT_mesh_shader : require") == 1
+    assert (
+        "layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;"
+        in combined_code
+    )
+    assert (
+        "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;"
+        in combined_code
+    )
+    assert "#extension GL_EXT_mesh_shader : require" in mesh_code
+    assert (
+        "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;" in mesh_code
+    )
+    assert (
+        "layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;"
+        not in mesh_code
+    )
+
+
 def test_glsl_ray_stage_entries_use_distinct_names():
     shader = """
     shader CombinedRayStages {
@@ -3726,9 +3765,11 @@ def test_glsl_ray_stage_entries_use_distinct_names():
     assert "void ray_miss_main()" in combined_code
     assert "void ray_callable_main()" in combined_code
     assert "void main()" not in combined_code
+    assert "#extension GL_EXT_ray_tracing : require" in combined_code
 
     assert "void main()" in ray_miss_code
     assert "void ray_miss_main()" not in ray_miss_code
+    assert "#extension GL_EXT_ray_tracing : require" in ray_miss_code
 
 
 def test_glsl_stage_local_helpers_emit_before_entrypoint():

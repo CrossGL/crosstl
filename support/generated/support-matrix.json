@@ -132,7 +132,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 465
+        "test_count": 466
       },
       "translator_codegen": {
         "exists": true,
@@ -271,7 +271,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 685
+        "test_count": 686
       },
       "translator_codegen": {
         "exists": true,
@@ -1401,7 +1401,7 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "",
+      "notes": "Entry points lower to HLSL mesh/amplification shader attributes with deterministic stage names, numthreads from local-size layouts or @numthreads, and optional mesh output topology attributes. Full mesh payload/output signature validation remains incomplete.",
       "status": "partial"
     },
     {
@@ -1410,7 +1410,7 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "Entry points and combined-stage names lower, but target-specific GLSL mesh/task layout and extension semantics are not complete.",
+      "notes": "Entry points and combined-stage names lower with GL_EXT_mesh_shader enablement and local-size layouts for task/mesh stages. Full mesh output layout and payload semantics are not complete.",
       "status": "partial"
     },
     {
@@ -1419,7 +1419,7 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "",
+      "notes": "Entry points lower to Metal object/mesh functions, but full mesh payload, topology, and threadgroup layout semantics are not complete.",
       "status": "partial"
     },
     {
@@ -1482,7 +1482,7 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "",
+      "notes": "Ray entry points lower to HLSL library shader attributes with stage-specific names and payload semantics, but full ray pipeline object/signature coverage remains incomplete.",
       "status": "partial"
     },
     {
@@ -1491,7 +1491,7 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "Entry points and combined-stage names lower, but target-specific GLSL ray tracing layout and extension semantics are not complete.",
+      "notes": "Entry points and combined-stage names lower with GL_EXT_ray_tracing enablement, but full GLSL ray tracing layout and payload semantics are not complete.",
       "status": "partial"
     },
     {
@@ -1500,7 +1500,7 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "",
+      "notes": "Ray entry points lower to Metal-style entry keywords and payload attributes, but full Metal ray tracing pipeline semantics remain incomplete.",
       "status": "partial"
     },
     {
@@ -3566,8 +3566,11 @@
           "status": "unsupported"
         },
         "directx": {
-          "evidence": [],
-          "notes": "",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_ray_and_mesh_shader_attributes",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_mesh_task_stages_emit_numthreads_layouts"
+          ],
+          "notes": "Entry points lower to HLSL mesh/amplification shader attributes with deterministic stage names, numthreads from local-size layouts or @numthreads, and optional mesh output topology attributes. Full mesh payload/output signature validation remains incomplete.",
           "status": "partial"
         },
         "hip": {
@@ -3576,8 +3579,10 @@
           "status": "unsupported"
         },
         "metal": {
-          "evidence": [],
-          "notes": "",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_mesh_object_stage_codegen"
+          ],
+          "notes": "Entry points lower to Metal object/mesh functions, but full mesh payload, topology, and threadgroup layout semantics are not complete.",
           "status": "partial"
         },
         "mojo": {
@@ -3587,9 +3592,10 @@
         },
         "opengl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_task_stage_entries_use_distinct_names"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_task_stage_entries_use_distinct_names",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_task_stage_extensions_and_local_size_layouts"
           ],
-          "notes": "Entry points and combined-stage names lower, but target-specific GLSL mesh/task layout and extension semantics are not complete.",
+          "notes": "Entry points and combined-stage names lower with GL_EXT_mesh_shader enablement and local-size layouts for task/mesh stages. Full mesh output layout and payload semantics are not complete.",
           "status": "partial"
         },
         "rust": {
@@ -3621,8 +3627,11 @@
           "status": "unknown"
         },
         "directx": {
-          "evidence": [],
-          "notes": "",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_ray_payload_semantics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_ray_and_mesh_shader_attributes"
+          ],
+          "notes": "Ray entry points lower to HLSL library shader attributes with stage-specific names and payload semantics, but full ray pipeline object/signature coverage remains incomplete.",
           "status": "partial"
         },
         "hip": {
@@ -3631,8 +3640,11 @@
           "status": "unknown"
         },
         "metal": {
-          "evidence": [],
-          "notes": "",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_payload_semantics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
+          ],
+          "notes": "Ray entry points lower to Metal-style entry keywords and payload attributes, but full Metal ray tracing pipeline semantics remain incomplete.",
           "status": "partial"
         },
         "mojo": {
@@ -3644,7 +3656,7 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_ray_stage_entries_use_distinct_names"
           ],
-          "notes": "Entry points and combined-stage names lower, but target-specific GLSL ray tracing layout and extension semantics are not complete.",
+          "notes": "Entry points and combined-stage names lower with GL_EXT_ray_tracing enablement, but full GLSL ray tracing layout and payload semantics are not complete.",
           "status": "partial"
         },
         "rust": {
