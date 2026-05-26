@@ -312,6 +312,7 @@ class HLSLCodeGen:
         self.required_texture_query_helpers = set()
         self.required_image_atomic_helpers = set()
         self.required_byteaddress_atomic_helpers = set()
+        self.required_glsl_buffer_aggregate_load_helpers = {}
         self.comparison_sampler_parameters = {}
         self.regular_sampler_parameters = {}
         self.implicit_texture_sampler_parameters = {}
@@ -584,6 +585,7 @@ class HLSLCodeGen:
         self.required_texture_query_helpers = set()
         self.required_image_atomic_helpers = set()
         self.required_byteaddress_atomic_helpers = set()
+        self.required_glsl_buffer_aggregate_load_helpers = {}
         self.comparison_sampler_parameters = {}
         self.regular_sampler_parameters = {}
         self.implicit_texture_sampler_parameters = {}
@@ -1479,6 +1481,7 @@ class HLSLCodeGen:
         code += self.generate_texture_query_helpers()
         code += self.generate_image_atomic_helpers()
         code += self.generate_byteaddress_atomic_helpers()
+        code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += functions_code
 
         return code
@@ -8964,12 +8967,33 @@ class HLSLCodeGen:
             ]
         )
 
-    def hlsl_byteaddress_aggregate_load(self, buffer_name, offset, access):
-        values = []
+    def hlsl_buffer_aggregate_helper_suffix(self, access):
+        return "".join(
+            char if char.isalnum() or char == "_" else "_"
+            for char in access["hlsl_type"]
+        )
+
+    def hlsl_byteaddress_aggregate_load_helper_name(self, access):
+        buffer_type = (
+            "ByteAddressBuffer" if access.get("readonly") else "RWByteAddressBuffer"
+        )
+        kind = "ro" if access.get("readonly") else "rw"
+        helper_name = f"__crossgl_load_{kind}_glsl_buffer_{self.hlsl_buffer_aggregate_helper_suffix(access)}"
+        self.required_glsl_buffer_aggregate_load_helpers[(helper_name, buffer_type)] = (
+            access
+        )
+        return helper_name
+
+    def hlsl_byteaddress_aggregate_load_assignments(
+        self, target_name, buffer_name, offset, access, indent=1
+    ):
+        indent_str = "    " * indent
+        lines = []
         for field_name, member in access["members"].items():
             if member.get("is_array"):
                 return None
             member_offset = byte_offset_add(offset, member["offset"])
+            member_target = f"{target_name}.{field_name}"
             field_access = {
                 **member,
                 "buffer": buffer_name,
@@ -8977,17 +9001,45 @@ class HLSLCodeGen:
                 "readonly": access["readonly"],
             }
             if member.get("members"):
-                value = self.hlsl_byteaddress_aggregate_load(
-                    buffer_name, member_offset, field_access
+                nested_lines = self.hlsl_byteaddress_aggregate_load_assignments(
+                    member_target, buffer_name, member_offset, field_access, indent
                 )
+                if nested_lines is None:
+                    return None
+                lines.extend(nested_lines)
             else:
                 value = self.hlsl_byteaddress_load(
                     buffer_name, member_offset, field_access
                 )
-            if value is None:
-                return None
-            values.append(value)
-        return f"{access['hlsl_type']}{{{', '.join(values)}}}"
+                lines.append(f"{indent_str}{member_target} = {value};")
+        return lines
+
+    def hlsl_byteaddress_aggregate_load(self, buffer_name, offset, access):
+        helper_name = self.hlsl_byteaddress_aggregate_load_helper_name(access)
+        return f"{helper_name}({buffer_name}, {offset})"
+
+    def generate_glsl_buffer_aggregate_load_helpers(self):
+        if not self.required_glsl_buffer_aggregate_load_helpers:
+            return ""
+
+        helpers = []
+        for (
+            helper_name,
+            buffer_type,
+        ), access in sorted(self.required_glsl_buffer_aggregate_load_helpers.items()):
+            lines = [
+                f"{access['hlsl_type']} {helper_name}({buffer_type} buffer, uint offset) {{",
+                f"    {access['hlsl_type']} result;",
+            ]
+            assignments = self.hlsl_byteaddress_aggregate_load_assignments(
+                "result", "buffer", "offset", access
+            )
+            if assignments is None:
+                continue
+            lines.extend(assignments)
+            lines.extend(["    return result;", "}"])
+            helpers.append("\n".join(lines) + "\n\n")
+        return "".join(helpers)
 
     def hlsl_byteaddress_leaf_store(self, buffer_name, offset, value, access):
         if access.get("matrix_columns"):

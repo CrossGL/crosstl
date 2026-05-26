@@ -1744,23 +1744,26 @@ def test_codegen_mixed_ssbo_nested_struct_aggregates_materialize_leaf_fields():
 
     assert "RWByteAddressBuffer aggregateBlock : register(u58);" in hlsl
     assert (
+        "AggregateBlockData __crossgl_load_rw_glsl_buffer_AggregateBlockData"
+        "(RWByteAddressBuffer buffer, uint offset)" in hlsl
+    )
+    assert "result.payload.scale = asfloat(buffer.Load(offset));" in hlsl
+    assert (
+        "result.payload.mask = bool3((buffer.Load((offset + 16)) != 0u), "
+        "(buffer.Load((offset + 16 + 4)) != 0u), "
+        "(buffer.Load((offset + 16 + 8)) != 0u));" in hlsl
+    )
+    assert "result.id = buffer.Load((offset + 32));" in hlsl
+    assert (
         "AggregateBlockData passThrough(RWByteAddressBuffer localBlock, uint i)" in hlsl
     )
     assert (
-        "return AggregateBlockData{AggregatePayload{"
-        "asfloat(localBlock.Load((48 + i * 48))), "
-        "bool3((localBlock.Load((48 + i * 48 + 16)) != 0u), "
-        "(localBlock.Load((48 + i * 48 + 16 + 4)) != 0u), "
-        "(localBlock.Load((48 + i * 48 + 16 + 8)) != 0u))}, "
-        "localBlock.Load((48 + i * 48 + 32))};" in hlsl
+        "return __crossgl_load_rw_glsl_buffer_AggregateBlockData"
+        "(localBlock, (48 + i * 48));" in hlsl
     )
     assert (
-        "AggregateBlockData inner = AggregateBlockData{"
-        "AggregatePayload{asfloat(aggregateBlock.Load(0)), "
-        "bool3((aggregateBlock.Load(16) != 0u), "
-        "(aggregateBlock.Load(20) != 0u), "
-        "(aggregateBlock.Load(24) != 0u))}, "
-        "aggregateBlock.Load(32)};" in hlsl
+        "AggregateBlockData inner = "
+        "__crossgl_load_rw_glsl_buffer_AggregateBlockData(aggregateBlock, 0);" in hlsl
     )
     assert "AggregateBlockData __crossgl_aggregate_store_0 = item;" in hlsl
     assert (

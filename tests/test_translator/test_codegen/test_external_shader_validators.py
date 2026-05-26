@@ -840,10 +840,19 @@ def test_mixed_glsl_ssbo_nested_struct_aggregate_hlsl_output_compiles_with_dxc(
         )
     )
     assert "RWByteAddressBuffer aggregateBlock : register(u30);" in code
-    assert "AggregateBlockData inner = AggregateBlockData{AggregatePayload" in code
     assert (
-        "AggregateBlockData item = AggregateBlockData"
-        "{AggregatePayload{asfloat(aggregateBlock.Load((48 + i * 48)))" in code
+        "AggregateBlockData __crossgl_load_rw_glsl_buffer_AggregateBlockData"
+        "(RWByteAddressBuffer buffer, uint offset)" in code
+    )
+    assert "result.payload.scale = asfloat(buffer.Load(offset));" in code
+    assert (
+        "AggregateBlockData inner = "
+        "__crossgl_load_rw_glsl_buffer_AggregateBlockData(aggregateBlock, 0);" in code
+    )
+    assert (
+        "AggregateBlockData item = "
+        "__crossgl_load_rw_glsl_buffer_AggregateBlockData"
+        "(aggregateBlock, (48 + i * 48));" in code
     )
     assert "AggregateBlockData __crossgl_aggregate_store_0 = item;" in code
     assert (
