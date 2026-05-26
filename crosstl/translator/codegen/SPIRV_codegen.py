@@ -2289,11 +2289,67 @@ class VulkanSPIRVCodeGen:
             self.convert_vector_constructor_scalar(arg, component_type, function_name)
         ]
 
+    def spirv_scope_constant(self, scope: str) -> SpirvId:
+        scope_values = {
+            "CrossDevice": 0,
+            "Device": 1,
+            "Workgroup": 2,
+            "Subgroup": 3,
+            "Invocation": 4,
+        }
+        return self.register_constant(
+            scope_values[scope], self.register_primitive_type("uint")
+        )
+
+    def spirv_memory_semantics_constant(self, *semantics: str) -> SpirvId:
+        semantic_values = {
+            "AcquireRelease": 0x8,
+            "UniformMemory": 0x40,
+            "WorkgroupMemory": 0x100,
+            "ImageMemory": 0x800,
+        }
+        value = 0
+        for semantic in semantics:
+            value |= semantic_values[semantic]
+        return self.register_constant(value, self.register_primitive_type("uint"))
+
+    def call_synchronization_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        if args or function_name not in {
+            "barrier",
+            "workgroupBarrier",
+            "memoryBarrier",
+        }:
+            return None
+
+        if function_name in {"barrier", "workgroupBarrier"}:
+            workgroup_scope = self.spirv_scope_constant("Workgroup")
+            workgroup_semantics = self.spirv_memory_semantics_constant(
+                "AcquireRelease", "WorkgroupMemory"
+            )
+            self.emit(
+                f"OpControlBarrier %{workgroup_scope.id} %{workgroup_scope.id} "
+                f"%{workgroup_semantics.id}"
+            )
+            return self.register_constant(0, self.register_primitive_type("int"))
+
+        device_scope = self.spirv_scope_constant("Device")
+        device_semantics = self.spirv_memory_semantics_constant(
+            "AcquireRelease", "UniformMemory", "WorkgroupMemory", "ImageMemory"
+        )
+        self.emit(f"OpMemoryBarrier %{device_scope.id} %{device_semantics.id}")
+        return self.register_constant(0, self.register_primitive_type("int"))
+
     def call_builtin_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         """Call a built-in function."""
         function_name = {"frac": "fract"}.get(function_name, function_name)
+        synchronization_call = self.call_synchronization_function(function_name, args)
+        if synchronization_call is not None:
+            return synchronization_call
+
         if function_name == "mix" and len(args) == 3:
             bool_mix = self.call_bool_mix_function(args)
             if bool_mix is not None:

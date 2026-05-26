@@ -272,6 +272,19 @@ shader SpirvComplexResourceValidation {
 """
 
 
+SPIRV_SYNCHRONIZATION_COMPUTE_SHADER = """
+shader SpirvSynchronizationValidation {
+    compute {
+        void main() {
+            barrier();
+            workgroupBarrier();
+            memoryBarrier();
+        }
+    }
+}
+"""
+
+
 SAMPLED_TEXTURE_ARRAY_FRAGMENT_SHADER = """
 shader SampledTextureArrayValidation {
     sampler2D textures[4];
@@ -1918,6 +1931,25 @@ def test_generated_spirv_complex_resource_compute_validates_with_spirv_tools(
     output = tmp_path / "complex_resource_compute.spv"
     code = VulkanSPIRVCodeGen().generate(
         crosstl.translator.parse(SPIRV_COMPLEX_RESOURCE_COMPUTE_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([spirv_as, str(source), "-o", str(output)])
+    run_validator([spirv_val, str(output)])
+
+
+def test_generated_spirv_synchronization_compute_validates_with_spirv_tools(
+    tmp_path,
+):
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is None or spirv_val is None:
+        pytest.skip("spirv-as and spirv-val are not installed")
+
+    source = tmp_path / "synchronization_compute.spvasm"
+    output = tmp_path / "synchronization_compute.spv"
+    code = VulkanSPIRVCodeGen().generate(
+        crosstl.translator.parse(SPIRV_SYNCHRONIZATION_COMPUTE_SHADER)
     )
     source.write_text(code, encoding="utf-8")
 

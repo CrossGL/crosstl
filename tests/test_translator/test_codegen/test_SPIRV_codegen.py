@@ -2462,6 +2462,53 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(r"%\d+ = OpCompositeExtract %\d+ %\d+ 2\b", spv_code)
         assert "WARNING" not in spv_code
 
+    def test_compute_synchronization_builtins_emit_spirv_barriers(self):
+        source_code = """
+        shader ComputeSynchronization {
+            compute {
+                void main() {
+                    barrier();
+                    workgroupBarrier();
+                    memoryBarrier();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", spv_code)
+        assert uint_type is not None
+        workgroup_scope = re.search(
+            rf"(%\d+) = OpConstant {re.escape(uint_type.group(1))} 2", spv_code
+        )
+        device_scope = re.search(
+            rf"(%\d+) = OpConstant {re.escape(uint_type.group(1))} 1", spv_code
+        )
+        workgroup_semantics = re.search(
+            rf"(%\d+) = OpConstant {re.escape(uint_type.group(1))} 264", spv_code
+        )
+        device_semantics = re.search(
+            rf"(%\d+) = OpConstant {re.escape(uint_type.group(1))} 2376", spv_code
+        )
+
+        assert workgroup_scope is not None
+        assert device_scope is not None
+        assert workgroup_semantics is not None
+        assert device_semantics is not None
+        assert (
+            f"OpControlBarrier {workgroup_scope.group(1)} "
+            f"{workgroup_scope.group(1)} {workgroup_semantics.group(1)}"
+        ) in spv_code
+        assert spv_code.count("OpControlBarrier") == 2
+        assert (
+            f"OpMemoryBarrier {device_scope.group(1)} {device_semantics.group(1)}"
+            in spv_code
+        )
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+
     def test_vector_member_access_extracts_spirv_component(self):
         source_code = """
         shader VectorMemberAccess {
