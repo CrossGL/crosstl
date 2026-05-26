@@ -100,6 +100,7 @@ from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
     collect_generic_struct_specializations,
+    format_struct_constructor_expression,
     generate_generic_structs,
     generate_struct_constructor_expression,
     generic_struct_specialized_type_name,
@@ -5051,6 +5052,70 @@ class MetalCodeGen:
                 )
         return "\n".join(lines)
 
+    def metal_aggregate_load(self, buffer_name, offset, access):
+        values = []
+        for field_name, member in access["members"].items():
+            if member.get("is_array"):
+                return None
+            member_offset = byte_offset_add(offset, member["offset"])
+            field_access = {
+                **member,
+                "buffer": buffer_name,
+                "member": f"{access['member']}.{field_name}",
+                "readonly": access["readonly"],
+            }
+            if member.get("members"):
+                value = self.metal_aggregate_load(
+                    buffer_name, member_offset, field_access
+                )
+            else:
+                value = self.metal_buffer_load(buffer_name, member_offset, field_access)
+            if value is None:
+                return None
+            values.append(value)
+        return format_struct_constructor_expression(self, access["metal_type"], values)
+
+    def metal_aggregate_store_members(self, buffer_name, offset, value, access):
+        lines = []
+        for field_name, member in access["members"].items():
+            if member.get("is_array"):
+                return None
+            member_offset = byte_offset_add(offset, member["offset"])
+            member_value = f"{value}.{field_name}"
+            field_access = {
+                **member,
+                "buffer": buffer_name,
+                "member": f"{access['member']}.{field_name}",
+                "readonly": access["readonly"],
+            }
+            if member.get("members"):
+                nested_stores = self.metal_aggregate_store_members(
+                    buffer_name, member_offset, member_value, field_access
+                )
+                if nested_stores is None:
+                    return None
+                lines.extend(nested_stores)
+            else:
+                store = self.metal_buffer_store(
+                    buffer_name, member_offset, member_value, field_access
+                )
+                if store is None:
+                    return None
+                lines.extend(store.splitlines())
+        return lines
+
+    def metal_aggregate_store(self, buffer_name, offset, value, access):
+        temp_name = self.next_metal_temp_variable("aggregate_store")
+        stores = self.metal_aggregate_store_members(
+            buffer_name, offset, temp_name, access
+        )
+        if stores is None:
+            return (
+                "/* unsupported Metal GLSL buffer block aggregate store: "
+                "array fields require element-wise stores */"
+            )
+        return "\n".join([f"{access['metal_type']} {temp_name} = {value}", *stores])
+
     def metal_matrix_compound_store(self, buffer_name, offset, value, op, access):
         compound_ops = {
             "+=": "+",
@@ -5078,14 +5143,20 @@ class MetalCodeGen:
 
     def generate_glsl_buffer_block_member_load(self, expr):
         access = self.glsl_buffer_block_member_access(expr)
-        if access is None or access.get("is_array") or access.get("members"):
+        if access is None or access.get("is_array"):
             return None
+        if access.get("members"):
+            return self.metal_aggregate_load(access["buffer"], access["offset"], access)
         return self.metal_buffer_load(access["buffer"], access["offset"], access)
 
     def generate_glsl_buffer_block_array_load(self, expr):
         access = self.glsl_buffer_block_array_access(expr)
-        if access is None or access.get("members"):
+        if access is None:
             return None
+        if access.get("members"):
+            return self.metal_aggregate_load(
+                access["buffer"], access["offset_expr"], access
+            )
         return self.metal_buffer_load(access["buffer"], access["offset_expr"], access)
 
     def generate_glsl_buffer_block_store(self, target, rhs, op):
@@ -5104,10 +5175,12 @@ class MetalCodeGen:
                 "readonly device buffer cannot be written */"
             )
         if access.get("members"):
-            return (
-                "/* unsupported Metal GLSL buffer block aggregate store: "
-                "select a concrete leaf member */"
-            )
+            if op != "=":
+                return (
+                    "/* unsupported Metal GLSL buffer block aggregate compound "
+                    "store: assign a full aggregate value explicitly */"
+                )
+            return self.metal_aggregate_store(access["buffer"], offset, rhs, access)
 
         if access.get("matrix_columns"):
             if op != "=":

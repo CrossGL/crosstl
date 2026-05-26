@@ -101,6 +101,7 @@ from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
     collect_generic_struct_specializations,
+    format_struct_constructor_expression,
     generate_generic_structs,
     generate_struct_constructor_expression,
     generic_struct_specialized_type_name,
@@ -8964,6 +8965,87 @@ class HLSLCodeGen:
             ]
         )
 
+    def hlsl_byteaddress_aggregate_load(self, buffer_name, offset, access):
+        values = []
+        for field_name, member in access["members"].items():
+            if member.get("is_array"):
+                return None
+            member_offset = byte_offset_add(offset, member["offset"])
+            field_access = {
+                **member,
+                "buffer": buffer_name,
+                "member": f"{access['member']}.{field_name}",
+                "readonly": access["readonly"],
+            }
+            if member.get("members"):
+                value = self.hlsl_byteaddress_aggregate_load(
+                    buffer_name, member_offset, field_access
+                )
+            else:
+                value = self.hlsl_byteaddress_load(
+                    buffer_name, member_offset, field_access
+                )
+            if value is None:
+                return None
+            values.append(value)
+        return format_struct_constructor_expression(self, access["hlsl_type"], values)
+
+    def hlsl_byteaddress_leaf_store(self, buffer_name, offset, value, access):
+        if access.get("matrix_columns"):
+            return self.hlsl_byteaddress_matrix_store(
+                buffer_name, offset, value, access
+            )
+        if access["component_type"] == "bool" and access["components"] > 1:
+            return self.hlsl_byteaddress_bool_vector_store(
+                buffer_name, offset, value, access
+            )
+        store_value = self.hlsl_byteaddress_store_value(value, access)
+        store_method = self.hlsl_byteaddress_store_method(access["components"])
+        return f"{buffer_name}.{store_method}({offset}, {store_value})"
+
+    def hlsl_byteaddress_aggregate_store_members(
+        self, buffer_name, offset, value, access
+    ):
+        lines = []
+        for field_name, member in access["members"].items():
+            if member.get("is_array"):
+                return None
+            member_offset = byte_offset_add(offset, member["offset"])
+            member_value = f"{value}.{field_name}"
+            field_access = {
+                **member,
+                "buffer": buffer_name,
+                "member": f"{access['member']}.{field_name}",
+                "readonly": access["readonly"],
+            }
+            if member.get("members"):
+                nested_stores = self.hlsl_byteaddress_aggregate_store_members(
+                    buffer_name, member_offset, member_value, field_access
+                )
+                if nested_stores is None:
+                    return None
+                lines.extend(nested_stores)
+            else:
+                store = self.hlsl_byteaddress_leaf_store(
+                    buffer_name, member_offset, member_value, field_access
+                )
+                if store is None:
+                    return None
+                lines.extend(store.splitlines())
+        return lines
+
+    def hlsl_byteaddress_aggregate_store(self, buffer_name, offset, value, access):
+        temp_name = self.next_hlsl_temp_variable("aggregate_store")
+        stores = self.hlsl_byteaddress_aggregate_store_members(
+            buffer_name, offset, temp_name, access
+        )
+        if stores is None:
+            return (
+                "/* unsupported HLSL GLSL buffer block aggregate store: "
+                "array fields require element-wise stores */"
+            )
+        return "\n".join([f"{access['hlsl_type']} {temp_name} = {value}", *stores])
+
     def hlsl_byteaddress_matrix_compound_store(
         self, buffer_name, offset, value, op, access
     ):
@@ -8997,14 +9079,22 @@ class HLSLCodeGen:
 
     def generate_glsl_buffer_block_member_load(self, expr):
         access = self.glsl_buffer_block_member_access(expr)
-        if access is None or access.get("runtime_array") or access.get("members"):
+        if access is None or access.get("runtime_array"):
             return None
+        if access.get("members"):
+            return self.hlsl_byteaddress_aggregate_load(
+                access["buffer"], access["offset"], access
+            )
         return self.hlsl_byteaddress_load(access["buffer"], access["offset"], access)
 
     def generate_glsl_buffer_block_array_load(self, expr):
         access = self.glsl_buffer_block_array_access(expr)
-        if access is None or access.get("members"):
+        if access is None:
             return None
+        if access.get("members"):
+            return self.hlsl_byteaddress_aggregate_load(
+                access["buffer"], access["offset_expr"], access
+            )
         return self.hlsl_byteaddress_load(
             access["buffer"], access["offset_expr"], access
         )
@@ -9025,9 +9115,14 @@ class HLSLCodeGen:
                 "readonly ByteAddressBuffer cannot be written */"
             )
         if access.get("members"):
-            return (
-                "/* unsupported HLSL GLSL buffer block aggregate store: "
-                "select a concrete leaf member */"
+            if op != "=":
+                return (
+                    "/* unsupported HLSL GLSL buffer block aggregate compound "
+                    "store: assign a full aggregate value explicitly */"
+                )
+            rhs = self.generate_expression_with_expected(value, access["type"])
+            return self.hlsl_byteaddress_aggregate_store(
+                access["buffer"], offset, rhs, access
             )
 
         rhs = self.generate_expression_with_expected(value, access["type"])
@@ -9054,9 +9149,7 @@ class HLSLCodeGen:
                 access["buffer"], offset, rhs, access
             )
 
-        store_value = self.hlsl_byteaddress_store_value(rhs, access)
-        store_method = self.hlsl_byteaddress_store_method(access["components"])
-        return f"{access['buffer']}.{store_method}({offset}, {store_value})"
+        return self.hlsl_byteaddress_leaf_store(access["buffer"], offset, rhs, access)
 
     def glsl_buffer_block_atomic_access(self, target):
         access = self.glsl_buffer_block_array_access(target)

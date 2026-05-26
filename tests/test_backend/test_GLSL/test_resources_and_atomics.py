@@ -1699,6 +1699,150 @@ def test_codegen_mixed_ssbo_nested_struct_arrays_lower_as_leaf_offsets():
     assert "nestedArrayBlock.items[i].flags = bvec2(flags.y, true);" in glsl
 
 
+def test_codegen_mixed_ssbo_nested_struct_aggregates_materialize_leaf_fields():
+    crossgl = """
+    shader main {
+        struct AggregatePayload {
+            float scale;
+            bvec3 mask;
+        };
+
+        struct AggregateBlockData {
+            AggregatePayload payload;
+            uint id;
+        };
+
+        struct AggregateBlock {
+            AggregateBlockData inner;
+            AggregateBlockData items[];
+        };
+
+        AggregateBlock aggregateBlock @glsl_buffer_block(std430) @binding(58);
+
+        AggregateBlockData passThrough(AggregateBlock localBlock @glsl_buffer_block(std430), uint i) {
+            return localBlock.items[i];
+        }
+
+        compute {
+            void main() {
+                uint i = 1u;
+                AggregateBlockData inner = aggregateBlock.inner;
+                AggregateBlockData item = passThrough(aggregateBlock, i);
+                aggregateBlock.inner = item;
+                aggregateBlock.items[i] = inner;
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer aggregateBlock : register(u58);" in hlsl
+    assert (
+        "AggregateBlockData passThrough(RWByteAddressBuffer localBlock, uint i)" in hlsl
+    )
+    assert (
+        "return AggregateBlockData(AggregatePayload("
+        "asfloat(localBlock.Load((48 + i * 48))), "
+        "bool3((localBlock.Load((48 + i * 48 + 16)) != 0u), "
+        "(localBlock.Load((48 + i * 48 + 16 + 4)) != 0u), "
+        "(localBlock.Load((48 + i * 48 + 16 + 8)) != 0u))), "
+        "localBlock.Load((48 + i * 48 + 32)));" in hlsl
+    )
+    assert (
+        "AggregateBlockData inner = AggregateBlockData("
+        "AggregatePayload(asfloat(aggregateBlock.Load(0)), "
+        "bool3((aggregateBlock.Load(16) != 0u), "
+        "(aggregateBlock.Load(20) != 0u), "
+        "(aggregateBlock.Load(24) != 0u))), "
+        "aggregateBlock.Load(32));" in hlsl
+    )
+    assert "AggregateBlockData __crossgl_aggregate_store_0 = item;" in hlsl
+    assert (
+        "aggregateBlock.Store(0, "
+        "asuint(__crossgl_aggregate_store_0.payload.scale));" in hlsl
+    )
+    assert (
+        "bool3 __crossgl_bool_store_1 = "
+        "__crossgl_aggregate_store_0.payload.mask;" in hlsl
+    )
+    assert (
+        "aggregateBlock.Store3(16, uint3((__crossgl_bool_store_1.x ? 1u : 0u), "
+        "(__crossgl_bool_store_1.y ? 1u : 0u), "
+        "(__crossgl_bool_store_1.z ? 1u : 0u)));" in hlsl
+    )
+    assert "aggregateBlock.Store(32, __crossgl_aggregate_store_0.id);" in hlsl
+    assert "AggregateBlockData __crossgl_aggregate_store_2 = inner;" in hlsl
+    assert (
+        "aggregateBlock.Store((48 + i * 48), "
+        "asuint(__crossgl_aggregate_store_2.payload.scale));" in hlsl
+    )
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    assert (
+        "kernel void kernel_main(device uchar* aggregateBlock [[buffer(58)]])" in metal
+    )
+    assert "AggregateBlockData passThrough(device uchar* localBlock, uint i)" in metal
+    assert (
+        "return AggregateBlockData{AggregatePayload{"
+        "(*reinterpret_cast<const device float*>"
+        "(localBlock + (48 + i * 48))), "
+        "bool3(((*reinterpret_cast<const device uint*>"
+        "(localBlock + (48 + i * 48 + 16))) != 0u), "
+        "((*reinterpret_cast<const device uint*>"
+        "(localBlock + (48 + i * 48 + 16 + 4))) != 0u), "
+        "((*reinterpret_cast<const device uint*>"
+        "(localBlock + (48 + i * 48 + 16 + 8))) != 0u))}, "
+        "(*reinterpret_cast<const device uint*>"
+        "(localBlock + (48 + i * 48 + 32)))};" in metal
+    )
+    assert (
+        "AggregateBlockData inner = AggregateBlockData{"
+        "AggregatePayload{"
+        "(*reinterpret_cast<const device float*>(aggregateBlock + 0)), "
+        "bool3(((*reinterpret_cast<const device uint*>(aggregateBlock + 16)) != 0u), "
+        "((*reinterpret_cast<const device uint*>(aggregateBlock + 20)) != 0u), "
+        "((*reinterpret_cast<const device uint*>(aggregateBlock + 24)) != 0u))}, "
+        "(*reinterpret_cast<const device uint*>(aggregateBlock + 32))};" in metal
+    )
+    assert "AggregateBlockData __crossgl_aggregate_store_0 = item;" in metal
+    assert (
+        "(*reinterpret_cast<device float*>(aggregateBlock + 0)) = "
+        "__crossgl_aggregate_store_0.payload.scale;" in metal
+    )
+    assert (
+        "bool3 __crossgl_buffer_store_1 = "
+        "__crossgl_aggregate_store_0.payload.mask;" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>(aggregateBlock + 24)) = "
+        "((__crossgl_buffer_store_1.z) ? 1u : 0u);" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>(aggregateBlock + 32)) = "
+        "__crossgl_aggregate_store_0.id;" in metal
+    )
+    assert "AggregateBlockData __crossgl_aggregate_store_2 = inner;" in metal
+    assert (
+        "(*reinterpret_cast<device float*>(aggregateBlock + (48 + i * 48))) = "
+        "__crossgl_aggregate_store_2.payload.scale;" in metal
+    )
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 58) buffer AggregateBlock" in glsl
+    assert "struct AggregatePayload" in glsl
+    assert "AggregatePayload payload;" in glsl
+    assert "AggregateBlockData inner;" in glsl
+    assert "AggregateBlockData items[];" in glsl
+    assert "aggregateBlock.inner = item;" in glsl
+    assert "aggregateBlock.items[i] = inner;" in glsl
+
+
 def test_codegen_mixed_ssbo_metal_store_parenthesizes_binary_ternary_operand():
     crossgl = """
     shader main {

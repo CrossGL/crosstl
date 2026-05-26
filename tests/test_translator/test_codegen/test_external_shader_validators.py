@@ -288,6 +288,33 @@ void main() {
 """
 
 
+MIXED_GLSL_SSBO_NESTED_STRUCT_AGGREGATE_COMPUTE_SHADER = """
+#version 450 core
+struct AggregatePayload {
+    float scale;
+    bvec3 mask;
+};
+
+struct AggregateBlockData {
+    AggregatePayload payload;
+    uint id;
+};
+
+layout(std430, binding = 30) buffer AggregateBlock {
+    AggregateBlockData inner;
+    AggregateBlockData items[];
+} aggregateBlock;
+
+void main() {
+    uint i = 1u;
+    AggregateBlockData inner = aggregateBlock.inner;
+    AggregateBlockData item = aggregateBlock.items[i];
+    aggregateBlock.inner = item;
+    aggregateBlock.items[i] = inner;
+}
+"""
+
+
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
 
@@ -799,6 +826,57 @@ def test_mixed_glsl_ssbo_nested_struct_array_hlsl_output_compiles_with_dxc(
     assert output_path.exists()
 
 
+def test_mixed_glsl_ssbo_nested_struct_aggregate_hlsl_output_compiles_with_dxc(
+    tmp_path,
+):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / "mixed_glsl_ssbo_nested_struct_aggregate.hlsl"
+    output_path = tmp_path / "mixed_glsl_ssbo_nested_struct_aggregate.dxil"
+
+    code = HLSLCodeGen().generate(
+        _mixed_glsl_ast(
+            MIXED_GLSL_SSBO_NESTED_STRUCT_AGGREGATE_COMPUTE_SHADER,
+            "compute",
+        )
+    )
+    assert "RWByteAddressBuffer aggregateBlock : register(u30);" in code
+    assert "AggregateBlockData inner = AggregateBlockData(AggregatePayload" in code
+    assert (
+        "AggregateBlockData item = AggregateBlockData"
+        "(AggregatePayload(asfloat(aggregateBlock.Load((48 + i * 48)))" in code
+    )
+    assert "AggregateBlockData __crossgl_aggregate_store_0 = item;" in code
+    assert (
+        "aggregateBlock.Store(0, "
+        "asuint(__crossgl_aggregate_store_0.payload.scale))" in code
+    )
+    assert (
+        "bool3 __crossgl_bool_store_1 = "
+        "__crossgl_aggregate_store_0.payload.mask" in code
+    )
+    assert "aggregateBlock.Store(32, __crossgl_aggregate_store_0.id)" in code
+    assert (
+        "aggregateBlock.Store((48 + i * 48), "
+        "asuint(__crossgl_aggregate_store_2.payload.scale))" in code
+    )
+    assert ("un" + "supported HLSL GLSL buffer block") not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
 def test_mixed_glsl_ssbo_bool_metal_output_compiles_with_xcrun_metal(tmp_path):
     xcrun = _require_xcrun_tool("metal")
     shader_path = tmp_path / "mixed_glsl_ssbo_bool.metal"
@@ -943,6 +1021,62 @@ def test_mixed_glsl_ssbo_nested_struct_array_metal_output_compiles_with_xcrun_me
     assert (
         "reinterpret_cast<device uint*>"
         "(nestedArrayBlock + (112 + i * 48 + 32 + 4))" in code
+    )
+    assert ("un" + "supported Metal GLSL buffer block") not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader_path),
+            "-o",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_mixed_glsl_ssbo_nested_struct_aggregate_metal_output_compiles_with_xcrun_metal(
+    tmp_path,
+):
+    xcrun = _require_xcrun_tool("metal")
+    shader_path = tmp_path / "mixed_glsl_ssbo_nested_struct_aggregate.metal"
+    output_path = tmp_path / "mixed_glsl_ssbo_nested_struct_aggregate.air"
+
+    code = MetalCodeGen().generate(
+        _mixed_glsl_ast(
+            MIXED_GLSL_SSBO_NESTED_STRUCT_AGGREGATE_COMPUTE_SHADER,
+            "compute",
+        )
+    )
+    assert "device uchar* aggregateBlock [[buffer(30)]]" in code
+    assert "AggregateBlockData inner = AggregateBlockData{AggregatePayload" in code
+    assert (
+        "AggregateBlockData item = AggregateBlockData{"
+        "AggregatePayload{(*reinterpret_cast<const device float*>"
+        "(aggregateBlock + (48 + i * 48)))" in code
+    )
+    assert "AggregateBlockData __crossgl_aggregate_store_0 = item;" in code
+    assert (
+        "reinterpret_cast<device float*>(aggregateBlock + 0)"
+        ") = __crossgl_aggregate_store_0.payload.scale" in code
+    )
+    assert (
+        "bool3 __crossgl_buffer_store_1 = "
+        "__crossgl_aggregate_store_0.payload.mask" in code
+    )
+    assert (
+        "reinterpret_cast<device uint*>(aggregateBlock + 32)"
+        ") = __crossgl_aggregate_store_0.id" in code
+    )
+    assert "AggregateBlockData __crossgl_aggregate_store_2 = inner;" in code
+    assert (
+        "reinterpret_cast<device float*>(aggregateBlock + (48 + i * 48))"
+        ") = __crossgl_aggregate_store_2.payload.scale" in code
     )
     assert ("un" + "supported Metal GLSL buffer block") not in code
     shader_path.write_text(code, encoding="utf-8")
