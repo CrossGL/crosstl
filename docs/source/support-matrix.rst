@@ -24,7 +24,7 @@ implicitly supported.
 
    "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "460", "367", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "662", "995", "GLSL 4.60 specification; OpenGL registry"
-   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "410", "375", "Apple Metal resources; Metal Shading Language specification"
+   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "417", "375", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "327", "19", "SPIR-V unified specification; Khronos SPIR-V registry"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "240", "56", "CUDA C++ programming guide"
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "271", "60", "ROCm HIP documentation"
@@ -37,7 +37,7 @@ implicitly supported.
 
    "DirectX / HLSL", "24", "17", "0", "0", "0", "0"
    "OpenGL / GLSL", "25", "16", "0", "0", "0", "0"
-   "Metal", "21", "18", "0", "0", "2", "0"
+   "Metal", "22", "17", "0", "0", "2", "0"
    "Vulkan SPIR-V", "6", "12", "0", "0", "0", "23"
    "CUDA", "10", "11", "0", "0", "3", "17"
    "HIP", "10", "11", "0", "0", "3", "17"
@@ -56,12 +56,11 @@ scope for graphics backend completion work.
 
    "DirectX / HLSL", "24", "17", "0", "0", "0", "0"
    "OpenGL / GLSL", "25", "16", "0", "0", "0", "0"
-   "Metal", "21", "18", "0", "0", "2", "0"
+   "Metal", "22", "17", "0", "0", "2", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
 
-   "Metal", "source", "Native preprocessor handling", "partial", "Lexer/parser/codegen preserve native preprocessor directives; macro expansion and include evaluation are not implemented yet."
    "Metal", "stages", "Geometry stage", "unsupported", ""
    "Metal", "stages", "Tessellation stages", "unsupported", ""
    "DirectX / HLSL", "stages", "Mesh/task/amplification stages", "partial", ""
@@ -130,7 +129,7 @@ Each category below uses the status codes from the legend.
 
    "Native source to CrossGL", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Native lexer coverage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Native preprocessor handling", "Y", "Y", "P", "?", "?", "?", "?", "?", "?"
+   "Native preprocessor handling", "Y", "Y", "Y", "?", "?", "?", "?", "?", "?"
 
 .. csv-table:: stages
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
@@ -206,7 +205,6 @@ need an audit before implementation work can be scoped accurately.
 .. csv-table:: Non-supported or unaudited feature rows
    :header: "Backend", "Category", "Feature", "Status", "Notes"
 
-   "Metal", "source", "Native preprocessor handling", "partial", "Lexer/parser/codegen preserve native preprocessor directives; macro expansion and include evaluation are not implemented yet."
    "Vulkan SPIR-V", "source", "Native preprocessor handling", "unknown", ""
    "CUDA", "source", "Native preprocessor handling", "unknown", ""
    "HIP", "source", "Native preprocessor handling", "unknown", ""

@@ -3,15 +3,6 @@
     {
       "backend": "Metal",
       "backend_id": "metal",
-      "category": "source",
-      "feature": "Native preprocessor handling",
-      "feature_id": "source.preprocessing",
-      "notes": "Lexer/parser/codegen preserve native preprocessor directives; macro expansion and include evaluation are not implemented yet.",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
       "category": "stages",
       "feature": "Geometry stage",
       "feature_id": "stage.geometry",
@@ -581,12 +572,11 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_backend/test_metal/test_lexer.py::def test_preprocessor_does_not_break_tokenization",
-            "tests/test_backend/test_metal/test_parser.py::def test_parse_preprocessor_define",
-            "tests/test_backend/test_metal/test_codegen.py::def test_codegen_preserves_preprocessor_define"
+            "tests/test_backend/test_metal/test_preprocessor.py::def test_",
+            "tests/test_backend/test_metal/test_codegen.py::def test_codegen_expands_preprocessor_define"
           ],
-          "notes": "Lexer/parser/codegen preserve native preprocessor directives; macro expansion and include evaluation are not implemented yet.",
-          "status": "partial"
+          "notes": "",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
@@ -1505,23 +1495,22 @@
   "summary": {
     "backend_count": 3,
     "backlog": {
-      "backlog_count": 53,
+      "backlog_count": 52,
       "by_backend": {
         "directx": 17,
-        "metal": 20,
+        "metal": 19,
         "opengl": 16
       },
       "by_category": {
         "images": 9,
         "language": 3,
         "resources": 14,
-        "source": 1,
         "stages": 8,
         "textures": 18
       },
       "by_status": {
         "diagnostic": 0,
-        "partial": 51,
+        "partial": 50,
         "supported": 0,
         "unknown": 0,
         "unsupported": 2,
@@ -1540,8 +1529,8 @@
       },
       "metal": {
         "diagnostic": 0,
-        "partial": 18,
-        "supported": 21,
+        "partial": 17,
+        "supported": 22,
         "unknown": 0,
         "unsupported": 2,
         "validated_rejection": 0

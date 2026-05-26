@@ -1,7 +1,9 @@
 """Lexer for importing Metal source into CrossGL Translator."""
 
 import re
-from typing import Iterator, Tuple, List, Optional
+from typing import Dict, Iterator, Tuple, List, Optional
+
+from .preprocessor import MetalPreprocessor
 
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
@@ -307,9 +309,24 @@ KEYWORDS = {
 class MetalLexer:
     """Tokenize Metal Shading Language source for the Metal parser."""
 
-    def __init__(self, code: str):
+    def __init__(
+        self,
+        code: str,
+        preprocess: bool = True,
+        include_paths: Optional[List[str]] = None,
+        defines: Optional[Dict[str, str]] = None,
+        strict_preprocessor: bool = False,
+        file_path: Optional[str] = None,
+    ):
         """Initialize the lexer with raw Metal source text."""
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
+        if preprocess:
+            preprocessor = MetalPreprocessor(
+                include_paths=include_paths,
+                defines=defines,
+                strict=strict_preprocessor,
+            )
+            code = preprocessor.preprocess(code, file_path=file_path)
         self.code = code
         self._length = len(code)
 
@@ -359,7 +376,21 @@ class MetalLexer:
         return None
 
     @classmethod
-    def from_file(cls, filepath: str) -> "MetalLexer":
+    def from_file(
+        cls,
+        filepath: str,
+        preprocess: bool = True,
+        include_paths: Optional[List[str]] = None,
+        defines: Optional[Dict[str, str]] = None,
+        strict_preprocessor: bool = False,
+    ) -> "MetalLexer":
         """Create a lexer instance from a Metal source file."""
         with open(filepath, "r", encoding="utf-8") as f:
-            return cls(f.read())
+            return cls(
+                f.read(),
+                preprocess=preprocess,
+                include_paths=include_paths,
+                defines=defines,
+                strict_preprocessor=strict_preprocessor,
+                file_path=filepath,
+            )

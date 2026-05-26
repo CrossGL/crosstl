@@ -914,7 +914,7 @@ def test_codegen_mesh_output_functions():
     assert "SetPrimitive" in result
 
 
-def test_codegen_preserves_preprocessor_define():
+def test_codegen_expands_preprocessor_define():
     code = """
     #define FOO 1
     void main() {
@@ -922,7 +922,8 @@ def test_codegen_preserves_preprocessor_define():
     }
     """
     result = convert(code)
-    assert "#define FOO 1" in result
+    assert "#define FOO 1" not in result
+    assert "int x = 1;" in result
 
 
 def test_codegen_threadgroup_memory_and_barrier():

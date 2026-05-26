@@ -410,7 +410,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 410
+        "test_count": 417
       },
       "translator_codegen": {
         "exists": true,
@@ -1143,15 +1143,6 @@
     }
   ],
   "backlog": [
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "source",
-      "feature": "Native preprocessor handling",
-      "feature_id": "source.preprocessing",
-      "notes": "Lexer/parser/codegen preserve native preprocessor directives; macro expansion and include evaluation are not implemented yet.",
-      "status": "partial"
-    },
     {
       "backend": "Vulkan SPIR-V",
       "backend_id": "vulkan",
@@ -3543,12 +3534,11 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_backend/test_metal/test_lexer.py::def test_preprocessor_does_not_break_tokenization",
-            "tests/test_backend/test_metal/test_parser.py::def test_parse_preprocessor_define",
-            "tests/test_backend/test_metal/test_codegen.py::def test_codegen_preserves_preprocessor_define"
+            "tests/test_backend/test_metal/test_preprocessor.py::def test_",
+            "tests/test_backend/test_metal/test_codegen.py::def test_codegen_expands_preprocessor_define"
           ],
-          "notes": "Lexer/parser/codegen preserve native preprocessor directives; macro expansion and include evaluation are not implemented yet.",
-          "status": "partial"
+          "notes": "",
+          "status": "supported"
         },
         "mojo": {
           "evidence": [],
@@ -5612,7 +5602,7 @@
   },
   "summary": {
     "backend_count": 9,
-    "backlog_count": 240,
+    "backlog_count": 239,
     "feature_count": 41,
     "status_counts": {
       "cuda": {
@@ -5641,8 +5631,8 @@
       },
       "metal": {
         "diagnostic": 0,
-        "partial": 18,
-        "supported": 21,
+        "partial": 17,
+        "supported": 22,
         "unknown": 0,
         "unsupported": 2,
         "validated_rejection": 0
