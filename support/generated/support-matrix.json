@@ -260,7 +260,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 314,
+        "unsupported_marker_count": 351,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 448
+        "test_count": 454
       },
       "translator_codegen": {
         "exists": true,
@@ -625,7 +625,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 273
+        "test_count": 274
       },
       "translator_codegen": {
         "exists": true,
@@ -797,7 +797,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 451
+        "test_count": 455
       },
       "translator_codegen": {
         "exists": true,
@@ -911,7 +911,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 270
+        "test_count": 275
       },
       "translator_codegen": {
         "exists": true,
@@ -1277,7 +1277,7 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
+      "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
       "status": "partial"
     },
     {
@@ -1763,8 +1763,8 @@
       "category": "resources",
       "feature": "GLSL buffer block lowering",
       "feature_id": "resources.glsl_buffer_blocks",
-      "notes": "",
-      "status": "unknown"
+      "notes": "GLSL-style layout(...) buffer blocks and buffer-qualified runtime-array declarations lower to SPIR-V BufferBlock Uniform descriptors with descriptor set/binding decorations, std430-style member offsets, runtime-array strides, direct block member access, buffer_load/buffer_store helper lowering, and spirv-as/spirv-val coverage. Full std140/scalar layout parity, block arrays, atomics, and complete memory-qualifier decorations remain incomplete.",
+      "status": "partial"
     },
     {
       "backend": "CUDA",
@@ -3341,11 +3341,19 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_intersection_function_table_globals_lower_to_buffer_parameters",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_intersection_function_table_globals_thread_through_helpers",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_intersection_function_table_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_visible_function_table_stage_parameter_maps_signature_and_binding",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_intersection_function_table_stage_parameter_gets_buffer_binding",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_function_table_parameters_compile_with_metal3",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_arrayed_visible_function_table_emits_compile_safe_diagnostic",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_arrayed_intersection_function_table_emits_compile_safe_diagnostic",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_arrayed_visible_function_table_parameter_emits_compile_safe_diagnostic",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_arrayed_intersection_function_table_parameter_emits_diagnostic",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_function_table_array_diagnostics_compile_with_metal3",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_lowers_to_metal_intersection_attribute",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_accepts_bounding_box_result_struct",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
           ],
-          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
+          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
           "status": "partial"
         },
         "mojo": {
@@ -3973,9 +3981,13 @@
           "status": "unknown"
         },
         "vulkan": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_blocks_emit_spirv_buffer_block_layout",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_array_declarations_lower_to_buffer_blocks",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_glsl_buffer_block_compute_validates_with_spirv_tools"
+          ],
+          "notes": "GLSL-style layout(...) buffer blocks and buffer-qualified runtime-array declarations lower to SPIR-V BufferBlock Uniform descriptors with descriptor set/binding decorations, std430-style member offsets, runtime-array strides, direct block member access, buffer_load/buffer_store helper lowering, and spirv-as/spirv-val coverage. Full std140/scalar layout parity, block arrays, atomics, and complete memory-qualifier decorations remain incomplete.",
+          "status": "partial"
         }
       }
     },
@@ -5457,9 +5469,9 @@
       },
       "vulkan": {
         "diagnostic": 0,
-        "partial": 13,
+        "partial": 14,
         "supported": 17,
-        "unknown": 12,
+        "unknown": 11,
         "unsupported": 0,
         "validated_rejection": 0
       }

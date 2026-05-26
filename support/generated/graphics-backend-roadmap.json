@@ -69,7 +69,7 @@
       "category": "stages",
       "feature": "Ray tracing stages",
       "feature_id": "stage.ray_tracing",
-      "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
+      "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
       "status": "partial"
     },
     {
@@ -452,11 +452,19 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_intersection_function_table_globals_lower_to_buffer_parameters",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_intersection_function_table_globals_thread_through_helpers",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_intersection_function_table_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_visible_function_table_stage_parameter_maps_signature_and_binding",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_intersection_function_table_stage_parameter_gets_buffer_binding",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_function_table_parameters_compile_with_metal3",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_arrayed_visible_function_table_emits_compile_safe_diagnostic",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_arrayed_intersection_function_table_emits_compile_safe_diagnostic",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_arrayed_visible_function_table_parameter_emits_compile_safe_diagnostic",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_arrayed_intersection_function_table_parameter_emits_diagnostic",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_function_table_array_diagnostics_compile_with_metal3",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_lowers_to_metal_intersection_attribute",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_accepts_bounding_box_result_struct",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
           ],
-          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
+          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector<triangle_data, instancing> intersection queries with xcrun metal3 coverage for helper-threaded calls; CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
           "status": "partial"
         },
         "opengl": {
