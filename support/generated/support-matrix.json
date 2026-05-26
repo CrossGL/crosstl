@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 494
+        "test_count": 497
       },
       "translator_codegen": {
         "exists": true,
@@ -260,7 +260,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 308,
+        "unsupported_marker_count": 314,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -433,7 +433,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 341
+        "test_count": 343
       },
       "translator_codegen": {
         "exists": true,
@@ -457,7 +457,7 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 18,
+        "unsupported_marker_count": 23,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -466,6 +466,26 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_structured_buffer_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_byte_address_buffer_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_byte_address_buffer_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "def unsupported_byte_address_buffer_call(self, operation, buffer_type, fallback):"
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "\"\"\"Return diagnostic code for unsupported byte-address buffer operations.\"\"\""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "f\"/* unsupported {self.resource_backend_name()} byte-address buffer call: \""
           },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -518,18 +538,6 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_multisample_resource_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_sampled_resource_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_multisample_resource_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_multisample_resource_call("
           }
         ]
       },
@@ -539,7 +547,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 241
+        "test_count": 242
       },
       "translator_codegen": {
         "exists": true,
@@ -617,7 +625,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 272
+        "test_count": 273
       },
       "translator_codegen": {
         "exists": true,
@@ -675,7 +683,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 245
+        "test_count": 247
       },
       "translator_codegen": {
         "exists": true,
@@ -789,7 +797,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 449
+        "test_count": 451
       },
       "translator_codegen": {
         "exists": true,
@@ -903,7 +911,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 267
+        "test_count": 270
       },
       "translator_codegen": {
         "exists": true,
