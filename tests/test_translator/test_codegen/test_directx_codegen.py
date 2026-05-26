@@ -13523,14 +13523,17 @@ def test_directx_direct_projected_cube_texture_lowers_supported_color_forms():
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
                 vec4 cubeProjected = textureProj(cubeMap, linearSampler, input.cubeProj);
+                vec4 cubeLod = textureProjLod(cubeMap, linearSampler, input.cubeProj, input.lod);
+                vec4 cubeGrad = textureProjGrad(cubeMap, linearSampler, input.cubeProj, input.ddx, input.ddy);
                 vec4 cubeLodOffset = textureProjLodOffset(cubeMap, linearSampler, input.cubeProj, input.lod, input.offset);
                 vec4 cubeGradOffset = textureProjGradOffset(cubeMap, linearSampler, input.cubeProj, input.ddx, input.ddy, input.offset);
                 vec4 cubeArrayProjected = textureProj(cubeArray, linearSampler, input.cubeArrayProj);
                 vec4 cubeArrayLodOffset = textureProjLodOffset(cubeArray, linearSampler, input.cubeArrayProj, input.lod, input.offset);
                 vec4 cubeArrayGradOffset = textureProjGradOffset(cubeArray, linearSampler, input.cubeArrayProj, input.ddx, input.ddy, input.offset);
                 vec4 implicitCube = textureProj(cubeMap, input.cubeProj);
+                vec4 implicitCubeGrad = textureProjGrad(cubeMap, input.cubeProj, input.ddx, input.ddy);
                 vec4 implicitCubeArray = textureProjLod(cubeArray, input.cubeArrayProj, input.lod);
-                return cubeProjected + cubeLodOffset + cubeGradOffset + cubeArrayProjected + cubeArrayLodOffset + cubeArrayGradOffset + implicitCube + implicitCubeArray;
+                return cubeProjected + cubeLod + cubeGrad + cubeLodOffset + cubeGradOffset + cubeArrayProjected + cubeArrayLodOffset + cubeArrayGradOffset + implicitCube + implicitCubeGrad + implicitCubeArray;
             }
         }
     }
@@ -13550,7 +13553,19 @@ def test_directx_direct_projected_cube_texture_lowers_supported_color_forms():
         in generated_code
     )
     assert (
+        "float4 cubeLod = cubeMap.SampleLevel(linearSampler, input.cubeProj.xyz / input.cubeProj.w, input.lod);"
+        in generated_code
+    )
+    assert (
+        "float4 cubeGrad = cubeMap.SampleGrad(linearSampler, input.cubeProj.xyz / input.cubeProj.w, input.ddx, input.ddy);"
+        in generated_code
+    )
+    assert (
         "float4 implicitCube = cubeMap.Sample(cubeMapSampler, input.cubeProj.xyz / input.cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "float4 implicitCubeGrad = cubeMap.SampleGrad(cubeMapSampler, input.cubeProj.xyz / input.cubeProj.w, input.ddx, input.ddy);"
         in generated_code
     )
     assert (
