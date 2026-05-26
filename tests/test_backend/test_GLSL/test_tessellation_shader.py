@@ -75,12 +75,22 @@ def test_codegen_tess_control_roundtrip():
     output = generate_crossgl(TESSELLATION_CONTROL_GLSL, "tessellation_control")
     assert "tessellation_control" in output.lower()
     assert "layout(vertices = 3) out;" in output
+    assert "in vec3 vPosition[];" in output
+    assert "out vec3 tcPosition[];" in output
+    assert "TessellationControlInput" not in output
+    assert "TessellationControlOutput" not in output
     assert "// layout(" not in output
     shader_ast = parse_crossgl(output)
     assert ShaderStage.TESSELLATION_CONTROL in shader_ast.stages
 
     glsl = regenerate_glsl(TESSELLATION_CONTROL_GLSL, "tessellation_control")
     assert "layout(vertices = 3) out;" in glsl
+    assert "in vec3 vPosition[];" in glsl
+    assert "out vec3 tcPosition[];" in glsl
+    assert "TessellationControlInput" not in glsl
+    assert "TessellationControlOutput" not in glsl
+    assert "input." not in glsl
+    assert "output." not in glsl
     assert "return output;" not in glsl
 
 
@@ -88,12 +98,20 @@ def test_codegen_tess_eval_roundtrip():
     output = generate_crossgl(TESSELLATION_EVAL_GLSL, "tessellation_evaluation")
     assert "tessellation_evaluation" in output.lower()
     assert "layout(triangles, equal_spacing, cw) in;" in output
+    assert "in vec3 tcPosition[];" in output
+    assert "TessellationEvaluationInput" not in output
+    assert "TessellationEvaluationOutput" not in output
     assert "// layout(" not in output
     shader_ast = parse_crossgl(output)
     assert ShaderStage.TESSELLATION_EVALUATION in shader_ast.stages
 
     glsl = regenerate_glsl(TESSELLATION_EVAL_GLSL, "tessellation_evaluation")
     assert "layout(triangles, equal_spacing, cw) in;" in glsl
+    assert "in vec3 tcPosition[];" in glsl
+    assert "TessellationEvaluationInput" not in glsl
+    assert "TessellationEvaluationOutput" not in glsl
+    assert "input." not in glsl
+    assert "output." not in glsl
     assert "return output;" not in glsl
 
 

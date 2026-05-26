@@ -59,6 +59,9 @@ class GLSLToCrossGLConverter:
     }
     NON_STRUCT_STAGE_TYPES = {
         "compute",
+        "geometry",
+        "tessellation_control",
+        "tessellation_evaluation",
         "mesh",
         "task",
         "ray_generation",
@@ -621,13 +624,8 @@ class GLSLToCrossGLConverter:
                 if self._is_output_var(var):
                     self.outputs.append(var)
 
-        # Ensure vertex-like stages include gl_Position
-        if self.shader_type in (
-            "vertex",
-            "geometry",
-            "tessellation_control",
-            "tessellation_evaluation",
-        ):
+        # Ensure vertex stages include gl_Position
+        if self.shader_type == "vertex":
             has_position = any(
                 isinstance(var, VariableNode) and var.name == "gl_Position"
                 for var in self.outputs
@@ -666,9 +664,6 @@ class GLSLToCrossGLConverter:
         if self.inputs and self.shader_type in (
             "vertex",
             "fragment",
-            "geometry",
-            "tessellation_control",
-            "tessellation_evaluation",
         ):
             result += self.indent_str + f"struct {self.stage_struct_name()}Input {{\n"
             self.increase_indent()
@@ -683,12 +678,7 @@ class GLSLToCrossGLConverter:
             result += self.indent_str + "};\n\n"
 
         # Generate output struct for vertex-like stages
-        if self.outputs and self.shader_type in (
-            "vertex",
-            "geometry",
-            "tessellation_control",
-            "tessellation_evaluation",
-        ):
+        if self.outputs and self.shader_type == "vertex":
             result += self.indent_str + f"struct {self.stage_struct_name()}Output {{\n"
             self.increase_indent()
             for output_var in self.outputs:
@@ -847,12 +837,9 @@ class GLSLToCrossGLConverter:
                 result += self.indent() + self.generate_statement(statement) + "\n"
 
             # Add implicit return for stages with output struct if not present
-            if self.shader_type in (
-                "vertex",
-                "geometry",
-                "tessellation_control",
-                "tessellation_evaluation",
-            ) and not any(isinstance(stmt, ReturnNode) for stmt in main_function.body):
+            if self.shader_type in ("vertex",) and not any(
+                isinstance(stmt, ReturnNode) for stmt in main_function.body
+            ):
                 result += self.indent() + "return output;\n"
 
             # Add implicit return for fragment shaders if not present
@@ -1138,17 +1125,11 @@ class GLSLToCrossGLConverter:
             if self.shader_type in (
                 "vertex",
                 "fragment",
-                "geometry",
-                "tessellation_control",
-                "tessellation_evaluation",
             ) and any(var.name == node.name for var in self.inputs):
                 return f"input.{node.name}"
-            if self.shader_type in (
-                "vertex",
-                "geometry",
-                "tessellation_control",
-                "tessellation_evaluation",
-            ) and any(var.name == node.name for var in self.outputs):
+            if self.shader_type in ("vertex",) and any(
+                var.name == node.name for var in self.outputs
+            ):
                 return f"output.{node.name}"
             return node.name
         elif isinstance(node, BinaryOpNode):

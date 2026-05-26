@@ -451,7 +451,9 @@ class GLSLParser:
             self.eat("IDENTIFIER")
 
             array_size = None
+            is_array = False
             if self.current_token[0] == "LBRACKET":
+                is_array = True
                 self.eat("LBRACKET")
                 if self.current_token[0] != "RBRACKET":
                     array_size = self.parse_expression()
@@ -469,6 +471,7 @@ class GLSLParser:
                 qualifiers=qualifiers or [],
                 array_size=array_size,
                 layout=layout,
+                is_array=is_array,
             )
 
             lowered = {q.lower() for q in qualifiers or []}

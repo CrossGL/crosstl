@@ -3345,23 +3345,12 @@ class GLSLCodeGen:
             return self.vertex_stage_output(func)
         return None
 
-    def is_void_stage_return_value(self, return_value_name):
+    def is_void_stage_entry_return_value(self):
         if self.current_stage_output is not None:
             return False
         if self.current_stage_entry_type is None:
             return False
-        if not return_value_name:
-            return False
-        if (
-            return_value_name == "output"
-            and self.current_stage_return_type
-            and self.current_stage_return_type != "void"
-        ):
-            return True
-        return (
-            self.local_variable_types.get(return_value_name)
-            == self.current_stage_return_type
-        )
+        return self.current_function_return_type == "void"
 
     def vertex_stage_output(self, func):
         output_type = self.function_return_type(func)
@@ -3617,8 +3606,6 @@ class GLSLCodeGen:
             return_value_name = self.expression_name(stmt.value)
             if return_value_name in self.flattened_stage_variables:
                 return f"{indent_str}return;\n"
-            if self.is_void_stage_return_value(return_value_name):
-                return f"{indent_str}return;\n"
             stage_struct_return = self.generate_stage_struct_constructor_return(
                 stmt.value, indent
             )
@@ -3638,6 +3625,8 @@ class GLSLCodeGen:
                     f"{indent_str}{self.current_stage_output['name']} = {value};\n"
                     f"{indent_str}return;\n"
                 )
+            if self.is_void_stage_entry_return_value():
+                return f"{indent_str}return;\n"
             if isinstance(stmt.value, list):
                 # Multiple return values
                 values = ", ".join(self.generate_expression(val) for val in stmt.value)

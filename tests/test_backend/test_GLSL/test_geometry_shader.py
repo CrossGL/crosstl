@@ -71,8 +71,20 @@ def test_codegen_geometry_roundtrip():
     output = generate_crossgl(GEOMETRY_GLSL, "geometry")
     assert "geometry" in output.lower()
     assert "EmitVertex" in output
+    assert "in vec3 vColor[];" in output
+    assert "out vec3 gColor;" in output
+    assert "GeometryInput" not in output
+    assert "GeometryOutput" not in output
     shader_ast = parse_crossgl(output)
     assert ShaderStage.GEOMETRY in shader_ast.stages
+
+    glsl = regenerate_glsl(GEOMETRY_GLSL, "geometry")
+    assert "in vec3 vColor[];" in glsl
+    assert "out vec3 gColor;" in glsl
+    assert "GeometryInput" not in glsl
+    assert "GeometryOutput" not in glsl
+    assert "input." not in glsl
+    assert "output." not in glsl
 
 
 def test_codegen_geometry_layout_roundtrip_preserves_adjacency_and_invocations():
