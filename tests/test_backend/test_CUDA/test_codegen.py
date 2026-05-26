@@ -236,8 +236,13 @@ class TestCudaCodeGen:
             return x;
         }
 
+        float tex2D(float x) {
+            return x + 1.0f;
+        }
+
         __global__ void kernel(float* out, float x) {
             out[0] = lerp(x);
+            out[1] = tex2D(x);
         }
         """
         lexer = CudaLexer(code)
@@ -249,8 +254,11 @@ class TestCudaCodeGen:
         result = codegen.generate(ast)
 
         assert "f32 lerp(f32 x) {" in result
+        assert "f32 tex2D(f32 x) {" in result
         assert "out[0] = lerp(x);" in result
+        assert "out[1] = tex2D(x);" in result
         assert "out[0] = mix(x);" not in result
+        assert "out[1] = texture(x);" not in result
 
     def test_user_defined_cuda_atomic_name_call_does_not_convert_to_builtin(self):
         """Test user-defined CUDA atomic names shadow builtin conversion."""
@@ -1326,6 +1334,75 @@ class TestCudaCodeGen:
             cudaArray_t arrayRef;
             cudaArray* rawArray;
         }
+
+        void resourceOps(
+            texture<float4, 1> tex1d,
+            texture<float4, 2> tex2d,
+            texture<float4, cudaTextureType3D> tex3d,
+            texture<float4, cudaTextureType2DLayered> layeredTex,
+            texture<float4, cudaTextureTypeCubemap> cubeTex,
+            texture<float4, cudaTextureTypeCubemapLayered> cubeLayerTex,
+            surface<void, 2> surface2d,
+            surface<void, cudaSurfaceType3D> volumeSurface,
+            surface<void, cudaSurfaceTypeCubemap> cubeSurface,
+            int2 pixel,
+            int3 voxel,
+            float2 uv,
+            float3 uvw
+        ) {
+            float4 line = tex1D<float4>(tex1d, uv.x);
+            float4 sampled = tex2D<float4>(tex2d, uv.x, uv.y);
+            float4 sampledCoord = tex2D<float4>(tex2d, uv);
+            float4 sampledLod = tex2DLod<float4>(tex2d, uv.x, uv.y, 1.0f);
+            float4 sampledGrad = tex2DGrad<float4>(tex2d, uv, uv, uv);
+            float4 layer = tex2DLayered<float4>(
+                layeredTex,
+                uv.x,
+                uv.y,
+                pixel.x
+            );
+            float4 volume = tex3D<float4>(tex3d, uvw.x, uvw.y, uvw.z);
+            float4 cube = texCubemap<float4>(cubeTex, uvw.x, uvw.y, uvw.z);
+            float4 cubeLayer = texCubemapLayered<float4>(
+                cubeLayerTex,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                pixel.x
+            );
+            float4 read = surf2Dread<float4>(
+                surface2d,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(read, surface2d, pixel.x * sizeof(float4), pixel.y);
+            float4 voxelValue = surf3Dread<float4>(
+                volumeSurface,
+                voxel.x * sizeof(float4),
+                voxel.y,
+                voxel.z
+            );
+            surf3Dwrite(
+                voxelValue,
+                volumeSurface,
+                voxel.x * sizeof(float4),
+                voxel.y,
+                voxel.z
+            );
+            float4 cubeRead = surfCubemapread<float4>(
+                cubeSurface,
+                pixel.x * sizeof(float4),
+                pixel.y,
+                voxel.z
+            );
+            surfCubemapwrite(
+                cubeRead,
+                cubeSurface,
+                pixel.x * sizeof(float4),
+                pixel.y,
+                voxel.z
+            );
+        }
         """
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
@@ -1345,6 +1422,63 @@ class TestCudaCodeGen:
         assert "var cubeSurface: imageCube;" in result
         assert "var arrayRef: cudaArray_t;" in result
         assert "var rawArray: ptr<cudaArray>;" in result
+        assert "void resourceOps(" in result
+        assert "sampler1D tex1d" in result
+        assert "sampler2D tex2d" in result
+        assert "sampler3D tex3d" in result
+        assert "sampler2DArray layeredTex" in result
+        assert "samplerCube cubeTex" in result
+        assert "samplerCubeArray cubeLayerTex" in result
+        assert "image2D surface2d" in result
+        assert "image3D volumeSurface" in result
+        assert "imageCube cubeSurface" in result
+        assert "var line: vec4<f32> = texture(tex1d, uv.x);" in result
+        assert (
+            "var sampled: vec4<f32> = texture(tex2d, vec2<f32>(uv.x, uv.y));" in result
+        )
+        assert "var sampledCoord: vec4<f32> = texture(tex2d, uv);" in result
+        assert (
+            "var sampledLod: vec4<f32> = textureLod("
+            "tex2d, vec2<f32>(uv.x, uv.y), 1.0f);" in result
+        )
+        assert "var sampledGrad: vec4<f32> = textureGrad(tex2d, uv, uv, uv);" in result
+        assert (
+            "var layer: vec4<f32> = texture("
+            "layeredTex, vec3<f32>(uv.x, uv.y, pixel.x));" in result
+        )
+        assert (
+            "var volume: vec4<f32> = texture(tex3d, "
+            "vec3<f32>(uvw.x, uvw.y, uvw.z));" in result
+        )
+        assert (
+            "var cube: vec4<f32> = texture(cubeTex, "
+            "vec3<f32>(uvw.x, uvw.y, uvw.z));" in result
+        )
+        assert (
+            "var cubeLayer: vec4<f32> = texture("
+            "cubeLayerTex, vec4<f32>(uvw.x, uvw.y, uvw.z, pixel.x));" in result
+        )
+        assert (
+            "var read: vec4<f32> = imageLoad("
+            "surface2d, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert "imageStore(surface2d, vec2<i32>(pixel.x, pixel.y), read);" in result
+        assert (
+            "var voxelValue: vec4<f32> = imageLoad("
+            "volumeSurface, vec3<i32>(voxel.x, voxel.y, voxel.z));" in result
+        )
+        assert (
+            "imageStore(volumeSurface, vec3<i32>(voxel.x, voxel.y, voxel.z), "
+            "voxelValue);" in result
+        )
+        assert (
+            "var cubeRead: vec4<f32> = imageLoad("
+            "cubeSurface, vec3<i32>(pixel.x, pixel.y, voxel.z));" in result
+        )
+        assert (
+            "imageStore(cubeSurface, vec3<i32>(pixel.x, pixel.y, voxel.z), "
+            "cubeRead);" in result
+        )
         assert "unsignedint" not in result
         assert "constunsigned" not in result
 
