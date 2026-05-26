@@ -14,6 +14,7 @@ from crosstl.translator.ast import (
     AssignmentNode,
     BinaryOpNode,
     ConstructorNode,
+    ConstructorPatternNode,
     ExecutionModel,
     ExpressionStatementNode,
     FunctionCallNode,
@@ -21,6 +22,7 @@ from crosstl.translator.ast import (
     GenericParameterNode,
     GenericType,
     IdentifierNode,
+    IdentifierPatternNode,
     LiteralPatternNode,
     LiteralNode,
     MatchArmNode,
@@ -33,6 +35,8 @@ from crosstl.translator.ast import (
     ShaderNode,
     StructMemberNode,
     StructNode,
+    EnumNode,
+    EnumVariantNode,
     TernaryOpNode,
     VariableNode,
 )
@@ -4781,6 +4785,137 @@ def test_non_copy_generic_return_member_args_and_new_calls_compile(tmp_path):
     )
     assert "Pair<Payload> { first:" not in generated_code
     assert "Pair::<Payload>::new(left.payload.clone(), right.payload.clone())" not in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_non_copy_generic_enum_variant_returns_and_match_arms_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    generic_type = GenericType("T")
+    choice_payload_type = NamedType("Choice", [payload_type])
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode("One", fields=[generic_type]),
+            EnumVariantNode("Pair", fields=[generic_type, generic_type]),
+        ],
+    )
+    choice_enum.generic_params = [GenericParameterNode("T")]
+
+    ast = ShaderNode(
+        "NonCopyGenericEnumReturns",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "wrap_payload",
+                choice_payload_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("Choice::<Payload>::One"),
+                            [IdentifierNode("payload")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "duplicate_payload",
+                choice_payload_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("Choice::<Payload>::Pair"),
+                            [IdentifierNode("payload"), IdentifierNode("payload")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "repack_match",
+                choice_payload_type,
+                [ParameterNode("choice", choice_payload_type)],
+                [
+                    ReturnNode(
+                        MatchNode(
+                            IdentifierNode("choice"),
+                            [
+                                MatchArmNode(
+                                    ConstructorPatternNode(
+                                        "Choice::One",
+                                        [IdentifierPatternNode("payload")],
+                                    ),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            FunctionCallNode(
+                                                IdentifierNode(
+                                                    "Choice::<Payload>::Pair"
+                                                ),
+                                                [
+                                                    IdentifierNode("payload"),
+                                                    IdentifierNode("payload"),
+                                                ],
+                                            ),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                                MatchArmNode(
+                                    ConstructorPatternNode(
+                                        "Choice::Pair",
+                                        [
+                                            IdentifierPatternNode("first"),
+                                            IdentifierPatternNode("second"),
+                                        ],
+                                    ),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            FunctionCallNode(
+                                                IdentifierNode(
+                                                    "Choice::<Payload>::Pair"
+                                                ),
+                                                [
+                                                    IdentifierNode("first"),
+                                                    IdentifierNode("second"),
+                                                ],
+                                            ),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                            ],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "return Choice::<Payload>::One(payload);" in generated_code
+    assert "return Choice::<Payload>::Pair(payload.clone(), payload);" in generated_code
+    assert "Choice::One(payload) =>" in generated_code
+    assert "Choice::<Payload>::Pair(payload.clone(), payload)" in generated_code
+    assert "Choice::<Payload>::Pair(first, second)" in generated_code
+    assert "return match choice {" in generated_code
+    assert "Choice::<Payload>::One(payload.clone())" not in generated_code
+    assert "return match choice.clone()" not in generated_code
+    assert "Choice::<Payload>::Pair(first.clone(), second.clone())" not in (
         generated_code
     )
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)

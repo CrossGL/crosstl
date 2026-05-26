@@ -372,6 +372,8 @@ class RustCodeGen:
         self.trait_methods = {}
         self.enum_variant_names = {}
         self.enum_variant_field_types = {}
+        self.enum_variant_payload_type_map = {}
+        self.enum_generic_params = {}
         self.non_copy_type_names = set()
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
@@ -410,6 +412,10 @@ class RustCodeGen:
         self.trait_methods = self.collect_trait_methods(ast)
         self.enum_variant_names = self.collect_enum_variant_names(ast)
         self.enum_variant_field_types = self.collect_enum_variant_field_types(ast)
+        self.enum_variant_payload_type_map = self.collect_enum_variant_payload_type_map(
+            ast
+        )
+        self.enum_generic_params = self.collect_enum_generic_params(ast)
         self.non_copy_type_names = self.collect_non_copy_type_names(ast)
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
@@ -797,6 +803,88 @@ class RustCodeGen:
 
         collect(node)
         return field_types
+
+    def collect_enum_variant_payload_type_map(self, node):
+        """Collect positional payload types for enum variant constructor calls."""
+        payload_types = {}
+
+        def add_enum(name, enum_node):
+            if not name or enum_node is None:
+                return
+            variant_payloads = {}
+            for variant in getattr(enum_node, "variants", []) or []:
+                variant_payloads[variant.name] = [
+                    self.convert_type_node_to_string(field_type)
+                    for field_type in self.enum_variant_payload_types(variant)
+                ]
+            payload_types[name] = variant_payloads
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, EnumNode):
+                add_enum(current.name, current)
+            elif isinstance(current, StructNode):
+                wrapper_enum = self.struct_enum_wrapper(current)
+                if wrapper_enum is not None:
+                    add_enum(current.name, wrapper_enum)
+                    add_enum(wrapper_enum.name, wrapper_enum)
+                for member in getattr(current, "members", []) or []:
+                    if isinstance(member, EnumNode):
+                        collect(member)
+            for struct in getattr(current, "structs", []):
+                collect(struct)
+            for struct in getattr(current, "local_structs", []):
+                collect(struct)
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        return payload_types
+
+    def collect_enum_generic_params(self, node):
+        """Collect generic parameter names for enums and enum-wrapper structs."""
+        generic_params = {}
+
+        def add_enum(name, generic_owner):
+            params = self.generic_param_names(generic_owner)
+            if name and params:
+                generic_params[name] = params
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, EnumNode):
+                add_enum(current.name, current)
+            elif isinstance(current, StructNode):
+                wrapper_enum = self.struct_enum_wrapper(current)
+                if wrapper_enum is not None:
+                    add_enum(current.name, current)
+                    add_enum(wrapper_enum.name, current)
+                for member in getattr(current, "members", []) or []:
+                    if isinstance(member, EnumNode):
+                        collect(member)
+            for struct in getattr(current, "structs", []):
+                collect(struct)
+            for struct in getattr(current, "local_structs", []):
+                collect(struct)
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        return generic_params
 
     def is_user_defined_function(self, func_name):
         return isinstance(func_name, str) and func_name in self.user_function_names
@@ -1294,7 +1382,7 @@ class RustCodeGen:
 
     def enum_default_variant_name(self, node):
         for variant in getattr(node, "variants", []) or []:
-            if getattr(variant, "data", None):
+            if self.enum_variant_data(variant):
                 continue
             if getattr(variant, "value", None) is not None:
                 continue
@@ -1328,6 +1416,7 @@ class RustCodeGen:
             code = ""
         name = enum_name or node.name
         generic_node = generic_owner or node
+        self.enum_generic_params[name] = self.generic_param_names(generic_node)
         code += f"pub enum {name}{self.format_generic_params(generic_node)} {{\n"
         for variant in getattr(node, "variants", []) or []:
             if variant.name == default_variant_name:
@@ -2727,7 +2816,11 @@ class RustCodeGen:
         arm_indent = "    " * (indent + 1)
         subject_expr = getattr(node, "expression", "")
         subject_type = self.expression_result_type(subject_expr)
-        expression = self.generate_expression(subject_expr)
+        expression = None
+        if return_context:
+            expression = self.generate_direct_return_move_expression(subject_expr)
+        if expression is None:
+            expression = self.generate_expression(subject_expr)
 
         code = f"{indent_str}match {expression} {{\n"
         has_unconditional_wildcard = False
@@ -2851,7 +2944,16 @@ class RustCodeGen:
         if subject_type is None:
             return None
         base, args = self.generic_type_parts(subject_type)
-        variant = str(pattern_type).split("::")[-1]
+        variant_base, variant = self.split_variant_path(
+            self.normalize_turbofish_type_name(pattern_type)
+        )
+        if variant_base is not None:
+            variant_base, _variant_args = self.generic_type_parts(variant_base)
+            if variant_base != base:
+                return None
+        payload_types = self.resolve_enum_variant_payload_types(subject_type, variant)
+        if index < len(payload_types):
+            return payload_types[index]
         if base == "Option" and variant == "Some" and index == 0 and args:
             return args[0]
         if base == "Result" and args:
@@ -3597,6 +3699,15 @@ class RustCodeGen:
         args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
         callee = func_name
 
+        enum_variant = self.generate_enum_variant_call_with_typed_args(
+            func_name,
+            args,
+            target_type=target_type,
+            return_context=True,
+        )
+        if enum_variant is not None:
+            return enum_variant
+
         if self.is_user_defined_function(func_name):
             param_types = self.user_function_param_types.get(func_name, [])
             generated_args = self.generate_return_call_args_with_types(
@@ -3650,6 +3761,47 @@ class RustCodeGen:
 
         generated_args = self.generate_return_call_args_with_types(args, member_types)
         return f"{self.struct_new_call_path(type_name)}({', '.join(generated_args)})"
+
+    def generate_enum_variant_call_with_typed_args(
+        self,
+        func_name,
+        args,
+        target_type=None,
+        return_context=False,
+    ):
+        variant_info = self.enum_variant_call_info(func_name, target_type)
+        if variant_info is None:
+            return None
+
+        enum_type, variant_name, payload_types = variant_info
+        if len(args) == 0 and not payload_types:
+            return self.enum_variant_call_path(enum_type, variant_name)
+        if len(args) > 0 and not payload_types:
+            return None
+
+        if return_context:
+            generated_args = self.generate_return_call_args_with_types(
+                args,
+                payload_types,
+            )
+        else:
+            generated_args = []
+            for index, arg in enumerate(args):
+                payload_type = (
+                    payload_types[index] if index < len(payload_types) else None
+                )
+                arg_expr = self.generate_expression_with_type(arg, payload_type)
+                arg_expr = self.normalize_typed_expression_value(
+                    arg,
+                    arg_expr,
+                    payload_type,
+                )
+                generated_args.append(arg_expr)
+
+        return (
+            f"{self.enum_variant_call_path(enum_type, variant_name)}"
+            f"({', '.join(generated_args)})"
+        )
 
     def generate_return_call_args_with_types(self, args, target_types):
         move_counts = self.return_move_place_counts(args)
@@ -4661,6 +4813,13 @@ class RustCodeGen:
                 )
                 return f"{callee}({args_str})"
 
+            enum_variant = self.generate_enum_variant_call_with_typed_args(
+                func_name,
+                args,
+            )
+            if enum_variant is not None:
+                return enum_variant
+
             if func_name == "mix" and len(args) == 3:
                 bool_mix = self.generate_bool_mix_expression(args)
                 if bool_mix is not None:
@@ -4990,6 +5149,14 @@ class RustCodeGen:
             return None
 
         args = getattr(expr, "arguments", getattr(expr, "args", []))
+        enum_variant = self.generate_enum_variant_call_with_typed_args(
+            func_name,
+            args,
+            target_type=target_type,
+        )
+        if enum_variant is not None:
+            return enum_variant
+
         struct_constructor = self.generate_struct_new_call_with_typed_args(
             func_name,
             args,
@@ -5071,6 +5238,79 @@ class RustCodeGen:
     def struct_new_call_path(self, type_name):
         rust_type = self.map_type(type_name)
         return f"{self.rust_constructor_path(rust_type)}::new"
+
+    def enum_variant_call_info(self, func_name, target_type=None):
+        if not isinstance(func_name, str) or "::" not in func_name:
+            return None
+
+        enum_path, variant_name = func_name.rsplit("::", 1)
+        if not enum_path or not variant_name:
+            return None
+
+        enum_type = self.normalize_turbofish_type_name(enum_path)
+        enum_base, enum_args = self.generic_type_parts(enum_type)
+        target_type = self.normalize_turbofish_type_name(target_type)
+        target_base, target_args = (
+            self.generic_type_parts(target_type) if target_type else (None, [])
+        )
+        if target_base == enum_base and target_args and not enum_args:
+            enum_type = target_type
+
+        enum_base, _enum_args = self.generic_type_parts(enum_type)
+        variants = self.enum_variant_names.get(enum_base, [])
+        if variant_name not in variants:
+            return None
+
+        payload_types = self.resolve_enum_variant_payload_types(
+            enum_type,
+            variant_name,
+        )
+        return enum_type, variant_name, payload_types
+
+    def enum_variant_call_result_type(self, func_name):
+        variant_info = self.enum_variant_call_info(func_name)
+        if variant_info is None:
+            return None
+        enum_type, _variant_name, _payload_types = variant_info
+        return enum_type
+
+    def resolve_enum_variant_payload_types(self, enum_type, variant_name):
+        if enum_type is None or variant_name is None:
+            return []
+
+        enum_type = self.normalize_turbofish_type_name(enum_type)
+        exact_variants = self.enum_variant_payload_type_map.get(enum_type)
+        if exact_variants is not None:
+            return list(exact_variants.get(variant_name, []))
+
+        enum_base, generic_args = self.generic_type_parts(enum_type)
+        variant_payloads = self.enum_variant_payload_type_map.get(enum_base, {})
+        payload_types = variant_payloads.get(variant_name)
+        if payload_types is None:
+            return []
+
+        generic_params = self.enum_generic_params.get(
+            enum_base,
+            self.struct_generic_params.get(enum_base, []),
+        )
+        substitutions = dict(zip(generic_params, generic_args))
+        return [
+            self.substitute_type_parameters(payload_type, substitutions)
+            for payload_type in payload_types
+        ]
+
+    def enum_variant_call_path(self, enum_type, variant_name):
+        rust_type = self.map_type(enum_type)
+        return f"{self.rust_constructor_path(rust_type)}::{variant_name}"
+
+    def normalize_turbofish_type_name(self, type_name):
+        if type_name is None:
+            return None
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            type_name = self.convert_type_node_to_string(type_name)
+        else:
+            type_name = str(type_name)
+        return type_name.replace("::<", "<", 1)
 
     def generate_user_function_call_args(self, func_name, args):
         param_types = self.user_function_param_types.get(func_name, [])
@@ -6058,6 +6298,9 @@ class RustCodeGen:
                 return func_name
             if isinstance(func_name, str) and self.matrix_type_info(func_name):
                 return func_name
+            enum_result_type = self.enum_variant_call_result_type(func_name)
+            if enum_result_type is not None:
+                return enum_result_type
             if isinstance(func_name, str) and "::" in func_name:
                 base_name = func_name.split("::", 1)[0]
                 if base_name in self.current_generic_param_names:

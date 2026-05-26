@@ -3189,6 +3189,11 @@ class VulkanSPIRVCodeGen:
             return self.register_vector_type(self.register_primitive_type("float"), 2)
         if result_kind == "vec3":
             return self.register_vector_type(self.register_primitive_type("float"), 3)
+        if result_kind == "mat4x3":
+            column_type = self.register_vector_type(
+                self.register_primitive_type("float"), 3
+            )
+            return self.register_matrix_type(column_type, 4)
         return self.register_primitive_type("uint")
 
     def ray_query_state_getter_info(self, operation: str):
@@ -3286,6 +3291,38 @@ class VulkanSPIRVCodeGen:
                 "OpRayQueryGetIntersectionFrontFaceKHR",
                 "bool",
             ),
+            "CandidateObjectToWorld": (
+                "OpRayQueryGetIntersectionObjectToWorldKHR",
+                "mat4x3",
+            ),
+            "CommittedObjectToWorld": (
+                "OpRayQueryGetIntersectionObjectToWorldKHR",
+                "mat4x3",
+            ),
+            "CandidateObjectToWorld3x4": (
+                "OpRayQueryGetIntersectionObjectToWorldKHR",
+                "mat4x3",
+            ),
+            "CommittedObjectToWorld3x4": (
+                "OpRayQueryGetIntersectionObjectToWorldKHR",
+                "mat4x3",
+            ),
+            "CandidateWorldToObject": (
+                "OpRayQueryGetIntersectionWorldToObjectKHR",
+                "mat4x3",
+            ),
+            "CommittedWorldToObject": (
+                "OpRayQueryGetIntersectionWorldToObjectKHR",
+                "mat4x3",
+            ),
+            "CandidateWorldToObject3x4": (
+                "OpRayQueryGetIntersectionWorldToObjectKHR",
+                "mat4x3",
+            ),
+            "CommittedWorldToObject3x4": (
+                "OpRayQueryGetIntersectionWorldToObjectKHR",
+                "mat4x3",
+            ),
         }
         getter = getters.get(operation)
         if getter is None:
@@ -3322,6 +3359,14 @@ class VulkanSPIRVCodeGen:
             "CommittedTriangleBarycentrics",
             "CandidateTriangleFrontFace",
             "CommittedTriangleFrontFace",
+            "CandidateObjectToWorld",
+            "CommittedObjectToWorld",
+            "CandidateObjectToWorld3x4",
+            "CommittedObjectToWorld3x4",
+            "CandidateWorldToObject",
+            "CommittedWorldToObject",
+            "CandidateWorldToObject3x4",
+            "CommittedWorldToObject3x4",
         }
 
     def process_ray_query_state_getter(

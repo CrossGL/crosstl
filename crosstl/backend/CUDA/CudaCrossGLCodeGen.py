@@ -1159,8 +1159,7 @@ class CudaToCrossGLConverter:
         raw_name = node.name if isinstance(node.name, str) else self.visit(node.name)
         base_name = self.cooperative_group_base_name(raw_name)
         if base_name in {"sync", "thread_rank", "size"} and len(node.args) == 1:
-            group_name = self.simple_identifier(node.args[0])
-            group_metadata = self.lookup_cooperative_group_metadata(group_name)
+            group_metadata = self.resolve_cooperative_group_metadata(node.args[0])
             if group_metadata is not None:
                 return self.format_cooperative_group_member_call(
                     group_metadata, base_name, []
@@ -1174,12 +1173,16 @@ class CudaToCrossGLConverter:
                 return "workgroupBarrier()"
             if member == "thread_rank":
                 return "gl_LocalInvocationIndex"
-            if member == "size":
+            if member in {"size", "num_threads"}:
                 return self.format_thread_block_size_expression()
+            if member == "thread_index":
+                return "gl_LocalInvocationID"
+            if member == "dim_threads":
+                return "gl_WorkGroupSize"
 
         if group_kind == "thread_block_tile" and not args:
             tile_size = group_metadata.get("tile_size")
-            if member == "size" and tile_size:
+            if member in {"size", "num_threads"} and tile_size:
                 return tile_size
             if (
                 member == "thread_rank"
@@ -1188,9 +1191,13 @@ class CudaToCrossGLConverter:
             ):
                 return f"(gl_LocalInvocationIndex % {tile_size})"
 
-        if member in {"thread_rank", "size"}:
+        if member in {"thread_rank", "size", "num_threads"}:
             return self.format_unsupported_cooperative_group_expression(
                 group_kind, member
+            )
+        if member in {"thread_index", "dim_threads"}:
+            return self.format_unsupported_cooperative_group_expression(
+                group_kind, member, "vec3<u32>(0, 0, 0)"
             )
         return (
             f"// cooperative_groups {group_kind}.{member} "
@@ -1200,10 +1207,12 @@ class CudaToCrossGLConverter:
     def format_thread_block_size_expression(self):
         return "((gl_WorkGroupSize.x * gl_WorkGroupSize.y) * gl_WorkGroupSize.z)"
 
-    def format_unsupported_cooperative_group_expression(self, group_kind, member):
+    def format_unsupported_cooperative_group_expression(
+        self, group_kind, member, fallback="0"
+    ):
         return (
             f"(/* cooperative_groups {group_kind}.{member} "
-            "not directly supported in CrossGL */ 0)"
+            f"not directly supported in CrossGL */ {fallback})"
         )
 
     def cooperative_group_declaration_metadata(self, node):

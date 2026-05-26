@@ -179,6 +179,66 @@ def test_codegen_preserves_storage_image_parameter_access_qualifiers():
     )
 
 
+def test_codegen_preserves_storage_image_parameter_memory_qualifiers():
+    code = """
+    #version 460 core
+    layout(rgba32f, binding = 0) coherent volatile restrict readonly uniform image2D source;
+    layout(rgba32f, binding = 1) coherent volatile restrict writeonly uniform image2D target;
+
+    float readPixel(coherent volatile restrict readonly image2D image, ivec2 pixel) {
+        return imageLoad(image, pixel).x;
+    }
+
+    void writePixel(coherent volatile restrict writeonly image2D image, ivec2 pixel, vec4 value) {
+        imageStore(image, pixel, value);
+    }
+
+    void main() {
+        float value = readPixel(source, ivec2(0, 0));
+        writePixel(target, ivec2(0, 0), vec4(value));
+    }
+    """
+
+    output = generate_crossgl(code, "compute")
+
+    assert (
+        "image2D source @binding(0) @rgba32f @coherent @volatile @restrict @readonly;"
+        in output
+    )
+    assert (
+        "image2D target @binding(1) @rgba32f @coherent @volatile @restrict @writeonly;"
+        in output
+    )
+    assert (
+        "float readPixel(image2D image @coherent @volatile @restrict @readonly, "
+        "ivec2 pixel)" in output
+    )
+    assert (
+        "void writePixel(image2D image @coherent @volatile @restrict @writeonly, "
+        "ivec2 pixel, vec4 value)" in output
+    )
+
+    shader_ast = parse_crossgl(output)
+    regenerated_glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert (
+        "layout(rgba32f, binding = 0) coherent volatile restrict readonly uniform "
+        "image2D source;" in regenerated_glsl
+    )
+    assert (
+        "layout(rgba32f, binding = 1) coherent volatile restrict writeonly uniform "
+        "image2D target;" in regenerated_glsl
+    )
+    assert (
+        "float readPixel(coherent volatile restrict readonly image2D image, "
+        "ivec2 pixel)" in regenerated_glsl
+    )
+    assert (
+        "void writePixel(coherent volatile restrict writeonly image2D image, "
+        "ivec2 pixel, vec4 value)" in regenerated_glsl
+    )
+
+
 def test_parse_image_atomics_and_counters():
     code = """
     #version 450 core

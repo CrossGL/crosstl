@@ -3387,6 +3387,27 @@ class HLSLCodeGen:
 
     def generate_buffer_call(self, func_name, args):
         """Render canonical CrossGL buffer operations as HLSL resource methods."""
+        vector_load_methods = {
+            "buffer_load2": "Load2",
+            "buffer_load3": "Load3",
+            "buffer_load4": "Load4",
+        }
+        if func_name in vector_load_methods and len(args) >= 2:
+            buffer = self.generate_expression(args[0])
+            index = self.generate_expression(args[1])
+            return f"{buffer}.{vector_load_methods[func_name]}({index})"
+
+        vector_store_methods = {
+            "buffer_store2": "Store2",
+            "buffer_store3": "Store3",
+            "buffer_store4": "Store4",
+        }
+        if func_name in vector_store_methods and len(args) >= 3:
+            buffer = self.generate_expression(args[0])
+            index = self.generate_expression(args[1])
+            value = self.generate_expression(args[2])
+            return f"{buffer}.{vector_store_methods[func_name]}({index}, {value})"
+
         if func_name == "buffer_load" and len(args) >= 2:
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])

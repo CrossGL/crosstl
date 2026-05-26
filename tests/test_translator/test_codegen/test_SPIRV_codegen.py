@@ -2913,8 +2913,8 @@ class TestVulkanSPIRVCodeGen:
         report_result = gen.process_expression(RayTracingOpNode("ReportHit", [1.0, 0]))
         proceed_result = gen.process_expression(RayQueryOpNode("Proceed", "rq", []))
         ray_t_result = gen.process_expression(RayQueryOpNode("CommittedRayT", "rq", []))
-        transform_result = gen.process_expression(
-            RayQueryOpNode("CandidateObjectToWorld3x4", "rq", [])
+        aabb_opaque_result = gen.process_expression(
+            RayQueryOpNode("CandidateAABBOpaque", "rq", [])
         )
         mesh_result = gen.process_expression(MeshOpNode("SetMeshOutputCounts", [3, 1]))
 
@@ -2924,7 +2924,7 @@ class TestVulkanSPIRVCodeGen:
         assert report_result.type.base_type == "bool"
         assert proceed_result.type.base_type == "bool"
         assert ray_t_result.type.base_type == "float"
-        assert transform_result.type.base_type == "uint"
+        assert aabb_opaque_result.type.base_type == "uint"
         assert mesh_result.type.base_type == "uint"
         assert (
             "WARNING: SPIR-V backend does not lower ray tracing operation "
@@ -2936,7 +2936,7 @@ class TestVulkanSPIRVCodeGen:
         ) in spv_code
         assert (
             "WARNING: SPIR-V backend does not lower ray query operation "
-            "CandidateObjectToWorld3x4 yet; using a default uint value"
+            "CandidateAABBOpaque yet; using a default uint value"
         ) in spv_code
         assert (
             "WARNING: SPIR-V backend does not lower mesh shader operation "
@@ -2973,9 +2973,9 @@ class TestVulkanSPIRVCodeGen:
                         RayQueryOpNode("CandidateRayT", "rq", []),
                     ),
                     VariableNode(
-                        "transformToken",
+                        "aabbOpaqueToken",
                         PrimitiveType("uint"),
-                        RayQueryOpNode("CandidateObjectToWorld3x4", "rq", []),
+                        RayQueryOpNode("CandidateAABBOpaque", "rq", []),
                     ),
                     ExpressionStatementNode(MeshOpNode("SetMeshOutputCounts", [3, 1])),
                     ExpressionStatementNode(
@@ -3003,7 +3003,7 @@ class TestVulkanSPIRVCodeGen:
         assert "ReportHit yet; using a default bool value" in spv_code
         assert "Proceed yet; using a default bool value" in spv_code
         assert "CandidateRayT yet; using a default float value" in spv_code
-        assert "CandidateObjectToWorld3x4 yet; using a default uint value" in spv_code
+        assert "CandidateAABBOpaque yet; using a default uint value" in spv_code
         assert "SetMeshOutputCounts yet; using a default uint value" in spv_code
         assert "TraceRay yet; using a default uint value" in spv_code
         assert "Unknown expression type" not in spv_code
@@ -3486,6 +3486,93 @@ class TestVulkanSPIRVCodeGen:
         assert "OpRayQueryGetWorldRayDirectionKHR" not in spv_code
         assert "OpRayQueryGetIntersectionObjectRayOriginKHR" not in spv_code
         assert "OpRayQueryGetIntersectionObjectRayDirectionKHR" not in spv_code
+
+    def test_ray_query_transform_getters_emit_khr_instructions(self, tmp_path):
+        source_code = """
+        shader RayQueryTransformGetters {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    mat4x3 candidateObjectToWorld = rq.CandidateObjectToWorld();
+                    mat4x3 candidateObjectToWorld3x4 =
+                        rq.CandidateObjectToWorld3x4();
+                    mat4x3 committedObjectToWorld = rq.CommittedObjectToWorld();
+                    mat4x3 committedObjectToWorld3x4 =
+                        rq.CommittedObjectToWorld3x4();
+                    mat4x3 candidateWorldToObject = rq.CandidateWorldToObject();
+                    mat4x3 candidateWorldToObject3x4 =
+                        rq.CandidateWorldToObject3x4();
+                    mat4x3 committedWorldToObject = rq.CommittedWorldToObject();
+                    mat4x3 committedWorldToObject3x4 =
+                        rq.CommittedWorldToObject3x4();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        assert float_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        assert vec3_type is not None
+        assert re.search(
+            rf"%\d+ = OpTypeMatrix {re.escape(vec3_type.group(1))} 4",
+            spv_code,
+        )
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert spv_code.count("OpRayQueryGetIntersectionObjectToWorldKHR") == 4
+        assert spv_code.count("OpRayQueryGetIntersectionWorldToObjectKHR") == 4
+        assert "CandidateObjectToWorld yet; using a default" not in spv_code
+        assert "CandidateObjectToWorld3x4 yet; using a default" not in spv_code
+        assert "CommittedWorldToObject yet; using a default" not in spv_code
+        assert "CommittedWorldToObject3x4 yet; using a default" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_ray_query_transform_getters_reject_arguments(self):
+        source_code = """
+        shader RayQueryTransformGetterBadArgs {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    mat4x3 candidateObjectToWorld = rq.CandidateObjectToWorld(1);
+                    mat4x3 committedObjectToWorld =
+                        rq.CommittedObjectToWorld3x4(1);
+                    mat4x3 candidateWorldToObject =
+                        rq.CandidateWorldToObject3x4(1);
+                    mat4x3 committedWorldToObject = rq.CommittedWorldToObject(1);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+        committed_object_warning = (
+            "WARNING: SPIR-V RayQuery.CommittedObjectToWorld3x4 requires 0 arguments"
+        )
+        candidate_world_warning = (
+            "WARNING: SPIR-V RayQuery.CandidateWorldToObject3x4 requires 0 arguments"
+        )
+
+        assert (
+            "WARNING: SPIR-V RayQuery.CandidateObjectToWorld requires 0 arguments"
+            in spv_code
+        )
+        assert committed_object_warning in spv_code
+        assert candidate_world_warning in spv_code
+        assert (
+            "WARNING: SPIR-V RayQuery.CommittedWorldToObject requires 0 arguments"
+            in spv_code
+        )
+        assert "OpRayQueryGetIntersectionObjectToWorldKHR" not in spv_code
+        assert "OpRayQueryGetIntersectionWorldToObjectKHR" not in spv_code
 
     def test_ray_query_supported_operations_reject_unexpected_arguments(self):
         source_code = """

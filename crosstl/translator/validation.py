@@ -1803,6 +1803,10 @@ def validate_image_format_metadata(node, context):
     if not format_metadata:
         return
 
+    if len(format_metadata) > 1:
+        format_list = ", ".join(sorted(f"@{name}" for name in format_metadata))
+        raise ValueError(f"Conflicting format metadata on {context}: {format_list}")
+
     node_type = _node_declared_type(node)
     if _is_storage_image_type(node_type):
         return
@@ -1861,7 +1865,7 @@ def _node_image_format_metadata(node):
             continue
         format_name = _normalized_metadata_name(_attribute_metadata_value(attr))
         if format_name:
-            format_metadata.add(f"format({format_name})")
+            format_metadata.add(format_name)
         else:
             format_metadata.add("format")
     return format_metadata

@@ -561,6 +561,45 @@ class TestCudaCodeGen:
         assert "thread_rank" not in result
         assert "tile.size" not in result
 
+    def test_cooperative_groups_sync_factory_and_member_aliases_convert(self):
+        """Test cooperative-groups sync and current member aliases convert."""
+        code = """
+        namespace cg = cooperative_groups;
+
+        __global__ void metadata(unsigned int* out) {
+            auto block = cg::this_thread_block();
+            cg::sync(cg::this_thread_block());
+            unsigned int count = block.num_threads();
+            dim3 local = block.thread_index();
+            dim3 dims = block.dim_threads();
+            auto tile = cg::tiled_partition<16>(block);
+            unsigned int tile_count = tile.num_threads();
+            out[count] = local.x + dims.x + tile_count;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "workgroupBarrier();" in result
+        assert (
+            "var count: u32 = "
+            "((gl_WorkGroupSize.x * gl_WorkGroupSize.y) * gl_WorkGroupSize.z);"
+            in result
+        )
+        assert "var local: vec3<u32> = gl_LocalInvocationID;" in result
+        assert "var dims: vec3<u32> = gl_WorkGroupSize;" in result
+        assert "var tile_count: u32 = 16;" in result
+        assert "cg::sync" not in result
+        assert "cg::this_thread_block" not in result
+        assert "num_threads" not in result
+        assert "thread_index" not in result
+        assert "dim_threads" not in result
+
     def test_unsupported_cooperative_group_rank_is_expression_safe(self):
         """Test unsupported cooperative rank helpers remain expression-safe."""
         code = """
@@ -568,9 +607,10 @@ class TestCudaCodeGen:
             auto group = cooperative_groups::coalesced_threads();
             unsigned int rank = group.thread_rank();
             unsigned int width = group.size();
+            unsigned int count = group.num_threads();
             unsigned int direct =
                 cooperative_groups::coalesced_threads().thread_rank();
-            out[0] = rank + width + direct;
+            out[0] = rank + width + count + direct;
         }
         """
         lexer = CudaLexer(code)
@@ -589,6 +629,11 @@ class TestCudaCodeGen:
         assert (
             "var width: u32 = (/* cooperative_groups "
             "coalesced_group.size not directly supported in CrossGL */ 0);" in result
+        )
+        assert (
+            "var count: u32 = (/* cooperative_groups "
+            "coalesced_group.num_threads not directly supported in CrossGL */ 0);"
+            in result
         )
         assert (
             "var direct: u32 = (/* cooperative_groups "

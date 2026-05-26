@@ -989,6 +989,66 @@ def test_hlsl_glsl_buffer_block_fixed_width_aliases_lower_to_byteaddressbuffer()
     assert "size_t" not in generated_code
 
 
+def test_directx_byte_address_vector_buffer_helpers_lower_to_load_store_methods():
+    shader = """
+    shader ByteAddressVectorHelpersHLSL {
+        ByteAddressBuffer rawInput @register(t3);
+        RWByteAddressBuffer rawOutput @register(u4);
+
+        uvec2 readPair(ByteAddressBuffer raw, uint offset) {
+            return buffer_load2(raw, offset);
+        }
+
+        uvec3 readTriple(RWByteAddressBuffer raw, uint offset) {
+            return buffer_load3(raw, offset + uint(16));
+        }
+
+        uvec4 readQuad(RWByteAddressBuffer raw, uint offset) {
+            return buffer_load4(raw, offset + uint(32));
+        }
+
+        void writeVectors(
+            RWByteAddressBuffer raw,
+            uint offset,
+            uvec2 pair,
+            uvec3 triple,
+            uvec4 quad
+        ) {
+            buffer_store2(raw, offset, pair);
+            buffer_store3(raw, offset + uint(16), triple);
+            buffer_store4(raw, offset + uint(32), quad);
+        }
+
+        uvec4 combine(uint offset) {
+            uvec2 pair = readPair(rawInput, offset);
+            uvec3 triple = readTriple(rawOutput, offset);
+            uvec4 quad = readQuad(rawOutput, offset);
+            writeVectors(rawOutput, offset, pair, triple, quad);
+            return quad;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "ByteAddressBuffer rawInput : register(t3);" in generated_code
+    assert "RWByteAddressBuffer rawOutput : register(u4);" in generated_code
+    assert "uint2 readPair(ByteAddressBuffer raw, uint offset)" in generated_code
+    assert "return raw.Load2(offset);" in generated_code
+    assert "uint3 readTriple(RWByteAddressBuffer raw, uint offset)" in generated_code
+    assert "return raw.Load3((offset + uint(16)));" in generated_code
+    assert "return raw.Load4((offset + uint(32)));" in generated_code
+    assert "raw.Store2(offset, pair);" in generated_code
+    assert "raw.Store3((offset + uint(16)), triple);" in generated_code
+    assert "raw.Store4((offset + uint(32)), quad);" in generated_code
+    assert "buffer_load2(" not in generated_code
+    assert "buffer_load3(" not in generated_code
+    assert "buffer_load4(" not in generated_code
+    assert "buffer_store2(" not in generated_code
+    assert "buffer_store3(" not in generated_code
+    assert "buffer_store4(" not in generated_code
+
+
 def test_directx_glsl_buffer_block_atomics_lower_to_byteaddress_helpers():
     shader = """
     shader GlslBufferBlockAtomicsHLSL {
