@@ -7963,6 +7963,286 @@ class TestVulkanSPIRVCodeGen:
         assert "textureGatherCompareOffset" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_projected_texture_operations_emit_divided_spirv_coordinates(self):
+        source_code = """
+        shader Resources {
+            sampler2d colorMap;
+            sampler2darray layerMap;
+            sampler3D volumeMap;
+            sampler linearSampler;
+
+            compute {
+                void main() {
+                    vec3 uvq = vec3(0.25, 0.75, 2.0);
+                    vec4 uvqw = vec4(0.25, 0.75, 0.0, 2.0);
+                    vec4 uvLayerQ = vec4(0.25, 0.75, 1.0, 2.0);
+                    vec4 xyzq = vec4(0.25, 0.5, 0.75, 2.0);
+                    vec2 ddx = vec2(0.1, 0.0);
+                    vec2 ddy = vec2(0.0, 0.1);
+                    vec3 dxyz = vec3(0.1, 0.0, 0.0);
+                    vec4 projected = textureProj(colorMap, uvq);
+                    vec4 projectedW = textureProj(colorMap, linearSampler, uvqw);
+                    vec4 shifted = textureProjOffset(
+                        colorMap,
+                        linearSampler,
+                        uvq,
+                        ivec2(1, 0)
+                    );
+                    vec4 lod = textureProjLod(colorMap, uvq, 2.0);
+                    vec4 lodOffset = textureProjLodOffset(
+                        colorMap,
+                        uvq,
+                        2.0,
+                        ivec2(1, 0)
+                    );
+                    vec4 grad = textureProjGrad(
+                        colorMap,
+                        linearSampler,
+                        uvq,
+                        ddx,
+                        ddy
+                    );
+                    vec4 gradOffset = textureProjGradOffset(
+                        colorMap,
+                        uvq,
+                        ddx,
+                        ddy,
+                        ivec2(-1, 0)
+                    );
+                    vec4 volume = textureProjGrad(volumeMap, xyzq, dxyz, dxyz);
+                    vec4 layer = textureProjLod(layerMap, uvLayerQ, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+        assert vec4_type is not None
+        assert spv_code.count("OpImageSampleExplicitLod") == 9
+        assert spv_code.count("OpFDiv") >= 19
+        assert f"OpImageSampleExplicitLod {vec4_type.group(1)}" in spv_code
+        assert re.search(
+            r"OpImageSampleExplicitLod %\d+ %\d+ %\d+ Lod\|ConstOffset %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            r"OpImageSampleExplicitLod %\d+ %\d+ %\d+ Grad\|ConstOffset %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        for function_name in [
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+        ]:
+            assert function_name not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_projected_shadow_compare_operations_emit_dref_sampling(self):
+        source_code = """
+        shader Resources {
+            sampler2dshadow shadowMap;
+            sampler2darrayshadow shadowArray;
+            sampler compareSampler;
+
+            compute {
+                void main() {
+                    vec3 uvq = vec3(0.25, 0.75, 2.0);
+                    vec4 uvqw = vec4(0.25, 0.75, 0.0, 2.0);
+                    vec4 uvLayerQ = vec4(0.25, 0.75, 1.0, 2.0);
+                    vec2 ddx = vec2(0.1, 0.0);
+                    vec2 ddy = vec2(0.0, 0.1);
+                    float depth = 0.5;
+                    float projected = textureCompareProj(shadowMap, uvq, depth);
+                    float projectedW = textureCompareProj(
+                        shadowMap,
+                        compareSampler,
+                        uvqw,
+                        depth
+                    );
+                    float shifted = textureCompareProjOffset(
+                        shadowMap,
+                        compareSampler,
+                        uvq,
+                        depth,
+                        ivec2(1, 0)
+                    );
+                    float lod = textureCompareProjLod(shadowMap, uvq, depth, 2.0);
+                    float lodOffset = textureCompareProjLodOffset(
+                        shadowMap,
+                        uvq,
+                        depth,
+                        2.0,
+                        ivec2(1, 0)
+                    );
+                    float grad = textureCompareProjGrad(
+                        shadowMap,
+                        compareSampler,
+                        uvq,
+                        depth,
+                        ddx,
+                        ddy
+                    );
+                    float gradOffset = textureCompareProjGradOffset(
+                        shadowArray,
+                        compareSampler,
+                        uvLayerQ,
+                        depth,
+                        ddx,
+                        ddy,
+                        ivec2(-1, 0)
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        assert float_type is not None
+        assert spv_code.count("OpImageSampleDrefExplicitLod") == 7
+        assert spv_code.count("OpFDiv") >= 14
+        assert f"OpImageSampleDrefExplicitLod {float_type.group(1)}" in spv_code
+        assert re.search(
+            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Lod\|ConstOffset %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            r"OpImageSampleDrefExplicitLod %\d+ %\d+ %\d+ %\d+ Grad\|ConstOffset %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        for function_name in [
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+        ]:
+            assert function_name not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_texture_bias_variants_emit_spirv_bias_operands(self):
+        source_code = """
+        shader Resources {
+            sampler2d colorMap;
+            sampler linearSampler;
+
+            fragment {
+                void main() {
+                    vec2 uv = vec2(0.25, 0.75);
+                    vec3 uvq = vec3(0.25, 0.75, 2.0);
+                    vec4 uvqw = vec4(0.25, 0.75, 0.0, 2.0);
+                    vec4 biased = texture(colorMap, linearSampler, uv, 0.5);
+                    vec4 offsetBiased = textureOffset(
+                        colorMap,
+                        linearSampler,
+                        uv,
+                        ivec2(1, 0),
+                        0.25
+                    );
+                    vec4 projectedBias = textureProj(
+                        colorMap,
+                        linearSampler,
+                        uvqw,
+                        0.5
+                    );
+                    vec4 projectedOffsetBias = textureProjOffset(
+                        colorMap,
+                        linearSampler,
+                        uvq,
+                        ivec2(1, 0),
+                        0.25
+                    );
+                    vec4 result = biased
+                        + offsetBiased
+                        + projectedBias
+                        + projectedOffsetBias;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("OpImageSampleImplicitLod") == 4
+        assert len(re.findall(r"\bOpImageSampleImplicitLod\b.*\bBias\b", spv_code)) == 4
+        assert (
+            len(
+                re.findall(
+                    r"\bOpImageSampleImplicitLod\b.*\bBias\|ConstOffset\b", spv_code
+                )
+            )
+            == 2
+        )
+        assert "OpImageSampleExplicitLod" not in spv_code
+        assert "OpFDiv" in spv_code
+        for function_name in [
+            "textureOffset",
+            "textureProj",
+            "textureProjOffset",
+        ]:
+            assert function_name not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_compute_texture_bias_variants_emit_diagnostics(self):
+        source_code = """
+        shader Resources {
+            sampler2d colorMap;
+            sampler linearSampler;
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.25, 0.75);
+                    vec3 uvq = vec3(0.25, 0.75, 2.0);
+                    vec4 biased = texture(colorMap, linearSampler, uv, 0.5);
+                    vec4 offsetBiased = textureOffset(
+                        colorMap,
+                        linearSampler,
+                        uv,
+                        ivec2(1, 0),
+                        0.25
+                    );
+                    vec4 projectedBias = textureProj(
+                        colorMap,
+                        linearSampler,
+                        uvq,
+                        0.5
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: texture bias is not valid for explicit-lod SPIR-V sampling"
+            in spv_code
+        )
+        assert (
+            "WARNING: textureOffset bias is not valid for explicit-lod SPIR-V sampling"
+            in spv_code
+        )
+        assert (
+            "WARNING: textureProj bias is not valid for explicit-lod SPIR-V sampling"
+            in spv_code
+        )
+        assert "OpTexture" not in spv_code
+
     def test_resource_array_access_uses_uniform_constant_element_pointers(self):
         source_code = """
         shader Resources {

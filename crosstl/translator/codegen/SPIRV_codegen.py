@@ -495,16 +495,41 @@ class VulkanSPIRVCodeGen:
         return f"Offset %{offset_id.id}"
 
     def image_operands(self, *operands: str) -> str:
-        masks = []
-        values = []
+        operand_order = [
+            "Bias",
+            "Lod",
+            "Grad",
+            "ConstOffset",
+            "Offset",
+            "ConstOffsets",
+            "Sample",
+            "MinLod",
+        ]
+        operand_value_counts = {
+            "Bias": 1,
+            "Lod": 1,
+            "Grad": 2,
+            "ConstOffset": 1,
+            "Offset": 1,
+            "ConstOffsets": 1,
+            "Sample": 1,
+            "MinLod": 1,
+        }
+        operand_values = {}
         for operand in operands:
             if not operand:
                 continue
             parts = operand.split()
-            masks.append(parts[0])
-            values.extend(parts[1:])
+            values = parts[1:]
+            value_index = 0
+            for mask in parts[0].split("|"):
+                value_count = operand_value_counts.get(mask, 1)
+                operand_values[mask] = values[value_index : value_index + value_count]
+                value_index += value_count
+        masks = [mask for mask in operand_order if mask in operand_values]
         if not masks:
             return ""
+        values = [value for mask in masks for value in operand_values.get(mask, [])]
         return " ".join(["|".join(masks)] + values)
 
     def create_variable(
@@ -1590,6 +1615,35 @@ class VulkanSPIRVCodeGen:
 
         return sampled_image_id, coord_id, extra_args, metadata
 
+    def is_scalar_numeric_value(self, value_id: SpirvId) -> bool:
+        value_type = self.value_types.get(
+            value_id.id
+        ) or self.find_registered_type_by_base(value_id.type.base_type)
+        if value_type is None:
+            return False
+        if self.vector_component_type_and_count(value_type.type.base_type) is not None:
+            return False
+        return self.normalize_primitive_name(value_type.type.base_type) in {
+            "int",
+            "uint",
+            "float",
+            "double",
+        }
+
+    def texture_bias_operand(
+        self, function_name: str, bias_id: SpirvId
+    ) -> Optional[str]:
+        if not self.is_scalar_numeric_value(bias_id):
+            self.emit(f"; WARNING: {function_name} requires a scalar numeric bias")
+            return None
+        if self.requires_explicit_lod_sampling():
+            self.emit(
+                f"; WARNING: {function_name} bias is not valid for explicit-lod "
+                "SPIR-V sampling"
+            )
+            return None
+        return f"Bias %{bias_id.id}"
+
     def projected_coordinate_axes(self, metadata) -> int:
         dim = metadata.get("dim", "2D") if metadata else "2D"
         return {
@@ -1757,11 +1811,190 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = result_type
         return SpirvId(id_value, result_type.type)
 
+    def projected_texture_function_names(self):
+        return {
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+        }
+
+    def projected_shadow_function_names(self):
+        return {
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+        }
+
+    def projected_texture_operand_counts(self, function_name: str) -> int:
+        return {
+            "textureProj": 0,
+            "textureProjOffset": 1,
+            "textureProjLod": 1,
+            "textureProjLodOffset": 2,
+            "textureProjGrad": 2,
+            "textureProjGradOffset": 3,
+        }[function_name]
+
+    def projected_shadow_operand_counts(self, function_name: str) -> int:
+        return {
+            "textureCompareProj": 0,
+            "textureCompareProjOffset": 1,
+            "textureCompareProjLod": 1,
+            "textureCompareProjLodOffset": 2,
+            "textureCompareProjGrad": 2,
+            "textureCompareProjGradOffset": 3,
+        }[function_name]
+
+    def projected_texture_image_operands(
+        self, function_name: str, extra_args: List[SpirvId]
+    ) -> Optional[str]:
+        if function_name == "textureProj":
+            if extra_args:
+                return self.texture_bias_operand(function_name, extra_args[0])
+            if self.requires_explicit_lod_sampling():
+                return self.default_lod_operand()
+            return ""
+
+        if function_name == "textureProjOffset":
+            offset_operand = self.image_offset_operand(extra_args[0])
+            if len(extra_args) >= 2:
+                bias_operand = self.texture_bias_operand(function_name, extra_args[1])
+                if bias_operand is None:
+                    return None
+                return self.image_operands(offset_operand, bias_operand)
+            if self.requires_explicit_lod_sampling():
+                return self.image_operands(self.default_lod_operand(), offset_operand)
+            return offset_operand
+
+        if function_name == "textureProjLod":
+            return f"Lod %{extra_args[0].id}"
+        if function_name == "textureProjLodOffset":
+            return self.image_operands(
+                f"Lod %{extra_args[0].id}", self.image_offset_operand(extra_args[1])
+            )
+        if function_name == "textureProjGrad":
+            return f"Grad %{extra_args[0].id} %{extra_args[1].id}"
+        return self.image_operands(
+            f"Grad %{extra_args[0].id} %{extra_args[1].id}",
+            self.image_offset_operand(extra_args[2]),
+        )
+
+    def call_projected_texture_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        sample_args = self.sampled_texture_operands(
+            function_name,
+            args,
+            self.projected_texture_operand_counts(function_name),
+        )
+        if sample_args is None:
+            return self.register_constant(0.0, self.register_primitive_type("float"))
+
+        sampled_image_id, coord_id, extra_args, metadata = sample_args
+        projected_coord = self.project_texture_coordinate(
+            function_name, coord_id, metadata
+        )
+        result_type = self.resource_access_result_type(metadata)
+        if projected_coord is None:
+            return self.default_value_for_type(result_type)
+
+        image_operands = self.projected_texture_image_operands(
+            function_name, extra_args
+        )
+        if image_operands is None:
+            return self.default_value_for_type(result_type)
+
+        id_value = self.get_id()
+        opcode = (
+            "OpImageSampleExplicitLod"
+            if image_operands and ("Lod" in image_operands or "Grad" in image_operands)
+            else "OpImageSampleImplicitLod"
+        )
+        self.emit(
+            f"%{id_value} = {opcode} %{result_type.id} "
+            f"%{sampled_image_id.id} %{projected_coord.id}"
+            f"{(' ' + image_operands) if image_operands else ''}"
+        )
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
+
+    def projected_shadow_image_operands(
+        self, function_name: str, extra_args: List[SpirvId]
+    ) -> str:
+        if function_name == "textureCompareProj":
+            return (
+                self.default_lod_operand()
+                if self.requires_explicit_lod_sampling()
+                else ""
+            )
+        if function_name == "textureCompareProjOffset":
+            offset_operand = self.image_offset_operand(extra_args[0])
+            if self.requires_explicit_lod_sampling():
+                return self.image_operands(self.default_lod_operand(), offset_operand)
+            return offset_operand
+        if function_name == "textureCompareProjLod":
+            return f"Lod %{extra_args[0].id}"
+        if function_name == "textureCompareProjLodOffset":
+            return self.image_operands(
+                f"Lod %{extra_args[0].id}", self.image_offset_operand(extra_args[1])
+            )
+        if function_name == "textureCompareProjGrad":
+            return f"Grad %{extra_args[0].id} %{extra_args[1].id}"
+        return self.image_operands(
+            f"Grad %{extra_args[0].id} %{extra_args[1].id}",
+            self.image_offset_operand(extra_args[2]),
+        )
+
+    def call_projected_shadow_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        compare_args = self.shadow_compare_operands(
+            function_name,
+            args,
+            self.projected_shadow_operand_counts(function_name),
+        )
+        if compare_args is None:
+            return self.register_constant(0.0, self.register_primitive_type("float"))
+
+        sampled_image_id, coord_id, depth_id, extra_args = compare_args
+        metadata = self.resource_metadata_for_value(sampled_image_id)
+        projected_coord = self.project_texture_coordinate(
+            function_name, coord_id, metadata
+        )
+        result_type = self.register_primitive_type("float")
+        if projected_coord is None:
+            return self.default_value_for_type(result_type)
+
+        image_operands = self.projected_shadow_image_operands(function_name, extra_args)
+        id_value = self.get_id()
+        opcode = (
+            "OpImageSampleDrefExplicitLod"
+            if image_operands and ("Lod" in image_operands or "Grad" in image_operands)
+            else "OpImageSampleDrefImplicitLod"
+        )
+        self.emit(
+            f"%{id_value} = {opcode} %{result_type.id} "
+            f"%{sampled_image_id.id} %{projected_coord.id} %{depth_id.id}"
+            f"{(' ' + image_operands) if image_operands else ''}"
+        )
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
+
     def call_resource_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         if function_name in self.image_atomic_function_names():
             return self.call_image_atomic_function(function_name, args)
+        if function_name in self.projected_texture_function_names():
+            return self.call_projected_texture_function(function_name, args)
+        if function_name in self.projected_shadow_function_names():
+            return self.call_projected_shadow_function(function_name, args)
 
         if function_name == "imageLoad":
             if len(args) < 2:
@@ -1830,9 +2063,15 @@ class VulkanSPIRVCodeGen:
                     0.0, self.register_primitive_type("float")
                 )
 
-            sampled_image_id, coord_id, _, metadata = sample_args
+            sampled_image_id, coord_id, extra_args, metadata = sample_args
 
             result_type = self.resource_access_result_type(metadata)
+            bias_operand = None
+            if extra_args:
+                bias_operand = self.texture_bias_operand(function_name, extra_args[0])
+                if bias_operand is None:
+                    return self.default_value_for_type(result_type)
+
             id_value = self.get_id()
             if self.requires_explicit_lod_sampling():
                 self.emit(
@@ -1844,6 +2083,7 @@ class VulkanSPIRVCodeGen:
                 self.emit(
                     f"%{id_value} = OpImageSampleImplicitLod %{result_type.id} "
                     f"%{sampled_image_id.id} %{coord_id.id}"
+                    f"{(' ' + bias_operand) if bias_operand else ''}"
                 )
             self.value_types[id_value] = result_type
             return SpirvId(id_value, result_type.type)
@@ -1972,6 +2212,12 @@ class VulkanSPIRVCodeGen:
             offset_id = extra_args[0]
 
             result_type = self.resource_access_result_type(metadata)
+            bias_operand = None
+            if len(extra_args) >= 2:
+                bias_operand = self.texture_bias_operand(function_name, extra_args[1])
+                if bias_operand is None:
+                    return self.default_value_for_type(result_type)
+
             id_value = self.get_id()
             offset_operand = self.image_offset_operand(offset_id)
             if self.requires_explicit_lod_sampling():
@@ -1983,7 +2229,8 @@ class VulkanSPIRVCodeGen:
             else:
                 self.emit(
                     f"%{id_value} = OpImageSampleImplicitLod %{result_type.id} "
-                    f"%{sampled_image_id.id} %{coord_id.id} {offset_operand}"
+                    f"%{sampled_image_id.id} %{coord_id.id} "
+                    f"{self.image_operands(offset_operand, bias_operand)}"
                 )
             self.value_types[id_value] = result_type
             return SpirvId(id_value, result_type.type)
@@ -2275,12 +2522,18 @@ class VulkanSPIRVCodeGen:
     def resource_offset_argument_indices(self, function_name: str):
         return {
             "textureOffset": {2, 3},
+            "textureProjOffset": {2, 3},
+            "textureProjLodOffset": {3, 4},
+            "textureProjGradOffset": {4, 5},
             "textureLodOffset": {3, 4},
             "textureGradOffset": {4, 5},
             "textureGatherOffset": {2, 3},
             "textureGatherOffsets": {2, 3, 4, 5, 6},
             "texelFetchOffset": {3, 4},
             "textureCompareOffset": {3, 4},
+            "textureCompareProjOffset": {3, 4},
+            "textureCompareProjLodOffset": {4, 5},
+            "textureCompareProjGradOffset": {5, 6},
             "textureCompareLodOffset": {4, 5},
             "textureCompareGradOffset": {5, 6},
             "textureGatherCompareOffset": {3, 4},
