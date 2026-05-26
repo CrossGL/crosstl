@@ -827,6 +827,103 @@ def test_tessellation_patch_generic_literal_type_arguments_emit():
     assert "None" not in generated_code
 
 
+def test_tessellation_control_gl_in_aliases_explicit_input_patch_parameter():
+    code = """
+    shader main {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        tessellation_control {
+            void main(InputPatch<VSOut, 3> inputPatch) {
+                VSOut first = gl_in[0];
+                VSOut current = gl_in[gl_InvocationID];
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void main(InputPatch<VSOut, 3> inputPatch, "
+        "uint gl_InvocationID : SV_OutputControlPointID)" in generated_code
+    )
+    assert "VSOut first = inputPatch[0];" in generated_code
+    assert "VSOut current = inputPatch[gl_InvocationID];" in generated_code
+    assert "gl_in" not in generated_code
+
+
+def test_tessellation_evaluation_gl_in_aliases_explicit_output_patch_parameter():
+    code = """
+    shader main {
+        struct HSOut {
+            vec4 position @ gl_Position;
+        };
+
+        tessellation_evaluation {
+            void main(OutputPatch<HSOut, 3> patch) {
+                HSOut first = gl_in[0];
+                vec3 coord = gl_TessCoord;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void main(OutputPatch<HSOut, 3> patch, "
+        "float3 gl_TessCoord : SV_DomainLocation)" in generated_code
+    )
+    assert "HSOut first = patch[0];" in generated_code
+    assert "float3 coord = gl_TessCoord;" in generated_code
+    assert "gl_in" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            tessellation_control {
+                void main() {
+                    VSOut first = gl_in[0];
+                }
+            }
+            """,
+            "hull stage gl_in requires exactly one explicit InputPatch",
+        ),
+        (
+            """
+            tessellation_evaluation {
+                void main() {
+                    HSOut first = gl_in[0];
+                }
+            }
+            """,
+            "domain stage gl_in requires exactly one explicit OutputPatch",
+        ),
+    ],
+)
+def test_tessellation_gl_in_without_explicit_patch_parameter_raises(
+    stage_source, message
+):
+    code = f"""
+    shader main {{
+        struct VSOut {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct HSOut {{
+            vec4 position @ gl_Position;
+        }};
+
+        {stage_source}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_tessellation_output_patch_generic_literal_return_type_emits():
     code = """
     shader main {

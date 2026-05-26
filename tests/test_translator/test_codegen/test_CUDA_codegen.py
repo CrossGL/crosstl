@@ -2473,6 +2473,12 @@ class TestCudaCodeGen:
             TextureCube envMap;
             Texture2DArray layers;
             TextureCubeArray probes;
+            RWTexture1D<float4> lineImage;
+            RWTexture2D<float4> colorImage;
+            RWTexture3D<float4> volumeImage;
+            RWTexture2DArray<float4> layerImage;
+            RWTexture1D<uint> counterLine;
+            RWTexture2D<int> signedImage;
 
             void sampleResources(
                 Texture2D paramTex,
@@ -2489,6 +2495,32 @@ class TestCudaCodeGen:
                 vec4 envColor = texture(paramEnv, uvw);
                 vec4 layerColor = texture(paramLayers, uvw);
                 vec4 probeColor = texture(paramProbes, cubeLayer);
+            }
+
+            void processWritableResources(
+                RWTexture1D<float4> paramLineImage,
+                RWTexture2D<float4> paramImage,
+                RWTexture3D<float4> paramVolume,
+                RWTexture2DArray<float4> paramLayers,
+                RWTexture1D<uint> paramCounters,
+                RWTexture2D<int> paramSigned,
+                int x,
+                ivec2 pixel,
+                ivec3 voxel
+            ) {
+                vec4 line = imageLoad(paramLineImage, x);
+                imageStore(paramLineImage, x, line);
+                vec4 color = imageLoad(paramImage, pixel);
+                imageStore(paramImage, pixel, color);
+                vec4 volume = imageLoad(paramVolume, voxel);
+                imageStore(paramVolume, voxel, volume);
+                vec4 layer = imageLoad(paramLayers, voxel);
+                imageStore(paramLayers, voxel, layer);
+                uint counter = imageLoad(paramCounters, x);
+                imageStore(paramCounters, x, counter);
+                int signedValue = imageLoad(paramSigned, pixel);
+                imageStore(paramSigned, pixel, signedValue);
+                ivec2 dims = imageSize(paramImage);
             }
 
             compute {
@@ -2509,10 +2541,23 @@ class TestCudaCodeGen:
         assert "textureCube<float4> envMap;" in cuda_code
         assert "cudaTextureObject_t layers;" in cuda_code
         assert "cudaTextureObject_t probes;" in cuda_code
+        assert "cudaSurfaceObject_t lineImage;" in cuda_code
+        assert "cudaSurfaceObject_t colorImage;" in cuda_code
+        assert "cudaSurfaceObject_t volumeImage;" in cuda_code
+        assert "cudaSurfaceObject_t layerImage;" in cuda_code
+        assert "cudaSurfaceObject_t counterLine;" in cuda_code
+        assert "cudaSurfaceObject_t signedImage;" in cuda_code
         assert (
             "__device__ void sampleResources(texture<float4, 2> paramTex, "
             "texture<float4, 3> paramVolume, textureCube<float4> paramEnv, "
             "cudaTextureObject_t paramLayers, cudaTextureObject_t paramProbes"
+        ) in cuda_code
+        assert (
+            "__device__ void processWritableResources("
+            "cudaSurfaceObject_t paramLineImage, cudaSurfaceObject_t paramImage, "
+            "CglResourceQueryInfo paramImage_metadata, "
+            "cudaSurfaceObject_t paramVolume, cudaSurfaceObject_t paramLayers, "
+            "cudaSurfaceObject_t paramCounters, cudaSurfaceObject_t paramSigned"
         ) in cuda_code
         assert "float4 color = tex2D(paramTex, uv);" in cuda_code
         assert (
@@ -2530,10 +2575,61 @@ class TestCudaCodeGen:
             "(paramProbes, cubeLayer.x, cubeLayer.y, cubeLayer.z, cubeLayer.w);"
             in cuda_code
         )
+        assert (
+            "float4 line = surf1Dread<float4>"
+            "(paramLineImage, x * sizeof(float4));" in cuda_code
+        )
+        assert "surf1Dwrite(line, paramLineImage, x * sizeof(float4));" in cuda_code
+        assert (
+            "float4 color = surf2Dread<float4>"
+            "(paramImage, pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(color, paramImage, pixel.x * sizeof(float4), pixel.y);"
+            in cuda_code
+        )
+        assert (
+            "float4 volume = surf3Dread<float4>"
+            "(paramVolume, voxel.x * sizeof(float4), voxel.y, voxel.z);" in cuda_code
+        )
+        assert (
+            "surf3Dwrite(volume, paramVolume, voxel.x * sizeof(float4), "
+            "voxel.y, voxel.z);" in cuda_code
+        )
+        assert (
+            "float4 layer = surf2DLayeredread<float4>"
+            "(paramLayers, voxel.x * sizeof(float4), voxel.y, voxel.z);" in cuda_code
+        )
+        assert (
+            "surf2DLayeredwrite(layer, paramLayers, voxel.x * sizeof(float4), "
+            "voxel.y, voxel.z);" in cuda_code
+        )
+        assert (
+            "uint counter = surf1Dread<uint>(paramCounters, x * sizeof(uint));"
+            in cuda_code
+        )
+        assert "surf1Dwrite(counter, paramCounters, x * sizeof(uint));" in cuda_code
+        assert (
+            "int signedValue = surf2Dread<int>"
+            "(paramSigned, pixel.x * sizeof(int), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(signedValue, paramSigned, pixel.x * sizeof(int), pixel.y);"
+            in cuda_code
+        )
+        assert "int2 dims = cgl_imageSize_image2D(paramImage_metadata);" in cuda_code
         assert "Texture2D tex;" not in cuda_code
         assert "Texture3D volumeMap;" not in cuda_code
         assert "TextureCube envMap;" not in cuda_code
+        assert "RWTexture1D<float4>" not in cuda_code
+        assert "RWTexture2D<float4>" not in cuda_code
+        assert "RWTexture3D<float4>" not in cuda_code
+        assert "RWTexture2DArray<float4>" not in cuda_code
+        assert "RWTexture1D<uint>" not in cuda_code
+        assert "RWTexture2D<int>" not in cuda_code
         assert " = texture(" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
 
     def test_array_and_3d_texture_calls_emit_cuda_texture_functions(self):
         """Test CUDA maps array and 3D sampled texture calls by resource type."""

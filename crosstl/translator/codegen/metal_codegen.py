@@ -324,6 +324,7 @@ class MetalCodeGen:
         self.char_mapper = CharTypeMapper()
         self.texture_variables = []
         self.acceleration_structure_variables = []
+        self.visible_function_table_variables = []
         self.sampler_variables = []
         self.structured_buffer_variables = []
         self.structured_buffer_length_variables = []
@@ -545,6 +546,8 @@ class MetalCodeGen:
             "acceleration_structure": "instance_acceleration_structure",
             "instance_acceleration_structure": "instance_acceleration_structure",
             "primitive_acceleration_structure": "primitive_acceleration_structure",
+            "visible_function_table": "visible_function_table",
+            "visibleFunctionTable": "visible_function_table",
             "iimage1D": "texture1d<int, access::read_write>",
             "iimage1DArray": "texture1d_array<int, access::read_write>",
             "iimage2D": "texture2d<int, access::read_write>",
@@ -697,6 +700,7 @@ class MetalCodeGen:
 
         self.texture_variables = []
         self.acceleration_structure_variables = []
+        self.visible_function_table_variables = []
         self.sampler_variables = []
         self.structured_buffer_variables = []
         self.structured_buffer_length_variables = []
@@ -1138,6 +1142,32 @@ class MetalCodeGen:
                 )
                 mapped_type = self.map_resource_type_with_format(vtype, node)
                 self.acceleration_structure_variables.append(
+                    (node, binding, mapped_type, array_size)
+                )
+                buffer_register = max(buffer_register, binding + resource_count)
+                continue
+
+            if self.is_visible_function_table_type(vtype):
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "buffer"}, ("b", "u", "t")
+                )
+                if binding is None:
+                    binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "buffer",
+                        buffer_register,
+                        resource_count,
+                    )
+                self.reserve_resource_binding_range(
+                    used_resource_bindings,
+                    "Metal",
+                    "buffer",
+                    binding,
+                    resource_count,
+                    var_name,
+                )
+                mapped_type = self.map_visible_function_table_type(vtype)
+                self.visible_function_table_variables.append(
                     (node, binding, mapped_type, array_size)
                 )
                 buffer_register = max(buffer_register, binding + resource_count)
@@ -2230,6 +2260,19 @@ class MetalCodeGen:
                     array_size,
                 )
                 resource_params.append(f"{declaration} [[buffer({i})]]")
+        if self.visible_function_table_variables:
+            for (
+                visible_function_table_variable,
+                i,
+                visible_function_table_type,
+                array_size,
+            ) in self.visible_function_table_variables:
+                declaration = self.format_visible_function_table_parameter(
+                    visible_function_table_type,
+                    visible_function_table_variable.name,
+                    array_size,
+                )
+                resource_params.append(f"{declaration} [[buffer({i})]]")
         if self.structured_buffer_variables:
             for (
                 buffer_variable,
@@ -2306,6 +2349,14 @@ class MetalCodeGen:
         ) in self.acceleration_structure_variables:
             if getattr(acceleration_structure_variable, "name", None):
                 names.add(acceleration_structure_variable.name)
+        for (
+            visible_function_table_variable,
+            _,
+            _,
+            _,
+        ) in self.visible_function_table_variables:
+            if getattr(visible_function_table_variable, "name", None):
+                names.add(visible_function_table_variable.name)
         for buffer_variable, _, _, _ in self.structured_buffer_variables:
             if getattr(buffer_variable, "name", None):
                 names.add(buffer_variable.name)
@@ -2365,6 +2416,22 @@ class MetalCodeGen:
                     self.format_resource_parameter(
                         acceleration_structure_type,
                         acceleration_structure_name,
+                        array_size,
+                    )
+                )
+        for (
+            visible_function_table_variable,
+            visible_function_table_type,
+            array_size,
+        ) in self.required_function_visible_function_tables(func_name):
+            visible_function_table_name = getattr(
+                visible_function_table_variable, "name", None
+            )
+            if visible_function_table_name:
+                resource_params.append(
+                    self.format_visible_function_table_parameter(
+                        visible_function_table_type,
+                        visible_function_table_name,
                         array_size,
                     )
                 )
@@ -3723,11 +3790,20 @@ class MetalCodeGen:
                 "origin, tmin, direction, tmax, and payload location",
             )
 
+        if expr.operation == "CallShader":
+            call_shader = self.generate_metal_call_shader(expr.arguments, rendered_args)
+            if call_shader is not None:
+                return call_shader
+            return self.unsupported_metal_ray_tracing_intrinsic(
+                "CallShader",
+                "requires one visible_function_table resource, or an explicit "
+                "visible_function_table argument",
+            )
+
         unsupported_reasons = {
             "ReportHit": (
                 "intersection acceptance is expressed through the Metal intersection return value"
             ),
-            "CallShader": "Metal callable dispatch requires visible function tables",
             "AcceptHitAndEndSearch": (
                 "Metal hit acceptance is controlled by intersection results"
             ),
@@ -3768,6 +3844,33 @@ class MetalCodeGen:
                 f"(void){intersection_name}",
             ]
         )
+
+    def generate_metal_call_shader(self, raw_args, rendered_args):
+        if len(raw_args) == 2:
+            table_name = self.default_visible_function_table_name()
+            if table_name is None:
+                return None
+            shader_index, callable_data = rendered_args
+        elif len(raw_args) == 3:
+            table_name = rendered_args[0]
+            shader_index = rendered_args[1]
+            callable_data = rendered_args[2]
+        else:
+            return None
+
+        return f"{table_name}[{shader_index}]({callable_data})"
+
+    def default_visible_function_table_name(self):
+        names = [
+            getattr(visible_function_table_variable, "name", None)
+            for visible_function_table_variable, _, _, _ in (
+                self.visible_function_table_variables
+            )
+            if getattr(visible_function_table_variable, "name", None)
+        ]
+        if len(names) == 1:
+            return names[0]
+        return None
 
     def unsupported_metal_ray_tracing_intrinsic(self, operation, reason):
         return f"/* unsupported Metal ray tracing intrinsic: {operation} - {reason} */"
@@ -4109,6 +4212,39 @@ class MetalCodeGen:
             return f"array<{pointer_type}, {array_size}> {name}"
         return f"{pointer_type} {name}"
 
+    def visible_function_table_type_name(self, vtype):
+        return str(self.resource_base_type(vtype)).split("<", 1)[0]
+
+    def is_visible_function_table_type(self, vtype):
+        return self.visible_function_table_type_name(vtype) in {
+            "visible_function_table",
+            "visibleFunctionTable",
+        }
+
+    def visible_function_table_signature(self, vtype):
+        type_name = str(self.resource_base_type(vtype))
+        if "<" not in type_name or not type_name.endswith(">"):
+            return "void()"
+
+        payload_type = type_name.split("<", 1)[1][:-1].strip()
+        if not payload_type or payload_type == "void":
+            return "void()"
+        return f"void(thread {self.map_type(payload_type)}&)"
+
+    def map_visible_function_table_type(self, vtype):
+        return f"visible_function_table<{self.visible_function_table_signature(vtype)}>"
+
+    def format_visible_function_table_parameter(self, vtype, name, array_size=None):
+        table_type = (
+            vtype
+            if str(vtype).startswith("visible_function_table<")
+            else self.map_visible_function_table_type(vtype)
+        )
+        if array_size is not None:
+            array_size = array_size or "1"
+            return f"array<{table_type}, {array_size}> {name}"
+        return f"{table_type} {name}"
+
     def is_sampler_type(self, vtype):
         return self.resource_base_type(vtype) == "sampler"
 
@@ -4126,6 +4262,7 @@ class MetalCodeGen:
         return (
             self.is_structured_buffer_type(vtype)
             or self.is_acceleration_structure_type(vtype)
+            or self.is_visible_function_table_type(vtype)
             or self.resource_base_type(vtype)
             in {
                 "sampler",
@@ -4328,6 +4465,10 @@ class MetalCodeGen:
             namespace = "sampler"
             attribute_names = {"binding", "sampler"}
             prefixes = ("s",)
+        elif self.is_visible_function_table_type(raw_param_type):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
         elif self.is_acceleration_structure_type(raw_param_type):
             namespace = "buffer"
             attribute_names = {"binding", "buffer"}
@@ -4433,6 +4574,20 @@ class MetalCodeGen:
                 self.global_resource_shape(acceleration_structure_variable)[1],
                 getattr(acceleration_structure_variable, "name", "<anonymous>"),
             )
+        for (
+            visible_function_table_variable,
+            binding,
+            _,
+            _,
+        ) in self.visible_function_table_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                self.global_resource_shape(visible_function_table_variable)[1],
+                getattr(visible_function_table_variable, "name", "<anonymous>"),
+            )
         for buffer_variable, binding, _, _ in self.structured_buffer_variables:
             self.reserve_resource_binding_range(
                 used_bindings,
@@ -4494,6 +4649,11 @@ class MetalCodeGen:
                 node, {"binding", "sampler"}, ("s",)
             )
             return f" [[sampler({binding})]]" if binding is not None else ""
+        if self.is_visible_function_table_type(raw_param_type):
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer"}, ("b", "u", "t")
+            )
+            return f" [[buffer({binding})]]" if binding is not None else ""
         if self.is_acceleration_structure_type(raw_param_type):
             binding = self.explicit_resource_binding_index(
                 node, {"binding", "buffer"}, ("b", "u", "t")
@@ -4541,6 +4701,8 @@ class MetalCodeGen:
             return self.format_structured_buffer_parameter(
                 raw_param_type, name, array_size
             )
+        if self.is_visible_function_table_type(raw_param_type):
+            return self.format_visible_function_table_parameter(raw_param_type, name)
         array_type = self.resource_array_parameter(raw_param_type, node)
         if array_type is not None:
             resource_type, array_size = array_type
@@ -5358,6 +5520,7 @@ class MetalCodeGen:
 
         texture_names = self.global_texture_names()
         acceleration_structure_names = self.global_acceleration_structure_names()
+        visible_function_table_names = self.global_visible_function_table_names()
         buffer_names = (
             self.global_structured_buffer_names()
             | self.global_glsl_buffer_block_names()
@@ -5374,6 +5537,7 @@ class MetalCodeGen:
                     and (
                         name in texture_names
                         or name in acceleration_structure_names
+                        or name in visible_function_table_names
                         or name in buffer_names
                         or name in sampler_names
                     )
@@ -5387,8 +5551,36 @@ class MetalCodeGen:
                 self.add_buffer_call_resource_dependencies(
                     node, local_names, buffer_names, dependencies
                 )
+            if isinstance(node, RayTracingOpNode):
+                self.add_ray_tracing_resource_dependencies(
+                    node,
+                    local_names,
+                    visible_function_table_names,
+                    dependencies,
+                )
 
         return dependencies
+
+    def add_ray_tracing_resource_dependencies(
+        self, call, local_names, visible_function_table_names, dependencies
+    ):
+        if getattr(call, "operation", None) != "CallShader":
+            return
+        args = getattr(call, "arguments", [])
+        if len(args) == 3:
+            table_name = self.expression_name(args[0])
+            if (
+                table_name in visible_function_table_names
+                and table_name not in local_names
+            ):
+                dependencies.add(table_name)
+            return
+        if len(args) == 2 and len(self.visible_function_table_variables) == 1:
+            table_name = getattr(
+                self.visible_function_table_variables[0][0], "name", None
+            )
+            if table_name and table_name not in local_names:
+                dependencies.add(table_name)
 
     def add_texture_call_resource_dependencies(
         self, call, local_names, texture_names, sampler_names, dependencies
@@ -5499,6 +5691,15 @@ class MetalCodeGen:
             if getattr(acceleration_structure_variable, "name", None)
         }
 
+    def global_visible_function_table_names(self):
+        return {
+            visible_function_table_variable.name
+            for visible_function_table_variable, _, _, _ in (
+                self.visible_function_table_variables
+            )
+            if getattr(visible_function_table_variable, "name", None)
+        }
+
     def global_structured_buffer_names(self):
         return {
             buffer_variable.name
@@ -5564,6 +5765,23 @@ class MetalCodeGen:
             if getattr(acceleration_structure_variable, "name", None) in dependencies
         ]
 
+    def required_function_visible_function_tables(self, func_name):
+        dependencies = self.function_global_resource_dependencies.get(func_name, set())
+        return [
+            (
+                visible_function_table_variable,
+                visible_function_table_type,
+                array_size,
+            )
+            for (
+                visible_function_table_variable,
+                _,
+                visible_function_table_type,
+                array_size,
+            ) in self.visible_function_table_variables
+            if getattr(visible_function_table_variable, "name", None) in dependencies
+        ]
+
     def required_function_samplers(self, func_name):
         dependencies = self.function_global_resource_dependencies.get(func_name, set())
         return [
@@ -5627,6 +5845,12 @@ class MetalCodeGen:
             acceleration_structure_variable.name
             for acceleration_structure_variable, _, _ in (
                 self.required_function_acceleration_structures(func_name)
+            )
+        )
+        names.extend(
+            visible_function_table_variable.name
+            for visible_function_table_variable, _, _ in (
+                self.required_function_visible_function_tables(func_name)
             )
         )
         for (
@@ -6899,6 +7123,10 @@ class MetalCodeGen:
             attribute_names = {"binding", "buffer"}
             prefixes = ("b", "u", "t")
         elif self.is_acceleration_structure_type(vtype):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
+        elif self.is_visible_function_table_type(vtype):
             namespace = "buffer"
             attribute_names = {"binding", "buffer"}
             prefixes = ("b", "u", "t")
@@ -9679,6 +9907,9 @@ class MetalCodeGen:
             base_type, array_suffix = split_array_type_suffix(vtype_str)
             base_mapped = self.map_type(base_type)
             return f"{base_mapped}{array_suffix}"
+
+        if self.is_visible_function_table_type(vtype_str):
+            return self.map_visible_function_table_type(vtype_str)
 
         generic_enum_type = generic_enum_specialized_type_name(self, vtype_str)
         if generic_enum_type is not None:

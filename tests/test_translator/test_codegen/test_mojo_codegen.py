@@ -1031,6 +1031,94 @@ def test_byte_address_buffer_placeholders_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_byte_address_vector_methods_and_reinterpret_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    RWByteAddressBuffer rawVectors;
+
+    vec2 readPair(uint offset) {
+        return asfloat(rawVectors.Load2(offset));
+    }
+
+    vec3 readTriple(uint offset) {
+        return asfloat(rawVectors.Load3(offset));
+    }
+
+    vec4 readQuad(uint offset) {
+        return asfloat(rawVectors.Load4(offset));
+    }
+
+    int readSigned(uint offset) {
+        return asint(rawVectors.Load(offset));
+    }
+
+    void writeVectors(uint offset, vec2 pair, vec3 normal, vec4 color) {
+        rawVectors.Store2(offset, asuint(pair));
+        rawVectors.Store3(offset + uint(16), asuint(normal));
+        rawVectors.Store4(offset + uint(32), asuint(color));
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "None(" not in generated_code
+    assert (
+        "fn buffer_load2(buffer: RWByteAddressBuffer, "
+        "index: UInt32) -> SIMD[DType.uint32, 2]:" in generated_code
+    )
+    assert (
+        "fn buffer_load3(buffer: RWByteAddressBuffer, "
+        "index: UInt32) -> SIMD[DType.uint32, 4]:" in generated_code
+    )
+    assert (
+        "fn buffer_load4(buffer: RWByteAddressBuffer, "
+        "index: UInt32) -> SIMD[DType.uint32, 4]:" in generated_code
+    )
+    assert (
+        "fn buffer_store2(buffer: RWByteAddressBuffer, "
+        "index: UInt32, value: SIMD[DType.uint32, 2]):" in generated_code
+    )
+    assert (
+        "fn buffer_store3(buffer: RWByteAddressBuffer, "
+        "index: UInt32, value: SIMD[DType.uint32, 4]):" in generated_code
+    )
+    assert (
+        "fn asfloat(value: SIMD[DType.uint32, 2]) -> SIMD[DType.float32, 2]:"
+        in generated_code
+    )
+    assert (
+        "fn asfloat(value: SIMD[DType.uint32, 4]) -> SIMD[DType.float32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn asuint(value: SIMD[DType.float32, 2]) -> SIMD[DType.uint32, 2]:"
+        in generated_code
+    )
+    assert (
+        "fn asuint(value: SIMD[DType.float32, 4]) -> SIMD[DType.uint32, 4]:"
+        in generated_code
+    )
+    assert "fn asint(value: UInt32) -> Int32:" in generated_code
+    assert "return asfloat(buffer_load2(rawVectors, offset))" in generated_code
+    assert "return asfloat(buffer_load3(rawVectors, offset))" in generated_code
+    assert (
+        "buffer_store4(rawVectors, (offset + UInt32(32)), asuint(color))"
+        in generated_code
+    )
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "byte_address_vector_methods.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_invalid_buffer_operations_are_rejected_for_mojo_codegen():
     code = """
     ByteAddressBuffer rawBytes;
@@ -1627,7 +1715,7 @@ def test_inferred_let_declarations_do_not_emit_none_type():
 
     assert "var weight = 1" in generated_code
     assert "var mask = True" in generated_code
-    assert "var tint = float4(1.0, 0.0, 0.0, 1.0)" in generated_code
+    assert "var tint = SIMD[DType.float32, 4](1.0, 0.0, 0.0, 1.0)" in generated_code
     assert ": None" not in generated_code
 
 
@@ -2759,6 +2847,141 @@ def test_generic_vector_constructors_emit_mojo_names():
     assert "vec2<" not in generated_code
     assert "vec3<" not in generated_code
     assert "vec4<" not in generated_code
+
+
+def test_hlsl_style_vector_aliases_emit_mojo_simd_names():
+    code = """
+    struct HlslVectors {
+        float2 uv;
+        float3 normal;
+        float4 color;
+        half3 hdr;
+        double2 precise;
+        int3 index;
+        uint4 mask;
+        bool2 flags;
+    };
+
+    float4 buildColor(float2 uv, float z) {
+        return float4(uv, z, 1.0);
+    }
+
+    half3 buildHalf(half2 pair, half value) {
+        return half3(pair, value);
+    }
+
+    packed_half4 buildPacked(packed_half2 pair, half z, half w) {
+        return packed_half4(pair, z, w);
+    }
+
+    f16vec3 buildF16(f16vec2 pair, half value) {
+        return f16vec3(pair, value);
+    }
+
+    double3 buildPrecise(double2 pair, double value) {
+        return double3(pair, value);
+    }
+
+    int3 buildIndex(int2 pair, int z) {
+        return int3(pair, z);
+    }
+
+    uint3 buildMask(uint2 pair, uint z) {
+        return uint3(pair, z);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "var uv: SIMD[DType.float32, 2]" in generated_code
+    assert "var normal: SIMD[DType.float32, 4]" in generated_code
+    assert "var color: SIMD[DType.float32, 4]" in generated_code
+    assert "var hdr: SIMD[DType.float16, 4]" in generated_code
+    assert "var precise: SIMD[DType.float64, 2]" in generated_code
+    assert "var index: SIMD[DType.int32, 4]" in generated_code
+    assert "var mask: SIMD[DType.uint32, 4]" in generated_code
+    assert "var flags: SIMD[DType.bool, 2]" in generated_code
+    assert "return SIMD[DType.float32, 4](uv[0], uv[1], z, 1.0)" in generated_code
+    assert (
+        "return SIMD[DType.float16, 4](pair[0], pair[1], value, 0.0)" in generated_code
+    )
+    assert "return SIMD[DType.float16, 4](pair[0], pair[1], z, w)" in generated_code
+    assert (
+        "return SIMD[DType.float64, 4](pair[0], pair[1], value, 0.0)" in generated_code
+    )
+    assert "return SIMD[DType.int32, 4](pair[0], pair[1], z, 0)" in generated_code
+    assert "return SIMD[DType.uint32, 4](pair[0], pair[1], z, 0)" in generated_code
+    for raw_alias in (
+        "float2(",
+        "float3(",
+        "float4(",
+        "half2(",
+        "half3(",
+        "packed_half2(",
+        "packed_half4(",
+        "f16vec2(",
+        "f16vec3(",
+        "double2(",
+        "double3(",
+        "int2(",
+        "int3(",
+        "uint2(",
+        "uint3(",
+    ):
+        assert raw_alias not in generated_code
+
+
+def test_hlsl_style_vector_aliases_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    float4 makeColor(float2 uv, float z, float w) {
+        return float4(uv, z, w);
+    }
+
+    half3 makeHalf(half2 pair, half z) {
+        return half3(pair, z);
+    }
+
+    double3 makePrecise(double2 pair, double z) {
+        return double3(pair, z);
+    }
+
+    int3 makeIndex(int2 pair, int z) {
+        return int3(pair, z);
+    }
+
+    uint4 makeMask(uint2 pair, uint z, uint w) {
+        return uint4(pair, z, w);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    generated_code += """
+fn main():
+    print(makeColor(SIMD[DType.float32, 2](1.0, 2.0), 3.0, 4.0))
+    print(makeHalf(SIMD[DType.float16, 2](1.0, 2.0), Float16(3.0)))
+    print(makePrecise(SIMD[DType.float64, 2](1.0, 2.0), 3.0))
+    print(makeIndex(SIMD[DType.int32, 2](1, 2), 3))
+    print(makeMask(SIMD[DType.uint32, 2](1, 2), UInt32(3), UInt32(4)))
+"""
+
+    source_path = tmp_path / "hlsl_style_vector_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1.0, 2.0, 3.0, 4.0]" in result.stdout
+    assert "[1, 2, 3, 0]" in result.stdout
 
 
 def test_three_component_vectors_emit_power_of_two_simd_storage():

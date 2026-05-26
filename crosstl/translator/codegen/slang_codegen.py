@@ -81,6 +81,7 @@ class SlangCodeGen:
         self.user_function_return_types = {}
         self.stage_entry_name_overrides = {}
         self.identifier_aliases = {}
+        self.current_hull_output_rewrite = None
         self._generating = False
         self.semantic_map = {
             "gl_Position": "SV_Position",
@@ -1058,6 +1059,7 @@ class SlangCodeGen:
         saved_image_resource_types = self.image_resource_types.copy()
         saved_function_return_type = self.current_function_return_type
         saved_identifier_aliases = self.identifier_aliases.copy()
+        saved_hull_output_rewrite = self.current_hull_output_rewrite
         if hasattr(node, "return_type"):
             ret_type_name = self.convert_type_node_to_string(node.return_type)
             ret_type = self.convert_type(ret_type_name)
@@ -1068,6 +1070,15 @@ class SlangCodeGen:
         semantic = self.function_return_semantic(node)
         body = getattr(node, "body", [])
         body_statements = self.get_statements(body)
+        param_list = getattr(node, "parameters", getattr(node, "params", []))
+        hull_output_rewrite = self.slang_stage_hull_output_rewrite(
+            body_statements, shader_type, ret_type_name, semantic, param_list
+        )
+        if hull_output_rewrite is not None:
+            ret_type_name = hull_output_rewrite["return_type_name"]
+            ret_type = self.convert_type(ret_type_name)
+            semantic = None
+
         builtin_return_rewrite = self.slang_stage_builtin_return_rewrite(
             body_statements, shader_type, ret_type_name, semantic
         )
@@ -1079,15 +1090,17 @@ class SlangCodeGen:
         self.current_function_return_type = ret_type_name
         semantic_str = self.semantic_suffix(semantic, shader_type)
 
-        param_list = getattr(node, "parameters", getattr(node, "params", []))
+        effective_param_list = self.slang_filtered_stage_parameters(
+            param_list, hull_output_rewrite
+        )
         if shader_type:
             self.validate_slang_stage_body_builtins(
-                body_statements, shader_type, param_list
+                body_statements, shader_type, effective_param_list
             )
         params = []
-        if param_list:
-            if param_list and hasattr(param_list[0], "name"):
-                for param in param_list:
+        if effective_param_list:
+            if effective_param_list and hasattr(effective_param_list[0], "name"):
+                for param in effective_param_list:
                     if hasattr(param, "param_type"):
                         param_type_name = self.convert_type_node_to_string(
                             param.param_type
@@ -1113,26 +1126,32 @@ class SlangCodeGen:
                         )
                     )
             else:
-                for param_type, param_name in param_list:
+                for param_type, param_name in effective_param_list:
                     self.register_variable_type(param_name, param_type)
                     params.append(
                         f"{self.map_resource_type_with_format(param_type)} {param_name}"
                     )
 
         for param_type, param_name, semantic in self.slang_implicit_stage_parameters(
-            body_statements, shader_type, param_list
+            body_statements, shader_type, effective_param_list
         ):
             self.register_variable_type(param_name, param_type)
             params.append(f"{self.convert_type(param_type)} {param_name} : {semantic}")
 
         params_str = ", ".join(params)
         identifier_aliases = self.slang_stage_system_value_aliases(
-            body_statements, shader_type, param_list
+            body_statements, shader_type, effective_param_list
+        )
+        identifier_aliases.update(
+            self.slang_stage_patch_input_aliases(
+                body_statements, shader_type, effective_param_list
+            )
         )
         identifier_aliases.update(
             self.slang_stage_builtin_return_aliases(builtin_return_rewrite)
         )
         self.identifier_aliases = identifier_aliases
+        self.current_hull_output_rewrite = hull_output_rewrite
 
         result = ""
         if (
@@ -1161,6 +1180,10 @@ class SlangCodeGen:
             local_type = self.convert_type(builtin_return_rewrite["return_type_name"])
             local_name = builtin_return_rewrite["local_name"]
             result += f"{self.indent()}{local_type} {local_name};\n"
+        if hull_output_rewrite is not None:
+            local_type = self.convert_type(hull_output_rewrite["return_type_name"])
+            local_name = hull_output_rewrite["local_name"]
+            result += f"{self.indent()}{local_type} {local_name};\n"
 
         for statement_index, stmt in enumerate(body_statements):
             result += (
@@ -1175,6 +1198,8 @@ class SlangCodeGen:
             "struct",
         }:
             result += f"{self.indent()}return {builtin_return_rewrite['local_name']};\n"
+        if hull_output_rewrite is not None:
+            result += f"{self.indent()}return {hull_output_rewrite['local_name']};\n"
 
         self.indent_level -= 1
         result += "}"
@@ -1182,11 +1207,169 @@ class SlangCodeGen:
         self.image_resource_types = saved_image_resource_types
         self.current_function_return_type = saved_function_return_type
         self.identifier_aliases = saved_identifier_aliases
+        self.current_hull_output_rewrite = saved_hull_output_rewrite
         return result
 
     def generate_compute_numthreads(self, execution_config=None):
         x, y, z = compute_local_size(execution_config)
         return f"[numthreads({x}, {y}, {z})]\n"
+
+    def slang_stage_hull_output_rewrite(
+        self, body_statements, shader_type, ret_type_name, semantic, param_list
+    ):
+        if self.slang_shader_stage_name(shader_type) != "hull":
+            return None
+
+        gl_out_assignments = []
+        for node in self.walk_ast(body_statements):
+            if not isinstance(node, AssignmentNode):
+                continue
+            member_target = self.slang_hull_output_member_target(node.left)
+            if member_target is not None:
+                gl_out_assignments.append((node, member_target))
+
+        if not gl_out_assignments:
+            if self.slang_stage_uses_gl_out(body_statements):
+                raise ValueError(
+                    "Slang hull stage gl_out requires assignments to "
+                    "gl_out[gl_InvocationID].field"
+                )
+            return None
+
+        if semantic is not None:
+            raise ValueError(
+                "Slang hull stage gl_out outputs cannot use a return semantic"
+            )
+        if self.contains_return_statement(body_statements):
+            raise ValueError(
+                "Slang hull stage gl_out outputs cannot be mixed with explicit returns"
+            )
+
+        for assignment, (_member, index) in gl_out_assignments:
+            if getattr(assignment, "operator", None) != "=":
+                raise ValueError(
+                    "Slang hull stage gl_out outputs require simple assignment"
+                )
+            if not self.is_slang_hull_output_index(index, param_list):
+                raise ValueError(
+                    "Slang hull stage gl_out writes must target "
+                    "gl_out[gl_InvocationID] or the SV_OutputControlPointID parameter"
+                )
+
+        output_type_name = None
+        removed_param_names = set()
+        if self.convert_type(ret_type_name) != "void":
+            output_type_name = ret_type_name
+        else:
+            output_patch_params = []
+            for param in param_list or []:
+                element_type = self.slang_patch_parameter_element_type_name(
+                    param, "OutputPatch"
+                )
+                if element_type:
+                    output_patch_params.append((param, element_type))
+
+            if len(output_patch_params) == 1:
+                output_patch_param, output_type_name = output_patch_params[0]
+                removed_param_names.add(output_patch_param.name)
+            else:
+                raise ValueError(
+                    "Slang hull stage gl_out requires a non-void return type or "
+                    "exactly one explicit OutputPatch<..., N> parameter"
+                )
+
+        return {
+            "return_type_name": output_type_name,
+            "local_name": self.unique_slang_builtin_output_local_name(
+                "gl_OutputControlPoint", body_statements
+            ),
+            "removed_param_names": removed_param_names,
+        }
+
+    def slang_filtered_stage_parameters(self, param_list, hull_output_rewrite):
+        if hull_output_rewrite is None:
+            return param_list
+
+        removed_param_names = hull_output_rewrite["removed_param_names"]
+        if not removed_param_names:
+            return param_list
+        if not param_list:
+            return param_list
+
+        if hasattr(param_list[0], "name"):
+            return [
+                param
+                for param in param_list
+                if getattr(param, "name", None) not in removed_param_names
+            ]
+        return [
+            param
+            for param in param_list
+            if len(param) < 2 or param[1] not in removed_param_names
+        ]
+
+    def slang_stage_uses_gl_out(self, body_statements):
+        return any(
+            isinstance(node, IdentifierNode) and node.name == "gl_out"
+            for node in self.walk_ast(body_statements)
+        )
+
+    def slang_hull_output_member_target(self, target):
+        if not isinstance(target, MemberAccessNode):
+            return None
+
+        obj = getattr(target, "object", getattr(target, "object_expr", None))
+        if not isinstance(obj, ArrayAccessNode):
+            return None
+
+        array = getattr(obj, "array", getattr(obj, "array_expr", None))
+        if self.identifier_name(array) != "gl_out":
+            return None
+
+        index = getattr(obj, "index", getattr(obj, "index_expr", None))
+        return target.member, index
+
+    def is_slang_hull_output_index(self, index, param_list):
+        index_name = self.identifier_name(index)
+        if index_name == "gl_InvocationID":
+            return True
+
+        for param in param_list or []:
+            param_name = getattr(param, "name", None)
+            if param_name != index_name:
+                continue
+            semantic = self.semantic_from_node(param)
+            if self.map_semantic(semantic, "tessellation_control") == (
+                "SV_OutputControlPointID"
+            ):
+                return True
+        return False
+
+    def slang_patch_parameter_element_type_name(self, param, patch_type):
+        type_node = getattr(param, "param_type", None)
+        if getattr(type_node, "name", None) == patch_type:
+            generic_args = getattr(type_node, "generic_args", []) or []
+            if generic_args:
+                return self.convert_type_node_to_string(generic_args[0])
+
+        type_name = self.slang_parameter_type_name(param)
+        prefix = f"{patch_type}<"
+        if not type_name.startswith(prefix) or not type_name.endswith(">"):
+            return None
+
+        args = type_name[len(prefix) : -1]
+        return self.first_slang_generic_argument(args)
+
+    def first_slang_generic_argument(self, args):
+        depth = 0
+        for index, char in enumerate(args):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif char == "," and depth == 0:
+                return args[:index].strip()
+        return args.strip()
 
     def slang_implicit_stage_parameters(self, body_statements, shader_type, param_list):
         candidates = self.slang_implicit_stage_parameter_candidates(shader_type)
@@ -1262,6 +1445,57 @@ class SlangCodeGen:
             if existing_param_name and existing_param_name != node.name:
                 aliases[node.name] = existing_param_name
         return aliases
+
+    def slang_stage_patch_input_aliases(self, body_statements, shader_type, param_list):
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        patch_type = {
+            "hull": "InputPatch",
+            "domain": "OutputPatch",
+        }.get(shader_stage)
+        if patch_type is None:
+            return {}
+
+        declared_names = {
+            getattr(param, "name", None)
+            for param in param_list or []
+            if getattr(param, "name", None)
+        }
+        for node in self.walk_ast(body_statements):
+            if isinstance(node, VariableNode):
+                declared_names.add(node.name)
+
+        uses_gl_in = any(
+            isinstance(node, IdentifierNode)
+            and node.name == "gl_in"
+            and node.name not in declared_names
+            for node in self.walk_ast(body_statements)
+        )
+        if not uses_gl_in:
+            return {}
+
+        patch_params = [
+            param
+            for param in param_list or []
+            if self.slang_parameter_type_name(param).startswith(f"{patch_type}<")
+        ]
+        if len(patch_params) == 1:
+            patch_param = patch_params[0]
+            self.register_variable_type(
+                "gl_in", self.slang_parameter_type_name(patch_param), patch_param
+            )
+            return {"gl_in": patch_param.name}
+
+        raise ValueError(
+            f"Slang {shader_stage} stage gl_in requires exactly one explicit "
+            f"{patch_type}<..., N> parameter"
+        )
+
+    def slang_parameter_type_name(self, param):
+        if hasattr(param, "param_type"):
+            return self.convert_type_node_to_string(param.param_type)
+        if hasattr(param, "vtype"):
+            return str(param.vtype)
+        return ""
 
     def slang_implicit_stage_parameter_candidates(self, shader_type):
         shader_stage = self.slang_shader_stage_name(shader_type)
@@ -1634,10 +1868,25 @@ class SlangCodeGen:
         return f"{left} {node.operator} {right}"
 
     def slang_assignment_target_alias(self, target):
+        hull_output_alias = self.slang_hull_output_member_alias(target)
+        if hull_output_alias is not None:
+            return hull_output_alias
+
         target_name = self.slang_stage_builtin_output_target_name(target)
         if target_name is None:
             return None
         return self.identifier_aliases.get(target_name)
+
+    def slang_hull_output_member_alias(self, target):
+        if self.current_hull_output_rewrite is None:
+            return None
+
+        member_target = self.slang_hull_output_member_target(target)
+        if member_target is None:
+            return None
+
+        member, _index = member_target
+        return f"{self.current_hull_output_rewrite['local_name']}.{member}"
 
     def generate_expression_with_expected(self, expr, expected_type):
         previous_expected_type = self.current_expression_expected_type
@@ -1986,6 +2235,9 @@ class SlangCodeGen:
             )
             return f"{{{elements}}}"
         elif isinstance(node, MemberAccessNode):
+            hull_output_alias = self.slang_hull_output_member_alias(node)
+            if hull_output_alias is not None:
+                return hull_output_alias
             obj = self.generate_expression(node.object)
             return f"{obj}.{node.member}"
         elif isinstance(node, BinaryOpNode):

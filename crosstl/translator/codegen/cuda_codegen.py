@@ -44,6 +44,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         "TextureCube": "samplerCube",
         "TextureCubeArray": "samplerCubeArray",
     }
+    storage_resource_type_aliases = {
+        "RWTexture1D": "image1D",
+        "RWTexture1DArray": "image1DArray",
+        "RWTexture2D": "image2D",
+        "RWTexture2DArray": "image2DArray",
+        "RWTexture3D": "image3D",
+        "RWTexture2DMS": "image2DMS",
+        "RWTexture2DMSArray": "image2DMSArray",
+    }
 
     def __init__(self):
         """Initialize CUDA type maps and per-generation visitor state."""
@@ -1518,6 +1527,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if sampled_resource_type:
             return type_mapping.get(sampled_resource_type, sampled_resource_type)
 
+        storage_resource_type = self.canonical_storage_resource_type(crossgl_type)
+        if storage_resource_type:
+            return type_mapping.get(storage_resource_type, storage_resource_type)
+
         # Handle arrays
         if crossgl_type.startswith("array<") and crossgl_type.endswith(">"):
             # Extract element type and size
@@ -1547,13 +1560,39 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         base_type = type_name.split("[", 1)[0].split("<", 1)[0].strip()
         return self.sampled_resource_type_aliases.get(base_type)
 
+    def canonical_storage_resource_type(self, type_name):
+        """Return the image spelling for HLSL-style writable resources."""
+        if not isinstance(type_name, str):
+            return None
+        base_type = type_name.split("[", 1)[0].strip()
+        base_name = base_type.split("<", 1)[0].strip()
+        image_type = self.storage_resource_type_aliases.get(base_name)
+        if image_type is None:
+            return None
+
+        if "<" not in base_type or ">" not in base_type:
+            return image_type
+
+        value_type = base_type.split("<", 1)[1].rsplit(">", 1)[0].strip()
+        value_type = value_type.split(",", 1)[0].strip().lower()
+        if value_type in {"int", "i32"}:
+            return f"i{image_type}"
+        if value_type in {"uint", "u32"}:
+            return f"u{image_type}"
+        return image_type
+
     def resource_base_type(self, type_name):
         """Normalize resource aliases before resource dispatch decisions."""
         base_type = ResourceDiagnosticMixin.resource_base_type(self, type_name)
-        return self.canonical_sampled_resource_type(base_type) or base_type
+        return (
+            self.canonical_sampled_resource_type(base_type)
+            or self.canonical_storage_resource_type(base_type)
+            or base_type
+        )
 
     def dimension_query_spec(self, type_name):
         """Return CUDA resource query metadata for supported image shapes."""
+        type_name = self.resource_base_type(type_name)
         spec = ResourceQueryMixin.dimension_query_spec(self, type_name)
         if spec is not None:
             return spec

@@ -3255,6 +3255,88 @@ def test_directx_ray_tracing_intrinsics_validate_payload_arguments():
     )
     assert "TraceRay(accel, 0, 255, 0, 1, 0, ray, payload);" in generated
 
+    valid_expanded_trace_ray_code = """
+    shader ValidExpandedTraceRayPayload {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayPayload payload;
+                TraceRay(
+                    accel,
+                    0,
+                    0xFF,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0, 0.0, 0.0),
+                    0.0,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0,
+                    payload
+                );
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_expanded_trace_ray_code), "ray_generation"
+    )
+    assert (
+        "TraceRay(accel, 0, 255, 0, 1, 0, float3(0.0, 0.0, 0.0), 0.0, "
+        "float3(0.0, 0.0, 1.0), 100.0, payload);"
+    ) in generated
+
+    bad_acceleration_structure_code = """
+    shader BadTraceRayAccelerationStructure {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                uint accel;
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(accel, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="TraceRay acceleration structure.*RaytracingAccelerationStructure",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(bad_acceleration_structure_code),
+            "ray_generation",
+        )
+
+    bad_ray_descriptor_code = """
+    shader BadTraceRayDescriptor {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                vec3 ray;
+                RayPayload payload;
+                TraceRay(accel, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="TraceRay ray descriptor.*RayDesc"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(bad_ray_descriptor_code),
+            "ray_generation",
+        )
+
     scalar_trace_ray_payload_code = """
     shader BadTraceRayScalarPayload {
         ray_generation {
@@ -3303,6 +3385,142 @@ def test_directx_ray_tracing_intrinsics_validate_payload_arguments():
         )
 
 
+def test_directx_ray_tracing_intrinsics_validate_trace_ray_expanded_shape():
+    bad_origin_code = """
+    shader BadExpandedTraceRayOrigin {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayPayload payload;
+                TraceRay(
+                    accel,
+                    0,
+                    0xFF,
+                    0,
+                    1,
+                    0,
+                    vec2(0.0, 0.0),
+                    0.0,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0,
+                    payload
+                );
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="TraceRay origin.*float3"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(bad_origin_code),
+            "ray_generation",
+        )
+
+    bad_min_distance_code = """
+    shader BadExpandedTraceRayMinDistance {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                uint minDistance;
+                RayPayload payload;
+                TraceRay(
+                    accel,
+                    0,
+                    0xFF,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0, 0.0, 0.0),
+                    minDistance,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0,
+                    payload
+                );
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="TraceRay minimum distance.*scalar floating"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(bad_min_distance_code),
+            "ray_generation",
+        )
+
+    bad_direction_code = """
+    shader BadExpandedTraceRayDirection {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayPayload payload;
+                TraceRay(
+                    accel,
+                    0,
+                    0xFF,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0, 0.0, 0.0),
+                    0.0,
+                    vec2(0.0, 1.0),
+                    100.0,
+                    payload
+                );
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="TraceRay direction.*float3"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(bad_direction_code),
+            "ray_generation",
+        )
+
+    bad_max_distance_code = """
+    shader BadExpandedTraceRayMaxDistance {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                uint maxDistance;
+                RayPayload payload;
+                TraceRay(
+                    accel,
+                    0,
+                    0xFF,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0, 0.0, 0.0),
+                    0.0,
+                    vec3(0.0, 0.0, 1.0),
+                    maxDistance,
+                    payload
+                );
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="TraceRay maximum distance.*scalar floating"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(bad_max_distance_code),
+            "ray_generation",
+        )
+
+
 def test_directx_ray_tracing_intrinsics_validate_callable_and_hit_arguments():
     valid_callable_and_hit_code = """
     shader ValidCallableAndHitArguments {
@@ -3335,6 +3553,40 @@ def test_directx_ray_tracing_intrinsics_validate_callable_and_hit_arguments():
     assert "CallShader(0, data);" in generated
     assert "ReportHit(1.0, 0, attributes);" in generated
 
+    valid_report_hit_without_attributes_code = """
+    shader ValidReportHitWithoutAttributes {
+        ray_intersection {
+            void main() {
+                ReportHit(1.0, 0);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_report_hit_without_attributes_code),
+        "ray_intersection",
+    )
+    assert "ReportHit(1.0, 0);" in generated
+
+    float_callable_index_code = """
+    shader BadCallShaderFloatIndex {
+        struct CallableData {
+            uint value;
+        };
+
+        ray_generation {
+            void main() {
+                CallableData data;
+                CallShader(0.5, data);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="CallShader shader index.*scalar int or uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(float_callable_index_code), "ray_generation"
+        )
+
     scalar_callable_code = """
     shader BadCallableScalarArgument {
         ray_generation {
@@ -3350,6 +3602,45 @@ def test_directx_ray_tracing_intrinsics_validate_callable_and_hit_arguments():
     ):
         HLSLCodeGen().generate_stage(
             crosstl.translator.parse(scalar_callable_code), "ray_generation"
+        )
+
+    uint_hit_distance_code = """
+    shader BadReportHitUintDistance {
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                uint hitDistance;
+                ReportHit(hitDistance, 0, attributes);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ReportHit hit distance.*scalar floating"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(uint_hit_distance_code), "ray_intersection"
+        )
+
+    float_hit_kind_code = """
+    shader BadReportHitFloatKind {
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                ReportHit(1.0, 0.5, attributes);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ReportHit hit kind.*scalar int or uint"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(float_hit_kind_code), "ray_intersection"
         )
 
     scalar_hit_attribute_code = """

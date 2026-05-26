@@ -126,6 +126,8 @@ class VulkanSPIRVCodeGen:
         self.loop_continue_labels = []
         self.defined_functions = set()
         self.current_struct_members = {}
+        self.cbuffer_variables = {}
+        self.cbuffer_members = {}
 
         self.inputs = []
         self.outputs = []
@@ -3964,6 +3966,133 @@ class VulkanSPIRVCodeGen:
 
         return self.register_struct_type(struct_node.name, members)
 
+    def process_cbuffer_declaration(self, cbuffer_node: StructNode) -> SpirvId:
+        """Emit a CrossGL cbuffer as a SPIR-V Uniform block."""
+        members = []
+        for member in getattr(cbuffer_node, "members", []) or []:
+            member_type_source = getattr(
+                member,
+                "member_type",
+                getattr(member, "var_type", getattr(member, "vtype", None)),
+            )
+            if member_type_source is None:
+                continue
+            member_type = self.map_crossgl_type(member_type_source)
+            members.append((member_type, member.name))
+
+        cbuffer_type = self.register_struct_type(cbuffer_node.name, members)
+        self.decorate_cbuffer_type(cbuffer_type, members)
+
+        var_id = self.create_variable(cbuffer_type, "Uniform", cbuffer_node.name)
+        descriptor_set, binding = self.resource_descriptor_slot(cbuffer_node)
+        self.decorations.append(
+            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+        )
+        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+
+        self.global_variables[cbuffer_node.name] = var_id
+        self.cbuffer_variables[cbuffer_node.name] = var_id
+        self.uniform_buffers.append(var_id)
+        for member_index, (member_type, member_name) in enumerate(members):
+            if member_name in self.cbuffer_members:
+                raise ValueError(f"Ambiguous SPIR-V cbuffer member {member_name}")
+            self.cbuffer_members[member_name] = (var_id, member_type, member_index)
+
+        return var_id
+
+    def decorate_cbuffer_type(
+        self, cbuffer_type: SpirvId, members: List[Tuple[SpirvId, str]]
+    ):
+        self.decorations.append(f"OpDecorate %{cbuffer_type.id} Block")
+
+        offset = 0
+        for member_index, (member_type, _) in enumerate(members):
+            offset = self.align_to(offset, self.uniform_layout_alignment(member_type))
+            self.decorations.append(
+                f"OpMemberDecorate %{cbuffer_type.id} {member_index} Offset {offset}"
+            )
+            if self.uniform_layout_contains_matrix(member_type):
+                self.decorations.append(
+                    f"OpMemberDecorate %{cbuffer_type.id} {member_index} ColMajor"
+                )
+                self.decorations.append(
+                    f"OpMemberDecorate %{cbuffer_type.id} {member_index} MatrixStride 16"
+                )
+            self.decorate_uniform_array_strides(member_type)
+            offset += self.uniform_layout_size(member_type)
+
+    def align_to(self, value: int, alignment: int) -> int:
+        if alignment <= 1:
+            return value
+        return ((value + alignment - 1) // alignment) * alignment
+
+    def uniform_layout_alignment(self, type_id: SpirvId) -> int:
+        if self.matrix_type_info_from_type(type_id) is not None:
+            return 16
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, _ = array_info
+            return max(16, self.uniform_layout_alignment(element_type))
+
+        vector_info = self.vector_type_info_from_type(type_id)
+        if vector_info is not None:
+            _, component_count = vector_info
+            return 8 if component_count == 2 else 16
+
+        return 4
+
+    def uniform_layout_size(self, type_id: SpirvId) -> int:
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is not None:
+            _, column_count = matrix_info
+            return 16 * column_count
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, size = array_info
+            stride = self.uniform_array_stride(element_type)
+            return stride * int(size or 1)
+
+        vector_info = self.vector_type_info_from_type(type_id)
+        if vector_info is not None:
+            component_type, component_count = vector_info
+            component_size = self.uniform_scalar_size(component_type)
+            return self.align_to(component_size * component_count, 16)
+
+        return self.uniform_scalar_size(type_id)
+
+    def uniform_scalar_size(self, type_id: SpirvId) -> int:
+        return (
+            8
+            if self.normalize_primitive_name(type_id.type.base_type) == "double"
+            else 4
+        )
+
+    def uniform_array_stride(self, element_type: SpirvId) -> int:
+        return self.align_to(self.uniform_layout_size(element_type), 16)
+
+    def uniform_layout_contains_matrix(self, type_id: SpirvId) -> bool:
+        if self.matrix_type_info_from_type(type_id) is not None:
+            return True
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, _ = array_info
+            return self.uniform_layout_contains_matrix(element_type)
+
+        return False
+
+    def decorate_uniform_array_strides(self, type_id: SpirvId):
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is None:
+            return
+
+        element_type, _ = array_info
+        stride = self.uniform_array_stride(element_type)
+        self.decorations.append(f"OpDecorate %{type_id.id} ArrayStride {stride}")
+        self.decorate_uniform_array_strides(element_type)
+
     def process_function_node(self, function_node, stage=None):
         """Process a CrossGL function definition."""
         return_type = self.map_crossgl_type(function_node.return_type)
@@ -4207,7 +4336,7 @@ class VulkanSPIRVCodeGen:
         return binding
 
     def reserve_explicit_resource_bindings(self, ast: ShaderNode):
-        for node in self.global_resource_nodes(ast):
+        for node in self.global_descriptor_binding_nodes(ast):
             explicit_binding = self.explicit_interface_integer_attribute(
                 node, "binding"
             )
@@ -4222,6 +4351,10 @@ class VulkanSPIRVCodeGen:
                     f"binding {explicit_binding}"
                 )
             self.reserved_resource_bindings.add(key)
+
+    def global_descriptor_binding_nodes(self, ast: ShaderNode):
+        yield from self.global_resource_nodes(ast)
+        yield from getattr(ast, "cbuffers", []) or []
 
     def global_resource_nodes(self, ast: ShaderNode):
         nodes = list(getattr(ast, "global_variables", []) or [])
@@ -4871,6 +5004,19 @@ class VulkanSPIRVCodeGen:
                 return self.load_from_variable(variable_id, var_type)
         return variable_id
 
+    def cbuffer_member_pointer(self, name: str) -> Optional[SpirvId]:
+        member_info = self.cbuffer_members.get(name)
+        if member_info is None:
+            return None
+
+        cbuffer_var, member_type, member_index = member_info
+        int_type = self.primitive_types["int"]
+        index = self.register_constant(member_index, int_type)
+        ptr_type = self.register_pointer_type(member_type, "Uniform")
+        access = self.access_chain(cbuffer_var, [index], ptr_type)
+        self.variable_value_types[access.id] = member_type
+        return access
+
     def variable_pointer_from_expression(self, expr) -> Optional[SpirvId]:
         if isinstance(expr, IdentifierNode):
             name = expr.name
@@ -4896,6 +5042,7 @@ class VulkanSPIRVCodeGen:
         return (
             self.local_variables.get(name)
             or self.global_variables.get(name)
+            or self.cbuffer_member_pointer(name)
             or self.ensure_compute_builtin(name)
         )
 
@@ -6263,6 +6410,10 @@ class VulkanSPIRVCodeGen:
                 return self.get_variable_value(var_id)
             elif expr in self.global_variables:
                 return self.get_variable_value(self.global_variables[expr])
+            elif expr in self.cbuffer_members:
+                member_pointer = self.cbuffer_member_pointer(expr)
+                if member_pointer is not None:
+                    return self.get_variable_value(member_pointer)
             else:
                 builtin_component = self.process_dotted_compute_builtin(expr)
                 if builtin_component is not None:
@@ -6314,6 +6465,10 @@ class VulkanSPIRVCodeGen:
                 return self.get_variable_value(var_id)
             elif expr.name in self.global_variables:
                 return self.get_variable_value(self.global_variables[expr.name])
+            elif expr.name in self.cbuffer_members:
+                member_pointer = self.cbuffer_member_pointer(expr.name)
+                if member_pointer is not None:
+                    return self.get_variable_value(member_pointer)
             else:
                 builtin = self.ensure_compute_builtin(expr.name)
                 if builtin is not None:
@@ -6958,6 +7113,9 @@ class VulkanSPIRVCodeGen:
             self.collect_storage_image_pointer_parameters(ast)
         )
         self.reserve_explicit_resource_bindings(ast)
+
+        for cbuffer in getattr(ast, "cbuffers", []) or []:
+            self.process_cbuffer_declaration(cbuffer)
 
         for var in getattr(ast, "global_variables", []):
             self.process_global_variable_declaration(var)

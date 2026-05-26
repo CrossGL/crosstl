@@ -40,18 +40,39 @@ MOJO_VECTOR_TYPES = {
     "vec2": ("DType.float32", 2, 2, None),
     "vec3": ("DType.float32", 3, 4, "0.0"),
     "vec4": ("DType.float32", 4, 4, None),
+    "float2": ("DType.float32", 2, 2, None),
+    "float3": ("DType.float32", 3, 4, "0.0"),
+    "float4": ("DType.float32", 4, 4, None),
     "vec2<f32>": ("DType.float32", 2, 2, None),
     "vec3<f32>": ("DType.float32", 3, 4, "0.0"),
     "vec4<f32>": ("DType.float32", 4, 4, None),
+    "half2": ("DType.float16", 2, 2, None),
+    "half3": ("DType.float16", 3, 4, "0.0"),
+    "half4": ("DType.float16", 4, 4, None),
+    "packed_half2": ("DType.float16", 2, 2, None),
+    "packed_half3": ("DType.float16", 3, 4, "0.0"),
+    "packed_half4": ("DType.float16", 4, 4, None),
+    "f16vec2": ("DType.float16", 2, 2, None),
+    "f16vec3": ("DType.float16", 3, 4, "0.0"),
+    "f16vec4": ("DType.float16", 4, 4, None),
     "vec2<f64>": ("DType.float64", 2, 2, None),
     "vec3<f64>": ("DType.float64", 3, 4, "0.0"),
     "vec4<f64>": ("DType.float64", 4, 4, None),
+    "double2": ("DType.float64", 2, 2, None),
+    "double3": ("DType.float64", 3, 4, "0.0"),
+    "double4": ("DType.float64", 4, 4, None),
     "vec2<i32>": ("DType.int32", 2, 2, None),
     "vec3<i32>": ("DType.int32", 3, 4, "0"),
     "vec4<i32>": ("DType.int32", 4, 4, None),
+    "int2": ("DType.int32", 2, 2, None),
+    "int3": ("DType.int32", 3, 4, "0"),
+    "int4": ("DType.int32", 4, 4, None),
     "vec2<u32>": ("DType.uint32", 2, 2, None),
     "vec3<u32>": ("DType.uint32", 3, 4, "0"),
     "vec4<u32>": ("DType.uint32", 4, 4, None),
+    "uint2": ("DType.uint32", 2, 2, None),
+    "uint3": ("DType.uint32", 3, 4, "0"),
+    "uint4": ("DType.uint32", 4, 4, None),
     "vec2<bool>": ("DType.bool", 2, 2, None),
     "vec3<bool>": ("DType.bool", 3, 4, "False"),
     "vec4<bool>": ("DType.bool", 4, 4, None),
@@ -105,6 +126,7 @@ SWIZZLE_SETS = {
 }
 
 MOJO_DTYPE_INFO = {
+    "DType.float16": ("half", "half", "0.0"),
     "DType.float32": ("float", "vec", "0.0"),
     "DType.float64": ("double", "dvec", "0.0"),
     "DType.int32": ("int", "ivec", "0"),
@@ -113,6 +135,7 @@ MOJO_DTYPE_INFO = {
 }
 
 MOJO_DTYPE_SUFFIX = {
+    "DType.float16": "f16",
     "DType.float32": "f32",
     "DType.float64": "f64",
     "DType.int32": "i32",
@@ -121,6 +144,7 @@ MOJO_DTYPE_SUFFIX = {
 }
 
 MOJO_SCALAR_DTYPES = {
+    "half": "DType.float16",
     "float": "DType.float32",
     "double": "DType.float64",
     "int": "DType.int32",
@@ -333,6 +357,26 @@ MOJO_REINTERPRET_BUILTINS = {
     "asuint": "UInt32",
 }
 
+MOJO_REINTERPRET_TARGET_TYPES = {
+    "asfloat": ("float", "vec"),
+    "asint": ("int", "ivec"),
+    "asuint": ("uint", "uvec"),
+}
+
+MOJO_BYTE_ADDRESS_LOAD_METHODS = {
+    "Load": 1,
+    "Load2": 2,
+    "Load3": 3,
+    "Load4": 4,
+}
+
+MOJO_BYTE_ADDRESS_STORE_METHODS = {
+    "Store": 1,
+    "Store2": 2,
+    "Store3": 3,
+    "Store4": 4,
+}
+
 MOJO_INTEGER_INDEX_TYPES = {"int", "uint", "short", "ushort", "long", "ulong"}
 
 MOJO_VECTOR_ARITHMETIC_OPS = {
@@ -372,6 +416,8 @@ class MojoCodeGen:
         self.required_buffer_append_helpers = set()
         self.required_buffer_consume_helpers = set()
         self.required_buffer_dimensions_helpers = set()
+        self.required_byte_address_vector_load_helpers = set()
+        self.required_byte_address_vector_store_helpers = set()
         self.required_reinterpret_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
@@ -516,6 +562,8 @@ class MojoCodeGen:
         self.required_buffer_append_helpers = set()
         self.required_buffer_consume_helpers = set()
         self.required_buffer_dimensions_helpers = set()
+        self.required_byte_address_vector_load_helpers = set()
+        self.required_byte_address_vector_store_helpers = set()
         self.required_reinterpret_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
@@ -792,6 +840,22 @@ class MojoCodeGen:
                 f"Unsupported {operation} for Mojo codegen; "
                 f"{buffer_type} is not valid for this operation"
             )
+
+    def byte_address_load_result_type(self, width):
+        if width == 1:
+            return "uint"
+        return f"uvec{width}"
+
+    def byte_address_vector_mojo_type(self, width, dtype="DType.uint32"):
+        source_width = int(width)
+        storage_width = 4 if source_width == 3 else source_width
+        return f"SIMD[{dtype}, {storage_width}]"
+
+    def byte_address_vector_zero_value(self, width, dtype="DType.uint32"):
+        mojo_type = self.byte_address_vector_mojo_type(width, dtype)
+        zero = MOJO_DTYPE_INFO[dtype][2]
+        storage_width = 4 if int(width) == 3 else int(width)
+        return f"{mojo_type}({', '.join([zero] * storage_width)})"
 
     def extract_semantic_from_attributes(self, attributes):
         """Extract semantic information from new AST attributes."""
@@ -1980,7 +2044,12 @@ class MojoCodeGen:
             if func_expr is None:
                 func_expr = expr.name
             func_name = None
-            if hasattr(func_expr, "name"):
+            if isinstance(func_expr, MemberAccessNode):
+                member_call = self.generate_member_function_call(func_expr, expr.args)
+                if member_call is not None:
+                    return member_call
+                callee = self.generate_expression(func_expr)
+            elif hasattr(func_expr, "name") and getattr(func_expr, "name", None):
                 # It's an IdentifierNode, extract the name
                 func_name = func_expr.name
                 callee = func_name
@@ -2443,18 +2512,123 @@ class MojoCodeGen:
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"buffer_dimensions({generated_args})"
 
+    def generate_member_function_call(self, func_expr, args):
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        obj_type = self.expression_result_type(obj_expr)
+        info = self.buffer_resource_info(obj_type)
+        if info is None:
+            return None
+
+        obj = self.generate_expression(obj_expr)
+        buffer_type, element_type = info
+
+        if buffer_type in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+            if member in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+                width = MOJO_BYTE_ADDRESS_LOAD_METHODS[member]
+                self.register_buffer_resource_type(buffer_type)
+                if width == 1:
+                    self.required_buffer_load_helpers.add(info)
+                    generated_args = ", ".join(
+                        [obj, *[self.generate_expression(arg) for arg in args]]
+                    )
+                    return f"buffer_load({generated_args})"
+                self.required_byte_address_vector_load_helpers.add((buffer_type, width))
+                generated_args = ", ".join(
+                    [obj, *[self.generate_expression(arg) for arg in args]]
+                )
+                return f"buffer_load{width}({generated_args})"
+
+            if member in MOJO_BYTE_ADDRESS_STORE_METHODS:
+                self.validate_buffer_operation(
+                    member, info, MOJO_BUFFER_STORE_RESOURCE_TYPES
+                )
+                width = MOJO_BYTE_ADDRESS_STORE_METHODS[member]
+                self.register_buffer_resource_type(buffer_type)
+                if width == 1:
+                    self.required_buffer_store_helpers.add(info)
+                    generated_args = ", ".join(
+                        [obj, *[self.generate_expression(arg) for arg in args]]
+                    )
+                    return f"buffer_store({generated_args})"
+                self.required_byte_address_vector_store_helpers.add(
+                    (buffer_type, width)
+                )
+                generated_args = ", ".join(
+                    [obj, *[self.generate_expression(arg) for arg in args]]
+                )
+                return f"buffer_store{width}({generated_args})"
+
+        if member == "Load" and element_type is not None:
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_load_helpers.add(info)
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_load({generated_args})"
+
+        if member == "Store" and element_type is not None:
+            self.validate_buffer_operation(
+                "Store", info, MOJO_BUFFER_STORE_RESOURCE_TYPES
+            )
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_store_helpers.add(info)
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_store({generated_args})"
+
+        if member == "Append" and buffer_type == "AppendStructuredBuffer":
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_append_helpers.add(info)
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_append({generated_args})"
+
+        if member == "Consume" and buffer_type == "ConsumeStructuredBuffer":
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_consume_helpers.add(info)
+            return f"buffer_consume({obj})"
+
+        if member == "GetDimensions":
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_dimensions_helpers.add(info)
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_dimensions({generated_args})"
+
+        return None
+
     def generate_reinterpret_call(self, func_name, args):
-        return_type = MOJO_REINTERPRET_BUILTINS[func_name]
         if not args:
             return f"{func_name}()"
 
         source_type = self.expression_result_type(args[0])
-        arg_type = self.map_type(source_type) if source_type is not None else "UInt32"
-        if arg_type not in {"Float32", "Int32", "UInt32"}:
-            arg_type = "UInt32"
+        return_type_name = self.reinterpret_return_type_name(func_name, source_type)
+        return_type = self.map_type(return_type_name)
+        arg_type = self.reinterpret_argument_type(source_type)
         self.required_reinterpret_helpers.add((func_name, arg_type, return_type))
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"{func_name}({generated_args})"
+
+    def reinterpret_argument_type(self, source_type):
+        if source_type is None:
+            return "UInt32"
+        arg_type = self.map_type(source_type)
+        if arg_type in {"Float32", "Int32", "UInt32"}:
+            return arg_type
+        if self.vector_type_info(source_type) is not None:
+            return arg_type
+        return "UInt32"
+
+    def reinterpret_return_type_name(self, func_name, source_type):
+        scalar_type, vector_prefix = MOJO_REINTERPRET_TARGET_TYPES[func_name]
+        vector_info = self.vector_type_info(source_type)
+        if vector_info is not None:
+            return f"{vector_prefix}{vector_info[1]}"
+        return scalar_type
 
     def generate_resource_builtin_call(self, args, helper_base, return_kind):
         if not args:
@@ -2780,6 +2954,8 @@ class MojoCodeGen:
             and not self.required_buffer_append_helpers
             and not self.required_buffer_consume_helpers
             and not self.required_buffer_dimensions_helpers
+            and not self.required_byte_address_vector_load_helpers
+            and not self.required_byte_address_vector_store_helpers
             and not self.required_reinterpret_helpers
         ):
             return ""
@@ -2805,6 +2981,8 @@ class MojoCodeGen:
             or self.required_buffer_append_helpers
             or self.required_buffer_consume_helpers
             or self.required_buffer_dimensions_helpers
+            or self.required_byte_address_vector_load_helpers
+            or self.required_byte_address_vector_store_helpers
         ):
             code += "# CrossGL resource placeholders\n"
             for resource_type in sorted(
@@ -2843,6 +3021,10 @@ class MojoCodeGen:
                 code += self.generate_buffer_consume_helper(*key)
             for key in sorted(self.required_buffer_dimensions_helpers):
                 code += self.generate_buffer_dimensions_helper(*key)
+            for key in sorted(self.required_byte_address_vector_load_helpers):
+                code += self.generate_byte_address_vector_load_helper(*key)
+            for key in sorted(self.required_byte_address_vector_store_helpers):
+                code += self.generate_byte_address_vector_store_helper(*key)
             code += "\n"
 
         if self.required_reinterpret_helpers:
@@ -2956,8 +3138,35 @@ class MojoCodeGen:
             code += "    pass\n\n"
         return code
 
+    def generate_byte_address_vector_load_helper(self, buffer_type, width):
+        vector_type = self.byte_address_vector_mojo_type(width)
+        zero_value = self.byte_address_vector_zero_value(width)
+        code = ""
+        for index_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_load{width}(buffer: {buffer_type}, "
+                f"index: {index_type}) -> {vector_type}:\n"
+            )
+            code += f"    return {zero_value}\n\n"
+        return code
+
+    def generate_byte_address_vector_store_helper(self, buffer_type, width):
+        vector_type = self.byte_address_vector_mojo_type(width)
+        code = ""
+        for index_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_store{width}(buffer: {buffer_type}, "
+                f"index: {index_type}, value: {vector_type}):\n"
+            )
+            code += "    pass\n\n"
+        return code
+
     def generate_reinterpret_helper(self, func_name, arg_type, return_type):
         code = f"fn {func_name}(value: {arg_type}) -> {return_type}:\n"
+        return_match = re.fullmatch(r"SIMD\[(DType\.\w+), \d+\]", return_type)
+        if arg_type.startswith("SIMD[") and return_match is not None:
+            code += f"    return value.cast[{return_match.group(1)}]()\n\n"
+            return code
         code += f"    return {return_type}(value)\n\n"
         return code
 
@@ -3631,6 +3840,10 @@ class MojoCodeGen:
                 return right_type
             return left_type if left_type == right_type else left_type or right_type
         if isinstance(expr, FunctionCallNode):
+            member_result_type = self.member_function_result_type(expr)
+            if member_result_type is not None:
+                return member_result_type
+
             func_name = self.function_call_name(expr)
             if func_name in self.vector_constructor_info:
                 return func_name
@@ -3685,11 +3898,10 @@ class MojoCodeGen:
             if func_name in {"buffer_store", "buffer_append", "buffer_dimensions"}:
                 return "void"
             if func_name in MOJO_REINTERPRET_BUILTINS:
-                return {
-                    "asfloat": "float",
-                    "asint": "int",
-                    "asuint": "uint",
-                }[func_name]
+                source_type = (
+                    self.expression_result_type(expr.args[0]) if expr.args else None
+                )
+                return self.reinterpret_return_type_name(func_name, source_type)
             if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
                 _, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
                 if return_kind == "float":
@@ -3725,10 +3937,40 @@ class MojoCodeGen:
         func_expr = getattr(expr, "function", None)
         if func_expr is None:
             func_expr = expr.name
+        if isinstance(func_expr, MemberAccessNode):
+            return None
         if hasattr(func_expr, "name"):
             return func_expr.name
         if isinstance(func_expr, str):
             return func_expr
+        return None
+
+    def member_function_result_type(self, expr):
+        func_expr = getattr(expr, "function", None)
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        info = self.buffer_resource_info(self.expression_result_type(obj_expr))
+        if info is None:
+            return None
+
+        buffer_type, element_type = info
+        if buffer_type in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+            if member in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+                return self.byte_address_load_result_type(
+                    MOJO_BYTE_ADDRESS_LOAD_METHODS[member]
+                )
+            if member in MOJO_BYTE_ADDRESS_STORE_METHODS or member == "GetDimensions":
+                return "void"
+
+        if member == "Load":
+            return element_type
+        if member == "Consume" and buffer_type == "ConsumeStructuredBuffer":
+            return element_type
+        if member in {"Store", "Append", "GetDimensions"}:
+            return "void"
         return None
 
     def vector_type_info(self, type_name):

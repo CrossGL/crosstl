@@ -98,6 +98,50 @@ shader GLSLGeometryTessellationLayoutValidator {
 """
 
 
+GLSL_MESH_VALIDATOR_SHADER = """
+shader GLSLMeshValidator {
+    mesh {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        layout(points, max_vertices = 1, max_primitives = 1) out;
+
+        void main() {
+            SetMeshOutputCounts(1, 1);
+            gl_MeshVerticesEXT[0].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+            gl_PrimitivePointIndicesEXT[0] = 0u;
+        }
+    }
+}
+"""
+
+
+GLSL_RAY_GENERATION_VALIDATOR_SHADER = """
+shader GLSLRayGenerationValidator {
+    accelerationStructureEXT topLevelAS @binding(0);
+
+    ray_generation {
+        layout(location = 0) @rayPayloadEXT vec4 rayPayload;
+
+        void main() {
+            rayPayload = vec4(1.0);
+            TraceRay(
+                topLevelAS,
+                gl_RayFlagsNoneEXT,
+                255u,
+                0u,
+                0u,
+                0u,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                100.0,
+                0
+            );
+        }
+    }
+}
+"""
+
+
 MIXED_GLSL_PREPROCESSOR_COMPUTE_SHADER = """
 #version 300 es
 #extension GL_ARB_separate_shader_objects : enable
@@ -462,6 +506,23 @@ def _require_tool(name):
     return path
 
 
+def _require_glslang_stage(glslang, stage):
+    result = subprocess.run(
+        [glslang, "--help"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    help_text = "\n".join(
+        part for part in (result.stdout, result.stderr) if part.strip()
+    )
+    if result.returncode != 0:
+        detail = help_text.strip() or "no diagnostic output"
+        pytest.skip(f"glslangValidator stage probe failed: {detail}")
+    if stage not in help_text:
+        pytest.skip(f"glslangValidator does not advertise GLSL stage {stage!r}")
+
+
 def _require_xcrun_tool(name):
     xcrun = _require_tool("xcrun")
     probe = subprocess.run(
@@ -736,6 +797,45 @@ def test_generated_glsl_geometry_tessellation_layouts_validate_with_glslangvalid
         shader_path.write_text(code, encoding="utf-8")
 
         _run_validator([glslang, "-S", validator_stage, str(shader_path)])
+
+
+def test_generated_glsl_mesh_shader_validates_with_glslangvalidator(tmp_path):
+    glslang = _require_tool("glslangValidator")
+    _require_glslang_stage(glslang, "mesh")
+    shader_path = tmp_path / "mesh_shader.mesh"
+
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_MESH_VALIDATOR_SHADER), "mesh"
+    )
+    assert "#extension GL_EXT_mesh_shader : require" in code
+    assert "layout(points, max_vertices = 1, max_primitives = 1) out;" in code
+    assert "SetMeshOutputsEXT(1, 1);" in code
+    assert "SetMeshOutputCounts" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "mesh", str(shader_path)])
+
+
+def test_generated_glsl_ray_generation_validates_with_glslangvalidator(tmp_path):
+    glslang = _require_tool("glslangValidator")
+    _require_glslang_stage(glslang, "rgen")
+    shader_path = tmp_path / "ray_generation.rgen"
+
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_RAY_GENERATION_VALIDATOR_SHADER),
+        "ray_generation",
+    )
+    assert code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_tracing : require" in code
+    assert "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;" in code
+    assert "layout(location = 0) rayPayloadEXT vec4 rayPayload;" in code
+    assert "traceRayEXT(" in code
+    assert "TraceRay" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [glslang, "-V", "--target-env", "vulkan1.2", "-S", "rgen", str(shader_path)]
+    )
 
 
 def test_generated_glsl_multisample_storage_validates_with_glslangvalidator(

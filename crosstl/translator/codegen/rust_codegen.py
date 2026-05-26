@@ -252,14 +252,29 @@ class RustCodeGen:
             "dot": "dot",
             "cross": "cross",
             "length": "length",
+            "distance": "distance",
             "reflect": "reflect",
             "refract": "refract",
+            "faceforward": "faceforward",
             "sin": "sin",
             "cos": "cos",
             "tan": "tan",
+            "asin": "asin",
+            "acos": "acos",
+            "atan": "atan",
+            "atan2": "atan2",
+            "sinh": "sinh",
+            "cosh": "cosh",
+            "tanh": "tanh",
+            "degrees": "degrees",
+            "radians": "radians",
             "sqrt": "sqrt",
             "inversesqrt": "rsqrt",
             "pow": "pow",
+            "exp": "exp",
+            "exp2": "exp2",
+            "log": "log",
+            "log2": "log2",
             "abs": "abs",
             "min": "min",
             "max": "max",
@@ -269,6 +284,7 @@ class RustCodeGen:
             "step": "step",
             "floor": "floor",
             "ceil": "ceil",
+            "round": "round",
             "frac": "fract",
             "fract": "fract",
             "mod": "modulo",
@@ -5408,13 +5424,16 @@ class RustCodeGen:
         if mapped_name in {"image_store", "buffer_store", "buffer_dimensions"}:
             return "void"
 
-        if mapped_name in {"normalize", "reflect", "refract"} and arg_types:
+        if (
+            mapped_name in {"normalize", "reflect", "refract", "faceforward"}
+            and arg_types
+        ):
             return arg_types[0]
 
         if mapped_name == "cross" and len(arg_types) >= 2:
             return self.promoted_value_type(arg_types[0], arg_types[1]) or arg_types[0]
 
-        if mapped_name in {"dot", "length"} and arg_types:
+        if mapped_name in {"dot", "length", "distance"} and arg_types:
             return self.vector_or_scalar_component_type(arg_types[0])
 
         if (
@@ -5425,16 +5444,32 @@ class RustCodeGen:
                 "abs",
                 "floor",
                 "ceil",
+                "round",
                 "sin",
                 "cos",
                 "tan",
+                "asin",
+                "acos",
+                "atan",
+                "sinh",
+                "cosh",
+                "tanh",
+                "exp",
+                "exp2",
+                "log",
+                "log2",
+                "degrees",
+                "radians",
                 "fract",
             }
             and arg_types
         ):
             return arg_types[0]
 
-        if mapped_name in {"min", "max", "pow", "modulo"} and len(arg_types) >= 2:
+        if (
+            mapped_name in {"min", "max", "pow", "modulo", "atan2"}
+            and len(arg_types) >= 2
+        ):
             return self.promoted_value_type(arg_types[0], arg_types[1])
 
         if mapped_name == "clamp" and arg_types:

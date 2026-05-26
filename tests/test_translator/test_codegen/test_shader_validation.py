@@ -285,6 +285,30 @@ shader SpirvSynchronizationValidation {
 """
 
 
+SPIRV_UNIFORM_BUFFER_COMPUTE_SHADER = """
+shader SpirvUniformBufferValidation {
+    cbuffer Camera @set(1) @binding(2) {
+        mat4 viewProj;
+        vec4 tint;
+        float exposure;
+        vec4 palette[2];
+    }
+
+    sampler2D colorMap;
+    sampler linearSampler;
+
+    compute {
+        void main() {
+            mat4 localView = viewProj;
+            vec4 color = tint * exposure + palette[1];
+            vec4 sampled = texture(colorMap, linearSampler, vec2(0.5, 0.5));
+            vec4 result = color + sampled;
+        }
+    }
+}
+"""
+
+
 SPIRV_IMAGE_ATOMIC_FORWARDING_COMPUTE_SHADER = """
 shader SpirvImageAtomicForwardingValidation {
     uimage2D counters @r32ui;
@@ -1350,6 +1374,74 @@ shader MetalRayTracingHelperValidation {
 """
 
 
+METAL_RAY_CALLABLE_DISPATCH_SHADER = """
+shader MetalRayCallableDispatchValidation {
+    struct CallableData {
+        vec4 color;
+    };
+
+    visible_function_table<CallableData> callables @binding(1);
+
+    ray_generation {
+        void main() {
+            CallableData data;
+            data.color = vec4(1.0);
+            CallShader(0, data);
+        }
+    }
+}
+"""
+
+
+METAL_RAY_STAGES_SHADER = """
+shader MetalRayStagesValidation {
+    struct Payload {
+        vec3 color;
+    };
+
+    struct HitAttrib {
+        vec2 bary;
+    };
+
+    struct BoundsHit {
+        bool accept @ accept_intersection;
+        float distance @ distance;
+    };
+
+    ray_any_hit {
+        void main(Payload payload @ payload, HitAttrib attr @ hit_attribute) {
+            payload.color = vec3(attr.bary, 0.0);
+        }
+    }
+
+    ray_closest_hit {
+        void main(Payload payload @ payload, HitAttrib attr @ hit_attribute) {
+            payload.color = vec3(attr.bary, 1.0);
+        }
+    }
+
+    ray_miss {
+        void main(Payload payload @ payload) {
+            payload.color = vec3(0.0, 0.0, 0.0);
+        }
+    }
+
+    ray_callable {
+        void main(Payload data @ callable_data) {
+            data.color = vec3(1.0, 1.0, 1.0);
+        }
+    }
+
+    ray_intersection {
+        BoundsHit main(Payload payload @ payload) @bounding_box {
+            payload.color = vec3(1.0, 0.0, 0.0);
+            return BoundsHit { accept: true, distance: 1.0 };
+        }
+    }
+}
+"""
+
+
 METAL_TEXTURE_3D_PROJECTED_OFFSET_FRAGMENT_SHADER = """
 shader MetalTexture3DProjectedOffsetValidation {
     sampler3D volumeMap;
@@ -2303,6 +2395,16 @@ def test_generated_spirv_synchronization_compute_validates_with_spirv_tools(
     run_validator([spirv_val, str(output)])
 
 
+def test_generated_spirv_uniform_buffer_compute_validates_with_spirv_tools(
+    tmp_path,
+):
+    validate_spirv_shader_source(
+        tmp_path,
+        "uniform_buffer_compute",
+        SPIRV_UNIFORM_BUFFER_COMPUTE_SHADER,
+    )
+
+
 def test_generated_spirv_integer_image_atomics_validates_with_spirv_tools(
     tmp_path,
 ):
@@ -2972,6 +3074,60 @@ def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3(
     code = MetalCodeGen().generate(
         crosstl.translator.parse(METAL_RAY_TRACING_HELPER_SHADER)
     )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_callable_dispatch_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_callable_dispatch.metal"
+    output = tmp_path / "ray_callable_dispatch.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_CALLABLE_DISPATCH_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_stages_compile_with_metal3(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_stages.metal"
+    output = tmp_path / "ray_stages.air"
+    code = MetalCodeGen().generate(crosstl.translator.parse(METAL_RAY_STAGES_SHADER))
     source.write_text(code, encoding="utf-8")
 
     run_validator(

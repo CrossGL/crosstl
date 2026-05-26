@@ -2987,6 +2987,92 @@ def test_metal_unsupported_ray_intrinsics_emit_compile_safe_diagnostics():
     assert "CallShader(" not in generated
 
 
+def test_metal_callshader_lowers_to_visible_function_table_call():
+    code = """
+    shader rt {
+        struct CallableData {
+            vec4 color;
+        };
+
+        visible_function_table<CallableData> callables @binding(1);
+
+        ray_generation {
+            void main() {
+                CallableData data;
+                data.color = vec4(1.0);
+                CallShader(0, data);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "visible_function_table<void(thread CallableData&)> callables [[buffer(1)]]"
+        in generated
+    )
+    assert "callables[0](data);" in generated
+    assert "unsupported Metal ray tracing intrinsic: CallShader" not in generated
+    assert "CallShader(" not in generated
+
+
+def test_metal_callshader_visible_function_table_threads_through_helpers():
+    code = """
+    shader rt {
+        struct CallableData {
+            vec4 color;
+        };
+
+        visible_function_table<CallableData> callables @binding(2);
+
+        void invoke(uint shaderIndex, CallableData data) {
+            CallShader(shaderIndex, data);
+        }
+
+        ray_generation {
+            void main() {
+                CallableData data;
+                data.color = vec4(1.0);
+                invoke(3u, data);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void invoke(uint shaderIndex, CallableData data, "
+        "visible_function_table<void(thread CallableData&)> callables)"
+    ) in generated
+    assert "callables[shaderIndex](data);" in generated
+    assert "invoke(3u, data, callables);" in generated
+    assert "invoke(3u, data);" not in generated
+
+
+def test_metal_callshader_accepts_explicit_visible_function_table_argument():
+    code = """
+    shader rt {
+        struct CallableData {
+            vec4 color;
+        };
+
+        visible_function_table<CallableData> primaryCallables @binding(1);
+        visible_function_table<CallableData> secondaryCallables @binding(2);
+
+        ray_generation {
+            void main() {
+                CallableData data;
+                CallShader(secondaryCallables, 4u, data);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "secondaryCallables[4u](data);" in generated
+    assert "unsupported Metal ray tracing intrinsic: CallShader" not in generated
+
+
 def test_ray_intersection_stage_lowers_to_metal_intersection_attribute():
     code = """
     shader rt {

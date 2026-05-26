@@ -208,12 +208,44 @@ mod math {
         left.x * right.x + left.y * right.y + left.z * right.z
     }
 
+    pub fn length(value: Vec3<f32>) -> f32 {
+        dot(value, value).sqrt()
+    }
+
     pub fn normalize(value: Vec3<f32>) -> Vec3<f32> {
         value
     }
 
+    pub fn cross(left: Vec3<f32>, right: Vec3<f32>) -> Vec3<f32> {
+        Vec3::new(
+            left.y * right.z - left.z * right.y,
+            left.z * right.x - left.x * right.z,
+            left.x * right.y - left.y * right.x,
+        )
+    }
+
+    pub fn distance(left: Vec3<f32>, right: Vec3<f32>) -> f32 {
+        length(left - right)
+    }
+
     pub fn reflect(incident: Vec3<f32>, normal: Vec3<f32>) -> Vec3<f32> {
         incident - normal * (2.0 * dot(incident, normal))
+    }
+
+    pub fn refract(incident: Vec3<f32>, _normal: Vec3<f32>, _eta: f32) -> Vec3<f32> {
+        incident
+    }
+
+    pub fn faceforward(
+        normal: Vec3<f32>,
+        incident: Vec3<f32>,
+        reference: Vec3<f32>,
+    ) -> Vec3<f32> {
+        if dot(reference, incident) < 0.0 {
+            normal
+        } else {
+            -normal
+        }
     }
 
     pub fn max(left: f32, right: f32) -> f32 {
@@ -224,6 +256,10 @@ mod math {
         left.min(right)
     }
 
+    pub fn clamp(value: f32, low: f32, high: f32) -> f32 {
+        value.max(low).min(high)
+    }
+
     pub fn pow(left: f32, right: f32) -> f32 {
         left.powf(right)
     }
@@ -232,8 +268,96 @@ mod math {
         value.sqrt()
     }
 
+    pub fn rsqrt(value: f32) -> f32 {
+        1.0 / value.sqrt()
+    }
+
+    pub fn abs(value: f32) -> f32 {
+        value.abs()
+    }
+
     pub fn floor(value: f32) -> f32 {
         value.floor()
+    }
+
+    pub fn ceil(value: f32) -> f32 {
+        value.ceil()
+    }
+
+    pub fn round(value: f32) -> f32 {
+        value.round()
+    }
+
+    pub fn fract(value: f32) -> f32 {
+        value.fract()
+    }
+
+    pub fn sin(value: f32) -> f32 {
+        value.sin()
+    }
+
+    pub fn cos(value: f32) -> f32 {
+        value.cos()
+    }
+
+    pub fn tan(value: f32) -> f32 {
+        value.tan()
+    }
+
+    pub fn asin(value: f32) -> f32 {
+        value.asin()
+    }
+
+    pub fn acos(value: f32) -> f32 {
+        value.acos()
+    }
+
+    pub fn atan(value: f32) -> f32 {
+        value.atan()
+    }
+
+    pub fn atan2(left: f32, right: f32) -> f32 {
+        left.atan2(right)
+    }
+
+    pub fn sinh(value: f32) -> f32 {
+        value.sinh()
+    }
+
+    pub fn cosh(value: f32) -> f32 {
+        value.cosh()
+    }
+
+    pub fn tanh(value: f32) -> f32 {
+        value.tanh()
+    }
+
+    pub fn exp(value: f32) -> f32 {
+        value.exp()
+    }
+
+    pub fn exp2(value: f32) -> f32 {
+        value.exp2()
+    }
+
+    pub fn log(value: f32) -> f32 {
+        value.ln()
+    }
+
+    pub fn log2(value: f32) -> f32 {
+        value.log2()
+    }
+
+    pub fn degrees(value: f32) -> f32 {
+        value.to_degrees()
+    }
+
+    pub fn radians(value: f32) -> f32 {
+        value.to_radians()
+    }
+
+    pub fn modulo(left: f32, right: f32) -> f32 {
+        left % right
     }
 
     pub fn smoothstep(_edge0: f32, _edge1: f32, value: f32) -> f32 {
@@ -2987,6 +3111,53 @@ def test_texel_fetch_and_texture_query_calls_map_to_rust_helpers_and_compile(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_multisample_texture_fetch_and_query_helpers_compile(tmp_path):
+    code = """
+    shader MultisampleTextureProbe {
+        sampler2DMS msTexture;
+        sampler2DMSArray msArrayTexture;
+
+        fragment {
+            vec4 main(ivec2 pixel, int layer, int sampleIndex) @ gl_FragColor {
+                let size2D = textureSize(msTexture);
+                let sizeArray = textureSize(msArrayTexture);
+                let samples = textureSamples(msTexture);
+                let fetched = texelFetch(msTexture, pixel, sampleIndex);
+                let fetchedArray = texelFetch(msArrayTexture, ivec3(pixel.x, pixel.y, layer), sampleIndex);
+                return fetched + fetchedArray + vec4(float(size2D.x + sizeArray.z + samples));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static MS_TEXTURE: std::sync::LazyLock<Texture2DMS<f32>>" in generated_code
+    assert (
+        "static MS_ARRAY_TEXTURE: std::sync::LazyLock<Texture2DMSArray<f32>>"
+        in generated_code
+    )
+    assert "let size2D: Vec2<i32> = texture_size(*MS_TEXTURE);" in generated_code
+    assert (
+        "let sizeArray: Vec3<i32> = texture_size(*MS_ARRAY_TEXTURE);" in generated_code
+    )
+    assert "let samples: i32 = texture_samples(*MS_TEXTURE);" in generated_code
+    assert (
+        "let fetched: Vec4<f32> = texel_fetch(*MS_TEXTURE, pixel, sampleIndex);"
+        in generated_code
+    )
+    assert (
+        "let fetchedArray: Vec4<f32> = texel_fetch(*MS_ARRAY_TEXTURE, Vec3::<i32>::new(pixel.x, pixel.y, layer), sampleIndex);"
+        in generated_code
+    )
+    assert "sampler2DMS" not in generated_code
+    assert "sampler2DMSArray" not in generated_code
+    assert "textureSize" not in generated_code
+    assert "textureSamples" not in generated_code
+    assert "texelFetch" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_projected_sampling_and_gather_calls_map_to_rust_helpers_and_compile(
     tmp_path,
 ):
@@ -4219,6 +4390,58 @@ def test_builtin_function_calls_infer_rust_value_types_and_smoke_compile(tmp_pat
     assert "let reflected: f32 = reflect" not in generated_code
     assert "let mixed: f32 = lerp" not in generated_code
     assert "let tex: f32 = sample" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_common_math_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
+    code = """
+    shader CommonIntrinsicInference {
+        fragment {
+            vec4 main(vec3 normal, vec3 incident, vec3 reference, float x, float y, float angle) {
+                let dist = distance(normal, incident);
+                let facing = faceforward(normal, incident, reference);
+                let rounded = round(x);
+                let exponential = exp(x);
+                let exponential2 = exp2(x);
+                let naturalLog = log(y);
+                let binaryLog = log2(y);
+                let deg = degrees(angle);
+                let rad = radians(deg);
+                let arc = asin(clamp(x, -1.0, 1.0)) + acos(clamp(x, -1.0, 1.0))
+                    + atan(x) + atan2(y, x);
+                let hyper = sinh(x) + cosh(x) + tanh(x);
+                return vec4(
+                    facing,
+                    dist + rounded + exponential + exponential2 + naturalLog
+                        + binaryLog + deg + rad + arc + hyper
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let dist: f32 = distance(normal, incident);" in generated_code
+    assert (
+        "let facing: Vec3<f32> = faceforward(normal, incident, reference);"
+        in generated_code
+    )
+    assert "let rounded: f32 = round(x);" in generated_code
+    assert "let exponential: f32 = exp(x);" in generated_code
+    assert "let exponential2: f32 = exp2(x);" in generated_code
+    assert "let naturalLog: f32 = log(y);" in generated_code
+    assert "let binaryLog: f32 = log2(y);" in generated_code
+    assert "let deg: f32 = degrees(angle);" in generated_code
+    assert "let rad: f32 = radians(deg);" in generated_code
+    assert "let arc: f32 =" in generated_code
+    assert "asin(clamp(x, (-1.0), 1.0))" in generated_code
+    assert "acos(clamp(x, (-1.0), 1.0))" in generated_code
+    assert "atan(x)" in generated_code
+    assert "atan2(y, x)" in generated_code
+    assert "let hyper: f32 = ((sinh(x) + cosh(x)) + tanh(x));" in generated_code
+    assert "let dist: Vec3<f32> = distance" not in generated_code
+    assert "let facing: f32 = faceforward" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

@@ -3193,6 +3193,79 @@ class TestVulkanSPIRVCodeGen:
         ):
             VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
+    def test_cbuffer_globals_emit_spirv_uniform_blocks_and_bindings(self):
+        source_code = """
+        shader UniformBlocks {
+            cbuffer Camera @set(1) @binding(2) {
+                mat4 viewProj;
+                vec4 tint;
+                float exposure;
+                vec4 palette[2];
+            }
+
+            sampler2d colorMap;
+
+            compute {
+                void main() {
+                    mat4 localView = viewProj;
+                    vec4 color = tint * exposure + palette[1];
+                    vec4 sampled = texture(colorMap, vec2(0.5, 0.5));
+                    vec4 result = color + sampled;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        cbuffer_type = next(
+            (
+                type_id
+                for type_id in spirv_named_ids(spv_code, "Camera")
+                if re.search(rf"{re.escape(type_id)} = OpTypeStruct\b", spv_code)
+            ),
+            None,
+        )
+        assert cbuffer_type is not None
+        cbuffer_var = spirv_named_variable(spv_code, "Camera", storage_class="Uniform")
+        sampled_image = spirv_named_variable(
+            spv_code, "colorMap", storage_class="UniformConstant"
+        )
+
+        assert f"OpDecorate {cbuffer_type} Block" in spv_code
+        assert f"OpDecorate {cbuffer_var} DescriptorSet 1" in spv_code
+        assert f"OpDecorate {cbuffer_var} Binding 2" in spv_code
+        assert f"OpDecorate {sampled_image} DescriptorSet 0" in spv_code
+        assert f"OpDecorate {sampled_image} Binding 0" in spv_code
+        assert f"OpMemberDecorate {cbuffer_type} 0 Offset 0" in spv_code
+        assert f"OpMemberDecorate {cbuffer_type} 0 ColMajor" in spv_code
+        assert f"OpMemberDecorate {cbuffer_type} 0 MatrixStride 16" in spv_code
+        assert f"OpMemberDecorate {cbuffer_type} 1 Offset 64" in spv_code
+        assert f"OpMemberDecorate {cbuffer_type} 2 Offset 80" in spv_code
+        assert f"OpMemberDecorate {cbuffer_type} 3 Offset 96" in spv_code
+        assert re.search(r"OpDecorate %\d+ ArrayStride 16", spv_code)
+        assert "OpAccessChain" in spv_code
+        assert "Unknown variable" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_cbuffer_globals_reject_duplicate_spirv_bindings(self):
+        source_code = """
+        shader UniformBlocks {
+            sampler2d first @binding(0);
+
+            cbuffer Camera @binding(0) {
+                float exposure;
+            }
+        }
+        """
+
+        with pytest.raises(
+            ValueError, match="Duplicate SPIR-V resource binding set 0 binding 0"
+        ):
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
     def test_image_globals_emit_spirv_storage_image_types(self):
         source_code = """
         shader Resources {

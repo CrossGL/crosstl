@@ -1889,6 +1889,8 @@ class GLSLCodeGen:
         )
 
     def generate_stage_layout(self, shader_type, func, stage_layout_qualifiers=None):
+        if shader_type == "fragment":
+            return self.generate_fragment_stage_layout(func, stage_layout_qualifiers)
         if shader_type == "geometry":
             return self.generate_geometry_stage_layout(func, stage_layout_qualifiers)
         if shader_type == "tessellation_control":
@@ -1901,6 +1903,13 @@ class GLSLCodeGen:
             )
         if shader_type == "mesh":
             return self.generate_mesh_stage_layout(func, stage_layout_qualifiers)
+        return ""
+
+    def generate_fragment_stage_layout(self, func, stage_layout_qualifiers=None):
+        if self.glsl_stage_bare_attribute(
+            func, {"early_fragment_tests"}, stage_layout_qualifiers, "in"
+        ):
+            return "layout(early_fragment_tests) in;\n"
         return ""
 
     def generate_geometry_stage_layout(self, func, stage_layout_qualifiers=None):
@@ -8191,6 +8200,7 @@ class GLSLCodeGen:
             "cw",
             "ccw",
             "domain",
+            "early_fragment_tests",
             "equal_spacing",
             "fractional_even_spacing",
             "fractional_odd_spacing",

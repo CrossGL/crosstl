@@ -5174,19 +5174,106 @@ class HLSLCodeGen:
                 f"a user-defined struct type, got {mapped_type}"
             )
 
+    def hlsl_expression_mapped_base_and_array_suffix(self, expr):
+        expr_type = self.expression_result_type(expr)
+        if expr_type is None:
+            return None, ""
+
+        mapped_type = self.map_type(expr_type)
+        return split_array_type_suffix(mapped_type)
+
+    def validate_hlsl_trace_ray_exact_type_argument(
+        self, argument, shader_type, role, expected_type
+    ):
+        base_type, array_suffix = self.hlsl_expression_mapped_base_and_array_suffix(
+            argument
+        )
+        if base_type is None:
+            return
+        if array_suffix or base_type != expected_type:
+            actual_type = f"{base_type}{array_suffix}"
+            raise ValueError(
+                f"DirectX {shader_type} TraceRay {role} argument must be "
+                f"{expected_type}, got {actual_type}"
+            )
+
+    def validate_hlsl_ray_scalar_float_argument(
+        self, argument, shader_type, operation, role
+    ):
+        argument_type = self.expression_result_type(argument)
+        if argument_type is None:
+            return
+        if not self.is_scalar_floating_type(argument_type):
+            raise ValueError(
+                f"DirectX {shader_type} {operation} {role} argument must be "
+                f"scalar floating, got {self.map_type(argument_type)}"
+            )
+
+    def validate_hlsl_trace_ray_arguments(self, args, shader_type):
+        self.validate_hlsl_trace_ray_exact_type_argument(
+            args[0],
+            shader_type,
+            "acceleration structure",
+            "RaytracingAccelerationStructure",
+        )
+        for index, role in (
+            (1, "ray flags"),
+            (2, "instance inclusion mask"),
+            (3, "ray contribution to hit group index"),
+            (4, "geometry contribution multiplier"),
+            (5, "miss shader index"),
+        ):
+            self.validate_hlsl_scalar_int_uint_expression(
+                args[index], f"DirectX {shader_type} TraceRay {role} argument"
+            )
+        if len(args) == 8:
+            self.validate_hlsl_trace_ray_exact_type_argument(
+                args[6], shader_type, "ray descriptor", "RayDesc"
+            )
+        else:
+            self.validate_hlsl_trace_ray_exact_type_argument(
+                args[6], shader_type, "origin", "float3"
+            )
+            self.validate_hlsl_ray_scalar_float_argument(
+                args[7], shader_type, "TraceRay", "minimum distance"
+            )
+            self.validate_hlsl_trace_ray_exact_type_argument(
+                args[8], shader_type, "direction", "float3"
+            )
+            self.validate_hlsl_ray_scalar_float_argument(
+                args[9], shader_type, "TraceRay", "maximum distance"
+            )
+        self.validate_hlsl_ray_struct_argument(
+            args[-1], shader_type, "TraceRay", "payload"
+        )
+
+    def validate_hlsl_call_shader_arguments(self, args, shader_type):
+        self.validate_hlsl_scalar_int_uint_expression(
+            args[0], f"DirectX {shader_type} CallShader shader index argument"
+        )
+        self.validate_hlsl_ray_struct_argument(
+            args[1], shader_type, "CallShader", "callable data"
+        )
+
+    def validate_hlsl_report_hit_arguments(self, args, shader_type):
+        self.validate_hlsl_ray_scalar_float_argument(
+            args[0], shader_type, "ReportHit", "hit distance"
+        )
+        self.validate_hlsl_scalar_int_uint_expression(
+            args[1], f"DirectX {shader_type} ReportHit hit kind argument"
+        )
+        if len(args) == 3:
+            self.validate_hlsl_ray_struct_argument(
+                args[2], shader_type, "ReportHit", "hit attribute"
+            )
+
     def validate_hlsl_ray_tracing_call_arguments(self, operation, args, shader_type):
         if operation == "TraceRay":
-            self.validate_hlsl_ray_struct_argument(
-                args[-1], shader_type, operation, "payload"
-            )
+            self.validate_hlsl_trace_ray_arguments(args, shader_type)
         elif operation == "CallShader":
-            self.validate_hlsl_ray_struct_argument(
-                args[1], shader_type, operation, "callable data"
-            )
-        elif operation == "ReportHit" and len(args) == 3:
-            self.validate_hlsl_ray_struct_argument(
-                args[2], shader_type, operation, "hit attribute"
-            )
+            self.validate_hlsl_call_shader_arguments(args, shader_type)
+        elif operation == "ReportHit":
+            self.validate_hlsl_report_hit_arguments(args, shader_type)
 
     def validate_hlsl_ray_tracing_calls(self, func, shader_type):
         calls = self.hlsl_ray_tracing_calls(func)
