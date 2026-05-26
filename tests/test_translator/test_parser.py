@@ -1700,6 +1700,36 @@ def test_conflicting_hlsl_semantic_metadata_fails_validation():
         parse_code(tokenize_code(code))
 
 
+def test_conflicting_function_return_semantic_metadata_fails_validation():
+    code = """
+    shader ConflictingFunctionReturnSemanticMetadata {
+        fragment {
+            vec4 main() : SV_Target0 @SV_Target1 {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting semantic metadata"):
+        parse_code(tokenize_code(code))
+
+
+def test_conflicting_metal_color_return_metadata_values_fail_validation():
+    code = """
+    shader ConflictingMetalReturnColorMetadata {
+        fragment {
+            vec4 main() [[color(0)]] [[color(1)]] {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting semantic metadata"):
+        parse_code(tokenize_code(code))
+
+
 def test_glsl_layout_buffer_block_lowers_to_struct_and_resource_variable():
     code = """
     shader BufferBlockLayouts {

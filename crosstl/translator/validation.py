@@ -825,6 +825,8 @@ def validate_function_metadata(function, context):
                 f"{_metadata_value_phrase(attr_value)}"
             )
 
+    validate_hlsl_semantic_metadata(function, context)
+
 
 def validate_node_metadata(node, context):
     """Validate qualifier and attribute metadata on a declaration node."""
@@ -874,12 +876,7 @@ def validate_node_metadata(node, context):
             f"Conflicting resource access metadata on {context}: {access_list}"
         )
 
-    semantic_names = _node_hlsl_semantic_metadata_names(node)
-    if len(semantic_names) > 1:
-        raise ValueError(
-            f"Conflicting semantic metadata on {context}: "
-            f"{_metadata_name_phrase(semantic_names)}"
-        )
+    validate_hlsl_semantic_metadata(node, context)
 
     values_by_name = {}
     for attr in getattr(node, "attributes", []) or []:
@@ -1011,13 +1008,22 @@ def _node_resource_access_names(node):
     return access_names
 
 
-def _node_hlsl_semantic_metadata_names(node):
-    names = set()
+def validate_hlsl_semantic_metadata(node, context):
+    semantic_metadata = _node_hlsl_semantic_metadata(node)
+    if len(semantic_metadata) > 1:
+        raise ValueError(
+            f"Conflicting semantic metadata on {context}: "
+            f"{_metadata_attribute_phrase(semantic_metadata)}"
+        )
+
+
+def _node_hlsl_semantic_metadata(node):
+    metadata = set()
     for attr in getattr(node, "attributes", []) or []:
         attr_name = _normalized_metadata_name(getattr(attr, "name", None))
         if _is_hlsl_semantic_metadata_name(attr_name):
-            names.add(attr_name)
-    return names
+            metadata.add((attr_name, _attribute_metadata_values(attr)))
+    return metadata
 
 
 def _is_hlsl_semantic_metadata_name(name):
@@ -1038,6 +1044,19 @@ def _metadata_name_phrase(names):
     if len(formatted_names) == 2:
         return f"{formatted_names[0]} and {formatted_names[1]}"
     return ", ".join(formatted_names)
+
+
+def _metadata_attribute_phrase(metadata):
+    formatted_metadata = []
+    for name, value in metadata:
+        if value:
+            formatted_metadata.append(f"@{name}{_metadata_value_phrase(value)}")
+        else:
+            formatted_metadata.append(f"@{name}")
+    formatted_metadata = sorted(formatted_metadata)
+    if len(formatted_metadata) == 2:
+        return f"{formatted_metadata[0]} and {formatted_metadata[1]}"
+    return ", ".join(formatted_metadata)
 
 
 def _normalized_metadata_name(name):

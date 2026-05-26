@@ -698,11 +698,11 @@ class Parser:
 
         return ImportNode(path=path, alias=alias, items=items)
 
-    def parse_square_attributes(self):
+    def parse_square_attributes(self, allow_single_square=True):
         """Parse HLSL-style ``[attr]`` or Metal-style ``[[attr]]`` metadata."""
         attributes = []
 
-        while self.current_token_starts_square_attribute():
+        while self.current_token_starts_square_attribute(allow_single_square):
             double_bracket = self.peek()[0] == "LBRACKET"
             self.eat("LBRACKET")
             if double_bracket:
@@ -736,14 +736,17 @@ class Parser:
 
         return attributes
 
-    def current_token_starts_square_attribute(self):
+    def current_token_starts_square_attribute(self, allow_single_square=True):
         """Return whether the current bracketed group is metadata."""
         if self.current_token[0] != "LBRACKET":
             return False
 
         offset = 1
-        if self.peek()[0] == "LBRACKET":
+        double_bracket = self.peek()[0] == "LBRACKET"
+        if double_bracket:
             offset = 2
+        elif not allow_single_square:
+            return False
 
         name_token_type, name_token_value = self.peek(offset)
         if name_token_type in {"RBRACKET", "EOF"}:
@@ -753,16 +756,17 @@ class Parser:
 
         return self.peek(offset + 1)[0] in {"LPAREN", "COMMA", "RBRACKET"}
 
-    def parse_attribute_annotations(self):
+    def parse_attribute_annotations(self, allow_single_square=True):
         """Parse consecutive ``@``, HLSL ``[]``, or Metal ``[[]]`` attributes."""
         attributes = []
-        while self.current_token[0] in ["AT", "ATTRIBUTE"] or (
-            not attributes and self.current_token_starts_square_attribute()
-        ):
+        while self.current_token[0] in [
+            "AT",
+            "ATTRIBUTE",
+        ] or self.current_token_starts_square_attribute(allow_single_square):
             if self.current_token[0] in ["AT", "ATTRIBUTE"]:
                 attributes.extend(self.parse_attributes())
             else:
-                attributes.extend(self.parse_square_attributes())
+                attributes.extend(self.parse_square_attributes(allow_single_square))
         return attributes
 
     def parse_post_declaration_attributes(self):
@@ -771,16 +775,14 @@ class Parser:
         while (
             self.current_token[0] == "COLON"
             or self.current_token[0] in ["AT", "ATTRIBUTE"]
-            or (
-                self.current_token[0] == "LBRACKET"
-                and self.peek()[0] == "LBRACKET"
-                and self.current_token_starts_square_attribute()
-            )
+            or self.current_token_starts_square_attribute(allow_single_square=False)
         ):
             if self.current_token[0] == "COLON":
                 attributes.extend(self.parse_colon_semantic_attributes())
             else:
-                attributes.extend(self.parse_attribute_annotations())
+                attributes.extend(
+                    self.parse_attribute_annotations(allow_single_square=False)
+                )
         return attributes
 
     def parse_colon_semantic_attributes(self):
@@ -977,7 +979,11 @@ class Parser:
             variable_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
-        while self.current_token[0] == "LBRACKET" and self.peek()[0] != "LBRACKET":
+        while self.current_token[
+            0
+        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
+            allow_single_square=False
+        ):
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
@@ -1185,7 +1191,11 @@ class Parser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        while self.current_token[0] == "LBRACKET" and self.peek()[0] != "LBRACKET":
+        while self.current_token[
+            0
+        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
+            allow_single_square=False
+        ):
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
@@ -1425,7 +1435,11 @@ class Parser:
             name = self.current_token[1]
             self.eat("IDENTIFIER")
 
-        while self.current_token[0] == "LBRACKET" and self.peek()[0] != "LBRACKET":
+        while self.current_token[
+            0
+        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
+            allow_single_square=False
+        ):
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
@@ -1543,7 +1557,11 @@ class Parser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        while self.current_token[0] == "LBRACKET" and self.peek()[0] != "LBRACKET":
+        while self.current_token[
+            0
+        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
+            allow_single_square=False
+        ):
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
@@ -1553,7 +1571,11 @@ class Parser:
 
         attributes.extend(self.parse_post_declaration_attributes())
 
-        while self.current_token[0] == "LBRACKET" and self.peek()[0] != "LBRACKET":
+        while self.current_token[
+            0
+        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
+            allow_single_square=False
+        ):
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
