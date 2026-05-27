@@ -1733,6 +1733,110 @@ def test_directx_typed_buffer_atomics_reject_readonly_targets(
         generate_code(parse_code(tokenize_code(shader)))
 
 
+@pytest.mark.parametrize(
+    ("declaration", "call", "resource_type"),
+    [
+        (
+            "Buffer<uint> values @register(t1);",
+            "buffer_store(values, tid.x, 1u);",
+            "Buffer<uint>",
+        ),
+        (
+            "StructuredBuffer<uint> values @register(t1);",
+            "buffer_store(values, tid.x, 1u);",
+            "StructuredBuffer<uint>",
+        ),
+        (
+            "StructuredBuffer<uint> values[2] @register(t1);",
+            "buffer_store(values[1], tid.x, 1u);",
+            "StructuredBuffer<uint>",
+        ),
+        (
+            "ByteAddressBuffer rawBytes @register(t3);",
+            "buffer_store(rawBytes, tid.x * 4u, 1u);",
+            "ByteAddressBuffer",
+        ),
+        (
+            "ByteAddressBuffer rawBytes @register(t3);",
+            "buffer_store4(rawBytes, tid.x * 16u, uvec4(1u, 2u, 3u, 4u));",
+            "ByteAddressBuffer",
+        ),
+    ],
+)
+def test_directx_buffer_store_helpers_reject_readonly_resources(
+    declaration, call, resource_type
+):
+    shader = f"""
+    shader BadReadonlyBufferStoreHLSL {{
+        {declaration}
+
+        compute {{
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {{
+                {call}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"DirectX buffer helper 'buffer_store"
+            f"{'4' if 'buffer_store4' in call else ''}' cannot write readonly "
+            f"{re.escape(resource_type)}"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "call", "match"),
+    [
+        (
+            "AppendStructuredBuffer<uint> values @register(u1);",
+            "uint value = buffer_load(values, tid.x);",
+            "DirectX buffer helper 'buffer_load' requires a resource with "
+            "indexed read support, got AppendStructuredBuffer<uint>",
+        ),
+        (
+            "ConsumeStructuredBuffer<uint> values @register(u2);",
+            "buffer_store(values, tid.x, 1u);",
+            "DirectX buffer helper 'buffer_store' requires a resource with "
+            "indexed write support, got ConsumeStructuredBuffer<uint>",
+        ),
+        (
+            "ConsumeStructuredBuffer<uint> values @register(u2);",
+            "buffer_append(values, 1u);",
+            "DirectX buffer helper 'buffer_append' requires "
+            "AppendStructuredBuffer, got ConsumeStructuredBuffer<uint>",
+        ),
+        (
+            "AppendStructuredBuffer<uint> values @register(u1);",
+            "uint value = buffer_consume(values);",
+            "DirectX buffer helper 'buffer_consume' requires "
+            "ConsumeStructuredBuffer, got AppendStructuredBuffer<uint>",
+        ),
+    ],
+)
+def test_directx_append_consume_buffers_reject_wrong_helpers(declaration, call, match):
+    shader = f"""
+    shader BadAppendConsumeHelperHLSL {{
+        {declaration}
+
+        compute {{
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {{
+                {call}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 def test_structured_buffer_dimensions_lower_to_get_dimensions():
     code = """
     shader StructuredBufferDimensionsHLSL {

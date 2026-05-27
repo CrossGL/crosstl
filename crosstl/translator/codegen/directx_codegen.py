@@ -3385,8 +3385,103 @@ class HLSLCodeGen:
             "allMemoryBarrier": "AllMemoryBarrier",
         }.get(func_name)
 
+    def hlsl_buffer_helper_resource_type(self, expr):
+        vtype = self.type_name_string(self.expression_result_type(expr))
+        if not vtype:
+            return None
+        resource_type = self.resource_base_type(vtype)
+        resource_name = self.hlsl_resource_type_name(resource_type)
+        if resource_name in {
+            "Buffer",
+            "StructuredBuffer",
+            "ByteAddressBuffer",
+            "RWBuffer",
+            "RWStructuredBuffer",
+            "RWByteAddressBuffer",
+            "RasterizerOrderedBuffer",
+            "RasterizerOrderedStructuredBuffer",
+            "RasterizerOrderedByteAddressBuffer",
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+        }:
+            return resource_type
+        return None
+
+    def validate_buffer_call_access(self, func_name, args):
+        if not args:
+            return
+
+        resource_type = self.hlsl_buffer_helper_resource_type(args[0])
+        if resource_type is None:
+            return
+
+        resource_name = self.hlsl_resource_type_name(resource_type)
+        indexed_read_helpers = {
+            "buffer_load",
+            "buffer_load2",
+            "buffer_load3",
+            "buffer_load4",
+        }
+        indexed_write_helpers = {
+            "buffer_store",
+            "buffer_store2",
+            "buffer_store3",
+            "buffer_store4",
+        }
+        indexed_read_resources = {
+            "Buffer",
+            "StructuredBuffer",
+            "ByteAddressBuffer",
+            "RWBuffer",
+            "RWStructuredBuffer",
+            "RWByteAddressBuffer",
+            "RasterizerOrderedBuffer",
+            "RasterizerOrderedStructuredBuffer",
+            "RasterizerOrderedByteAddressBuffer",
+        }
+        indexed_write_resources = {
+            "RWBuffer",
+            "RWStructuredBuffer",
+            "RWByteAddressBuffer",
+            "RasterizerOrderedBuffer",
+            "RasterizerOrderedStructuredBuffer",
+            "RasterizerOrderedByteAddressBuffer",
+        }
+
+        if (
+            func_name in indexed_read_helpers
+            and resource_name not in indexed_read_resources
+        ):
+            raise ValueError(
+                f"DirectX buffer helper '{func_name}' requires a resource with "
+                f"indexed read support, got {resource_type}"
+            )
+        if func_name in indexed_write_helpers:
+            if resource_name in {"Buffer", "StructuredBuffer", "ByteAddressBuffer"}:
+                raise ValueError(
+                    f"DirectX buffer helper '{func_name}' cannot write readonly "
+                    f"{resource_type}"
+                )
+            if resource_name not in indexed_write_resources:
+                raise ValueError(
+                    f"DirectX buffer helper '{func_name}' requires a resource with "
+                    f"indexed write support, got {resource_type}"
+                )
+        if func_name == "buffer_append" and resource_name != "AppendStructuredBuffer":
+            raise ValueError(
+                "DirectX buffer helper 'buffer_append' requires "
+                f"AppendStructuredBuffer, got {resource_type}"
+            )
+        if func_name == "buffer_consume" and resource_name != "ConsumeStructuredBuffer":
+            raise ValueError(
+                "DirectX buffer helper 'buffer_consume' requires "
+                f"ConsumeStructuredBuffer, got {resource_type}"
+            )
+
     def generate_buffer_call(self, func_name, args):
         """Render canonical CrossGL buffer operations as HLSL resource methods."""
+        self.validate_buffer_call_access(func_name, args)
+
         vector_load_methods = {
             "buffer_load2": "Load2",
             "buffer_load3": "Load3",

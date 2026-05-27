@@ -462,6 +462,88 @@ def test_native_hip_memory_pool_virtual_memory_parses_and_compiles_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_external_interop_parses_and_compiles_if_available(tmp_path):
+    """Smoke native HIP external memory and semaphore lifecycle APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void external_interop_lifecycle(hipStream_t stream) {
+        hipExternalMemory_t external_memory;
+        hipExternalMemoryHandleDesc memory_desc;
+        hipExternalMemoryBufferDesc buffer_desc;
+        hipExternalMemoryMipmappedArrayDesc mipmap_desc;
+        hipMipmappedArray_t mipmapped_array;
+        hipExternalSemaphore_t external_semaphore;
+        hipExternalSemaphoreHandleDesc semaphore_desc;
+        hipExternalSemaphoreSignalParams signal_params;
+        hipExternalSemaphoreWaitParams wait_params;
+        void* mapped_ptr = NULL;
+
+        hipImportExternalMemory(&external_memory, &memory_desc);
+        hipExternalMemoryGetMappedBuffer(
+            &mapped_ptr, external_memory, &buffer_desc
+        );
+        hipExternalMemoryGetMappedMipmappedArray(
+            &mipmapped_array, external_memory, &mipmap_desc
+        );
+        hipImportExternalSemaphore(&external_semaphore, &semaphore_desc);
+        hipSignalExternalSemaphoresAsync(
+            &external_semaphore, &signal_params, 1, stream
+        );
+        hipWaitExternalSemaphoresAsync(
+            &external_semaphore, &wait_params, 1, stream
+        );
+        hipDestroyExternalSemaphore(external_semaphore);
+        hipFreeMipmappedArray(mipmapped_array);
+        hipDestroyExternalMemory(external_memory);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: external_interop_lifecycle" in crossgl
+    assert "void external_interop_lifecycle(hipStream_t stream)" in crossgl
+    assert "var external_memory: hipExternalMemory_t;" in crossgl
+    assert "var memory_desc: hipExternalMemoryHandleDesc;" in crossgl
+    assert "var buffer_desc: hipExternalMemoryBufferDesc;" in crossgl
+    assert "var mipmap_desc: hipExternalMemoryMipmappedArrayDesc;" in crossgl
+    assert "var mipmapped_array: hipMipmappedArray_t;" in crossgl
+    assert "var external_semaphore: hipExternalSemaphore_t;" in crossgl
+    assert "var semaphore_desc: hipExternalSemaphoreHandleDesc;" in crossgl
+    assert "var signal_params: hipExternalSemaphoreSignalParams;" in crossgl
+    assert "var wait_params: hipExternalSemaphoreWaitParams;" in crossgl
+    assert "var mapped_ptr: ptr<void> = NULL;" in crossgl
+    assert (
+        "// HIP import external memory: output: external_memory, "
+        "descriptor: (&memory_desc)"
+    ) in crossgl
+    assert (
+        "// HIP external memory mapped buffer: output: mapped_ptr, "
+        "memory: external_memory, descriptor: (&buffer_desc)"
+    ) in crossgl
+    assert (
+        "// HIP external memory mapped mipmapped array: output: mipmapped_array, "
+        "memory: external_memory, descriptor: (&mipmap_desc)"
+    ) in crossgl
+    assert (
+        "// HIP import external semaphore: output: external_semaphore, "
+        "descriptor: (&semaphore_desc)"
+    ) in crossgl
+    assert (
+        "// HIP signal external semaphores: semaphores: (&external_semaphore), "
+        "params: (&signal_params), count: 1, stream: stream"
+    ) in crossgl
+    assert (
+        "// HIP wait external semaphores: semaphores: (&external_semaphore), "
+        "params: (&wait_params), count: 1, stream: stream"
+    ) in crossgl
+    assert "// HIP destroy external semaphore: external_semaphore" in crossgl
+    assert "// HIP free mipmapped array: mipmapped_array" in crossgl
+    assert "// HIP destroy external memory: external_memory" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_stream_event_lifecycle_parses_and_compiles_if_available(
     tmp_path,
 ):
