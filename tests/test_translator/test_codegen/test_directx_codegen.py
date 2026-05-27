@@ -6623,6 +6623,65 @@ def test_directx_tessellation_control_validates_patch_constant_helper():
         )
 
 
+@pytest.mark.parametrize(
+    ("patch_parameter", "message"),
+    [
+        (
+            "InputPatch<OtherInput, 3> patch",
+            "patchconstantfunc 'HSConst'.*InputPatch element type.*HSInput",
+        ),
+        (
+            "InputPatch<HSInput, 4> patch",
+            "patchconstantfunc 'HSConst'.*InputPatch control point count.*3",
+        ),
+    ],
+)
+def test_directx_tessellation_control_validates_patch_constant_inputpatch_signature(
+    patch_parameter, message
+):
+    code = f"""
+    shader bad_patch_constant_inputpatch_signature {{
+        struct HSInput {{
+            vec3 position @ POSITION;
+        }};
+
+        struct OtherInput {{
+            vec3 position @ POSITION;
+        }};
+
+        struct HSOutput {{
+            vec3 position @ POSITION;
+        }};
+
+        struct HSConstData {{
+            vec3 edges @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        }};
+
+        tessellation_control {{
+            HSConstData HSConst({patch_parameter}) {{
+                HSConstData constants;
+                return constants;
+            }}
+
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {{
+                HSOutput output;
+                return output;
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
 def test_directx_tessellation_control_validates_patch_constant_primitive_id_type():
     float_id_code = """
     shader bad_patch_constant_float_primitive_id {

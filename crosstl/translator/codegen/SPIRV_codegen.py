@@ -3314,6 +3314,8 @@ class VulkanSPIRVCodeGen:
                 "OpRayQueryGetIntersectionFrontFaceKHR",
                 "bool",
             ),
+            "CandidateTriangleNormal": ("", "vec3"),
+            "CommittedTriangleNormal": ("", "vec3"),
             "CandidateTriangleVertexPositions": (
                 "OpRayQueryGetIntersectionTriangleVertexPositionsKHR",
                 "vec3_array3",
@@ -3390,6 +3392,8 @@ class VulkanSPIRVCodeGen:
             "CommittedTriangleBarycentrics",
             "CandidateTriangleFrontFace",
             "CommittedTriangleFrontFace",
+            "CandidateTriangleNormal",
+            "CommittedTriangleNormal",
             "CandidateTriangleVertexPositions",
             "CommittedTriangleVertexPositions",
             "CandidateObjectToWorld",
@@ -3437,6 +3441,11 @@ class VulkanSPIRVCodeGen:
         if getter_info is None:
             return self.represented_ir_diagnostic_default_value("ray query", operation)
 
+        if operation in {"CandidateTriangleNormal", "CommittedTriangleNormal"}:
+            return self.process_ray_query_triangle_normal_getter(
+                query_pointer, operation
+            )
+
         opcode, result_kind, _ = getter_info
         if operation in {
             "CandidateTriangleVertexPositions",
@@ -3457,6 +3466,51 @@ class VulkanSPIRVCodeGen:
         )
         self.value_types[id_value] = result_type
         return SpirvId(id_value, result_type.type)
+
+    def emit_glsl_std450_instruction(
+        self, instruction: str, result_type: SpirvId, args: List[SpirvId]
+    ) -> SpirvId:
+        if self.glsl_std450_id is None:
+            self.glsl_std450_id = self.get_id()
+            self.emit(f'%{self.glsl_std450_id} = OpExtInstImport "GLSL.std.450"')
+
+        id_value = self.get_id()
+        arg_list = " ".join(f"%{arg.id}" for arg in args)
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} "
+            f"%{self.glsl_std450_id} {instruction} {arg_list}"
+        )
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
+
+    def process_ray_query_triangle_normal_getter(
+        self, query_pointer: SpirvId, operation: str
+    ) -> SpirvId:
+        intersection = self.ray_query_intersection_constant(operation)
+        if intersection is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        self.require_capability("RayQueryPositionFetchKHR")
+        self.require_extension("SPV_KHR_ray_tracing_position_fetch")
+
+        vec3_type = self.ray_query_result_type_for_kind("vec3")
+        positions_type = self.ray_query_result_type_for_kind("vec3_array3")
+        positions_id = self.get_id()
+        self.emit(
+            f"%{positions_id} = "
+            f"OpRayQueryGetIntersectionTriangleVertexPositionsKHR "
+            f"%{positions_type.id} %{query_pointer.id} %{intersection.id}"
+        )
+        self.value_types[positions_id] = positions_type
+        positions = SpirvId(positions_id, positions_type.type)
+
+        p0 = self.composite_extract(positions, vec3_type, 0)
+        p1 = self.composite_extract(positions, vec3_type, 1)
+        p2 = self.composite_extract(positions, vec3_type, 2)
+        edge0 = self.binary_operation("-", vec3_type, p1, p0)
+        edge1 = self.binary_operation("-", vec3_type, p2, p0)
+        cross = self.emit_glsl_std450_instruction("Cross", vec3_type, [edge0, edge1])
+        return self.emit_glsl_std450_instruction("Normalize", vec3_type, [cross])
 
     def format_expected_argument_counts(self, expected_counts) -> str:
         return " or ".join(str(count) for count in sorted(expected_counts))

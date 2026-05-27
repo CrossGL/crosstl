@@ -5051,6 +5051,21 @@ class HLSLCodeGen:
             return None
         return self.type_name_string(generic_args[index])
 
+    def hlsl_patch_parameter(self, parameters, patch_type):
+        for parameter in parameters:
+            if self.hlsl_parameter_type_base(parameter) == patch_type:
+                return parameter
+        return None
+
+    def hlsl_patch_element_type(self, parameters, patch_type):
+        parameter = self.hlsl_patch_parameter(parameters, patch_type)
+        if parameter is None:
+            return None
+        element_type = self.hlsl_parameter_type_generic_argument(parameter, 0)
+        if element_type is None:
+            return None
+        return self.map_type(element_type)
+
     def hlsl_patch_control_point_count(self, parameters, patch_type):
         for parameter in parameters:
             if self.hlsl_parameter_type_base(parameter) != patch_type:
@@ -7436,6 +7451,9 @@ class HLSLCodeGen:
                 f"'{patch_function_name}' parameters must include "
                 "InputPatch<T, N>"
             )
+        self.validate_hlsl_patch_constant_input_patch_signature(
+            parameters, patch_parameters, patch_function_name
+        )
         self.validate_hlsl_scalar_integer_semantic_types(
             patch_parameters,
             "tessellation_control patchconstantfunc",
@@ -7444,6 +7462,44 @@ class HLSLCodeGen:
         self.validate_hlsl_patch_constant_tess_factor_semantics(
             func, patch_function, patch_function_name
         )
+
+    def validate_hlsl_patch_constant_input_patch_signature(
+        self, hull_parameters, patch_parameters, patch_function_name
+    ):
+        if not patch_parameters:
+            return
+
+        hull_element_type = self.hlsl_patch_element_type(hull_parameters, "InputPatch")
+        patch_element_type = self.hlsl_patch_element_type(
+            patch_parameters, "InputPatch"
+        )
+        if (
+            hull_element_type is not None
+            and patch_element_type is not None
+            and patch_element_type != hull_element_type
+        ):
+            raise ValueError(
+                "DirectX tessellation_control stage patchconstantfunc "
+                f"'{patch_function_name}' InputPatch element type "
+                f"'{patch_element_type}' must match tessellation_control "
+                f"InputPatch element type '{hull_element_type}'"
+            )
+
+        hull_control_points = self.hlsl_input_patch_control_point_count(hull_parameters)
+        patch_control_points = self.hlsl_input_patch_control_point_count(
+            patch_parameters
+        )
+        if (
+            hull_control_points is not None
+            and patch_control_points is not None
+            and patch_control_points != hull_control_points
+        ):
+            raise ValueError(
+                "DirectX tessellation_control stage patchconstantfunc "
+                f"'{patch_function_name}' InputPatch control point count "
+                f"({patch_control_points}) must match tessellation_control "
+                f"InputPatch control point count ({hull_control_points})"
+            )
 
     def hlsl_return_struct(self, func):
         return_type = self.type_name_string(

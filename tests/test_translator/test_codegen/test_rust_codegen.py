@@ -5314,6 +5314,161 @@ def test_generic_struct_like_enum_variant_assignment_and_call_targets_compile(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_target_typed_array_literals_in_generic_constructors_compile(tmp_path):
+    generic_type = GenericType("T")
+    float_type = PrimitiveType("float")
+    samples_float_type = NamedType("Samples", [float_type])
+    choice_float_type = NamedType("SampleChoice", [float_type])
+    omitted_variant_type = NamedType("SampleChoice::Window")
+
+    def int_array(*values):
+        return ArrayLiteralNode(
+            [LiteralNode(value, PrimitiveType("int")) for value in values]
+        )
+
+    choice_enum = EnumNode(
+        "SampleChoice",
+        [
+            EnumVariantNode(
+                "Window",
+                fields=[
+                    ("values", ArrayType(generic_type, 2)),
+                ],
+            ),
+        ],
+    )
+    choice_enum.generic_params = [GenericParameterNode("T")]
+
+    ast = ShaderNode(
+        "GenericArrayLiteralConstructorTargets",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Samples",
+                [
+                    StructMemberNode("values", ArrayType(generic_type, 2)),
+                ],
+                generic_params=[GenericParameterNode("T")],
+            ),
+            choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "identity_samples",
+                samples_float_type,
+                [ParameterNode("samples", samples_float_type)],
+                [ReturnNode(IdentifierNode("samples"))],
+            ),
+            FunctionNode(
+                "identity_choice",
+                choice_float_type,
+                [ParameterNode("choice", choice_float_type)],
+                [ReturnNode(IdentifierNode("choice"))],
+            ),
+            FunctionNode(
+                "build_struct",
+                samples_float_type,
+                [],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            samples_float_type,
+                            [],
+                            named_arguments={"values": int_array(1, 2)},
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "assign_struct",
+                samples_float_type,
+                [],
+                [
+                    VariableNode("selected", samples_float_type),
+                    AssignmentNode(
+                        IdentifierNode("selected"),
+                        ConstructorNode(
+                            samples_float_type,
+                            [],
+                            named_arguments={"values": int_array(3, 4)},
+                        ),
+                    ),
+                    ReturnNode(IdentifierNode("selected")),
+                ],
+            ),
+            FunctionNode(
+                "call_struct",
+                samples_float_type,
+                [],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("identity_samples"),
+                            [
+                                ConstructorNode(
+                                    samples_float_type,
+                                    [],
+                                    named_arguments={"values": int_array(5, 6)},
+                                )
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "build_variant",
+                choice_float_type,
+                [],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            omitted_variant_type,
+                            [],
+                            named_arguments={"values": int_array(7, 8)},
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "call_variant",
+                choice_float_type,
+                [],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("identity_choice"),
+                            [
+                                ConstructorNode(
+                                    omitted_variant_type,
+                                    [],
+                                    named_arguments={"values": int_array(9, 10)},
+                                )
+                            ],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "Samples::<f32> { values: [1.0, 2.0] }" in generated_code
+    assert "selected = Samples::<f32> { values: [3.0, 4.0] };" in generated_code
+    assert (
+        "return identity_samples(Samples::<f32> { values: [5.0, 6.0] });"
+        in generated_code
+    )
+    assert "SampleChoice::<f32>::Window { values: [7.0, 8.0] }" in generated_code
+    assert (
+        "return identity_choice(SampleChoice::<f32>::Window { "
+        "values: [9.0, 10.0] });"
+    ) in generated_code
+    assert "SampleChoice::Window" not in generated_code
+    assert "[1, 2]" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_struct_constructor_args_normalize_field_types_and_clone_non_copy_compile(
     tmp_path,
 ):

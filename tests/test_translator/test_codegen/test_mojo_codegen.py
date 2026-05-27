@@ -2441,6 +2441,107 @@ def test_resource_array_access_qualifiers_apply_to_indexed_mojo_resources():
         generate_code(parse_code(tokenize_code(invalid_raw_method_write)))
 
 
+def test_struct_resource_field_access_qualifiers_are_enforced_for_mojo_codegen():
+    invalid_structured_member_read = """
+    struct Resources {
+        writeonly RWStructuredBuffer<int> values[2];
+    };
+
+    Resources resources;
+
+    int invalidRead(int slot, uint index) {
+        return resources.values[slot].Load(index);
+    }
+    """
+    with pytest.raises(ValueError, match=r"Load.*resources\.values.*writeonly"):
+        generate_code(parse_code(tokenize_code(invalid_structured_member_read)))
+
+    invalid_structured_free_store = """
+    struct Resources {
+        readonly RWStructuredBuffer<int> values[2];
+    };
+
+    Resources resources;
+
+    void invalidStore(int slot, uint index, int value) {
+        buffer_store(resources.values[slot], index, value);
+    }
+    """
+    with pytest.raises(ValueError, match=r"buffer_store.*resources\.values.*readonly"):
+        generate_code(parse_code(tokenize_code(invalid_structured_free_store)))
+
+    invalid_raw_member_store = """
+    struct Resources {
+        readonly RWByteAddressBuffer rawBuffers[2];
+    };
+
+    Resources resources;
+
+    void invalidRawStore(int slot, uint offset, uint4 value) {
+        resources.rawBuffers[slot].Store4(offset, value);
+    }
+    """
+    with pytest.raises(ValueError, match=r"Store4.*resources\.rawBuffers.*readonly"):
+        generate_code(parse_code(tokenize_code(invalid_raw_member_store)))
+
+    invalid_raw_free_read = """
+    struct Resources {
+        writeonly RWByteAddressBuffer rawBuffers[2];
+    };
+
+    Resources resources;
+
+    uint invalidRawRead(int slot, uint offset) {
+        return buffer_load(resources.rawBuffers[slot], offset);
+    }
+    """
+    with pytest.raises(
+        ValueError, match=r"buffer_load.*resources\.rawBuffers.*writeonly"
+    ):
+        generate_code(parse_code(tokenize_code(invalid_raw_free_read)))
+
+
+def test_struct_resource_field_buffer_access_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct Resources {
+        RWStructuredBuffer<int> values[2];
+        RWByteAddressBuffer rawBuffers[2];
+    };
+
+    Resources resources;
+
+    int update(int slot, uint index, uint offset, uint4 data) {
+        int previous = resources.values[slot].Load(index);
+        resources.rawBuffers[slot].Store4(offset, data);
+        return previous;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn buffer_load(buffer: RWStructuredBuffer[Int32], " in generated_code
+    assert "fn buffer_store4(buffer: RWByteAddressBuffer, " in generated_code
+    assert "buffer_load(resources.values[int(slot)], index)" in generated_code
+    assert "buffer_store4(resources.rawBuffers[int(slot)], offset, data)" in (
+        generated_code
+    )
+    assert ".Load(" not in generated_code
+    assert ".Store4(" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "struct_resource_field_buffer_access.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_glsl_buffer_block_metadata_comments_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 

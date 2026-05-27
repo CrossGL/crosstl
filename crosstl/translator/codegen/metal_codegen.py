@@ -4524,7 +4524,17 @@ class MetalCodeGen:
             value = self.metal_mesh_vertex_output_value(args[1], mesh_output)
             return f"{output_parameter}.set_vertex({index}, {value})"
 
-        if func_name in {"SetPrimitive", "SetIndex"} and len(args) == 2:
+        if func_name == "SetPrimitive" and len(args) == 2:
+            primitive_output = self.metal_mesh_primitive_output_call(
+                output_parameter, args[0], args[1], mesh_output
+            )
+            if primitive_output is not None:
+                return primitive_output
+            return self.metal_mesh_index_output_write(
+                output_parameter, func_name, args[0], args[1]
+            )
+
+        if func_name == "SetIndex" and len(args) == 2:
             return self.metal_mesh_index_output_write(
                 output_parameter, func_name, args[0], args[1]
             )
@@ -4728,6 +4738,22 @@ class MetalCodeGen:
         if mapped_type == "float3":
             return f"{vertex_type}{{float4({value}, 1.0)}}"
         return f"{vertex_type}{{{value}}}"
+
+    def metal_mesh_primitive_output_call(
+        self, output_parameter, index_expr, value_expr, mesh_output
+    ):
+        primitive_type = mesh_output.get("primitive_type")
+        if not primitive_type or primitive_type == "void":
+            return None
+
+        value_type = self.expression_result_type(value_expr)
+        mapped_type = self.map_type(value_type) if value_type else None
+        if mapped_type != primitive_type:
+            return None
+
+        index = self.generate_expression(index_expr)
+        value = self.generate_expression(value_expr)
+        return f"{output_parameter}.set_primitive({index}, {value})"
 
     def metal_mesh_index_output_write(
         self, output_parameter, func_name, index_expr, value_expr

@@ -4675,6 +4675,69 @@ def test_codegen_mixed_ssbo_shadow_resource_array_helpers_infer_fallback_arg_typ
     assert "textureGatherCompare(" not in glsl
 
 
+def test_codegen_native_shadow_gather_imports_compare_helpers():
+    code = """
+    #version 460 core
+    layout(binding = 0) uniform sampler2DShadow shadowMaps[2];
+    layout(binding = 2) uniform sampler2DArrayShadow shadowArrays[2];
+    layout(location = 0) out vec4 fragColor;
+
+    vec4 gatherLayer(sampler2DShadow maps[2], sampler2DArrayShadow arrays[2], int layer, vec2 uv, vec3 uvLayer, float depth, ivec2 offset) {
+        vec4 planar = textureGather(maps[layer], uv, depth);
+        vec4 planarOffset = textureGatherOffset(maps[0], uv, depth, offset);
+        vec4 layered = textureGather(arrays[layer], uvLayer, depth);
+        vec4 layeredOffset = textureGatherOffset(arrays[0], uvLayer, depth, offset);
+        return planar + planarOffset + layered + layeredOffset;
+    }
+
+    void main() {
+        fragColor = gatherLayer(
+            shadowMaps,
+            shadowArrays,
+            1,
+            vec2(0.5),
+            vec3(0.5, 0.5, 1.0),
+            0.25,
+            ivec2(1, -1)
+        );
+    }
+    """
+
+    output = generate_crossgl(code, "fragment")
+
+    assert "vec4 planar = textureGatherCompare(maps[layer], uv, depth);" in output
+    assert (
+        "vec4 planarOffset = textureGatherCompareOffset(maps[0], uv, depth, "
+        "offset);" in output
+    )
+    assert (
+        "vec4 layered = textureGatherCompare(arrays[layer], uvLayer, depth);" in output
+    )
+    assert (
+        "vec4 layeredOffset = textureGatherCompareOffset(arrays[0], uvLayer, "
+        "depth, offset);" in output
+    )
+    assert "textureGather(maps[layer], uv, depth)" not in output
+    assert "textureGatherOffset(maps[0], uv, depth, offset)" not in output
+
+    shader_ast = parse_crossgl(output)
+    regenerated_glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "layout(binding = 0) uniform sampler2DShadow shadowMaps[2];" in (
+        regenerated_glsl
+    )
+    assert "layout(binding = 2) uniform sampler2DArrayShadow shadowArrays[2];" in (
+        regenerated_glsl
+    )
+    assert "textureGather(maps[layer], uv, depth)" in regenerated_glsl
+    assert "textureGatherOffset(maps[0], uv, depth, offset)" in regenerated_glsl
+    assert "textureGather(arrays[layer], uvLayer, depth)" in regenerated_glsl
+    assert "textureGatherOffset(arrays[0], uvLayer, depth, offset)" in (
+        regenerated_glsl
+    )
+    assert "textureGatherCompare" not in regenerated_glsl
+
+
 def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types():
     crossgl = """
     shader MultisampleArrayFallbacks {

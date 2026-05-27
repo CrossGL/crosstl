@@ -4686,6 +4686,51 @@ def test_metal_mesh_stage_vector_triangle_primitive_writes_expand_to_indices():
     assert "SetPrimitive" not in generated
 
 
+def test_metal_mesh_stage_primitive_struct_setter_uses_set_primitive():
+    code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        struct MeshPrimitive {
+            uint layer @ gl_PrimitiveID;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                MeshVertex outVertex;
+                outVertex.position = vec4(0.0, 0.0, 0.0, 1.0);
+                MeshPrimitive outPrimitive;
+                outPrimitive.layer = 7u;
+                SetMeshOutputCounts(3, 1);
+                SetVertex(0, outVertex);
+                SetPrimitive(0, outPrimitive);
+                SetIndex(0, uvec3(0u, 1u, 2u));
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+    assert (
+        "mesh<MeshVertex, MeshPrimitive, 3, 1, topology::triangle> _crossglMeshOut"
+        in generated
+    )
+    assert "_crossglMeshOut.set_vertex(0, outVertex);" in generated
+    assert "_crossglMeshOut.set_primitive(0, outPrimitive);" in generated
+    assert "_crossglMeshOut.set_index(0, uint3(0u, 1u, 2u).x);" in generated
+    assert "_crossglMeshOut.set_index((0) + 1, uint3(0u, 1u, 2u).y);" in generated
+    assert "_crossglMeshOut.set_index((0) + 2, uint3(0u, 1u, 2u).z);" in generated
+    assert "_crossglMeshOut.set_index(0, outPrimitive);" not in generated
+    assert "SetPrimitive" not in generated
+    assert "SetIndex" not in generated
+
+
 def test_metal_mesh_output_signature_roles_lower_to_mesh_output_parameter():
     code = """
     shader meshpipe {

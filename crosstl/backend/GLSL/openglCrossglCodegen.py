@@ -396,6 +396,7 @@ class GLSLToCrossGLConverter:
         self.converted_ssbo_struct_names = set()
         self.interface_block_struct_names = set()
         self.task_payload_shared_names = set()
+        self.variable_type_scopes = []
 
     def indent(self):
         return self.indent_str * self.indent_level
@@ -447,6 +448,55 @@ class GLSLToCrossGLConverter:
                 "operation": self.image_function_operations[name],
             }
         return None
+
+    def push_variable_type_scope(self):
+        self.variable_type_scopes.append({})
+
+    def pop_variable_type_scope(self):
+        self.variable_type_scopes.pop()
+
+    def register_variable_type(self, var):
+        if not self.variable_type_scopes:
+            return
+        name = getattr(var, "name", None)
+        vtype = getattr(var, "vtype", None)
+        if name and vtype:
+            self.variable_type_scopes[-1][name] = vtype
+
+    def register_parameter_type(self, param):
+        if isinstance(param, VariableNode):
+            self.register_variable_type(param)
+            return
+        if isinstance(param, tuple) and len(param) == 2:
+            param_type, param_name = param
+            if self.variable_type_scopes:
+                self.variable_type_scopes[-1][param_name] = param_type
+
+    def lookup_variable_type(self, name):
+        for scope in reversed(self.variable_type_scopes):
+            if name in scope:
+                return scope[name]
+        return None
+
+    def expression_resource_type(self, expr):
+        if isinstance(expr, VariableNode):
+            return self.lookup_variable_type(expr.name)
+        if isinstance(expr, ArrayAccessNode):
+            return self.expression_resource_type(expr.array)
+        return None
+
+    def expression_is_shadow_sampler(self, expr):
+        resource_type = self.expression_resource_type(expr)
+        return bool(resource_type and str(resource_type).endswith("Shadow"))
+
+    def shadow_gather_import_name(self, name, args):
+        if not args or not self.expression_is_shadow_sampler(args[0]):
+            return name
+        if name == "textureGather" and len(args) >= 3:
+            return "textureGatherCompare"
+        if name == "textureGatherOffset" and len(args) >= 4:
+            return "textureGatherCompareOffset"
+        return name
 
     def _is_image_resource_type(self, type_name):
         if not type_name:
@@ -559,7 +609,14 @@ class GLSLToCrossGLConverter:
         self.structured_buffer_names = set()
         self.structured_buffer_instance_members = {}
         self.converted_ssbo_struct_names = set()
+        self.variable_type_scopes = [{}]
 
+        for var in getattr(node, "uniforms", []) or []:
+            self.register_variable_type(var)
+        for var in getattr(node, "global_variables", []) or []:
+            self.register_variable_type(var)
+        for var in getattr(node, "io_variables", []) or []:
+            self.register_variable_type(var)
         for var in getattr(node, "global_variables", []) or []:
             member = self.ssbo_element_member(var)
             if member is None:
@@ -1203,26 +1260,33 @@ class GLSLToCrossGLConverter:
 
     def generate_function(self, node):
         """Render one GLSL function node as a CrossGL function block."""
-        return_type = self.convert_type(node.return_type)
-        name = node.name
-
-        params = []
+        self.push_variable_type_scope()
         for param in node.params:
-            param_decl = self.generate_function_parameter(param)
-            if param_decl is not None:
-                params.append(param_decl)
+            self.register_parameter_type(param)
 
-        params_str = ", ".join(params)
+        try:
+            return_type = self.convert_type(node.return_type)
+            name = node.name
 
-        result = f"{return_type} {name}({params_str}) {{\n"
+            params = []
+            for param in node.params:
+                param_decl = self.generate_function_parameter(param)
+                if param_decl is not None:
+                    params.append(param_decl)
 
-        self.increase_indent()
-        for statement in self.generate_statement_sequence(node.body):
-            result += self.indent() + statement + "\n"
-        self.decrease_indent()
+            params_str = ", ".join(params)
 
-        result += self.indent() + "}"
-        return result
+            result = f"{return_type} {name}({params_str}) {{\n"
+
+            self.increase_indent()
+            for statement in self.generate_statement_sequence(node.body):
+                result += self.indent() + statement + "\n"
+            self.decrease_indent()
+
+            result += self.indent() + "}"
+            return result
+        finally:
+            self.pop_variable_type_scope()
 
     def generate_statement_sequence(self, statements):
         generated = []
@@ -1303,6 +1367,7 @@ class GLSLToCrossGLConverter:
             ray_control = self.ray_control_statement(node)
             if ray_control is not None:
                 return ray_control + ";"
+            self.register_variable_type(node)
             return self.generate_variable_declaration(node) + ";"
         elif isinstance(node, FunctionCallNode):
             return self.generate_function_call(node) + ";"
@@ -1545,6 +1610,8 @@ class GLSLToCrossGLConverter:
         ray_query_call = self.generate_ray_query_method_call(name, node.args)
         if ray_query_call is not None:
             return ray_query_call
+
+        name = self.shadow_gather_import_name(name, node.args)
 
         if name in [
             "vec2",

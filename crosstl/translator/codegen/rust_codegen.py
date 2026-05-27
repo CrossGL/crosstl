@@ -4399,18 +4399,40 @@ class RustCodeGen:
     def generate_array_literal_expression(
         self, expr, target_type=None, static_context=False
     ):
-        elements = [self.generate_expression(element) for element in expr.elements]
+        element_target_type = None
+        target_size = None
 
         if self.is_array_type_name(target_type):
-            base_type, size = parse_array_type(str(target_type))
-            if size is None:
+            element_target_type, target_size = parse_array_type(str(target_type))
+
+        elements = []
+        for element in expr.elements:
+            if element_target_type is None:
+                elements.append(self.generate_expression(element))
+                continue
+
+            element_expr = self.generate_expression_with_type(
+                element,
+                element_target_type,
+                static_context=static_context,
+            )
+            elements.append(
+                self.normalize_typed_expression_value(
+                    element,
+                    element_expr,
+                    element_target_type,
+                )
+            )
+
+        if element_target_type is not None:
+            if target_size is None:
                 return f"vec![{', '.join(elements)}]"
 
-            elements = elements[:size]
+            elements = elements[:target_size]
             padding = self.rust_array_padding_expression(
-                base_type, static_context=static_context
+                element_target_type, static_context=static_context
             )
-            while len(elements) < size:
+            while len(elements) < target_size:
                 elements.append(padding)
 
         return f"[{', '.join(elements)}]"
@@ -7143,9 +7165,18 @@ class RustCodeGen:
     def substitute_type_parameters(self, type_name, substitutions):
         if type_name is None:
             return None
-        type_name = str(type_name)
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            type_name = self.convert_type_node_to_string(type_name)
+        else:
+            type_name = str(type_name)
+
         if type_name in substitutions:
             return substitutions[type_name]
+
+        if self.is_array_type_name(type_name):
+            base_type, size = parse_array_type(type_name)
+            mapped_base = self.substitute_type_parameters(base_type, substitutions)
+            return f"{mapped_base}[{size}]" if size is not None else f"{mapped_base}[]"
 
         base_type, generic_args = self.generic_type_parts(type_name)
         if not generic_args:

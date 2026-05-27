@@ -2212,6 +2212,36 @@ shader MetalMeshOutputSignatureValidation {
 """
 
 
+METAL_MESH_PRIMITIVE_SETTER_SHADER = """
+shader MetalMeshPrimitiveSetterValidation {
+    struct MeshVertex {
+        vec4 position @ gl_Position;
+    };
+
+    struct MeshPrimitive {
+        uint layer @ gl_PrimitiveID;
+    };
+
+    mesh {
+        void main(
+            @vertices out MeshVertex verts[3],
+            @indices out uvec3 tris[1],
+            @primitives out MeshPrimitive prims[1]
+        ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+            MeshVertex outVertex;
+            outVertex.position = vec4(0.0, 0.0, 0.0, 1.0);
+            MeshPrimitive outPrimitive;
+            outPrimitive.layer = 7u;
+            SetMeshOutputCounts(3, 1);
+            SetVertex(0, outVertex);
+            SetPrimitive(0, outPrimitive);
+            SetIndex(0, uvec3(0u, 1u, 2u));
+        }
+    }
+}
+"""
+
+
 METAL_MESH_OUTPUT_VARIABLE_MEMBER_WRITES_SHADER = """
 shader MetalMeshOutputVariableMemberWritesValidation {
     struct MeshVertex {
@@ -4529,6 +4559,50 @@ def test_generated_metal_mesh_output_signature_compiles_with_metal3(tmp_path):
     assert "MeshPrimitive prims[1]" not in code
     assert "MeshVertex _crossglMeshVertices_verts_i_0 = {};" in code
     assert "_crossglMeshVertices_verts_i_0.uv = float2(0.0);" in code
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_mesh_primitive_setter_compiles_with_metal3(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "mesh_primitive_setter.metal"
+    output = tmp_path / "mesh_primitive_setter.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_MESH_PRIMITIVE_SETTER_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "mesh<MeshVertex, MeshPrimitive, 3, 1, topology::triangle>" in code
+    assert "_crossglMeshOut.set_vertex(0, outVertex);" in code
+    assert "_crossglMeshOut.set_primitive(0, outPrimitive);" in code
+    assert "_crossglMeshOut.set_index(0, uint3(0u, 1u, 2u).x);" in code
+    assert "_crossglMeshOut.set_index(0, outPrimitive);" not in code
+    assert "SetPrimitive" not in code
+    assert "SetIndex" not in code
 
     run_validator(
         [

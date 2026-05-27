@@ -8828,6 +8828,108 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
     assert "textureQueryLevels(" not in generated_code
 
 
+def test_slangc_smoke_compiles_generated_resource_query_helpers_if_available(
+    tmp_path,
+):
+    code = """
+    shader SlangResourceQueryCompileSmoke {
+        sampler2D colorMap @register(t0);
+        sampler3D volumeMap @register(t1);
+        sampler2DMS msColor @register(t2);
+        image2D colorImage @rgba32f @register(u0);
+        image2DMS msImage @rgba32f @register(u1);
+        uimage2DMS counters @r32ui @register(u2);
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main() {
+                ivec2 texSize = textureSize(colorMap, 0);
+                ivec3 volumeSize = textureSize(volumeMap, 0);
+                ivec2 msTexSize = textureSize(msColor, 0);
+                int texLevels = textureQueryLevels(colorMap);
+                int volumeLevels = textureQueryLevels(volumeMap);
+                ivec2 imageSizeValue = imageSize(colorImage);
+                ivec2 msImageSizeValue = imageSize(msImage);
+                int msImageSamples = imageSamples(msImage);
+                int counterSamples = imageSamples(counters);
+                imageStore(
+                    colorImage,
+                    ivec2(0, 0),
+                    vec4(
+                        float(
+                            texSize.x
+                            + volumeSize.x
+                            + msTexSize.x
+                            + imageSizeValue.x
+                        ),
+                        float(msImageSizeValue.x),
+                        float(
+                            texLevels
+                            + volumeLevels
+                            + msImageSamples
+                            + counterSamples
+                        ),
+                        1.0
+                    )
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "int2 cgl_textureSize_sampler2D(Sampler2D<float4> tex, uint mipLevel)"
+        in generated_code
+    )
+    assert (
+        "int3 cgl_textureSize_sampler3D(Sampler3D<float4> tex, uint mipLevel)"
+        in generated_code
+    )
+    assert "int2 cgl_textureSize_sampler2DMS(Sampler2DMS<float4> tex)" in (
+        generated_code
+    )
+    assert (
+        "int cgl_textureQueryLevels_sampler2D(Sampler2D<float4> tex)" in generated_code
+    )
+    assert (
+        "int cgl_textureQueryLevels_sampler3D(Sampler3D<float4> tex)" in generated_code
+    )
+    assert "int2 cgl_imageSize_image2D(RWTexture2D<float4> tex)" in generated_code
+    assert "int2 cgl_imageSize_image2DMS(RWTexture2DMS<float4> tex)" in (generated_code)
+    assert "int cgl_imageSamples_image2DMS(RWTexture2DMS<float4> tex)" in (
+        generated_code
+    )
+    assert "int cgl_imageSamples_uimage2DMS(RWTexture2DMS<uint> tex)" in (
+        generated_code
+    )
+    assert "int2 texSize = cgl_textureSize_sampler2D(colorMap, 0);" in generated_code
+    assert (
+        "int3 volumeSize = cgl_textureSize_sampler3D(volumeMap, 0);" in generated_code
+    )
+    assert "int2 msTexSize = cgl_textureSize_sampler2DMS(msColor);" in (generated_code)
+    assert (
+        "int texLevels = cgl_textureQueryLevels_sampler2D(colorMap);" in generated_code
+    )
+    assert (
+        "int volumeLevels = cgl_textureQueryLevels_sampler3D(volumeMap);"
+        in generated_code
+    )
+    assert "int2 imageSizeValue = cgl_imageSize_image2D(colorImage);" in generated_code
+    assert "int2 msImageSizeValue = cgl_imageSize_image2DMS(msImage);" in generated_code
+    assert "int msImageSamples = cgl_imageSamples_image2DMS(msImage);" in generated_code
+    assert (
+        "int counterSamples = cgl_imageSamples_uimage2DMS(counters);" in generated_code
+    )
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageSamples(" not in generated_code
+    assert "textureQueryLevels(" not in generated_code
+
+    compile_generated_slang(generated_code, tmp_path, "compute")
+
+
 def test_storage_image_load_store_emit_slang_subscript_access():
     code = """
     shader Resources {

@@ -754,6 +754,7 @@ class MojoCodeGen:
         self.struct_member_semantics = {}
         self.current_enum_value_aliases = {}
         self.resource_access_qualifiers = {}
+        self.struct_resource_access_qualifiers = {}
         self.mojo_resource_binding_cursors = {}
         self.mojo_used_resource_bindings = {}
         self.required_resource_types = set()
@@ -936,6 +937,7 @@ class MojoCodeGen:
         self.struct_member_semantics = {}
         self.current_enum_value_aliases = {}
         self.resource_access_qualifiers = {}
+        self.struct_resource_access_qualifiers = {}
         self.mojo_resource_binding_cursors = {}
         self.mojo_used_resource_bindings = {}
         self.required_resource_types = set()
@@ -1556,6 +1558,21 @@ class MojoCodeGen:
         if access:
             self.resource_access_qualifiers[name] = access
 
+    def register_struct_resource_access_metadata(
+        self, struct_name, member_name, member, member_type
+    ):
+        access = self.normalized_resource_access_metadata(member)
+        if access is None:
+            return
+
+        base_type, _ = self.resource_base_type_and_count(member_type)
+        if self.mojo_resource_kind(base_type, node=member) is None:
+            return
+
+        self.struct_resource_access_qualifiers.setdefault(struct_name, {})[
+            member_name
+        ] = access
+
     def resource_access_root_name(self, expr):
         if isinstance(expr, ArrayAccessNode):
             return self.resource_access_root_name(expr.array)
@@ -1566,26 +1583,62 @@ class MojoCodeGen:
             return name
         return None
 
-    def validate_resource_read_access(self, expr, operation):
+    def resource_access_path_name(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.resource_access_path_name(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            obj_path = self.resource_access_path_name(expr.object)
+            if obj_path:
+                return f"{obj_path}.{expr.member}"
+            return expr.member
+        name = getattr(expr, "name", None)
+        if name is not None:
+            return name
+        return None
+
+    def struct_field_resource_access(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.struct_field_resource_access(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            obj_type = self.expression_result_type(expr.object)
+            access = self.struct_resource_access_qualifiers.get(obj_type, {}).get(
+                expr.member
+            )
+            if access is not None:
+                return access, self.resource_access_path_name(expr)
+            return self.struct_field_resource_access(expr.object)
+        return None
+
+    def resource_access_qualifier(self, expr):
         root_name = self.resource_access_root_name(expr)
-        if root_name is None:
+        if root_name is not None:
+            access = self.resource_access_qualifiers.get(root_name)
+            if access is not None:
+                return access, root_name
+
+        field_access = self.struct_field_resource_access(expr)
+        if field_access is not None:
+            return field_access
+        return None, root_name
+
+    def validate_resource_read_access(self, expr, operation):
+        access, resource_name = self.resource_access_qualifier(expr)
+        if resource_name is None:
             return
-        access = self.resource_access_qualifiers.get(root_name)
         if access == "writeonly":
             raise ValueError(
                 f"Unsupported {operation} for Mojo codegen; "
-                f"resource '{root_name}' is writeonly"
+                f"resource '{resource_name}' is writeonly"
             )
 
     def validate_resource_write_access(self, expr, operation):
-        root_name = self.resource_access_root_name(expr)
-        if root_name is None:
+        access, resource_name = self.resource_access_qualifier(expr)
+        if resource_name is None:
             return
-        access = self.resource_access_qualifiers.get(root_name)
         if access == "readonly":
             raise ValueError(
                 f"Unsupported {operation} for Mojo codegen; "
-                f"resource '{root_name}' is readonly"
+                f"resource '{resource_name}' is readonly"
             )
 
     def validate_resource_read_write_access(self, expr, operation):
@@ -2064,6 +2117,9 @@ class MojoCodeGen:
                 size = get_array_size_from_node(member)
                 member_type = self.array_type_name(element_type, size)
                 self.struct_types[node.name][member.name] = member_type
+                self.register_struct_resource_access_metadata(
+                    node.name, member.name, member, member_type
+                )
                 semantic = self.node_semantic(member)
                 semantic_comment = ""
                 if semantic:
@@ -2086,6 +2142,9 @@ class MojoCodeGen:
                     member_type = "float"
 
                 self.struct_types[node.name][member.name] = member_type
+                self.register_struct_resource_access_metadata(
+                    node.name, member.name, member, member_type
+                )
 
                 semantic = self.node_semantic(member)
                 semantic_comment = ""
