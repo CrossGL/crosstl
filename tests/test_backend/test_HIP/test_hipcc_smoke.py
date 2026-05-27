@@ -1590,3 +1590,290 @@ def test_native_hip_module_occupancy_launch_parses_and_compiles_if_available(
     assert "// HIP module unload: module" in crossgl
 
     compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
+def test_native_hip_pitched_array_memory_copy_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP pitched allocation, arrays, and structured copy APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void pitched_array_memory_copy(
+        float* host,
+        hipStream_t stream,
+        size_t width_elems
+    ) {
+        float* pitched_device = NULL;
+        size_t pitch = 0;
+        size_t width_bytes = width_elems * sizeof(float);
+        hipPitchedPtr pitched_3d;
+        hipArray_t array;
+        hipArray_t array_3d;
+        HIP_ARRAY_DESCRIPTOR array_desc;
+        HIP_ARRAY3D_DESCRIPTOR array3d_desc;
+        hipChannelFormatDesc channel_desc;
+        hipExtent extent = make_hipExtent(width_bytes, 4, 2);
+        hipMemcpy3DParms copy_params = {0};
+        HIP_MEMCPY3D driver_copy_params = {0};
+        unsigned int flags = 0;
+        hipDeviceptr_t device_ptr = 0;
+
+        hipMallocPitch((void**)&pitched_device, &pitch, width_bytes, 4);
+        hipMalloc3D(&pitched_3d, extent);
+        hipMallocArray(&array, &channel_desc, width_elems, 4, hipArrayDefault);
+        hipMalloc3DArray(&array_3d, &channel_desc, extent, hipArrayDefault);
+        hipArrayCreate(&array, &array_desc);
+        hipArray3DCreate(&array_3d, &array3d_desc);
+        hipArrayGetDescriptor(&array_desc, array);
+        hipArray3DGetDescriptor(&array3d_desc, array_3d);
+        hipArrayGetInfo(&channel_desc, &extent, &flags, array);
+        hipMemcpy2D(
+            pitched_device, pitch, host, width_bytes, width_bytes, 4,
+            hipMemcpyHostToDevice
+        );
+        hipMemcpy2DAsync(
+            pitched_device, pitch, host, width_bytes, width_bytes, 4,
+            hipMemcpyHostToDevice, stream
+        );
+        hipMemcpyToArray(array, 0, 0, host, width_bytes, hipMemcpyHostToDevice);
+        hipMemcpyToArrayAsync(
+            array, 0, 0, host, width_bytes, hipMemcpyHostToDevice, stream
+        );
+        hipMemcpyFromArray(host, array, 0, 0, width_bytes, hipMemcpyDeviceToHost);
+        hipMemcpyFromArrayAsync(
+            host, array, 0, 0, width_bytes, hipMemcpyDeviceToHost, stream
+        );
+        hipMemcpy2DToArray(
+            array, 0, 0, host, pitch, width_bytes, 4, hipMemcpyHostToDevice
+        );
+        hipMemcpy2DToArrayAsync(
+            array, 0, 0, host, pitch, width_bytes, 4,
+            hipMemcpyHostToDevice, stream
+        );
+        hipMemcpy2DFromArray(
+            host, pitch, array, 0, 0, width_bytes, 4, hipMemcpyDeviceToHost
+        );
+        hipMemcpy2DFromArrayAsync(
+            host, pitch, array, 0, 0, width_bytes, 4,
+            hipMemcpyDeviceToHost, stream
+        );
+        hipMemcpyArrayToArray(
+            array_3d, 0, 0, array, 0, 0, width_bytes,
+            hipMemcpyDeviceToDevice
+        );
+        hipMemcpy2DArrayToArray(
+            array_3d, 0, 0, array, 0, 0, width_bytes, 4,
+            hipMemcpyDeviceToDevice
+        );
+        hipMemcpy3D(&copy_params);
+        hipMemcpy3DAsync(&copy_params, stream);
+        hipDrvMemcpy3D(&driver_copy_params);
+        hipDrvMemcpy3DAsync(&driver_copy_params, stream);
+        hipMemcpyAtoH(host, array, 0, width_bytes);
+        hipMemcpyAtoHAsync(host, array, 0, width_bytes, stream);
+        hipMemcpyHtoA(array, 4, host, width_bytes);
+        hipMemcpyHtoAAsync(array, 4, host, width_bytes, stream);
+        hipMemcpyAtoD(device_ptr, array, 8, width_bytes);
+        hipMemcpyDtoA(array, 12, device_ptr, width_bytes);
+        hipMemcpyAtoA(array_3d, 16, array, 20, width_bytes);
+        hipArrayDestroy(array_3d);
+        hipFreeArray(array);
+        hipFree(pitched_device);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: pitched_array_memory_copy" in crossgl
+    assert (
+        "void pitched_array_memory_copy("
+        "ptr<f32> host, hipStream_t stream, u32 width_elems)"
+    ) in crossgl
+    assert "var pitched_device: ptr<f32> = NULL;" in crossgl
+    assert "var pitch: u32 = 0;" in crossgl
+    assert "var width_bytes: u32 = (width_elems * sizeof(float));" in crossgl
+    assert "var pitched_3d: hipPitchedPtr;" in crossgl
+    assert "var array: ptr<void>;" in crossgl
+    assert "var array_3d: ptr<void>;" in crossgl
+    assert "var array_desc: HIP_ARRAY_DESCRIPTOR;" in crossgl
+    assert "var array3d_desc: HIP_ARRAY3D_DESCRIPTOR;" in crossgl
+    assert "var channel_desc: hipChannelFormatDesc;" in crossgl
+    assert "var extent: hipExtent = make_hipExtent(width_bytes, 4, 2);" in crossgl
+    assert "var copy_params: hipMemcpy3DParms = {0};" in crossgl
+    assert "var driver_copy_params: HIP_MEMCPY3D = {0};" in crossgl
+    assert "var flags: u32 = 0;" in crossgl
+    assert "var device_ptr: hipDeviceptr_t = 0;" in crossgl
+    assert (
+        "// HIP pitched memory allocate: pitched_device, pitch: pitch, "
+        "width: width_bytes, height: 4"
+    ) in crossgl
+    assert "// HIP 3D memory allocate: pitched_3d, extent: extent" in crossgl
+    assert (
+        "// HIP array allocate: array, desc: channel_desc, width: width_elems, "
+        "height: 4, flags: hipArrayDefault"
+    ) in crossgl
+    assert (
+        "// HIP 3D array allocate: array_3d, desc: channel_desc, "
+        "extent: extent, flags: hipArrayDefault"
+    ) in crossgl
+    assert "// HIP array create: output: array, descriptor: array_desc" in crossgl
+    assert (
+        "// HIP 3D array create: output: array_3d, descriptor: array3d_desc" in crossgl
+    )
+    assert "// HIP array get descriptor: output: array_desc, array: array" in crossgl
+    assert (
+        "// HIP array get 3D descriptor: output: array3d_desc, array: array_3d"
+        in crossgl
+    )
+    assert (
+        "// HIP array get info: desc output: channel_desc, "
+        "extent output: extent, flags output: flags, array: array"
+    ) in crossgl
+    assert (
+        "// HIP 2D memory copy: host -> pitched_device, dst pitch: pitch, "
+        "src pitch: width_bytes, width: width_bytes, height: 4, "
+        "kind: hipMemcpyHostToDevice"
+    ) in crossgl
+    assert (
+        "// HIP 2D memory copy: host -> pitched_device, dst pitch: pitch, "
+        "src pitch: width_bytes, width: width_bytes, height: 4, "
+        "kind: hipMemcpyHostToDevice, stream: stream"
+    ) in crossgl
+    assert (
+        "// HIP memory copy to array: source: host, destination array: array, "
+        "w offset: 0, h offset: 0, bytes: width_bytes, "
+        "kind: hipMemcpyHostToDevice"
+    ) in crossgl
+    assert (
+        "// HIP memory copy to array: source: host, destination array: array, "
+        "w offset: 0, h offset: 0, bytes: width_bytes, "
+        "kind: hipMemcpyHostToDevice, stream: stream"
+    ) in crossgl
+    assert (
+        "// HIP memory copy from array: source array: array, w offset: 0, "
+        "h offset: 0, destination: host, bytes: width_bytes, "
+        "kind: hipMemcpyDeviceToHost"
+    ) in crossgl
+    assert (
+        "// HIP memory copy from array: source array: array, w offset: 0, "
+        "h offset: 0, destination: host, bytes: width_bytes, "
+        "kind: hipMemcpyDeviceToHost, stream: stream"
+    ) in crossgl
+    assert (
+        "// HIP 2D memory copy to array: source: host, source pitch: pitch, "
+        "destination array: array, w offset: 0, h offset: 0, "
+        "width: width_bytes, height: 4, kind: hipMemcpyHostToDevice"
+    ) in crossgl
+    assert (
+        "// HIP 2D memory copy to array: source: host, source pitch: pitch, "
+        "destination array: array, w offset: 0, h offset: 0, "
+        "width: width_bytes, height: 4, kind: hipMemcpyHostToDevice, "
+        "stream: stream"
+    ) in crossgl
+    assert (
+        "// HIP 2D memory copy from array: source array: array, "
+        "w offset: 0, h offset: 0, destination: host, "
+        "destination pitch: pitch, width: width_bytes, height: 4, "
+        "kind: hipMemcpyDeviceToHost"
+    ) in crossgl
+    assert (
+        "// HIP 2D memory copy from array: source array: array, "
+        "w offset: 0, h offset: 0, destination: host, "
+        "destination pitch: pitch, width: width_bytes, height: 4, "
+        "kind: hipMemcpyDeviceToHost, stream: stream"
+    ) in crossgl
+    assert (
+        "// HIP memory copy array to array: source array: array, "
+        "source w offset: 0, source h offset: 0, destination array: array_3d, "
+        "destination w offset: 0, destination h offset: 0, "
+        "bytes: width_bytes, kind: hipMemcpyDeviceToDevice"
+    ) in crossgl
+    assert (
+        "// HIP 2D memory copy array to array: source array: array, "
+        "source w offset: 0, source h offset: 0, destination array: array_3d, "
+        "destination w offset: 0, destination h offset: 0, "
+        "width: width_bytes, height: 4, kind: hipMemcpyDeviceToDevice"
+    ) in crossgl
+    assert "// HIP 3D memory copy: params: copy_params" in crossgl
+    assert "// HIP 3D memory copy: params: copy_params, stream: stream" in crossgl
+    assert "// HIP driver 3D memory copy: params: driver_copy_params" in crossgl
+    assert (
+        "// HIP driver 3D memory copy: params: driver_copy_params, stream: stream"
+        in crossgl
+    )
+    assert (
+        "// HIP driver memory copy array to host: source array: array, "
+        "source offset: 0, destination host: host, bytes: width_bytes"
+    ) in crossgl
+    assert (
+        "// HIP driver memory copy array to host: source array: array, "
+        "source offset: 0, destination host: host, bytes: width_bytes, "
+        "stream: stream"
+    ) in crossgl
+    assert (
+        "// HIP driver memory copy host to array: source host: host, "
+        "destination array: array, destination offset: 4, bytes: width_bytes"
+    ) in crossgl
+    assert (
+        "// HIP driver memory copy host to array: source host: host, "
+        "destination array: array, destination offset: 4, bytes: width_bytes, "
+        "stream: stream"
+    ) in crossgl
+    assert (
+        "// HIP driver memory copy array to device: source array: array, "
+        "source offset: 8, destination device: device_ptr, bytes: width_bytes"
+    ) in crossgl
+    assert (
+        "// HIP driver memory copy device to array: source device: device_ptr, "
+        "destination array: array, destination offset: 12, bytes: width_bytes"
+    ) in crossgl
+    assert (
+        "// HIP driver memory copy array to array: source array: array, "
+        "source offset: 20, destination array: array_3d, "
+        "destination offset: 16, bytes: width_bytes"
+    ) in crossgl
+    assert "// HIP array free: array_3d" in crossgl
+    assert "// HIP array free: array" in crossgl
+    assert "// HIP memory free: pitched_device" in crossgl
+
+    raw_calls = (
+        "hipMallocPitch",
+        "hipMalloc3D",
+        "hipMallocArray",
+        "hipMalloc3DArray",
+        "hipArrayCreate",
+        "hipArray3DCreate",
+        "hipArrayGetDescriptor",
+        "hipArray3DGetDescriptor",
+        "hipArrayGetInfo",
+        "hipMemcpy2D",
+        "hipMemcpy2DAsync",
+        "hipMemcpyToArray",
+        "hipMemcpyToArrayAsync",
+        "hipMemcpyFromArray",
+        "hipMemcpyFromArrayAsync",
+        "hipMemcpy2DToArray",
+        "hipMemcpy2DToArrayAsync",
+        "hipMemcpy2DFromArray",
+        "hipMemcpy2DFromArrayAsync",
+        "hipMemcpyArrayToArray",
+        "hipMemcpy2DArrayToArray",
+        "hipMemcpy3D",
+        "hipMemcpy3DAsync",
+        "hipDrvMemcpy3D",
+        "hipDrvMemcpy3DAsync",
+        "hipMemcpyAtoH",
+        "hipMemcpyAtoHAsync",
+        "hipMemcpyHtoA",
+        "hipMemcpyHtoAAsync",
+        "hipMemcpyAtoD",
+        "hipMemcpyDtoA",
+        "hipMemcpyAtoA",
+        "hipArrayDestroy",
+        "hipFreeArray",
+    )
+    for raw_call in raw_calls:
+        assert f"{raw_call}(" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
