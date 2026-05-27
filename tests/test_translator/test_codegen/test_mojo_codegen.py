@@ -1847,6 +1847,82 @@ def test_hlsl_typed_integer_image_aliases_preserve_vector_value_signatures():
     )
 
 
+def test_hlsl_16bit_typed_image_aliases_preserve_mojo_value_signatures():
+    code = """
+    RWTexture2D<half2> halfPairs;
+    RWTexture2D<min16float3> minNormals;
+    RWTexture2D<min16int> smallSigned;
+    RasterizerOrderedTexture3D<min16uint4> smallCounters;
+
+    half2 readHalf(int2 pixel) {
+        return halfPairs.Load(pixel);
+    }
+    void writeHalf(int2 pixel, half2 value) {
+        halfPairs.Store(pixel, value);
+    }
+    min16float3 readMinNormal(int2 pixel) {
+        return minNormals.Load(pixel);
+    }
+    void writeMinNormal(int2 pixel, min16float3 value) {
+        minNormals.Store(pixel, value);
+    }
+    min16int readSigned(int2 pixel) {
+        return smallSigned.Load(pixel);
+    }
+    void writeSigned(int2 pixel, min16int value) {
+        smallSigned.Store(pixel, value);
+    }
+    min16uint4 readCounters(int4 voxel) {
+        return smallCounters.Load(voxel);
+    }
+    void writeCounters(int4 voxel, min16uint4 value) {
+        smallCounters.Store(voxel, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Image2DHalf2:" in generated_code
+    assert "struct Image2DHalf3:" in generated_code
+    assert "struct IImage2DInt16:" in generated_code
+    assert "struct UImage3DUInt164:" in generated_code
+    assert "var halfPairs: Image2DHalf2 = Image2DHalf2()" in generated_code
+    assert "var minNormals: Image2DHalf3 = Image2DHalf3()" in generated_code
+    assert "var smallSigned: IImage2DInt16 = IImage2DInt16()" in generated_code
+    assert "var smallCounters: UImage3DUInt164 = UImage3DUInt164()" in generated_code
+    assert (
+        "fn image_store(image: Image2DHalf2, coord: SIMD[DType.int32, 2], "
+        "value: SIMD[DType.float16, 2]):" in generated_code
+    )
+    assert (
+        "fn image_load(image: Image2DHalf3, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.float16, 4]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: IImage2DInt16, coord: SIMD[DType.int32, 2], "
+        "value: Int16):" in generated_code
+    )
+    assert (
+        "fn image_store(image: UImage3DUInt164, coord: SIMD[DType.int32, 4], "
+        "value: SIMD[DType.uint16, 4]):" in generated_code
+    )
+
+
+def test_typed_vector_image_atomics_require_scalar_integer_diagnostics():
+    code = """
+    RWTexture2D<int2> signedPairs;
+
+    int2 invalidAtomic(int2 pixel, int2 value) {
+        return signedPairs.InterlockedAdd(pixel, value);
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="image atomic.*scalar integer image required.*IImage2DInt2",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_hlsl_rasterizer_ordered_texture_aliases_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 

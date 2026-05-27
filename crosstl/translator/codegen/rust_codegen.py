@@ -3601,69 +3601,46 @@ class RustCodeGen:
             return False
         if isinstance(node, BlockNode):
             return True
-        if isinstance(node, list):
+        if isinstance(node, (list, tuple)):
             return any(self.expression_contains_block_node(item) for item in node)
-        if isinstance(node, tuple):
-            return any(self.expression_contains_block_node(item) for item in node)
+        if isinstance(node, dict):
+            return any(
+                self.expression_contains_block_node(item) for item in node.values()
+            )
 
-        if isinstance(node, ExpressionStatementNode):
-            return self.expression_contains_block_node(node.expression)
-        if isinstance(node, ReturnNode):
-            return self.expression_contains_block_node(node.value)
-        if isinstance(node, VariableNode):
-            return self.expression_contains_block_node(
-                getattr(node, "initial_value", None)
-            )
-        if isinstance(node, AssignmentNode):
-            return self.expression_contains_block_node(
-                [node.target, node.value],
-            )
-        if isinstance(node, IfNode):
-            return self.expression_contains_block_node(
-                [node.condition, node.then_branch, node.else_branch],
-            )
-        if isinstance(node, MatchNode):
-            pieces = [node.expression]
-            for arm in getattr(node, "arms", []) or []:
-                pieces.append(getattr(arm, "guard", None))
-                pieces.append(getattr(arm, "body", None))
-            return self.expression_contains_block_node(pieces)
-        if isinstance(node, FunctionCallNode):
-            return self.expression_contains_block_node(
-                [
-                    getattr(node, "function", getattr(node, "name", None)),
-                    getattr(node, "arguments", getattr(node, "args", [])),
-                ]
-            )
-        if isinstance(node, ConstructorNode):
-            return self.expression_contains_block_node(
-                [
-                    getattr(node, "arguments", []),
-                    list((getattr(node, "named_arguments", {}) or {}).values()),
-                ]
-            )
-        if isinstance(node, ArrayLiteralNode):
-            return self.expression_contains_block_node(getattr(node, "elements", []))
-        if isinstance(node, TernaryOpNode):
-            return self.expression_contains_block_node(
-                [node.condition, node.true_expr, node.false_expr],
-            )
-        if isinstance(node, BinaryOpNode):
-            return self.expression_contains_block_node([node.left, node.right])
-        if isinstance(node, UnaryOpNode):
-            return self.expression_contains_block_node(node.operand)
-        if isinstance(node, MemberAccessNode):
-            return self.expression_contains_block_node(
-                getattr(node, "object_expr", getattr(node, "object", None))
-            )
-        if isinstance(node, ArrayAccessNode):
-            return self.expression_contains_block_node(
-                [
-                    getattr(node, "array_expr", getattr(node, "array", None)),
-                    getattr(node, "index_expr", getattr(node, "index", None)),
-                ]
-            )
-        return False
+        child_attrs = (
+            "expression",
+            "value",
+            "initial_value",
+            "target",
+            "left",
+            "right",
+            "condition",
+            "then_branch",
+            "else_branch",
+            "body",
+            "guard",
+            "operand",
+            "object_expr",
+            "object",
+            "array_expr",
+            "array",
+            "index_expr",
+            "index",
+            "function",
+            "arguments",
+            "args",
+            "named_arguments",
+            "elements",
+            "true_expr",
+            "false_expr",
+            "arms",
+            "statements",
+        )
+        return any(
+            self.expression_contains_block_node(getattr(node, attr, None))
+            for attr in child_attrs
+        )
 
     def generate_block_expression(
         self,

@@ -2490,6 +2490,35 @@ shader MetalMeshPayloadLocalAliasValidation {
 """
 
 
+METAL_MESH_PAYLOAD_POINTER_ALIAS_SHADER = """
+shader MetalMeshPayloadPointerAliasValidation {
+    struct Payload {
+        vec4 color;
+    };
+
+    object {
+        void main(Payload payload @payload)
+            @max_total_threads_per_threadgroup(32)
+        {
+            Payload* alias = payload;
+            alias.color = vec4(1.0, 0.0, 0.0, 1.0);
+            DispatchMesh(1, 1, 1);
+        }
+    }
+
+    mesh {
+        void main(Payload payload @payload)
+            @max_total_threads_per_threadgroup(32)
+        {
+            Payload* alias = payload;
+            alias.color = vec4(0.0, 1.0, 0.0, 1.0);
+            vec4 color = alias.color;
+        }
+    }
+}
+"""
+
+
 METAL_CONST_OBJECT_PAYLOAD_SHADER = """
 shader MetalConstObjectPayloadValidation {
     struct Payload {
@@ -5102,6 +5131,48 @@ def test_generated_metal_mesh_payload_local_aliases_compile_with_metal3(tmp_path
     assert "unsupported Metal mesh payload store" in code
     assert "\n    Payload& alias = payload;" not in code
     assert "\n    thread Payload& alias = payload;" not in code
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_mesh_payload_pointer_aliases_compile_with_metal3(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "mesh_payload_pointer_alias.metal"
+    output = tmp_path / "mesh_payload_pointer_alias.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_MESH_PAYLOAD_POINTER_ALIAS_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "object_data Payload* alias = &payload;" in code
+    assert "const object_data Payload* alias = &payload;" in code
+    assert "alias->color = float4(1.0, 0.0, 0.0, 1.0);" in code
+    assert "unsupported Metal mesh payload store" in code
+    assert "\n    Payload* alias = payload;" not in code
 
     run_validator(
         [

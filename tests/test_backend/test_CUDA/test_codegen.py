@@ -2521,6 +2521,140 @@ class TestCudaCodeGen:
         assert "tex3DLod<float4>(" not in result
         assert "tex3DGrad<float4>(" not in result
 
+    def test_cuda_sparse_1d_and_cube_texture_helpers_emit_diagnostics(self):
+        """Test sparse CUDA 1D and cubemap texture fetches import as diagnostics."""
+        code = """
+        void sparseLineAndCubeFetchOps(
+            cudaTextureObject_t objectLine,
+            cudaTextureObject_t objectLineLayers,
+            cudaTextureObject_t objectCube,
+            cudaTextureObject_t objectCubeLayers,
+            bool* resident,
+            float x,
+            int layer,
+            float3 dir,
+            float lod
+        ) {
+            float4 sparseLine = tex1D<float4>(objectLine, x, resident);
+            float4 sparseLineLod = tex1DLod<float4>(
+                objectLine,
+                x,
+                lod,
+                resident
+            );
+            float4 sparseLineGrad = tex1DGrad<float4>(
+                objectLine,
+                x,
+                x,
+                x,
+                resident
+            );
+            float4 sparseLineLayer = tex1DLayered<float4>(
+                objectLineLayers,
+                x,
+                layer,
+                resident
+            );
+            float4 sparseLineLayerLod = tex1DLayeredLod<float4>(
+                objectLineLayers,
+                x,
+                layer,
+                lod,
+                resident
+            );
+            float4 sparseLineLayerGrad = tex1DLayeredGrad<float4>(
+                objectLineLayers,
+                x,
+                layer,
+                x,
+                x,
+                resident
+            );
+            float4 sparseCube = texCubemap<float4>(
+                objectCube,
+                dir.x,
+                dir.y,
+                dir.z,
+                resident
+            );
+            float4 sparseCubeLod = texCubemapLod<float4>(
+                objectCube,
+                dir.x,
+                dir.y,
+                dir.z,
+                lod,
+                resident
+            );
+            float4 sparseCubeGrad = texCubemapGrad<float4>(
+                objectCube,
+                dir.x,
+                dir.y,
+                dir.z,
+                dir,
+                dir,
+                resident
+            );
+            float4 sparseCubeLayer = texCubemapLayered<float4>(
+                objectCubeLayers,
+                dir.x,
+                dir.y,
+                dir.z,
+                layer,
+                resident
+            );
+            float4 sparseCubeLayerLod = texCubemapLayeredLod<float4>(
+                objectCubeLayers,
+                dir.x,
+                dir.y,
+                dir.z,
+                layer,
+                lod,
+                resident
+            );
+            float4 sparseCubeLayerGrad = texCubemapLayeredGrad<float4>(
+                objectCubeLayers,
+                dir.x,
+                dir.y,
+                dir.z,
+                layer,
+                dir,
+                dir,
+                resident
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "sampler1D objectLine" in result
+        assert "sampler1DArray objectLineLayers" in result
+        assert "samplerCube objectCube" in result
+        assert "samplerCubeArray objectCubeLayers" in result
+        for name, helper in (
+            ("sparseLine", "tex1D"),
+            ("sparseLineLod", "tex1DLod"),
+            ("sparseLineGrad", "tex1DGrad"),
+            ("sparseLineLayer", "tex1DLayered"),
+            ("sparseLineLayerLod", "tex1DLayeredLod"),
+            ("sparseLineLayerGrad", "tex1DLayeredGrad"),
+            ("sparseCube", "texCubemap"),
+            ("sparseCubeLod", "texCubemapLod"),
+            ("sparseCubeGrad", "texCubemapGrad"),
+            ("sparseCubeLayer", "texCubemapLayered"),
+            ("sparseCubeLayerLod", "texCubemapLayeredLod"),
+            ("sparseCubeLayerGrad", "texCubemapLayeredGrad"),
+        ):
+            assert (
+                f"var {name}: vec4<f32> = "
+                f"(/* cuda texture.{helper} sparse residency not directly "
+                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
+            ) in result
+            assert f"{helper}<float4>(" not in result
+
     def test_qualified_resource_object_pointer_array_conversion(self):
         """Test qualified CUDA resource object arrays retain inferred shapes."""
         code = """

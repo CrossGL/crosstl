@@ -2854,6 +2854,8 @@ class MetalCodeGen:
                 init_expr = self.generate_expression_with_expected(
                     initial_value, var_type
                 )
+                if self.local_pointer_initializer_needs_address(stmt, initial_value):
+                    init_expr = f"&{init_expr}"
                 address_space_mismatch = (
                     self.local_variable_address_space_mismatch_diagnostic(stmt)
                 )
@@ -2989,6 +2991,21 @@ class MetalCodeGen:
         return isinstance(
             self.local_variable_type_node(node), (PointerType, ReferenceType)
         )
+
+    def local_pointer_initializer_needs_address(self, node, initial_value):
+        if not isinstance(self.local_variable_type_node(node), PointerType):
+            return False
+        if initial_value is None:
+            return False
+        if (
+            isinstance(initial_value, UnaryOpNode)
+            and getattr(initial_value, "operator", getattr(initial_value, "op", None))
+            == "&"
+        ):
+            return False
+        if self.metal_type_is_pointer_like(self.expression_result_type(initial_value)):
+            return False
+        return self.assignment_target_root_name(initial_value) is not None
 
     def local_variable_qualifier(self, node):
         qualifiers = {

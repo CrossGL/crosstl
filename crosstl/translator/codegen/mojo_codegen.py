@@ -4882,8 +4882,8 @@ class MojoCodeGen:
         return_type = self.image_value_type(resource_type)
         if return_type not in {"Int32", "UInt32"}:
             raise ValueError(
-                "Unsupported image atomic for Mojo codegen; integer image required: "
-                f"{resource_type}"
+                "Unsupported image atomic for Mojo codegen; "
+                f"scalar integer image required: {resource_type}"
             )
 
         arg_types = tuple(self.resource_builtin_arg_type(arg) for arg in args)

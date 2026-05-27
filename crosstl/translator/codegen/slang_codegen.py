@@ -6183,6 +6183,10 @@ class SlangCodeGen:
             return self.unsupported_resource_query_call(
                 func_name, "requires a resource argument"
             )
+        if len(args) != 1:
+            return self.unsupported_resource_query_call(
+                func_name, "accepts only a resource argument"
+            )
 
         resource_type = self.resource_base_type(self.get_expression_type(args[0]))
         spec = self.dimension_query_spec(resource_type)
@@ -7010,6 +7014,10 @@ class SlangCodeGen:
             return self.unsupported_resource_query_call(
                 "textureQueryLevels", "requires a resource argument"
             )
+        if len(args) != 1:
+            return self.unsupported_resource_query_call(
+                "textureQueryLevels", "accepts only a resource argument"
+            )
 
         resource_type = self.resource_base_type(self.get_expression_type(args[0]))
         spec = self.dimension_query_spec(resource_type)
@@ -7060,6 +7068,12 @@ class SlangCodeGen:
             )
 
         texture_name, coord = query_args
+        coord_node = args[self.texture_query_lod_coord_index(args)]
+        coord_reason = self.sampled_texture_coordinate_rank_unsupported_reason(
+            args[0], coord_node
+        )
+        if coord_reason:
+            return self.unsupported_texture_query_lod_call(coord_reason)
         unclamped = f"{texture_name}.CalculateLevelOfDetailUnclamped({coord})"
         clamped = f"{texture_name}.CalculateLevelOfDetail({coord})"
         return f"float2({unclamped}, {clamped})"

@@ -283,6 +283,197 @@ def test_native_hip_texture_lod_grad_modes_parse_and_compile_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_texture_layer_cube_modes_parse_and_compile_if_available(
+    tmp_path,
+):
+    """Smoke native HIP layered and cubemap texture intrinsics."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    __global__ void texture_layer_cube_modes(
+        hipTextureObject_t rampArray,
+        hipTextureObject_t layers,
+        hipTextureObject_t env,
+        hipTextureObject_t probes,
+        float4* out
+    ) {
+        float u = 0.25f;
+        float layer = 1.0f;
+        float2 uv = make_float2(0.25f, 0.75f);
+        float3 dir = make_float3(0.25f, 0.5f, 0.75f);
+        float du = 0.125f;
+        float2 dxy = make_float2(0.125f, 0.25f);
+        float4 dcube = make_float4(0.125f, 0.25f, 0.5f, 0.0f);
+        float4 rampLayer = tex1DLayered<float4>(rampArray, u, layer);
+        float4 rampLayerLod = tex1DLayeredLod<float4>(
+            rampArray,
+            u,
+            layer,
+            1.0f
+        );
+        float4 rampLayerGrad = tex1DLayeredGrad<float4>(
+            rampArray,
+            u,
+            layer,
+            du,
+            du
+        );
+        float4 layerSample = tex2DLayered<float4>(layers, uv.x, uv.y, layer);
+        float4 layerLod = tex2DLayeredLod<float4>(
+            layers,
+            uv.x,
+            uv.y,
+            layer,
+            1.0f
+        );
+        float4 layerGrad = tex2DLayeredGrad<float4>(
+            layers,
+            uv.x,
+            uv.y,
+            layer,
+            dxy,
+            dxy
+        );
+        float4 cubeSample = texCubemap<float4>(env, dir.x, dir.y, dir.z);
+        float4 cubeLod = texCubemapLod<float4>(
+            env,
+            dir.x,
+            dir.y,
+            dir.z,
+            1.0f
+        );
+        float4 cubeGrad = texCubemapGrad<float4>(
+            env,
+            dir.x,
+            dir.y,
+            dir.z,
+            dcube,
+            dcube
+        );
+        float4 probeSample = texCubemapLayered<float4>(
+            probes,
+            dir.x,
+            dir.y,
+            dir.z,
+            layer
+        );
+        float4 probeLod = texCubemapLayeredLod<float4>(
+            probes,
+            dir.x,
+            dir.y,
+            dir.z,
+            layer,
+            1.0f
+        );
+        float4 probeGrad = texCubemapLayeredGrad<float4>(
+            probes,
+            dir.x,
+            dir.y,
+            dir.z,
+            layer,
+            dcube,
+            dcube
+        );
+        out[threadIdx.x] = make_float4(
+            rampLayer.x + rampLayerLod.x + rampLayerGrad.x,
+            layerSample.y + layerLod.y + layerGrad.y,
+            cubeSample.z + cubeLod.z + cubeGrad.z,
+            probeSample.w + probeLod.w + probeGrad.w
+        );
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    expected_fragments = (
+        "// Kernel: texture_layer_cube_modes",
+        "sampler1DArray rampArray",
+        "sampler2DArray layers",
+        "samplerCube env",
+        "samplerCubeArray probes",
+        "@group(0) @binding(4) var<storage, read_write> out: array<vec4<f32>>",
+        "var u: f32 = 0.25f;",
+        "var layer: f32 = 1.0f;",
+        "var uv: vec2<f32> = vec2<f32>(0.25f, 0.75f);",
+        "var dir: vec3<f32> = vec3<f32>(0.25f, 0.5f, 0.75f);",
+        "var du: f32 = 0.125f;",
+        "var dxy: vec2<f32> = vec2<f32>(0.125f, 0.25f);",
+        "var dcube: vec4<f32> = vec4<f32>(0.125f, 0.25f, 0.5f, 0.0f);",
+        "var rampLayer: vec4<f32> = texture(rampArray, vec2<f32>(u, layer));",
+        (
+            "var rampLayerLod: vec4<f32> = textureLod("
+            "rampArray, vec2<f32>(u, layer), 1.0f);"
+        ),
+        (
+            "var rampLayerGrad: vec4<f32> = textureGrad("
+            "rampArray, vec2<f32>(u, layer), du, du);"
+        ),
+        (
+            "var layerSample: vec4<f32> = texture("
+            "layers, vec3<f32>(uv.x, uv.y, layer));"
+        ),
+        (
+            "var layerLod: vec4<f32> = textureLod("
+            "layers, vec3<f32>(uv.x, uv.y, layer), 1.0f);"
+        ),
+        (
+            "var layerGrad: vec4<f32> = textureGrad("
+            "layers, vec3<f32>(uv.x, uv.y, layer), dxy, dxy);"
+        ),
+        (
+            "var cubeSample: vec4<f32> = texture("
+            "env, vec3<f32>(dir.x, dir.y, dir.z));"
+        ),
+        (
+            "var cubeLod: vec4<f32> = textureLod("
+            "env, vec3<f32>(dir.x, dir.y, dir.z), 1.0f);"
+        ),
+        (
+            "var cubeGrad: vec4<f32> = textureGrad("
+            "env, vec3<f32>(dir.x, dir.y, dir.z), dcube, dcube);"
+        ),
+        (
+            "var probeSample: vec4<f32> = texture("
+            "probes, vec4<f32>(dir.x, dir.y, dir.z, layer));"
+        ),
+        (
+            "var probeLod: vec4<f32> = textureLod("
+            "probes, vec4<f32>(dir.x, dir.y, dir.z, layer), 1.0f);"
+        ),
+        (
+            "var probeGrad: vec4<f32> = textureGrad("
+            "probes, vec4<f32>(dir.x, dir.y, dir.z, layer), dcube, dcube);"
+        ),
+        (
+            "out[gl_LocalInvocationID.x] = vec4<f32>("
+            "((rampLayer.x + rampLayerLod.x) + rampLayerGrad.x), "
+            "((layerSample.y + layerLod.y) + layerGrad.y), "
+            "((cubeSample.z + cubeLod.z) + cubeGrad.z), "
+            "((probeSample.w + probeLod.w) + probeGrad.w));"
+        ),
+    )
+    for fragment in expected_fragments:
+        assert fragment in crossgl
+
+    for raw_intrinsic in (
+        "tex1DLayered<",
+        "tex1DLayeredLod<",
+        "tex1DLayeredGrad<",
+        "tex2DLayered<",
+        "tex2DLayeredLod<",
+        "tex2DLayeredGrad<",
+        "texCubemap<",
+        "texCubemapLod<",
+        "texCubemapGrad<",
+        "texCubemapLayered<",
+        "texCubemapLayeredLod<",
+        "texCubemapLayeredGrad<",
+    ):
+        assert raw_intrinsic not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_texture_surface_lifecycle_parses_and_compiles_if_available(
     tmp_path,
 ):

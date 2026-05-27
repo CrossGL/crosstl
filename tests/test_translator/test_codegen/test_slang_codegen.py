@@ -6639,7 +6639,9 @@ def test_invalid_texture_query_lod_calls_emit_slang_diagnostics():
 
         compute {
             void main() {
+                float scalarCoord = 0.25;
                 vec2 uv = vec2(0.25, 0.5);
+                vec3 wideCoord = vec3(0.25, 0.5, 0.75);
                 vec2 missingTexture = textureQueryLod();
                 vec2 missingCoord = textureQueryLod(colorMap);
                 vec2 explicitMissingCoord = textureQueryLod(colorMap, querySampler);
@@ -6649,6 +6651,12 @@ def test_invalid_texture_query_lod_calls_emit_slang_diagnostics():
                     querySampler,
                     uv,
                     1
+                );
+                vec2 badImplicitCoord = textureQueryLod(colorMap, scalarCoord);
+                vec2 badExplicitCoord = textureQueryLod(
+                    colorMap,
+                    querySampler,
+                    wideCoord
                 );
                 vec2 samplerOnly = textureQueryLod(querySampler, uv);
                 vec2 shadowLod = textureQueryLod(shadowMap, uv);
@@ -6689,6 +6697,16 @@ def test_invalid_texture_query_lod_calls_emit_slang_diagnostics():
         "arguments */ float2(0.0, 0.0);" in generated_code
     )
     assert (
+        "float2 badImplicitCoord = /* unsupported Slang resource query: "
+        "textureQueryLod requires a 2-component coordinate for sampler2D */ "
+        "float2(0.0, 0.0);" in generated_code
+    )
+    assert (
+        "float2 badExplicitCoord = /* unsupported Slang resource query: "
+        "textureQueryLod requires a 2-component coordinate for sampler2D */ "
+        "float2(0.0, 0.0);" in generated_code
+    )
+    assert (
         "float2 samplerOnly = /* unsupported Slang resource query: "
         "textureQueryLod requires a non-shadow non-multisampled sampled texture "
         "resource */ float2(0.0, 0.0);" in generated_code
@@ -6708,7 +6726,7 @@ def test_invalid_texture_query_lod_calls_emit_slang_diagnostics():
         "textureQueryLod requires a non-shadow non-multisampled sampled texture "
         "resource */ float2(0.0, 0.0);" in generated_code
     )
-    assert generated_code.count("unsupported Slang resource query") == 9
+    assert generated_code.count("unsupported Slang resource query") == 11
     assert "textureQueryLod(" not in generated_code
     assert "CalculateLevelOfDetail(querySampler" not in generated_code
 
@@ -9404,6 +9422,9 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
                 int missingTextureSamples = textureSamples();
                 int missingImageSamples = imageSamples();
                 int missingLevels = textureQueryLevels();
+                int extraTextureSamples = textureSamples(msTex, 0);
+                int extraImageSamples = imageSamples(msImage, 0);
+                int extraLevels = textureQueryLevels(colorMap, 0);
             }
         }
     }
@@ -9453,7 +9474,19 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "int missingLevels = /* unsupported Slang resource query: "
         "textureQueryLevels requires a resource argument */ 0;" in generated_code
     )
-    assert generated_code.count("unsupported Slang resource query") == 9
+    assert (
+        "int extraTextureSamples = /* unsupported Slang resource query: "
+        "textureSamples accepts only a resource argument */ 0;" in generated_code
+    )
+    assert (
+        "int extraImageSamples = /* unsupported Slang resource query: "
+        "imageSamples accepts only a resource argument */ 0;" in generated_code
+    )
+    assert (
+        "int extraLevels = /* unsupported Slang resource query: "
+        "textureQueryLevels accepts only a resource argument */ 0;" in generated_code
+    )
+    assert generated_code.count("unsupported Slang resource query") == 12
     assert "textureQueryLevels(" not in generated_code
     assert "textureSamples(" not in generated_code
     assert "imageSamples(" not in generated_code

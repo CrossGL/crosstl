@@ -1635,15 +1635,27 @@ class CudaToCrossGLConverter:
 
     def is_sparse_cuda_texture_call(self, function_name, args):
         sparse_arg_counts = {
+            "tex1D": 3,
+            "tex1DLod": 4,
+            "tex1DGrad": 5,
             "tex2D": 4,
             "tex2DLod": 5,
             "tex2DGrad": 6,
             "tex3D": 5,
             "tex3DLod": 6,
             "tex3DGrad": 7,
+            "texCubemap": 5,
+            "texCubemapLod": 6,
+            "texCubemapGrad": 7,
+            "tex1DLayered": 4,
+            "tex1DLayeredLod": 5,
+            "tex1DLayeredGrad": 6,
             "tex2DLayered": 5,
             "tex2DLayeredLod": 6,
             "tex2DLayeredGrad": 7,
+            "texCubemapLayered": 6,
+            "texCubemapLayeredLod": 7,
+            "texCubemapLayeredGrad": 8,
         }
         return len(args) == sparse_arg_counts.get(function_name)
 
