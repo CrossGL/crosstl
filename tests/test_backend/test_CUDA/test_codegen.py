@@ -1304,6 +1304,57 @@ class TestCudaCodeGen:
         assert "err = cudaSuccess;" in result
         assert "cudaGetSurfaceObjectResourceDesc(" not in result
 
+    def test_cuda_external_memory_runtime_conversion(self):
+        """Test CUDA external-memory APIs emit metadata comments."""
+        code = """
+        void importExternalMemory(cudaExternalMemoryHandleDesc handleDesc) {
+            cudaExternalMemory_t memory;
+            cudaExternalMemoryBufferDesc bufferDesc;
+            cudaExternalMemoryMipmappedArrayDesc mipDesc;
+            cudaMipmappedArray_t mipmapped;
+            void* ptr;
+            cudaImportExternalMemory(&memory, &handleDesc);
+            cudaError_t err = cudaExternalMemoryGetMappedBuffer(
+                &ptr,
+                memory,
+                &bufferDesc
+            );
+            err = cudaExternalMemoryGetMappedMipmappedArray(
+                &mipmapped,
+                memory,
+                &mipDesc
+            );
+            err = cudaDestroyExternalMemory(memory);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA external memory import: output: memory, handle: (&handleDesc)"
+            in result
+        )
+        assert (
+            "// CUDA external memory mapped buffer: memory, "
+            "desc: (&bufferDesc), output: ptr"
+        ) in result
+        assert (
+            "// CUDA external memory mapped mipmapped array: memory, "
+            "desc: (&mipDesc), output: mipmapped"
+        ) in result
+        assert "// CUDA external memory destroy: memory" in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        assert "cudaImportExternalMemory(" not in result
+        assert "cudaExternalMemoryGetMappedBuffer(" not in result
+        assert "cudaExternalMemoryGetMappedMipmappedArray(" not in result
+        assert "cudaDestroyExternalMemory(" not in result
+
     def test_cuda_runtime_event_api_conversion(self):
         """Test CUDA stream and event API calls emit metadata comments"""
         code = """

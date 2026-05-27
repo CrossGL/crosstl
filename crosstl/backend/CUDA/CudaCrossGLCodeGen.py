@@ -715,6 +715,30 @@ class CudaToCrossGLConverter:
                     "// CUDA surface object resource descriptor query: "
                     f"{args[1]}, output: {output}"
                 ]
+        elif name == "cudaImportExternalMemory":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA external memory import: output: {output}, "
+                    f"handle: {args[1]}"
+                ]
+        elif name == "cudaExternalMemoryGetMappedBuffer":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA external memory mapped buffer: {args[1]}, "
+                    f"desc: {args[2]}, output: {output}"
+                ]
+        elif name == "cudaExternalMemoryGetMappedMipmappedArray":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA external memory mapped mipmapped array: "
+                    f"{args[1]}, desc: {args[2]}, output: {output}"
+                ]
+        elif name == "cudaDestroyExternalMemory":
+            if args:
+                return [f"// CUDA external memory destroy: {args[0]}"]
 
         return None
 

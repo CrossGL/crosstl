@@ -688,6 +688,110 @@ def test_native_hip_array_backed_texture_descriptor_setup_parses_and_compiles_if
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_linear_pitch2d_resource_desc_edges_parse_and_compile_if_available(
+    tmp_path,
+):
+    """Smoke HIP linear and pitched-2D resource descriptor field setup."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void texture_resource_desc_linear_pitch2d_edges(
+        float* device,
+        hipChannelFormatDesc channel_desc,
+        size_t width_elems,
+        size_t height,
+        size_t pitch_bytes
+    ) {
+        hipTextureObject_t linear_tex = 0;
+        hipTextureObject_t pitch_tex = 0;
+        hipResourceDesc linear_resource_desc = {0};
+        hipResourceDesc pitch_resource_desc = {0};
+        hipTextureDesc texture_desc = {0};
+        hipResourceDesc queried_linear_desc;
+        hipResourceDesc queried_pitch_desc;
+
+        linear_resource_desc.resType = hipResourceTypeLinear;
+        linear_resource_desc.res.linear.devPtr = device;
+        linear_resource_desc.res.linear.desc = channel_desc;
+        linear_resource_desc.res.linear.sizeInBytes = width_elems * sizeof(float);
+        pitch_resource_desc.resType = hipResourceTypePitch2D;
+        pitch_resource_desc.res.pitch2D.devPtr = device;
+        pitch_resource_desc.res.pitch2D.desc = channel_desc;
+        pitch_resource_desc.res.pitch2D.width = width_elems;
+        pitch_resource_desc.res.pitch2D.height = height;
+        pitch_resource_desc.res.pitch2D.pitchInBytes = pitch_bytes;
+        texture_desc.addressMode[0] = hipAddressModeClamp;
+        texture_desc.addressMode[1] = hipAddressModeClamp;
+        texture_desc.filterMode = hipFilterModePoint;
+        texture_desc.readMode = hipReadModeElementType;
+        texture_desc.normalizedCoords = 0;
+
+        hipCreateTextureObject(&linear_tex, &linear_resource_desc, &texture_desc, NULL);
+        hipCreateTextureObject(&pitch_tex, &pitch_resource_desc, &texture_desc, NULL);
+        hipGetTextureObjectResourceDesc(&queried_linear_desc, linear_tex);
+        hipGetTextureObjectResourceDesc(&queried_pitch_desc, pitch_tex);
+        hipDestroyTextureObject(linear_tex);
+        hipDestroyTextureObject(pitch_tex);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    expected_fragments = (
+        "// Function: texture_resource_desc_linear_pitch2d_edges",
+        "void texture_resource_desc_linear_pitch2d_edges("
+        "ptr<f32> device, hipChannelFormatDesc channel_desc, "
+        "u32 width_elems, u32 height, u32 pitch_bytes)",
+        "var linear_tex: sampler = 0;",
+        "var pitch_tex: sampler = 0;",
+        "var linear_resource_desc: hipResourceDesc = {0};",
+        "var pitch_resource_desc: hipResourceDesc = {0};",
+        "var texture_desc: hipTextureDesc = {0};",
+        "var queried_linear_desc: hipResourceDesc;",
+        "var queried_pitch_desc: hipResourceDesc;",
+        "linear_resource_desc.resType = hipResourceTypeLinear;",
+        "linear_resource_desc.res.linear.devPtr = device;",
+        "linear_resource_desc.res.linear.desc = channel_desc;",
+        "linear_resource_desc.res.linear.sizeInBytes = "
+        "(width_elems * sizeof(float));",
+        "pitch_resource_desc.resType = hipResourceTypePitch2D;",
+        "pitch_resource_desc.res.pitch2D.devPtr = device;",
+        "pitch_resource_desc.res.pitch2D.desc = channel_desc;",
+        "pitch_resource_desc.res.pitch2D.width = width_elems;",
+        "pitch_resource_desc.res.pitch2D.height = height;",
+        "pitch_resource_desc.res.pitch2D.pitchInBytes = pitch_bytes;",
+        "texture_desc.addressMode[0] = hipAddressModeClamp;",
+        "texture_desc.addressMode[1] = hipAddressModeClamp;",
+        "texture_desc.filterMode = hipFilterModePoint;",
+        "texture_desc.readMode = hipReadModeElementType;",
+        "texture_desc.normalizedCoords = 0;",
+        "// HIP texture object create: linear_tex, "
+        "resource: (&linear_resource_desc), texture desc: (&texture_desc), "
+        "resource view: NULL",
+        "// HIP texture object create: pitch_tex, "
+        "resource: (&pitch_resource_desc), texture desc: (&texture_desc), "
+        "resource view: NULL",
+        "// HIP texture object get resource desc: output: queried_linear_desc, "
+        "texture: linear_tex",
+        "// HIP texture object get resource desc: output: queried_pitch_desc, "
+        "texture: pitch_tex",
+        "// HIP texture object destroy: linear_tex",
+        "// HIP texture object destroy: pitch_tex",
+    )
+    for expected in expected_fragments:
+        assert expected in crossgl
+
+    raw_calls = (
+        "hipCreateTextureObject",
+        "hipGetTextureObjectResourceDesc",
+        "hipDestroyTextureObject",
+    )
+    for raw_call in raw_calls:
+        assert f"{raw_call}(" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_texture_object_descriptor_queries_parse_and_compile_if_available(
     tmp_path,
 ):
