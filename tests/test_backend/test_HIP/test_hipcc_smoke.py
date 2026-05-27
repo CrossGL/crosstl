@@ -171,6 +171,62 @@ def test_native_hip_texture_surface_lifecycle_parses_and_compiles_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_array_backed_texture_descriptor_setup_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP array-backed texture-object descriptor setup."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void array_backed_texture_descriptor_setup(hipArray_t array) {
+        hipTextureObject_t tex = 0;
+        hipResourceDesc resource_desc = {0};
+        hipTextureDesc texture_desc = {0};
+
+        resource_desc.resType = hipResourceTypeArray;
+        resource_desc.res.array.array = array;
+        texture_desc.addressMode[0] = hipAddressModeClamp;
+        texture_desc.addressMode[1] = hipAddressModeClamp;
+        texture_desc.filterMode = hipFilterModePoint;
+        texture_desc.readMode = hipReadModeElementType;
+        texture_desc.normalizedCoords = 0;
+        hipCreateTextureObject(&tex, &resource_desc, &texture_desc, NULL);
+        hipDestroyTextureObject(tex);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    expected_fragments = (
+        "// Function: array_backed_texture_descriptor_setup",
+        "void array_backed_texture_descriptor_setup(ptr<void> array)",
+        "var tex: sampler = 0;",
+        "var resource_desc: hipResourceDesc = {0};",
+        "var texture_desc: hipTextureDesc = {0};",
+        "resource_desc.resType = hipResourceTypeArray;",
+        "resource_desc.res.array.array = array;",
+        "texture_desc.addressMode[0] = hipAddressModeClamp;",
+        "texture_desc.addressMode[1] = hipAddressModeClamp;",
+        "texture_desc.filterMode = hipFilterModePoint;",
+        "texture_desc.readMode = hipReadModeElementType;",
+        "texture_desc.normalizedCoords = 0;",
+        "// HIP texture object create: tex, resource: (&resource_desc), "
+        "texture desc: (&texture_desc), resource view: NULL",
+        "// HIP texture object destroy: tex",
+    )
+    for expected in expected_fragments:
+        assert expected in crossgl
+
+    raw_calls = (
+        "hipCreateTextureObject",
+        "hipDestroyTextureObject",
+    )
+    for raw_call in raw_calls:
+        assert f"{raw_call}(" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_texture_object_descriptor_queries_parse_and_compile_if_available(
     tmp_path,
 ):

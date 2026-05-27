@@ -210,6 +210,56 @@ shader HLSLMeshAmplificationValidator {
 """
 
 
+HLSL_TESSELLATION_VALIDATOR_SHADER = """
+shader HLSLTessellationValidator {
+    struct HSInput {
+        vec3 position @ POSITION;
+    };
+
+    struct HSOutput {
+        vec3 position @ POSITION;
+    };
+
+    struct HSConstData {
+        vec3 edges @ SV_TessFactor;
+        float inside @ SV_InsideTessFactor;
+    };
+
+    tessellation_control {
+        HSConstData HSConst(InputPatch<HSInput, 3> patch) {
+            HSConstData constants;
+            constants.edges[0] = 1.0;
+            constants.edges[1] = 1.0;
+            constants.edges[2] = 1.0;
+            constants.inside = 1.0;
+            return constants;
+        }
+
+        HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+            @domain(tri)
+            @partitioning(integer)
+            @outputtopology(triangle_cw)
+            @outputcontrolpoints(3)
+            @patchconstantfunc(HSConst) {
+            HSOutput output;
+            output.position = patch[id].position;
+            return output;
+        }
+    }
+
+    tessellation_evaluation {
+        vec4 main(OutputPatch<HSOutput, 3> patch, vec3 bary @ SV_DomainLocation)
+            @domain(tri) @ SV_Position {
+            vec3 position = patch[0].position * bary.x
+                + patch[1].position * bary.y
+                + patch[2].position * bary.z;
+            return vec4(position, 1.0);
+        }
+    }
+}
+"""
+
+
 GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER = """
 shader GLSLMultisampleStorageValidator {
     image2DMS colorImage @rgba16f;
@@ -1172,6 +1222,59 @@ def test_generated_hlsl_mesh_amplification_compile_with_dxc(tmp_path):
     )
     assert amplification_output.exists()
     assert mesh_output.exists()
+
+
+def test_generated_hlsl_tessellation_pair_compile_with_dxc(tmp_path):
+    shader_path = tmp_path / "tessellation_pair.hlsl"
+    hull_output = tmp_path / "tessellation_pair_hs.dxil"
+    domain_output = tmp_path / "tessellation_pair_ds.dxil"
+
+    code = HLSLCodeGen().generate(
+        crosstl.translator.parse(HLSL_TESSELLATION_VALIDATOR_SHADER)
+    )
+    assert '[shader("hull")]' in code
+    assert '[shader("domain")]' in code
+    assert '[patchconstantfunc("HSConst")]' in code
+    assert "[outputcontrolpoints(3)]" in code
+    assert "float edges[3] : SV_TessFactor;" in code
+    assert "constants.edges[0] = 1.0;" in code
+    assert (
+        "HSOutput HSMain(InputPatch<HSInput, 3> patch, "
+        "uint id : SV_OutputControlPointID)"
+    ) in code
+    assert (
+        "float4 DSMain(OutputPatch<HSOutput, 3> patch, "
+        "float3 bary : SV_DomainLocation): SV_Position"
+    ) in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    dxc = _require_tool("dxc")
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "hs_6_0",
+            "-E",
+            "HSMain",
+            str(shader_path),
+            "-Fo",
+            str(hull_output),
+        ]
+    )
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "ds_6_0",
+            "-E",
+            "DSMain",
+            str(shader_path),
+            "-Fo",
+            str(domain_output),
+        ]
+    )
+    assert hull_output.exists()
+    assert domain_output.exists()
 
 
 @pytest.mark.parametrize(

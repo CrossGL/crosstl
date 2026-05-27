@@ -2352,6 +2352,60 @@ class TestCudaCodeGen:
         )
         assert "tex1Dfetch<float4>(" not in result
 
+    def test_cuda_sparse_texture_fetch_helpers_emit_diagnostics(self):
+        """Test sparse CUDA 2D texture fetches import as diagnostics."""
+        code = """
+        void sparseFetchOps(
+            cudaTextureObject_t objectTex,
+            bool* resident,
+            float2 uv,
+            float lod
+        ) {
+            float4 sparseSample = tex2D<float4>(
+                objectTex,
+                uv.x,
+                uv.y,
+                resident
+            );
+            float4 sparseLod = tex2DLod<float4>(
+                objectTex,
+                uv.x,
+                uv.y,
+                lod,
+                resident
+            );
+            float4 sparseGrad = tex2DGrad<float4>(
+                objectTex,
+                uv.x,
+                uv.y,
+                uv,
+                uv,
+                resident
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "sampler2D objectTex" in result
+        for name, helper in (
+            ("sparseSample", "tex2D"),
+            ("sparseLod", "tex2DLod"),
+            ("sparseGrad", "tex2DGrad"),
+        ):
+            assert (
+                f"var {name}: vec4<f32> = "
+                f"(/* cuda texture.{helper} sparse residency not directly "
+                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
+            ) in result
+        assert "tex2D<float4>(" not in result
+        assert "tex2DLod<float4>(" not in result
+        assert "tex2DGrad<float4>(" not in result
+
     def test_qualified_resource_object_pointer_array_conversion(self):
         """Test qualified CUDA resource object arrays retain inferred shapes."""
         code = """

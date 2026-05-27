@@ -3511,6 +3511,68 @@ def test_advanced_texture_builtins_reject_invalid_mojo_resources():
         generate_code(parse_code(tokenize_code(shadow_query_lod)))
 
 
+def test_texture_coordinate_and_argument_diagnostics_for_mojo_codegen():
+    scalar_sample_coord = """
+    sampler2D colorMap;
+
+    vec4 invalidSample(sampler2D tex, float u) {
+        return texture(tex, u);
+    }
+    """
+    with pytest.raises(ValueError, match="sample.*coordinate.*Texture2D"):
+        generate_code(parse_code(tokenize_code(scalar_sample_coord)))
+
+    missing_lod = """
+    sampler2D colorMap;
+
+    vec4 invalidLod(sampler2D tex, vec2 uv) {
+        return textureLod(tex, uv);
+    }
+    """
+    with pytest.raises(ValueError, match="sample_lod.*expected 2 argument"):
+        generate_code(parse_code(tokenize_code(missing_lod)))
+
+    bad_grad_rank = """
+    sampler2D colorMap;
+
+    vec4 invalidGrad(sampler2D tex, vec2 uv, vec3 ddx, vec2 ddy) {
+        return textureGrad(tex, uv, ddx, ddy);
+    }
+    """
+    with pytest.raises(ValueError, match="sample_grad.*ddx.*Texture2D"):
+        generate_code(parse_code(tokenize_code(bad_grad_rank)))
+
+    missing_texel_lod = """
+    sampler2D colorMap;
+
+    vec4 invalidFetch(sampler2D tex, ivec2 pixel) {
+        return texelFetch(tex, pixel);
+    }
+    """
+    with pytest.raises(ValueError, match="texel_fetch.*expected 2 argument"):
+        generate_code(parse_code(tokenize_code(missing_texel_lod)))
+
+    scalar_texel_coord = """
+    sampler2D colorMap;
+
+    vec4 invalidFetch(sampler2D tex, int pixel) {
+        return texelFetch(tex, pixel, 0);
+    }
+    """
+    with pytest.raises(ValueError, match="texel_fetch.*coordinate.*Texture2D"):
+        generate_code(parse_code(tokenize_code(scalar_texel_coord)))
+
+    image_texel_fetch = """
+    image2D colorImage;
+
+    vec4 invalidFetch(image2D image, ivec2 pixel) {
+        return texelFetch(image, pixel, 0);
+    }
+    """
+    with pytest.raises(ValueError, match="texel_fetch.*texture resource required"):
+        generate_code(parse_code(tokenize_code(image_texel_fetch)))
+
+
 def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -4391,6 +4453,8 @@ def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast
     state = VariableNode("state", PrimitiveType("sampler"))
     uv = VariableNode("uv", VectorType(PrimitiveType("float"), 2))
     uv_layer = VariableNode("uvLayer", VectorType(PrimitiveType("float"), 3))
+    wide_uv = VariableNode("wideUv", VectorType(PrimitiveType("float"), 3))
+    scalar_pixel = VariableNode("scalarPixel", PrimitiveType("int"))
     bias = VariableNode("bias", PrimitiveType("float"))
     lod = VariableNode("lod", PrimitiveType("float"))
     depth = VariableNode("depth", PrimitiveType("float"))
@@ -4405,6 +4469,8 @@ def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast
     codegen.register_variable_type("state", "sampler")
     codegen.register_variable_type("uv", "vec2")
     codegen.register_variable_type("uvLayer", "vec3")
+    codegen.register_variable_type("wideUv", "vec3")
+    codegen.register_variable_type("scalarPixel", "int")
     codegen.register_variable_type("bias", "float")
     codegen.register_variable_type("lod", "float")
     codegen.register_variable_type("depth", "float")
@@ -4652,6 +4718,12 @@ def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast
         codegen.generate_expression(
             TextureOpNode("CalculateLevelOfDetail", shadow, [uv], sampler_expr=state)
         )
+    with pytest.raises(ValueError, match="sample.*coordinate.*Texture2D"):
+        codegen.generate_expression(
+            TextureOpNode("Sample", tex, [wide_uv], sampler_expr=state)
+        )
+    with pytest.raises(ValueError, match="texel_fetch.*coordinate.*Texture2D"):
+        codegen.generate_expression(TextureOpNode("Load", tex, [scalar_pixel]))
 
 
 def test_direct_texture_op_nodes_reject_unknown_operations():

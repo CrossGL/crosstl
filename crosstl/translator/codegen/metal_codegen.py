@@ -4852,6 +4852,20 @@ class MetalCodeGen:
                 f"{self.current_metal_mesh_output_parameter}"
                 f".set_primitive_count({primitive_count})"
             )
+        if expr.operation == "DispatchMesh":
+            if (
+                len(expr.arguments) == 4
+                and self.current_metal_mesh_payload_parameter is None
+            ):
+                return (
+                    "/* unsupported Metal mesh dispatch: DispatchMesh payload "
+                    "argument requires an object_data payload context */"
+                )
+            if self.current_metal_mesh_grid_properties_parameter is None:
+                return (
+                    "/* unsupported Metal mesh dispatch: DispatchMesh requires "
+                    "mesh_grid_properties context */"
+                )
         if (
             expr.operation == "DispatchMesh"
             and self.current_metal_mesh_grid_properties_parameter

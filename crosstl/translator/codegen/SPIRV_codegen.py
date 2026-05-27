@@ -3895,9 +3895,11 @@ class VulkanSPIRVCodeGen:
 
         return self.represented_ir_diagnostic_default_value("ray query", operation)
 
-    def process_mesh_operation(self, expr: MeshOpNode) -> SpirvId:
+    def process_mesh_operation(self, expr: MeshOpNode) -> Optional[SpirvId]:
         """Process represented mesh/task shader intrinsics."""
         operation = expr.operation
+        if operation == "DispatchMesh":
+            return self.process_dispatch_mesh_operation(expr)
         if operation != "SetMeshOutputCounts":
             return self.represented_ir_diagnostic_default_value(
                 "mesh shader", operation
@@ -3946,6 +3948,40 @@ class VulkanSPIRVCodeGen:
             )
 
         return self.register_constant(0, uint_type)
+
+    def process_dispatch_mesh_operation(self, expr: MeshOpNode) -> Optional[SpirvId]:
+        """Lower task-shader DispatchMesh to the SPIR-V mesh-task terminator."""
+        operation = expr.operation
+        if self.current_execution_model != "TaskEXT":
+            return self.represented_ir_diagnostic_default_value(
+                "mesh shader", operation
+            )
+
+        arguments = getattr(expr, "arguments", []) or []
+        if len(arguments) != 3:
+            self.emit(
+                "; WARNING: SPIR-V mesh DispatchMesh requires exactly 3 arguments"
+            )
+            return self.register_constant(0, self.register_primitive_type("uint"))
+
+        uint_type = self.register_primitive_type("uint")
+        group_counts = []
+        for argument in arguments:
+            group_count = self.process_expression(argument)
+            if group_count is None:
+                self.emit(
+                    "; WARNING: SPIR-V mesh DispatchMesh requires group-count operands"
+                )
+                return self.register_constant(0, uint_type)
+            group_counts.append(self.convert_value_to_type(group_count, uint_type))
+
+        self.require_capability("MeshShadingEXT")
+        self.require_extension("SPV_EXT_mesh_shader")
+        self.emit(
+            "OpEmitMeshTasksEXT "
+            + " ".join(f"%{group_count.id}" for group_count in group_counts)
+        )
+        return None
 
     def flatten_vector_constructor_args(
         self,
@@ -5158,7 +5194,9 @@ class VulkanSPIRVCodeGen:
                 continue
             if re.match(r"%\d+ = OpLabel$", stripped):
                 return False
-            return stripped.startswith(("OpBranch", "OpReturn", "OpKill"))
+            return stripped.startswith(
+                ("OpBranch", "OpReturn", "OpKill", "OpEmitMeshTasksEXT")
+            )
         return False
 
     def normalize_primitive_name(self, type_name: str) -> str:
@@ -6652,7 +6690,10 @@ class VulkanSPIRVCodeGen:
 
         self.process_statements(function_node.body)
 
-        if self.convert_type_node_to_string(function_node.return_type) == "void":
+        if (
+            self.convert_type_node_to_string(function_node.return_type) == "void"
+            and not self.current_block_has_terminator()
+        ):
             self.create_return()
 
         self.end_function()

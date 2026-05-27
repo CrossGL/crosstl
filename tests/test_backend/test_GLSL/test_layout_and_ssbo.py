@@ -168,6 +168,38 @@ def test_parse_fragment_blend_support_layout_roundtrip():
     assert "fragColor" not in glsl
 
 
+def test_parse_fragment_component_packed_outputs_roundtrip():
+    code = """
+    #version 450 core
+    layout(location = 0, component = 0) out float luminance;
+    layout(location = 0, component = 1) out vec2 velocity;
+    layout(location = 0, component = 3) out float coverage;
+
+    void main() {
+        luminance = 1.0;
+        velocity = vec2(0.5);
+        coverage = 0.25;
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "out float luminance @location(0) @component(0);" in crossgl
+    assert "out vec2 velocity @location(0) @component(1);" in crossgl
+    assert "out float coverage @location(0) @component(3);" in crossgl
+    assert "fragColor" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "layout(location = 0, component = 0) out float luminance;" in glsl
+    assert "layout(location = 0, component = 1) out vec2 velocity;" in glsl
+    assert "layout(location = 0, component = 3) out float coverage;" in glsl
+    assert "luminance = 1.0;" in glsl
+    assert "velocity = vec2(0.5);" in glsl
+    assert "coverage = 0.25;" in glsl
+    assert "fragColor" not in glsl
+
+
 def test_parse_fragment_color_and_depth_outputs_roundtrip():
     code = """
     #version 450 core

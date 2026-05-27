@@ -1254,6 +1254,36 @@ def test_glsl_fragment_blend_support_layout_qualifiers():
     assert "outputColour = vec4(1.0);" in fragment_code
 
 
+def test_glsl_fragment_component_packed_output_layouts():
+    code = """
+    shader ComponentPackedOutput {
+        out float luminance @location(0) @component(0);
+        out vec2 velocity @location(0) @component(1);
+        out float coverage @location(0) @component(3);
+
+        fragment {
+            void main() {
+                luminance = 1.0;
+                velocity = vec2(0.5);
+                coverage = 0.25;
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 0, component = 0) out float luminance;" in fragment_code
+    assert "layout(location = 0, component = 1) out vec2 velocity;" in fragment_code
+    assert "layout(location = 0, component = 3) out float coverage;" in fragment_code
+    assert "luminance = 1.0;" in fragment_code
+    assert "velocity = vec2(0.5);" in fragment_code
+    assert "coverage = 0.25;" in fragment_code
+    assert "fragColor" not in fragment_code
+
+
 @pytest.mark.parametrize(
     "depth_layout",
     ["depth_any", "depth_greater", "depth_less", "depth_unchanged"],

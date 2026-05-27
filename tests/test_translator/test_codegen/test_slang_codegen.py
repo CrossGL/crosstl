@@ -5667,7 +5667,11 @@ def test_texture_offset_builtins_emit_slang_offset_methods():
 def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
     code = """
     shader Resources {
+        sampler querySampler;
         sampler2d colorMap;
+        sampler2dshadow shadowMap;
+        sampler2dms msTex;
+        image2D colorImage;
 
         compute {
             void main() {
@@ -5677,6 +5681,16 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
                 vec4 missingOffset = textureOffset(colorMap, uv);
                 vec4 missingLodOffset = textureLodOffset(colorMap, uv, offset);
                 vec4 missingGradOffset = textureGradOffset(colorMap, uv, ddx, offset);
+                vec4 samplerOffset = textureOffset(querySampler, uv, offset);
+                vec4 imageOffset = textureLodOffset(colorImage, uv, 1.0, offset);
+                vec4 shadowOffset = textureGradOffset(
+                    shadowMap,
+                    uv,
+                    ddx,
+                    ddx,
+                    offset
+                );
+                vec4 multisampleOffset = textureOffset(msTex, uv, offset);
             }
         }
     }
@@ -5700,9 +5714,33 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
         "textureGradOffset requires gradient x, gradient y, and offset arguments */ "
         "float4(0.0);" in generated_code
     )
+    assert (
+        "float4 samplerOffset = /* unsupported Slang texture offset: "
+        "textureOffset requires a non-shadow non-multisampled sampled texture "
+        "resource */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 imageOffset = /* unsupported Slang texture offset: "
+        "textureLodOffset requires a non-shadow non-multisampled sampled texture "
+        "resource */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 shadowOffset = /* unsupported Slang texture offset: "
+        "textureGradOffset requires a non-shadow non-multisampled sampled texture "
+        "resource */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 multisampleOffset = /* unsupported Slang texture offset: "
+        "textureOffset requires a non-shadow non-multisampled sampled texture "
+        "resource */ float4(0.0);" in generated_code
+    )
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code
     assert "textureGradOffset(" not in generated_code
+    assert "querySampler.Sample" not in generated_code
+    assert "colorImage.Sample" not in generated_code
+    assert "shadowMap.Sample" not in generated_code
+    assert "msTex.Sample" not in generated_code
 
 
 def test_projected_texture_builtins_emit_slang_projected_samples():
@@ -5819,7 +5857,11 @@ def test_projected_texture_builtins_emit_slang_projected_samples():
 def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
     code = """
     shader Resources {
+        sampler querySampler;
         sampler2d colorMap;
+        sampler2dshadow shadowMap;
+        sampler2dms msTex;
+        image2D colorImage;
 
         compute {
             void main() {
@@ -5828,6 +5870,10 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
                 vec2 ddx = vec2(0.1, 0.0);
                 ivec2 offset = ivec2(1, 0);
                 vec4 badCoord = textureProj(colorMap, uv);
+                vec4 samplerProjected = textureProj(querySampler, uvq);
+                vec4 imageProjected = textureProj(colorImage, uvq);
+                vec4 shadowProjected = textureProj(shadowMap, uvq);
+                vec4 multisampleProjected = textureProj(msTex, uvq);
                 vec4 missingLod = textureProjLod(colorMap, uvq);
                 vec4 missingGrad = textureProjGrad(colorMap, uvq, ddx);
                 vec4 missingOffset = textureProjGradOffset(
@@ -5851,6 +5897,26 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
         "float4(0.0);" in generated_code
     )
     assert (
+        "float4 samplerProjected = /* unsupported Slang projected texture: "
+        "textureProj requires sampler1D/2D/3D texture resource */ float4(0.0);"
+        in generated_code
+    )
+    assert (
+        "float4 imageProjected = /* unsupported Slang projected texture: "
+        "textureProj requires sampler1D/2D/3D texture resource */ float4(0.0);"
+        in generated_code
+    )
+    assert (
+        "float4 shadowProjected = /* unsupported Slang projected texture: "
+        "textureProj requires sampler1D/2D/3D texture resource */ float4(0.0);"
+        in generated_code
+    )
+    assert (
+        "float4 multisampleProjected = /* unsupported Slang projected texture: "
+        "textureProj requires sampler1D/2D/3D texture resource */ float4(0.0);"
+        in generated_code
+    )
+    assert (
         "float4 missingLod = /* unsupported Slang projected texture: "
         "textureProjLod requires one lod argument */ float4(0.0);" in generated_code
     )
@@ -5868,6 +5934,10 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
     assert "textureProjLod(" not in generated_code
     assert "textureProjGrad(" not in generated_code
     assert "textureProjGradOffset(" not in generated_code
+    assert "querySampler.Sample" not in generated_code
+    assert "colorImage.Sample" not in generated_code
+    assert "shadowMap.Sample" not in generated_code
+    assert "msTex.Sample" not in generated_code
 
 
 def test_explicit_sampler_texel_fetch_emits_combined_slang_methods():
@@ -6059,7 +6129,11 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
 def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
     code = """
     shader Resources {
+        sampler querySampler;
         sampler2d colorMap;
+        sampler2dshadow shadowMap;
+        sampler2dms msTex;
+        image2D colorImage;
 
         compute {
             vec4 gatherDiagnostics(
@@ -6070,6 +6144,10 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
                 vec4 badComponent = textureGather(tex, uv, 4);
                 vec4 missingOffset = textureGatherOffset(tex, uv);
                 vec4 badOffsets = textureGatherOffsets(tex, uv, offset);
+                vec4 samplerGather = textureGather(querySampler, uv);
+                vec4 imageGather = textureGather(colorImage, uv);
+                vec4 shadowGather = textureGather(shadowMap, uv);
+                vec4 multisampleGather = textureGather(msTex, uv);
                 return badComponent + missingOffset + badOffsets;
             }
 
@@ -6097,9 +6175,33 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
         "textureGatherOffsets requires a typed offsets array or four offset arguments */ "
         "float4(0.0);" in generated_code
     )
+    assert (
+        "float4 samplerGather = /* unsupported Slang texture gather: "
+        "textureGather requires a non-shadow non-multisampled sampled texture "
+        "resource */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 imageGather = /* unsupported Slang texture gather: "
+        "textureGather requires a non-shadow non-multisampled sampled texture "
+        "resource */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 shadowGather = /* unsupported Slang texture gather: "
+        "textureGather requires a non-shadow non-multisampled sampled texture "
+        "resource */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 multisampleGather = /* unsupported Slang texture gather: "
+        "textureGather requires a non-shadow non-multisampled sampled texture "
+        "resource */ float4(0.0);" in generated_code
+    )
     assert "textureGather(" not in generated_code
     assert "textureGatherOffset(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
+    assert "querySampler.Gather" not in generated_code
+    assert "colorImage.Gather" not in generated_code
+    assert "shadowMap.Gather" not in generated_code
+    assert "msTex.Gather" not in generated_code
 
 
 def test_shadow_compare_builtins_emit_slang_compare_methods():
@@ -6197,17 +6299,24 @@ def test_shadow_compare_builtins_emit_slang_compare_methods():
 def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
     code = """
     shader Resources {
+        sampler querySampler;
         sampler2d colorMap;
         sampler2dshadow shadowMap;
+        sampler2dms msTex;
+        image2D colorImage;
 
         compute {
             void main() {
                 vec2 uv = vec2(0.25, 0.75);
                 vec2 ddx = vec2(0.1, 0.0);
                 float badResource = textureCompare(colorMap, uv, 0.5);
+                float samplerCompare = textureCompare(querySampler, uv, 0.5);
+                float imageCompare = textureCompare(colorImage, uv, 0.5);
+                float multisampleCompare = textureCompare(msTex, uv, 0.5);
                 float missingDepth = textureCompare(shadowMap, uv);
                 float missingLod = textureCompareLod(shadowMap, uv, 0.5);
                 float missingGrad = textureCompareGrad(shadowMap, uv, 0.5, ddx);
+                vec4 badGatherResource = textureGatherCompare(colorMap, uv, 0.5);
                 vec4 missingGatherOffset = textureGatherCompareOffset(
                     shadowMap,
                     uv,
@@ -6227,6 +6336,18 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
         "textureCompare requires a shadow sampler resource */ 0.0;" in generated_code
     )
     assert (
+        "float samplerCompare = /* unsupported Slang shadow compare: "
+        "textureCompare requires a shadow sampler resource */ 0.0;" in generated_code
+    )
+    assert (
+        "float imageCompare = /* unsupported Slang shadow compare: "
+        "textureCompare requires a shadow sampler resource */ 0.0;" in generated_code
+    )
+    assert (
+        "float multisampleCompare = /* unsupported Slang shadow compare: "
+        "textureCompare requires a shadow sampler resource */ 0.0;" in generated_code
+    )
+    assert (
         "float missingDepth = /* unsupported Slang shadow compare: "
         "textureCompare requires texture, coordinate, and compare arguments */ 0.0;"
         in generated_code
@@ -6241,6 +6362,11 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
         in generated_code
     )
     assert (
+        "float4 badGatherResource = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompare requires a shadow sampler resource */ float4(0.0);"
+        in generated_code
+    )
+    assert (
         "float4 missingGatherOffset = /* unsupported Slang shadow gather compare: "
         "textureGatherCompareOffset requires one offset argument */ float4(0.0);"
         in generated_code
@@ -6248,7 +6374,11 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
     assert "textureCompare(" not in generated_code
     assert "textureCompareLod(" not in generated_code
     assert "textureCompareGrad(" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
     assert "textureGatherCompareOffset(" not in generated_code
+    assert "querySampler.SampleCmp" not in generated_code
+    assert "colorImage.SampleCmp" not in generated_code
+    assert "msTex.SampleCmp" not in generated_code
 
 
 def test_texture_query_lod_emits_slang_lod_methods():

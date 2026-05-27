@@ -3868,6 +3868,7 @@ class MojoCodeGen:
         args = self.strip_split_sampler_arg(args)
         texture_type = self.expression_result_type(args[0])
         mapped_type = self.map_type(texture_type)
+        self.validate_texture_sample_args(args, helper_name, mapped_type)
         if mapped_type in MOJO_RESOURCE_SAMPLE_COORDS:
             if helper_name == "sample":
                 self.required_resource_sample_types.add(mapped_type)
@@ -3878,6 +3879,60 @@ class MojoCodeGen:
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"{helper_name}({generated_args})"
+
+    def validate_texture_sample_args(self, args, helper_name, resource_type):
+        if not self.is_texture_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"texture resource required: {resource_type}"
+            )
+        if resource_type not in MOJO_RESOURCE_SAMPLE_COORDS:
+            required = (
+                "non-multisample texture required"
+                if self.is_multisample_resource_type(resource_type)
+                else "sampleable texture required"
+            )
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"{required}: {resource_type}"
+            )
+
+        expected_counts = {"sample": 2, "sample_lod": 3, "sample_grad": 4}
+        expected_count = expected_counts.get(helper_name)
+        if expected_count is not None and len(args) != expected_count:
+            argument_count = expected_count - 1
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; expected "
+                f"{argument_count} argument(s) after texture resource, got "
+                f"{len(args) - 1}"
+            )
+
+        expected_coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        if len(args) >= 2:
+            self.validate_resource_argument_type(
+                args[1], expected_coord_type, helper_name, resource_type, "coordinate"
+            )
+        if helper_name == "sample_lod" and len(args) >= 3:
+            self.validate_resource_argument_type(
+                args[2], "Float32", helper_name, resource_type, "lod"
+            )
+        if helper_name == "sample_grad":
+            if len(args) >= 3:
+                self.validate_resource_argument_type(
+                    args[2],
+                    expected_coord_type,
+                    helper_name,
+                    resource_type,
+                    "ddx",
+                )
+            if len(args) >= 4:
+                self.validate_resource_argument_type(
+                    args[3],
+                    expected_coord_type,
+                    helper_name,
+                    resource_type,
+                    "ddy",
+                )
 
     def strip_split_sampler_arg(self, args):
         if len(args) < 3:
@@ -3946,11 +4001,40 @@ class MojoCodeGen:
     def generate_texel_fetch_call(self, args):
         if args:
             resource_type = self.map_type(self.expression_result_type(args[0]))
+            self.validate_texel_fetch_args(args, resource_type)
             if resource_type in MOJO_RESOURCE_TEXEL_COORDS:
                 self.required_resource_texel_fetch_types.add(resource_type)
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"texel_fetch({generated_args})"
+
+    def validate_texel_fetch_args(self, args, resource_type):
+        if not self.is_texture_resource_type(resource_type):
+            raise ValueError(
+                "Unsupported texel_fetch for Mojo codegen; "
+                f"texture resource required: {resource_type}"
+            )
+        if resource_type not in MOJO_RESOURCE_TEXEL_COORDS:
+            raise ValueError(
+                "Unsupported texel_fetch for Mojo codegen; "
+                f"texel-fetch texture required: {resource_type}"
+            )
+        if len(args) != 3:
+            raise ValueError(
+                "Unsupported texel_fetch for Mojo codegen; expected 2 argument(s) "
+                f"after texture resource, got {len(args) - 1}"
+            )
+
+        self.validate_resource_argument_type(
+            args[1],
+            MOJO_RESOURCE_TEXEL_COORDS[resource_type],
+            "texel_fetch",
+            resource_type,
+            "coordinate",
+        )
+        self.validate_resource_argument_type(
+            args[2], "Int32", "texel_fetch", resource_type, "lod_or_sample"
+        )
 
     def generate_image_load_call(self, args):
         if args:
@@ -4357,6 +4441,13 @@ class MojoCodeGen:
         return f"{helper_name}({generated_args})"
 
     def resource_builtin_arg_type(self, arg):
+        if isinstance(arg, bool):
+            return "Bool"
+        if isinstance(arg, int):
+            return "Int32"
+        if isinstance(arg, float):
+            return "Float32"
+
         type_name = self.expression_result_type(arg)
         mapped_type = self.map_type(type_name)
         if mapped_type not in {"Float32", None}:
@@ -4370,6 +4461,16 @@ class MojoCodeGen:
             return self.map_type(scalar_type)
 
         return "Float32"
+
+    def validate_resource_argument_type(
+        self, arg, expected_type, helper_name, resource_type, label
+    ):
+        actual_type = self.resource_builtin_arg_type(arg)
+        if actual_type != expected_type:
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; {label} for "
+                f"{resource_type} must be {expected_type}, got {actual_type}"
+            )
 
     def resource_builtin_return_type(self, return_kind):
         if return_kind == "float":

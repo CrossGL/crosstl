@@ -6211,6 +6211,12 @@ class SlangCodeGen:
             return True
         if func_name == "texelFetch":
             return self.is_texel_fetch_sampler_type(resource_type)
+        return self.sampled_texture_sampling_accepts_resource(texture_arg)
+
+    def sampled_texture_sampling_accepts_resource(self, texture_arg):
+        resource_type = self.resource_base_type(self.get_expression_type(texture_arg))
+        if resource_type is None:
+            return True
         return self.is_lod_query_sampler_type(resource_type)
 
     def sampled_texture_operation_unsupported_reason(self, func_name, args):
@@ -6255,6 +6261,12 @@ class SlangCodeGen:
                 func_name, "requires texture and coordinate arguments"
             )
 
+        if not self.sampled_texture_sampling_accepts_resource(args[0]):
+            return self.unsupported_texture_offset_call(
+                func_name,
+                "requires a non-shadow non-multisampled sampled texture resource",
+            )
+
         texture_name, coord, extra_args = sample_args
 
         if func_name == "textureOffset":
@@ -6293,6 +6305,11 @@ class SlangCodeGen:
         if sample_args is None:
             return self.unsupported_texture_projected_call(
                 func_name, "requires texture and projected coordinate arguments"
+            )
+
+        if not self.projected_texture_accepts_resource(args[0]):
+            return self.unsupported_texture_projected_call(
+                func_name, "requires sampler1D/2D/3D texture resource"
             )
 
         texture_name, coord, extra_args = sample_args
@@ -6360,6 +6377,12 @@ class SlangCodeGen:
         offset = self.generate_expression(extra_args[2])
         return f"{texture_name}.SampleGrad({projected_coord}, {ddx}, {ddy}, {offset})"
 
+    def projected_texture_accepts_resource(self, texture_node):
+        resource_type = self.resource_base_type(self.get_expression_type(texture_node))
+        if resource_type is None:
+            return True
+        return resource_type in {"sampler1D", "sampler2D", "sampler3D"}
+
     def projected_texture_coord(self, texture_node, coord_node, coord):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
         coord_type = self.resource_base_type(self.get_expression_type(coord_node))
@@ -6401,6 +6424,12 @@ class SlangCodeGen:
         if gather_args is None:
             return self.unsupported_texture_gather_call(
                 func_name, "requires texture and coordinate arguments"
+            )
+
+        if not self.sampled_texture_sampling_accepts_resource(args[0]):
+            return self.unsupported_texture_gather_call(
+                func_name,
+                "requires a non-shadow non-multisampled sampled texture resource",
             )
 
         texture_name, coord, extra_args = gather_args

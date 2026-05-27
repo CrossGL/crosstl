@@ -4588,6 +4588,41 @@ def test_metal_mesh_dispatch_helper_call_without_stage_context_is_diagnostic():
     assert "DispatchMesh" not in generated
 
 
+def test_metal_dispatch_mesh_without_grid_context_is_diagnostic():
+    code = """
+    shader meshpipe {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[1],
+                @indices out uint points[1]
+            ) @numthreads(1, 1, 1) @outputtopology(point) {
+                DispatchMesh(1, 1, 1, payload);
+                SetMeshOutputCounts(1, 1);
+                verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+                points[0] = 0u;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "/* unsupported Metal mesh dispatch: DispatchMesh requires "
+        "mesh_grid_properties context */"
+    ) in generated
+    assert "DispatchMesh(" not in generated
+    assert "_crossglMeshGrid.set_threadgroups_per_grid" not in generated
+
+
 def test_metal_mesh_payload_dispatch_accepts_threadgroup_array_elements():
     code = """
     shader meshpipe {

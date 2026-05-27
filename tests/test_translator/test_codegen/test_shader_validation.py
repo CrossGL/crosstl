@@ -2521,6 +2521,32 @@ shader MetalMeshPayloadInvalidSourceValidation {
 """
 
 
+METAL_MESH_DISPATCH_WITHOUT_GRID_CONTEXT_SHADER = """
+shader MetalMeshDispatchWithoutGridContextValidation {
+    struct MeshPayload {
+        uint meshlet;
+    };
+
+    struct MeshVertex {
+        vec4 position @ gl_Position;
+    };
+
+    mesh {
+        void main(
+            @mesh_payload in MeshPayload payload,
+            @vertices out MeshVertex verts[1],
+            @indices out uint points[1]
+        ) @numthreads(1, 1, 1) @outputtopology(point) {
+            DispatchMesh(1, 1, 1, payload);
+            SetMeshOutputCounts(1, 1);
+            verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+            points[0] = 0u;
+        }
+    }
+}
+"""
+
+
 METAL_RAY_TRACING_HELPER_SHADER = """
 shader MetalRayTracingHelperValidation {
     accelerationStructureEXT topLevelAS @binding(0);
@@ -5058,6 +5084,48 @@ def test_generated_metal_mesh_payload_invalid_sources_compile_with_metal3(tmp_pa
     assert "_crossglMeshPayload = makePayload();" not in code
     assert "_crossglMeshPayload = threadPayload;" not in code
     assert code.count("_crossglMeshGrid.set_threadgroups_per_grid(") == 2
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_mesh_dispatch_without_grid_context_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "mesh_dispatch_without_grid_context.metal"
+    output = tmp_path / "mesh_dispatch_without_grid_context.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_MESH_DISPATCH_WITHOUT_GRID_CONTEXT_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "unsupported Metal mesh dispatch" in code
+    assert "mesh_grid_properties context" in code
+    assert "DispatchMesh(" not in code
 
     run_validator(
         [

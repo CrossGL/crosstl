@@ -3067,6 +3067,56 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "OpSetMeshOutputsEXT" not in spv_code
 
+    def test_task_stage_dispatch_mesh_emits_ext_terminator(self, tmp_path):
+        source_code = """
+        shader TaskSPIRV {
+            task {
+                layout(local_size_x = 2, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {
+                    DispatchMesh(2, 3, 1);
+                    int afterDispatch = 1;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint TaskEXT %(\d+) "main"', spv_code)
+        assert entry_match is not None
+        entry_id = entry_match.group(1)
+        assert "; Version: 1.4" in spv_code
+        assert "OpCapability MeshShadingEXT" in spv_code
+        assert 'OpExtension "SPV_EXT_mesh_shader"' in spv_code
+        assert f"OpExecutionMode %{entry_id} LocalSize 2 1 1" in spv_code
+        assert re.search(r"OpEmitMeshTasksEXT %\d+ %\d+ %\d+", spv_code)
+        assert "DispatchMesh yet; using a default" not in spv_code
+        assert "afterDispatch" not in spv_code
+        assert "OpReturn" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_task_stage_dispatch_mesh_rejects_bad_arity(self):
+        source_code = """
+        shader TaskSPIRVBadArity {
+            task {
+                void main() {
+                    DispatchMesh(1, 1);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh DispatchMesh requires exactly 3 arguments" in spv_code
+        )
+        assert "OpEmitMeshTasksEXT" not in spv_code
+
     def test_ray_query_proceed_and_intersection_t_emit_khr_instructions(self, tmp_path):
         bool_type = PrimitiveType("bool")
         float_type = PrimitiveType("float")

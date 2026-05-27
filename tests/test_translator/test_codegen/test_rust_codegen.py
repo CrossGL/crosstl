@@ -5949,6 +5949,189 @@ def test_deep_nested_array_literals_and_access_target_types_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_array_branch_target_types_and_non_copy_clones_compile(tmp_path):
+    float_matrix_type = ArrayType(
+        ArrayType(PrimitiveType("float"), 2),
+        2,
+    )
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+
+    def int_array(*values):
+        return ArrayLiteralNode(
+            [LiteralNode(value, PrimitiveType("int")) for value in values]
+        )
+
+    def matrix_literal(*rows):
+        return ArrayLiteralNode([int_array(*row) for row in rows])
+
+    def bool_match(true_tail, false_tail):
+        return MatchNode(
+            IdentifierNode("flag"),
+            [
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(True, PrimitiveType("bool"))),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            true_tail,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(False, PrimitiveType("bool"))),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            false_tail,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+            ],
+        )
+
+    ast = ShaderNode(
+        "ArrayBranchTargetTypes",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "choose_float_ternary",
+                float_matrix_type,
+                [ParameterNode("flag", PrimitiveType("bool"))],
+                [
+                    ReturnNode(
+                        TernaryOpNode(
+                            IdentifierNode("flag"),
+                            matrix_literal((1, 2), (3,)),
+                            matrix_literal((4,), (5, 6)),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "choose_float_match",
+                float_matrix_type,
+                [ParameterNode("flag", PrimitiveType("bool"))],
+                [
+                    ReturnNode(
+                        bool_match(
+                            matrix_literal((7, 8), (9,)),
+                            matrix_literal((10,), (11, 12)),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "clone_payload_ternary_local",
+                payload_matrix_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("left", payload_matrix_type),
+                    ParameterNode("right", payload_matrix_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        payload_matrix_type,
+                        TernaryOpNode(
+                            IdentifierNode("flag"),
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        ),
+                    ),
+                    ReturnNode(IdentifierNode("selected")),
+                ],
+            ),
+            FunctionNode(
+                "move_payload_ternary_return",
+                payload_matrix_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("left", payload_matrix_type),
+                    ParameterNode("right", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        TernaryOpNode(
+                            IdentifierNode("flag"),
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "clone_payload_match_local",
+                payload_matrix_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("left", payload_matrix_type),
+                    ParameterNode("right", payload_matrix_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        payload_matrix_type,
+                        bool_match(IdentifierNode("left"), IdentifierNode("right")),
+                    ),
+                    ReturnNode(IdentifierNode("selected")),
+                ],
+            ),
+            FunctionNode(
+                "move_payload_match_return",
+                payload_matrix_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("left", payload_matrix_type),
+                    ParameterNode("right", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        bool_match(IdentifierNode("left"), IdentifierNode("right"))
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "return (if flag { [[1.0, 2.0], [3.0, Default::default()]] } "
+        "else { [[4.0, Default::default()], [5.0, 6.0]] });"
+    ) in generated_code
+    assert "true => {\n        [[7.0, 8.0], [9.0, Default::default()]]" in (
+        generated_code
+    )
+    assert "false => {\n        [[10.0, Default::default()], [11.0, 12.0]]" in (
+        generated_code
+    )
+    assert (
+        "let selected: [[Payload; 2]; 2] = "
+        "(if flag { left.clone() } else { right.clone() });"
+    ) in generated_code
+    assert ("return (if flag { left } else { right });") in generated_code
+    assert "true => {\n            left.clone()\n        }" in generated_code
+    assert "false => {\n            right.clone()\n        }" in generated_code
+    assert "true => {\n        left\n    }" in generated_code
+    assert "false => {\n        right\n    }" in generated_code
+    assert "left.clone() } else { right.clone() });" in generated_code
+    assert "return (if flag { left.clone()" not in generated_code
+    assert "[[1, 2]" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_struct_constructor_args_normalize_field_types_and_clone_non_copy_compile(
     tmp_path,
 ):
