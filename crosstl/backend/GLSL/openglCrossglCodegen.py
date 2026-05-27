@@ -73,6 +73,12 @@ class GLSLToCrossGLConverter:
         "xfb_offset",
         "xfb_stride",
     )
+    BARE_LAYOUT_ATTRIBUTE_NAMES = (
+        "depth_any",
+        "depth_greater",
+        "depth_less",
+        "depth_unchanged",
+    )
     NON_STRUCT_STAGE_TYPES = {
         "compute",
         "geometry",
@@ -719,6 +725,9 @@ class GLSLToCrossGLConverter:
             value = layout.get(name)
             if value is not None:
                 attributes.append(f"@{name}({value})")
+        for name in self.BARE_LAYOUT_ATTRIBUTE_NAMES:
+            if name in layout and layout.get(name) is None:
+                attributes.append(f"@{name}")
         return f" {' '.join(attributes)}" if attributes else ""
 
     def storage_qualifier_attributes(self, var):

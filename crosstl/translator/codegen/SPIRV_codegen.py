@@ -3318,6 +3318,8 @@ class VulkanSPIRVCodeGen:
             "CommittedTriangleNormal": ("", "vec3"),
             "CandidateTriangleArea": ("", "float"),
             "CommittedTriangleArea": ("", "float"),
+            "CandidateTriangleCentroid": ("", "vec3"),
+            "CommittedTriangleCentroid": ("", "vec3"),
             "CandidateTriangleVertexPositions": (
                 "OpRayQueryGetIntersectionTriangleVertexPositionsKHR",
                 "vec3_array3",
@@ -3398,6 +3400,8 @@ class VulkanSPIRVCodeGen:
             "CommittedTriangleNormal",
             "CandidateTriangleArea",
             "CommittedTriangleArea",
+            "CandidateTriangleCentroid",
+            "CommittedTriangleCentroid",
             "CandidateTriangleVertexPositions",
             "CommittedTriangleVertexPositions",
             "CandidateObjectToWorld",
@@ -3451,6 +3455,10 @@ class VulkanSPIRVCodeGen:
             )
         if operation in {"CandidateTriangleArea", "CommittedTriangleArea"}:
             return self.process_ray_query_triangle_area_getter(query_pointer, operation)
+        if operation in {"CandidateTriangleCentroid", "CommittedTriangleCentroid"}:
+            return self.process_ray_query_triangle_centroid_getter(
+                query_pointer, operation
+            )
 
         opcode, result_kind, _ = getter_info
         if operation in {
@@ -3489,9 +3497,9 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = result_type
         return SpirvId(id_value, result_type.type)
 
-    def ray_query_triangle_edges(
+    def ray_query_triangle_vertices(
         self, query_pointer: SpirvId, operation: str
-    ) -> Optional[Tuple[SpirvId, SpirvId, SpirvId]]:
+    ) -> Optional[Tuple[SpirvId, SpirvId, SpirvId, SpirvId]]:
         intersection = self.ray_query_intersection_constant(operation)
         if intersection is None:
             return None
@@ -3513,6 +3521,16 @@ class VulkanSPIRVCodeGen:
         p0 = self.composite_extract(positions, vec3_type, 0)
         p1 = self.composite_extract(positions, vec3_type, 1)
         p2 = self.composite_extract(positions, vec3_type, 2)
+        return vec3_type, p0, p1, p2
+
+    def ray_query_triangle_edges(
+        self, query_pointer: SpirvId, operation: str
+    ) -> Optional[Tuple[SpirvId, SpirvId, SpirvId]]:
+        vertices = self.ray_query_triangle_vertices(query_pointer, operation)
+        if vertices is None:
+            return None
+
+        vec3_type, p0, p1, p2 = vertices
         edge0 = self.binary_operation("-", vec3_type, p1, p0)
         edge1 = self.binary_operation("-", vec3_type, p2, p0)
         return vec3_type, edge0, edge1
@@ -3541,6 +3559,20 @@ class VulkanSPIRVCodeGen:
         double_area = self.emit_glsl_std450_instruction("Length", float_type, [cross])
         half = self.register_constant(0.5, float_type)
         return self.binary_operation("*", float_type, double_area, half)
+
+    def process_ray_query_triangle_centroid_getter(
+        self, query_pointer: SpirvId, operation: str
+    ) -> SpirvId:
+        vertices = self.ray_query_triangle_vertices(query_pointer, operation)
+        if vertices is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        vec3_type, p0, p1, p2 = vertices
+        float_type = self.ray_query_result_type_for_kind("float")
+        p0_plus_p1 = self.binary_operation("+", vec3_type, p0, p1)
+        total = self.binary_operation("+", vec3_type, p0_plus_p1, p2)
+        three = self.register_constant(3.0, float_type)
+        return self.binary_operation("/", vec3_type, total, three)
 
     def format_expected_argument_counts(self, expected_counts) -> str:
         return " or ".join(str(count) for count in sorted(expected_counts))

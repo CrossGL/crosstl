@@ -432,6 +432,12 @@ class GLSLCodeGen:
         "xfb_offset",
         "xfb_stride",
     )
+    GLSL_BARE_LAYOUT_ATTRIBUTE_NAMES = {
+        "depth_any",
+        "depth_greater",
+        "depth_less",
+        "depth_unchanged",
+    }
     GLSL_VARIABLE_QUALIFIER_ATTRIBUTE_NAMES = {
         "invariant",
         "precise",
@@ -4570,6 +4576,15 @@ class GLSLCodeGen:
             if not attr_name:
                 continue
             normalized = str(attr_name).lower()
+            if normalized.startswith("glsl_"):
+                normalized = normalized[len("glsl_") :]
+            normalized = normalized.replace("-", "_")
+            if normalized in self.GLSL_BARE_LAYOUT_ATTRIBUTE_NAMES:
+                arguments = getattr(attr, "arguments", []) or []
+                if arguments:
+                    continue
+                layout_parts.append(normalized)
+                continue
             if normalized not in self.GLSL_LAYOUT_ATTRIBUTE_NAMES:
                 continue
             arguments = getattr(attr, "arguments", []) or []
@@ -4594,6 +4609,7 @@ class GLSLCodeGen:
 
         return (
             normalized in self.GLSL_LAYOUT_ATTRIBUTE_NAMES
+            or normalized in self.GLSL_BARE_LAYOUT_ATTRIBUTE_NAMES
             or normalized in self.GLSL_VARIABLE_QUALIFIER_ATTRIBUTE_NAMES
             or normalized in self.GLSL_STORAGE_QUALIFIER_ATTRIBUTE_NAMES
             or normalized

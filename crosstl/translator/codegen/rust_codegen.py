@@ -7271,10 +7271,13 @@ class RustCodeGen:
             )
 
     def array_access_element_type(self, expr):
-        array_name = self.get_expression_name(expr)
-        array_type = self.variable_types.get(array_name)
+        array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+        array_type = self.expression_result_type(array_expr)
         if array_type is None:
-            return None
+            array_name = self.get_expression_name(array_expr)
+            array_type = self.variable_types.get(array_name)
+            if array_type is None:
+                return None
         if hasattr(array_type, "name") or hasattr(array_type, "element_type"):
             array_type = self.convert_type_node_to_string(array_type)
         else:

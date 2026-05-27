@@ -5601,6 +5601,84 @@ def test_nested_array_literals_and_tuple_enum_payloads_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_nested_non_copy_array_access_infers_element_types_and_clones_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    grid_type = ArrayType(ArrayType(payload_type, 2), 2)
+    row_index = IdentifierNode("row")
+    col_index = IdentifierNode("col")
+
+    def grid_row():
+        return ArrayAccessNode(IdentifierNode("grid"), row_index)
+
+    def grid_cell():
+        return ArrayAccessNode(grid_row(), col_index)
+
+    ast = ShaderNode(
+        "NestedNonCopyArrayAccess",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "probe",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("grid", grid_type),
+                    ParameterNode("replacement", payload_type),
+                    ParameterNode("row", PrimitiveType("int")),
+                    ParameterNode("col", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode("picked", PrimitiveType("auto"), grid_cell()),
+                    VariableNode("pickedRow", PrimitiveType("auto"), grid_row()),
+                    AssignmentNode(grid_cell(), IdentifierNode("replacement")),
+                    ReturnNode(
+                        BinaryOpNode(
+                            BinaryOpNode(
+                                MemberAccessNode(IdentifierNode("picked"), "count"),
+                                "+",
+                                MemberAccessNode(
+                                    ArrayAccessNode(
+                                        IdentifierNode("pickedRow"),
+                                        LiteralNode(0, PrimitiveType("int")),
+                                    ),
+                                    "count",
+                                ),
+                            ),
+                            "+",
+                            MemberAccessNode(grid_cell(), "count"),
+                        )
+                    ),
+                ],
+            )
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "pub fn probe(mut grid: [[Payload; 2]; 2]" in generated_code
+    assert (
+        "let picked: Payload = grid[row as usize][col as usize].clone();"
+        in generated_code
+    )
+    assert "let pickedRow: [Payload; 2] = grid[row as usize].clone();" in generated_code
+    assert "let picked: [Payload; 2]" not in generated_code
+    assert "grid[row as usize].clone()[col as usize]" not in generated_code
+    assert "grid[row as usize][col as usize] = replacement.clone();" in generated_code
+    assert "grid[row as usize][col as usize].clone() =" not in generated_code
+    assert "grid[row as usize][col as usize].count" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_struct_constructor_args_normalize_field_types_and_clone_non_copy_compile(
     tmp_path,
 ):

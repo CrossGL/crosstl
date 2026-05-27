@@ -2012,7 +2012,9 @@ def test_hlsl_typed_buffer_aliases_compile_with_mojo(tmp_path):
 def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     code = """
     sampler2D colorMap;
+    sampler2DMS msTex;
     image2D colorImage;
+    uimage2DMS msCounterImage;
     iimage2D signedImage;
     uimage2D counterImage;
 
@@ -2021,6 +2023,12 @@ def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     }
     int texLevels(sampler2D tex) {
         return textureQueryLevels(tex);
+    }
+    int texSamples(sampler2DMS tex) {
+        return textureSamples(tex);
+    }
+    int imageMsCount(uimage2DMS image) {
+        return imageSamples(image);
     }
     vec4 fetchTex(sampler2D tex, ivec2 pixel) {
         return texelFetch(tex, pixel, 0);
@@ -2051,8 +2059,12 @@ def test_resource_query_and_image_placeholders_emit_mojo_helpers():
 
     assert "struct Image2D:" in generated_code
     assert "struct IImage2D:" in generated_code
+    assert "struct Texture2DMS:" in generated_code
     assert "struct UImage2D:" in generated_code
+    assert "struct UImage2DMS:" in generated_code
     assert "var colorImage: Image2D = Image2D()" in generated_code
+    assert "var msTex: Texture2DMS = Texture2DMS()" in generated_code
+    assert "var msCounterImage: UImage2DMS = UImage2DMS()" in generated_code
     assert "var signedImage: IImage2D = IImage2D()" in generated_code
     assert "var counterImage: UImage2D = UImage2D()" in generated_code
     assert (
@@ -2060,6 +2072,8 @@ def test_resource_query_and_image_placeholders_emit_mojo_helpers():
         in generated_code
     )
     assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
+    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert "fn image_samples(image: UImage2DMS) -> Int32:" in generated_code
     assert (
         "fn texel_fetch(tex: Texture2D, coord: SIMD[DType.int32, 2], lod: Int32)"
         in generated_code
@@ -2079,12 +2093,16 @@ def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     )
     assert "return texture_size(tex, 0)" in generated_code
     assert "return texture_query_levels(tex)" in generated_code
+    assert "return texture_samples(tex)" in generated_code
+    assert "return image_samples(image)" in generated_code
     assert "return texel_fetch(tex, pixel, 0)" in generated_code
     assert "return image_size(image)" in generated_code
     assert "return image_load(image, pixel)" in generated_code
     assert "image_store(image, pixel, value)" in generated_code
     assert "textureSize" not in generated_code
     assert "textureQueryLevels" not in generated_code
+    assert "textureSamples" not in generated_code
+    assert "imageSamples" not in generated_code
     assert "texelFetch" not in generated_code
     assert "imageLoad" not in generated_code
     assert "imageStore" not in generated_code
@@ -2095,7 +2113,9 @@ def test_resource_query_and_image_placeholders_compile_with_mojo(tmp_path):
 
     code = """
     sampler2D colorMap;
+    sampler2DMS msTex;
     image2D colorImage;
+    uimage2DMS msCounterImage;
     iimage2D signedImage;
     uimage2D counterImage;
 
@@ -2104,6 +2124,12 @@ def test_resource_query_and_image_placeholders_compile_with_mojo(tmp_path):
     }
     int texLevels(sampler2D tex) {
         return textureQueryLevels(tex);
+    }
+    int texSamples(sampler2DMS tex) {
+        return textureSamples(tex);
+    }
+    int imageMsCount(uimage2DMS image) {
+        return imageSamples(image);
     }
     vec4 fetchTex(sampler2D tex, ivec2 pixel) {
         return texelFetch(tex, pixel, 0);
@@ -2143,6 +2169,64 @@ def test_resource_query_and_image_placeholders_compile_with_mojo(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_resource_sample_count_and_query_level_diagnostics_for_mojo_codegen():
+    non_multisample_texture_samples = """
+    sampler2D colorMap;
+
+    int invalidSamples(sampler2D tex) {
+        return textureSamples(tex);
+    }
+    """
+    with pytest.raises(
+        ValueError, match="texture_samples.*multisample texture required"
+    ):
+        generate_code(parse_code(tokenize_code(non_multisample_texture_samples)))
+
+    non_multisample_image_samples = """
+    uimage2D image;
+
+    int invalidSamples(uimage2D image) {
+        return imageSamples(image);
+    }
+    """
+    with pytest.raises(ValueError, match="image_samples.*multisample image required"):
+        generate_code(parse_code(tokenize_code(non_multisample_image_samples)))
+
+    wrong_resource_for_texture_samples = """
+    image2D image;
+
+    int invalidSamples(image2D image) {
+        return textureSamples(image);
+    }
+    """
+    with pytest.raises(ValueError, match="texture_samples.*texture resource required"):
+        generate_code(parse_code(tokenize_code(wrong_resource_for_texture_samples)))
+
+    multisample_query_levels = """
+    sampler2DMS samples;
+
+    int invalidLevels(sampler2DMS tex) {
+        return textureQueryLevels(tex);
+    }
+    """
+    with pytest.raises(
+        ValueError, match="texture_query_levels.*non-multisample texture required"
+    ):
+        generate_code(parse_code(tokenize_code(multisample_query_levels)))
+
+    image_query_levels = """
+    image2D image;
+
+    int invalidLevels(image2D image) {
+        return textureQueryLevels(image);
+    }
+    """
+    with pytest.raises(
+        ValueError, match="texture_query_levels.*texture resource required"
+    ):
+        generate_code(parse_code(tokenize_code(image_query_levels)))
 
 
 def test_multisample_resource_placeholders_compile_with_mojo(tmp_path):
@@ -4165,6 +4249,8 @@ def test_direct_texture_op_nodes_emit_mojo_sample_helpers_without_ast_repr():
 def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
     codegen = MojoCodeGen()
     tex = VariableNode("tex", PrimitiveType("sampler2D"))
+    ms_tex = VariableNode("msTex", PrimitiveType("sampler2DMS"))
+    ms_image = VariableNode("msImage", PrimitiveType("uimage2DMS"))
     shadow = VariableNode("shadow", PrimitiveType("sampler2DShadow"))
     state = VariableNode("state", PrimitiveType("sampler"))
     uv = VariableNode("uv", VectorType(PrimitiveType("float"), 2))
@@ -4172,6 +4258,8 @@ def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
     depth = VariableNode("depth", PrimitiveType("float"))
 
     codegen.register_variable_type("tex", "sampler2D")
+    codegen.register_variable_type("msTex", "sampler2DMS")
+    codegen.register_variable_type("msImage", "uimage2DMS")
     codegen.register_variable_type("shadow", "sampler2DShadow")
     codegen.register_variable_type("state", "sampler")
     codegen.register_variable_type("uv", "vec2")
@@ -4186,6 +4274,12 @@ def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
     compare_call = codegen.generate_expression(
         TextureOpNode("SampleCmp", shadow, [uv, depth], sampler_expr=state)
     )
+    texture_samples_call = codegen.generate_expression(
+        TextureOpNode("textureSamples", ms_tex, [])
+    )
+    image_samples_call = codegen.generate_expression(
+        TextureOpNode("imageSamples", ms_image, [])
+    )
 
     assert load_call == "texel_fetch(tex, coord, 0)"
     assert size_call == "texture_size(tex)"
@@ -4193,6 +4287,8 @@ def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
     assert gather_call.endswith("(tex, uv)")
     assert compare_call.startswith("_crossgl_texture_compare_Texture2DShadow")
     assert compare_call.endswith("(shadow, uv, depth)")
+    assert texture_samples_call == "texture_samples(msTex)"
+    assert image_samples_call == "image_samples(msImage)"
     assert "TextureOpNode(" not in gather_call
     assert codegen.expression_result_type(TextureOpNode("Load", tex, [coord])) == "vec4"
     assert (
@@ -4205,6 +4301,14 @@ def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
         )
         == "float"
     )
+    assert (
+        codegen.expression_result_type(TextureOpNode("textureSamples", ms_tex, []))
+        == "int"
+    )
+    assert (
+        codegen.expression_result_type(TextureOpNode("imageSamples", ms_image, []))
+        == "int"
+    )
     helper_names = {
         helper["name"] for helper in codegen.required_resource_builtin_helpers.values()
     }
@@ -4214,6 +4318,12 @@ def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
     assert any(
         name.startswith("_crossgl_texture_compare_Texture2DShadow")
         for name in helper_names
+    )
+    assert ("texture_samples", "Texture2DMS") in (
+        codegen.required_resource_sample_count_helpers
+    )
+    assert ("image_samples", "UImage2DMS") in (
+        codegen.required_resource_sample_count_helpers
     )
 
 

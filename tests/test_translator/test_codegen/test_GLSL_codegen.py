@@ -1224,6 +1224,32 @@ def test_glsl_stage_interface_extended_layout_qualifiers():
     assert "layout(location = 0, index = 1) out vec4 fragColor;" in fragment_code
 
 
+@pytest.mark.parametrize(
+    "depth_layout",
+    ["depth_any", "depth_greater", "depth_less", "depth_unchanged"],
+)
+def test_glsl_conservative_depth_output_layout(depth_layout):
+    code = f"""
+    shader ConservativeDepthOutput {{
+        out float gl_FragDepth @{depth_layout};
+
+        fragment {{
+            void main() {{
+                gl_FragDepth = 0.5;
+            }}
+        }}
+    }}
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert f"layout({depth_layout}) out float gl_FragDepth;" in generated_code
+    assert "\nout float gl_FragDepth;" not in generated_code
+    assert "gl_FragDepth = 0.5;" in generated_code
+
+
 def test_glsl_stage_builtin_parameter_aliases_to_glsl_builtin():
     code = """
     shader StageBuiltinParameterAlias {

@@ -6580,13 +6580,18 @@ class SlangCodeGen:
             return "requires a multisampled image resource"
         return "requires a multisampled resource"
 
-    def unsupported_resource_query_call(self, func_name, reason):
-        return f"/* unsupported Slang resource query: {func_name} {reason} */ 0"
+    def unsupported_resource_query_call(self, func_name, reason, fallback="0"):
+        return (
+            f"/* unsupported Slang resource query: {func_name} {reason} */ "
+            f"{fallback}"
+        )
 
     def generate_texture_query_lod(self, args):
         query_args = self.texture_query_lod_args(args)
         if query_args is None:
-            return None
+            return self.unsupported_texture_query_lod_call(
+                self.texture_query_lod_unsupported_reason(args)
+            )
 
         texture_name, coord = query_args
         unclamped = f"{texture_name}.CalculateLevelOfDetailUnclamped({coord})"
@@ -6594,8 +6599,8 @@ class SlangCodeGen:
         return f"float2({unclamped}, {clamped})"
 
     def texture_query_lod_args(self, args):
-        coord_index = 2 if self.is_explicit_sampler_argument(args) else 1
-        if len(args) <= coord_index:
+        coord_index = self.texture_query_lod_coord_index(args)
+        if len(args) <= coord_index or len(args) != coord_index + 1:
             return None
 
         resource_type = self.resource_base_type(self.get_expression_type(args[0]))
@@ -6605,6 +6610,34 @@ class SlangCodeGen:
         texture_name = self.generate_expression(args[0])
         coord = self.generate_expression(args[coord_index])
         return texture_name, coord
+
+    def texture_query_lod_coord_index(self, args):
+        if len(args) >= 2 and self.is_sampler_state_type(
+            self.get_expression_type(args[1])
+        ):
+            return 2
+        return 1
+
+    def texture_query_lod_unsupported_reason(self, args):
+        if not args:
+            return "requires texture and coordinate arguments"
+
+        coord_index = self.texture_query_lod_coord_index(args)
+        if len(args) <= coord_index:
+            return "requires texture and coordinate arguments"
+        if len(args) != coord_index + 1:
+            return "accepts only texture, optional sampler, and coordinate arguments"
+
+        resource_type = self.resource_base_type(self.get_expression_type(args[0]))
+        if not self.is_lod_query_sampler_type(resource_type):
+            return "requires a non-shadow non-multisampled sampled texture resource"
+
+        return "requires texture and coordinate arguments"
+
+    def unsupported_texture_query_lod_call(self, reason):
+        return self.unsupported_resource_query_call(
+            "textureQueryLod", reason, "float2(0.0, 0.0)"
+        )
 
     def register_helper_function(self, name, source):
         if name not in self.helper_functions:

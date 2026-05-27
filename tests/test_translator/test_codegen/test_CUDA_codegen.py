@@ -5276,6 +5276,92 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
         assert "CglResourceQueryInfo" not in cuda_code
 
+    def test_texel_fetch_coordinate_shapes_emit_cuda_helpers_or_diagnostics(self):
+        """Test CUDA texelFetch lowers only coordinate shapes it can represent."""
+        source_code = """
+        shader TexelFetchShapes {
+            sampler1d lineTex;
+            sampler1darray lineLayers;
+            sampler2d tex;
+            sampler2darray layers;
+            sampler3d volume;
+            Texture3D<float4> typedVolume;
+
+            void fetchShapes(int x, ivec2 pixel, ivec3 voxel) {
+                vec4 fetchedLine = texelFetch(lineTex, x, 0);
+                vec4 fetchedLineLayer = texelFetch(lineLayers, pixel, 0);
+                vec4 fetched = texelFetch(tex, pixel, 0);
+                vec4 fetchedLayer = texelFetch(layers, voxel, 0);
+                vec4 fetchedVolume = texelFetch(volume, voxel, 0);
+                vec4 typedFetchedVolume = texelFetch(typedVolume, voxel, 0);
+                vec4 badLine = texelFetch(lineTex, pixel, 0);
+                vec4 badLineLayer = texelFetch(lineLayers, x, 0);
+                vec4 badTex = texelFetch(tex, x, 0);
+                vec4 badVolume = texelFetch(volume, pixel, 0);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "texture<float4, 1> lineTex;" in cuda_code
+        assert "cudaTextureObject_t lineLayers;" in cuda_code
+        assert "texture<float4, 2> tex;" in cuda_code
+        assert "cudaTextureObject_t layers;" in cuda_code
+        assert "texture<float4, 3> volume;" in cuda_code
+        assert "texture<float4, 3> typedVolume;" in cuda_code
+        assert "float4 fetchedLine = tex1Dfetch(lineTex, x);" in cuda_code
+        assert (
+            "float4 fetchedLineLayer = tex1DLayered<float4>"
+            "(lineLayers, pixel.x, pixel.y);" in cuda_code
+        )
+        assert "float4 fetched = tex2D(tex, pixel.x, pixel.y);" in cuda_code
+        assert (
+            "float4 fetchedLayer = tex2DLayered<float4>"
+            "(layers, voxel.x, voxel.y, voxel.z);" in cuda_code
+        )
+        assert (
+            "float4 fetchedVolume = tex3D(volume, voxel.x, voxel.y, voxel.z);"
+            in cuda_code
+        )
+        assert (
+            "float4 typedFetchedVolume = tex3D"
+            "(typedVolume, voxel.x, voxel.y, voxel.z);" in cuda_code
+        )
+        assert (
+            "float4 badLine = /* unsupported CUDA sampled resource call: "
+            "texelFetch coordinate rank on sampler1D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 badLineLayer = /* unsupported CUDA sampled resource call: "
+            "texelFetch coordinate rank on sampler1DArray */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 badTex = /* unsupported CUDA sampled resource call: "
+            "texelFetch coordinate rank on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 badVolume = /* unsupported CUDA sampled resource call: "
+            "texelFetch coordinate rank on sampler3D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert "tex1Dfetch(lineTex, pixel)" not in cuda_code
+        assert "tex1DLayered<float4>(lineLayers, x." not in cuda_code
+        assert "tex2D(tex, x." not in cuda_code
+        assert "tex3D(volume, pixel.x, pixel.y, pixel.z)" not in cuda_code
+        assert "texelFetch(" not in cuda_code
+
     def test_nested_resource_arrays_emit_cuda_texture_and_surface_calls(self):
         """Test CUDA preserves nested resource-array indices in resource calls."""
         source_code = """

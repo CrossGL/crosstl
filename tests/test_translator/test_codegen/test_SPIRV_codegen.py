@@ -2913,8 +2913,8 @@ class TestVulkanSPIRVCodeGen:
         report_result = gen.process_expression(RayTracingOpNode("ReportHit", [1.0, 0]))
         proceed_result = gen.process_expression(RayQueryOpNode("Proceed", "rq", []))
         ray_t_result = gen.process_expression(RayQueryOpNode("CommittedRayT", "rq", []))
-        triangle_centroid_result = gen.process_expression(
-            RayQueryOpNode("CommittedTriangleCentroid", "rq", [])
+        unsupported_query_result = gen.process_expression(
+            RayQueryOpNode("CommittedTriangleCustomAttribute", "rq", [])
         )
         mesh_result = gen.process_expression(MeshOpNode("SetMeshOutputCounts", [3, 1]))
 
@@ -2924,7 +2924,7 @@ class TestVulkanSPIRVCodeGen:
         assert report_result.type.base_type == "bool"
         assert proceed_result.type.base_type == "bool"
         assert ray_t_result.type.base_type == "float"
-        assert triangle_centroid_result.type.base_type == "uint"
+        assert unsupported_query_result.type.base_type == "uint"
         assert mesh_result.type.base_type == "uint"
         assert (
             "WARNING: SPIR-V backend does not lower ray tracing operation "
@@ -2936,7 +2936,7 @@ class TestVulkanSPIRVCodeGen:
         ) in spv_code
         assert (
             "WARNING: SPIR-V backend does not lower ray query operation "
-            "CommittedTriangleCentroid yet; using a default uint value"
+            "CommittedTriangleCustomAttribute yet; using a default uint value"
         ) in spv_code
         assert (
             "WARNING: SPIR-V backend does not lower mesh shader operation "
@@ -2973,9 +2973,9 @@ class TestVulkanSPIRVCodeGen:
                         RayQueryOpNode("CandidateRayT", "rq", []),
                     ),
                     VariableNode(
-                        "triangleCentroidToken",
+                        "customAttributeToken",
                         PrimitiveType("uint"),
-                        RayQueryOpNode("CommittedTriangleCentroid", "rq", []),
+                        RayQueryOpNode("CommittedTriangleCustomAttribute", "rq", []),
                     ),
                     ExpressionStatementNode(MeshOpNode("SetMeshOutputCounts", [3, 1])),
                     ExpressionStatementNode(
@@ -3003,7 +3003,10 @@ class TestVulkanSPIRVCodeGen:
         assert "ReportHit yet; using a default bool value" in spv_code
         assert "Proceed yet; using a default bool value" in spv_code
         assert "CandidateRayT yet; using a default float value" in spv_code
-        assert "CommittedTriangleCentroid yet; using a default uint value" in spv_code
+        assert (
+            "CommittedTriangleCustomAttribute yet; using a default uint value"
+            in spv_code
+        )
         assert "SetMeshOutputCounts yet; using a default uint value" in spv_code
         assert "TraceRay yet; using a default uint value" in spv_code
         assert "Unknown expression type" not in spv_code
@@ -3815,6 +3818,66 @@ class TestVulkanSPIRVCodeGen:
         assert "OpRayQueryGetIntersectionTriangleVertexPositionsKHR" not in spv_code
         assert " Cross " not in spv_code
         assert " Length " not in spv_code
+
+    def test_ray_query_triangle_centroid_getters_derive_from_position_fetch(
+        self, tmp_path
+    ):
+        source_code = """
+        shader RayQueryTriangleCentroids {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    vec3 candidateCentroid = rq.CandidateTriangleCentroid();
+                    vec3 committedCentroid = rq.CommittedTriangleCentroid();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert "OpCapability RayQueryPositionFetchKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert 'OpExtension "SPV_KHR_ray_tracing_position_fetch"' in spv_code
+        assert (
+            spv_code.count("OpRayQueryGetIntersectionTriangleVertexPositionsKHR") == 2
+        )
+        assert spv_code.count("OpCompositeExtract") >= 6
+        assert spv_code.count("OpFAdd") >= 4
+        assert spv_code.count("OpFDiv") >= 2
+        assert re.search(r"%\d+ = OpConstant %\d+ 3\.0", spv_code)
+        assert "CandidateTriangleCentroid yet; using a default" not in spv_code
+        assert "CommittedTriangleCentroid yet; using a default" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_ray_query_triangle_centroid_getters_reject_arguments(self):
+        source_code = """
+        shader RayQueryTriangleCentroidsBadArgs {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    vec3 candidateCentroid = rq.CandidateTriangleCentroid(1);
+                    vec3 committedCentroid = rq.CommittedTriangleCentroid(1);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V RayQuery.CandidateTriangleCentroid requires " "0 arguments"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V RayQuery.CommittedTriangleCentroid requires " "0 arguments"
+        ) in spv_code
+        assert "OpRayQueryGetIntersectionTriangleVertexPositionsKHR" not in spv_code
+        assert "OpFAdd" not in spv_code
+        assert "OpFDiv" not in spv_code
 
     def test_ray_query_supported_operations_reject_unexpected_arguments(self):
         source_code = """

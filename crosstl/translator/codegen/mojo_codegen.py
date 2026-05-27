@@ -780,6 +780,7 @@ class MojoCodeGen:
         self.required_resource_grad_types = set()
         self.required_resource_size_types = set()
         self.required_resource_query_level_types = set()
+        self.required_resource_sample_count_helpers = set()
         self.required_resource_texel_fetch_types = set()
         self.required_image_load_types = set()
         self.required_image_store_types = set()
@@ -963,6 +964,7 @@ class MojoCodeGen:
         self.required_resource_grad_types = set()
         self.required_resource_size_types = set()
         self.required_resource_query_level_types = set()
+        self.required_resource_sample_count_helpers = set()
         self.required_resource_texel_fetch_types = set()
         self.required_image_load_types = set()
         self.required_image_store_types = set()
@@ -3209,6 +3211,14 @@ class MojoCodeGen:
                 return self.generate_resource_size_call(expr.args, "texture_size")
             if func_name == "textureQueryLevels":
                 return self.generate_resource_query_levels_call(expr.args)
+            if func_name == "textureSamples":
+                return self.generate_resource_sample_count_call(
+                    expr.args, "texture_samples"
+                )
+            if func_name == "imageSamples":
+                return self.generate_resource_sample_count_call(
+                    expr.args, "image_samples"
+                )
             if func_name == "texelFetch":
                 return self.generate_texel_fetch_call(expr.args)
             if func_name == "imageSize":
@@ -3541,6 +3551,14 @@ class MojoCodeGen:
             return self.generate_resource_size_call(resource_args, helper_name)
         if operation == "textureQueryLevels":
             return self.generate_resource_query_levels_call(resource_args)
+        if operation == "textureSamples":
+            return self.generate_resource_sample_count_call(
+                resource_args, "texture_samples"
+            )
+        if operation == "imageSamples":
+            return self.generate_resource_sample_count_call(
+                resource_args, "image_samples"
+            )
 
         raise ValueError(f"Unsupported Mojo texture operation {operation}")
 
@@ -3846,11 +3864,47 @@ class MojoCodeGen:
     def generate_resource_query_levels_call(self, args):
         if args:
             resource_type = self.map_type(self.expression_result_type(args[0]))
-            if resource_type in MOJO_RESOURCE_SIZE_RETURNS:
-                self.required_resource_query_level_types.add(resource_type)
+            if not self.is_texture_resource_type(resource_type):
+                raise ValueError(
+                    "Unsupported texture_query_levels for Mojo codegen; "
+                    f"texture resource required: {resource_type}"
+                )
+            if self.is_multisample_resource_type(resource_type):
+                raise ValueError(
+                    "Unsupported texture_query_levels for Mojo codegen; "
+                    f"non-multisample texture required: {resource_type}"
+                )
+            self.required_resource_query_level_types.add(resource_type)
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"texture_query_levels({generated_args})"
+
+    def generate_resource_sample_count_call(self, args, helper_name):
+        if not args:
+            return f"{helper_name}()"
+
+        resource_type = self.map_type(self.expression_result_type(args[0]))
+        if helper_name == "texture_samples":
+            required_kind = "texture"
+            is_valid_kind = self.is_texture_resource_type(resource_type)
+        else:
+            required_kind = "image"
+            is_valid_kind = self.is_image_resource_type(resource_type)
+
+        if not is_valid_kind:
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"{required_kind} resource required: {resource_type}"
+            )
+        if not self.is_multisample_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"multisample {required_kind} required: {resource_type}"
+            )
+
+        self.required_resource_sample_count_helpers.add((helper_name, resource_type))
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
 
     def generate_texel_fetch_call(self, args):
         if args:
@@ -4523,6 +4577,7 @@ class MojoCodeGen:
             and not self.required_resource_grad_types
             and not self.required_resource_size_types
             and not self.required_resource_query_level_types
+            and not self.required_resource_sample_count_helpers
             and not self.required_resource_texel_fetch_types
             and not self.required_image_load_types
             and not self.required_image_store_types
@@ -4547,6 +4602,10 @@ class MojoCodeGen:
             | self.required_resource_grad_types
             | self.required_resource_size_types
             | self.required_resource_query_level_types
+            | {
+                resource_type
+                for _, resource_type in self.required_resource_sample_count_helpers
+            }
             | self.required_resource_texel_fetch_types
             | self.required_image_load_types
             | self.required_image_store_types
@@ -4581,6 +4640,12 @@ class MojoCodeGen:
                 code += self.generate_resource_size_helper(resource_type)
             for resource_type in sorted(self.required_resource_query_level_types):
                 code += self.generate_resource_query_levels_helper(resource_type)
+            for helper_name, resource_type in sorted(
+                self.required_resource_sample_count_helpers
+            ):
+                code += self.generate_resource_sample_count_helper(
+                    helper_name, resource_type
+                )
             for resource_type in sorted(self.required_resource_texel_fetch_types):
                 code += self.generate_texel_fetch_helper(resource_type)
             for resource_type in sorted(self.required_image_load_types):
@@ -4804,6 +4869,12 @@ class MojoCodeGen:
 
     def generate_resource_query_levels_helper(self, resource_type):
         code = f"fn texture_query_levels(tex: {resource_type}) -> Int32:\n"
+        code += "    return 1\n\n"
+        return code
+
+    def generate_resource_sample_count_helper(self, helper_name, resource_type):
+        parameter_name = "image" if helper_name == "image_samples" else "tex"
+        code = f"fn {helper_name}({parameter_name}: {resource_type}) -> Int32:\n"
         code += "    return 1\n\n"
         return code
 
@@ -5489,6 +5560,8 @@ class MojoCodeGen:
                 return "vec4"
             if func_name == "textureQueryLevels":
                 return "int"
+            if func_name in {"imageSamples", "textureSamples"}:
+                return "int"
             if func_name in {"textureSize", "imageSize"} and expr.args:
                 resource_type = self.map_type(self.expression_result_type(expr.args[0]))
                 size_type = MOJO_RESOURCE_SIZE_RETURNS.get(resource_type)
@@ -5589,6 +5662,8 @@ class MojoCodeGen:
             if operation == "textureQueryLod":
                 return "vec2"
             if operation == "textureQueryLevels":
+                return "int"
+            if operation in {"imageSamples", "textureSamples"}:
                 return "int"
             if operation in {"GetDimensions", "textureSize"}:
                 resource_type = self.map_type(
@@ -5730,6 +5805,8 @@ class MojoCodeGen:
                 return "void"
             if member in {"GetDimensions", "textureSize"}:
                 return self.resource_size_result_type_name(resource_type)
+            if member == "imageSamples":
+                return "int"
             if member in MOJO_ATOMIC_OP_ALIASES:
                 return self.image_result_type_name(resource_type)
             return None
@@ -5744,6 +5821,8 @@ class MojoCodeGen:
         if member in {"GetDimensions", "textureSize"}:
             return self.resource_size_result_type_name(resource_type)
         if member == "textureQueryLevels":
+            return "int"
+        if member == "textureSamples":
             return "int"
         return "vec4"
 

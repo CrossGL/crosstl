@@ -6157,6 +6157,91 @@ def test_texture_query_lod_emits_slang_lod_methods():
     assert "CalculateLevelOfDetail(querySampler" not in generated_code
 
 
+def test_invalid_texture_query_lod_calls_emit_slang_diagnostics():
+    code = """
+    shader InvalidTextureQueryLod {
+        sampler querySampler;
+        sampler2d colorMap;
+        sampler2dshadow shadowMap;
+        sampler2dms msTex;
+        image2D colorImage;
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.25, 0.5);
+                vec2 missingTexture = textureQueryLod();
+                vec2 missingCoord = textureQueryLod(colorMap);
+                vec2 explicitMissingCoord = textureQueryLod(colorMap, querySampler);
+                vec2 extraArg = textureQueryLod(colorMap, uv, 1);
+                vec2 explicitExtraArg = textureQueryLod(
+                    colorMap,
+                    querySampler,
+                    uv,
+                    1
+                );
+                vec2 samplerOnly = textureQueryLod(querySampler, uv);
+                vec2 shadowLod = textureQueryLod(shadowMap, uv);
+                vec2 msLod = textureQueryLod(msTex, uv);
+                vec2 imageLod = textureQueryLod(colorImage, uv);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float2 missingTexture = /* unsupported Slang resource query: "
+        "textureQueryLod requires texture and coordinate arguments */ "
+        "float2(0.0, 0.0);" in generated_code
+    )
+    assert (
+        "float2 missingCoord = /* unsupported Slang resource query: "
+        "textureQueryLod requires texture and coordinate arguments */ "
+        "float2(0.0, 0.0);" in generated_code
+    )
+    assert (
+        "float2 explicitMissingCoord = /* unsupported Slang resource query: "
+        "textureQueryLod requires texture and coordinate arguments */ "
+        "float2(0.0, 0.0);" in generated_code
+    )
+    assert (
+        "float2 extraArg = /* unsupported Slang resource query: "
+        "textureQueryLod accepts only texture, optional sampler, and coordinate "
+        "arguments */ float2(0.0, 0.0);" in generated_code
+    )
+    assert (
+        "float2 explicitExtraArg = /* unsupported Slang resource query: "
+        "textureQueryLod accepts only texture, optional sampler, and coordinate "
+        "arguments */ float2(0.0, 0.0);" in generated_code
+    )
+    assert (
+        "float2 samplerOnly = /* unsupported Slang resource query: "
+        "textureQueryLod requires a non-shadow non-multisampled sampled texture "
+        "resource */ float2(0.0, 0.0);" in generated_code
+    )
+    assert (
+        "float2 shadowLod = /* unsupported Slang resource query: "
+        "textureQueryLod requires a non-shadow non-multisampled sampled texture "
+        "resource */ float2(0.0, 0.0);" in generated_code
+    )
+    assert (
+        "float2 msLod = /* unsupported Slang resource query: "
+        "textureQueryLod requires a non-shadow non-multisampled sampled texture "
+        "resource */ float2(0.0, 0.0);" in generated_code
+    )
+    assert (
+        "float2 imageLod = /* unsupported Slang resource query: "
+        "textureQueryLod requires a non-shadow non-multisampled sampled texture "
+        "resource */ float2(0.0, 0.0);" in generated_code
+    )
+    assert generated_code.count("unsupported Slang resource query") == 9
+    assert "textureQueryLod(" not in generated_code
+    assert "CalculateLevelOfDetail(querySampler" not in generated_code
+
+
 def test_resource_queries_on_texture_arrays_emit_slang_helpers():
     code = """
     shader QueryArrays {

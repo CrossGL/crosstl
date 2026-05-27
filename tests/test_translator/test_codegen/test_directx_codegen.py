@@ -6132,6 +6132,95 @@ def test_directx_advanced_stage_signature_validation_rejects_partial_hlsl_shapes
         )
 
 
+@pytest.mark.parametrize(
+    ("patch_parameter", "message"),
+    [
+        (
+            "InputPatch<HSInput> patch",
+            r"tessellation_control.*InputPatch.*InputPatch<T, N>",
+        ),
+        (
+            "InputPatch<HSInput, PATCH_SIZE> patch",
+            r"tessellation_control.*InputPatch.*integer literal",
+        ),
+        (
+            "InputPatch<HSInput, 0> patch",
+            r"tessellation_control.*InputPatch.*positive",
+        ),
+    ],
+)
+def test_directx_tessellation_control_validates_inputpatch_generic_signature(
+    patch_parameter, message
+):
+    code = f"""
+    shader bad_hull_patch_signature {{
+        struct HSInput {{
+            vec3 position @ POSITION;
+        }};
+
+        struct HSOutput {{
+            vec3 position @ POSITION;
+        }};
+
+        tessellation_control {{
+            HSOutput main({patch_parameter}, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {{
+                HSOutput output;
+                return output;
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
+@pytest.mark.parametrize(
+    ("patch_parameter", "message"),
+    [
+        (
+            "OutputPatch<HSOutput> patch",
+            r"tessellation_evaluation.*OutputPatch.*OutputPatch<T, N>",
+        ),
+        (
+            "OutputPatch<HSOutput, PATCH_SIZE> patch",
+            r"tessellation_evaluation.*OutputPatch.*integer literal",
+        ),
+        (
+            "OutputPatch<HSOutput, 0> patch",
+            r"tessellation_evaluation.*OutputPatch.*positive",
+        ),
+    ],
+)
+def test_directx_tessellation_evaluation_validates_outputpatch_generic_signature(
+    patch_parameter, message
+):
+    code = f"""
+    shader bad_domain_patch_signature {{
+        struct HSOutput {{
+            vec3 position @ POSITION;
+        }};
+
+        tessellation_evaluation {{
+            vec4 main({patch_parameter}, vec3 bary @ SV_DomainLocation)
+                @domain(tri) {{
+                return vec4(0.0);
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_evaluation"
+        )
+
+
 def test_directx_geometry_stream_output_builtin_stages_are_validated():
     code = """
     shader bad_geometry_stream_output_semantic {
@@ -6633,6 +6722,18 @@ def test_directx_tessellation_control_validates_patch_constant_helper():
         (
             "InputPatch<HSInput, 4> patch",
             "patchconstantfunc 'HSConst'.*InputPatch control point count.*3",
+        ),
+        (
+            "InputPatch<HSInput> patch",
+            r"patchconstantfunc 'HSConst'.*InputPatch.*InputPatch<T, N>",
+        ),
+        (
+            "InputPatch<HSInput, PATCH_SIZE> patch",
+            r"patchconstantfunc 'HSConst'.*InputPatch.*integer literal",
+        ),
+        (
+            "InputPatch<HSInput, 0> patch",
+            r"patchconstantfunc 'HSConst'.*InputPatch.*positive",
         ),
     ],
 )

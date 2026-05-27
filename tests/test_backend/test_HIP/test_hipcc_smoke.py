@@ -2061,3 +2061,119 @@ def test_native_hip_driver_memory_memset_parses_and_compiles_if_available(
         assert f"{raw_call}(" not in crossgl
 
     compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
+def test_native_hip_stream_callback_launch_config_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP stream callbacks and launch-configuration APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    __global__ void launch_config_kernel(float* out) {
+        unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        out[idx] = 1.0f;
+    }
+
+    void stream_callback(
+        hipStream_t stream,
+        hipError_t status,
+        void* user_data
+    ) {
+    }
+
+    void host_function(void* user_data) {
+    }
+
+    void stream_callback_launch_config_smoke(
+        hipStream_t stream,
+        float* out
+    ) {
+        dim3 grid(1, 1, 1);
+        dim3 block(32, 1, 1);
+        dim3 out_grid;
+        dim3 out_block;
+        size_t shared_mem = sizeof(float) * 32;
+        hipStream_t out_stream;
+        int value = 7;
+        size_t offset = 0;
+        hipStreamCallback_t callback = stream_callback;
+        hipHostFn_t host_fn = host_function;
+        void* packed_args[] = {&out};
+
+        hipStreamAddCallback(stream, callback, out, 0);
+        hipLaunchHostFunc(stream, host_fn, out);
+        hipConfigureCall(grid, block, shared_mem, stream);
+        __hipPushCallConfiguration(grid, block, 0, stream);
+        __hipPopCallConfiguration(
+            &out_grid, &out_block, &shared_mem, &out_stream
+        );
+        hipSetupArgument(&value, sizeof(value), offset);
+        launch_config_kernel<<<grid, block, shared_mem, stream>>>(out);
+        hipLaunchKernel(
+            (const void*)launch_config_kernel,
+            grid,
+            block,
+            packed_args,
+            0,
+            stream
+        );
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    expected_fragments = (
+        "// Kernel: launch_config_kernel",
+        "// Function: stream_callback",
+        "void stream_callback("
+        "hipStream_t stream, hipError_t status, ptr<void> user_data)",
+        "// Function: host_function",
+        "void host_function(ptr<void> user_data)",
+        "// Function: stream_callback_launch_config_smoke",
+        "void stream_callback_launch_config_smoke(" "hipStream_t stream, ptr<f32> out)",
+        "var grid: vec3<u32> = vec3<u32>(1, 1, 1);",
+        "var block: vec3<u32> = vec3<u32>(32, 1, 1);",
+        "var out_grid: vec3<u32>;",
+        "var out_block: vec3<u32>;",
+        "var shared_mem: u32 = (sizeof(float) * 32);",
+        "var out_stream: hipStream_t;",
+        "var value: i32 = 7;",
+        "var offset: u32 = 0;",
+        "var callback: hipStreamCallback_t = stream_callback;",
+        "var host_fn: hipHostFn_t = host_function;",
+        "// HIP stream add callback: stream: stream, callback: callback, "
+        "user data: out, flags: 0",
+        "// HIP launch host function: stream: stream, function: host_fn, "
+        "user data: out",
+        "// HIP configure call: grid: grid, block: block, "
+        "shared memory: shared_mem, stream: stream",
+        "// HIP push call configuration: grid: grid, block: block, "
+        "shared memory: 0, stream: stream",
+        "// HIP pop call configuration: grid output: out_grid, "
+        "block output: out_block, shared memory output: shared_mem, "
+        "stream output: out_stream",
+        "// HIP setup kernel argument: value: (&value), "
+        "bytes: sizeof(value), offset: offset",
+        "// Kernel launch: launch_config_kernel<<<grid, block, shared_mem, "
+        "stream>>>()",
+        "// Kernel launch: launch_config_kernel<<<grid, block, 0, stream>>>()",
+    )
+    for expected in expected_fragments:
+        assert expected in crossgl
+
+    assert crossgl.count("// Arguments: out") == 2
+
+    raw_calls = (
+        "hipStreamAddCallback",
+        "hipLaunchHostFunc",
+        "hipConfigureCall",
+        "__hipPushCallConfiguration",
+        "__hipPopCallConfiguration",
+        "hipSetupArgument",
+        "hipLaunchKernel",
+    )
+    for raw_call in raw_calls:
+        assert f"{raw_call}(" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)

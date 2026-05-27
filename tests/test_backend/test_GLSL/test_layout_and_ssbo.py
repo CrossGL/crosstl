@@ -66,6 +66,34 @@ def test_parse_layout_locations_and_components():
     assert "fragColor = fragColor;" not in glsl
 
 
+@pytest.mark.parametrize(
+    "depth_layout",
+    ["depth_any", "depth_greater", "depth_less", "depth_unchanged"],
+)
+def test_parse_conservative_depth_layout_roundtrip(depth_layout):
+    code = f"""
+    #version 460 core
+    layout({depth_layout}) out float gl_FragDepth;
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {{
+        gl_FragDepth = 0.5;
+        fragColor = vec4(1.0);
+    }}
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert f"out float gl_FragDepth @{depth_layout};" in crossgl
+    assert "out float gl_FragDepth;" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert f"layout({depth_layout}) out float gl_FragDepth;" in glsl
+    assert "layout(location = 0) out vec4 fragColor;" in glsl
+    assert "gl_FragDepth = 0.5;" in glsl
+
+
 def test_parse_fragment_multiple_outputs_roundtrip():
     code = """
     #version 450 core

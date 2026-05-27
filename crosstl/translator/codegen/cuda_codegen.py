@@ -3039,6 +3039,63 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         self.output[3:3] = helper_lines
 
+    def vector_component_count_for_type(self, type_name):
+        if not isinstance(type_name, str):
+            return None
+
+        base_type = type_name.split("[", 1)[0].strip()
+        scalar_types = {
+            "bool",
+            "double",
+            "f16",
+            "f32",
+            "f64",
+            "float",
+            "half",
+            "i32",
+            "int",
+            "u32",
+            "uint",
+        }
+        if base_type in scalar_types:
+            return 1
+
+        vector_prefixes = (
+            "bvec",
+            "dvec",
+            "ivec",
+            "uvec",
+            "vec",
+            "bool",
+            "double",
+            "float",
+            "half",
+            "int",
+            "uint",
+        )
+        for prefix in vector_prefixes:
+            if not base_type.startswith(prefix):
+                continue
+            suffix = base_type[len(prefix) :]
+            if suffix and suffix[0] in {"2", "3", "4"}:
+                return int(suffix[0])
+        return None
+
+    def texel_fetch_coordinate_count(self, raw_coord):
+        coord_type = self.get_expression_type(raw_coord)
+        if coord_type is None:
+            coord_type = self.expression_result_type(raw_coord)
+        return self.vector_component_count_for_type(coord_type)
+
+    def expected_texel_fetch_coordinate_count(self, texture_type):
+        return {
+            "sampler1D": 1,
+            "sampler1DArray": 2,
+            "sampler2D": 2,
+            "sampler2DArray": 3,
+            "sampler3D": 3,
+        }.get(texture_type)
+
     def generate_resource_call(self, func_name, raw_args, args):
         if func_name in {"textureSize", "imageSize"}:
             return self.generate_dimension_query(func_name, raw_args, args)
@@ -3283,6 +3340,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
             texture_name = args[0]
             coord = args[1]
+            expected_coord_count = self.expected_texel_fetch_coordinate_count(
+                texture_type
+            )
+            actual_coord_count = self.texel_fetch_coordinate_count(raw_args[1])
+            if (
+                expected_coord_count is not None
+                and actual_coord_count is not None
+                and actual_coord_count != expected_coord_count
+            ):
+                return self.unsupported_sampled_resource_call(
+                    "texelFetch coordinate rank",
+                    texture_type,
+                    args,
+                )
             if texture_type == "sampler1D":
                 return f"tex1Dfetch({texture_name}, {coord})"
             if texture_type == "sampler1DArray":

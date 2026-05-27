@@ -5084,6 +5084,47 @@ class HLSLCodeGen:
             return self.hlsl_int_literal_value(generic_args[1])
         return None
 
+    def validate_hlsl_patch_parameter_signature(self, parameter, patch_type, context):
+        param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        type_name = self.type_name_string(param_type) or patch_type
+        generic_args = self.hlsl_type_generic_arguments(param_type)
+        parameter_name = getattr(parameter, "name", None)
+        name_clause = (
+            f" parameter '{parameter_name}'" if parameter_name else " parameter"
+        )
+
+        if len(generic_args) != 2:
+            raise ValueError(
+                f"DirectX {context} {patch_type}{name_clause} must use "
+                f"{patch_type}<T, N>; found '{type_name}'"
+            )
+
+        element_type = self.type_name_string(generic_args[0])
+        if not element_type:
+            raise ValueError(
+                f"DirectX {context} {patch_type}{name_clause} must include "
+                "an element type"
+            )
+
+        control_point_count = self.hlsl_int_literal_value(generic_args[1])
+        control_point_text = self.type_name_string(generic_args[1])
+        if control_point_count is None:
+            raise ValueError(
+                f"DirectX {context} {patch_type}{name_clause} control point "
+                f"count '{control_point_text}' must be an integer literal"
+            )
+        if control_point_count <= 0:
+            raise ValueError(
+                f"DirectX {context} {patch_type}{name_clause} control point "
+                f"count ({control_point_count}) must be positive"
+            )
+
+    def validate_hlsl_patch_parameter_signatures(self, parameters, patch_type, context):
+        for parameter in parameters:
+            if self.hlsl_parameter_type_base(parameter) != patch_type:
+                continue
+            self.validate_hlsl_patch_parameter_signature(parameter, patch_type, context)
+
     def hlsl_input_patch_control_point_count(self, parameters):
         return self.hlsl_patch_control_point_count(parameters, "InputPatch")
 
@@ -6278,6 +6319,9 @@ class HLSLCodeGen:
                     "DirectX tessellation_control stage parameters must include "
                     "an InputPatch<T, N> parameter"
                 )
+            self.validate_hlsl_patch_parameter_signatures(
+                parameters, "InputPatch", "tessellation_control stage"
+            )
             self.validate_hlsl_output_control_points(func, parameters)
             if not any(
                 self.hlsl_parameter_has_semantic(parameter, "SV_OutputControlPointID")
@@ -6299,6 +6343,9 @@ class HLSLCodeGen:
                     "DirectX tessellation_evaluation stage parameters must include "
                     "an OutputPatch<T, N> parameter"
                 )
+            self.validate_hlsl_patch_parameter_signatures(
+                parameters, "OutputPatch", "tessellation_evaluation stage"
+            )
             self.validate_hlsl_domain_output_patch_control_points(parameters)
             self.validate_hlsl_domain_output_patch_element_type(parameters)
             if not any(
@@ -7469,6 +7516,11 @@ class HLSLCodeGen:
                 f"'{patch_function_name}' parameters must include "
                 "InputPatch<T, N>"
             )
+        self.validate_hlsl_patch_parameter_signatures(
+            patch_parameters,
+            "InputPatch",
+            f"tessellation_control stage patchconstantfunc '{patch_function_name}'",
+        )
         self.validate_hlsl_patch_constant_input_patch_signature(
             parameters, patch_parameters, patch_function_name
         )
