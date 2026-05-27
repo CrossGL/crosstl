@@ -6023,9 +6023,12 @@ class SlangCodeGen:
             return structured_buffer_atomic
 
         if func_name in {"texture", "textureLod", "textureGrad"}:
-            sample_args = self.sampled_texture_args(args)
+            sample_args = self.sampled_texture_operation_args(func_name, args)
             if sample_args is None:
-                return None
+                return self.unsupported_sampled_texture_call(
+                    func_name,
+                    self.sampled_texture_operation_unsupported_reason(func_name, args),
+                )
 
             texture_name, coord, extra_args = sample_args
             if func_name == "texture":
@@ -6043,7 +6046,10 @@ class SlangCodeGen:
                 ddy = self.generate_expression(extra_args[1])
                 return f"{texture_name}.SampleGrad({coord}, {ddx}, {ddy})"
 
-            return None
+            return self.unsupported_sampled_texture_call(
+                func_name,
+                self.sampled_texture_operation_arity_requirement(func_name),
+            )
 
         if func_name in {"textureOffset", "textureLodOffset", "textureGradOffset"}:
             return self.generate_texture_offset(func_name, args)
@@ -6077,12 +6083,13 @@ class SlangCodeGen:
             return self.generate_texture_gather_compare(func_name, args)
 
         if func_name == "texelFetch":
-            fetch_args = self.sampled_texture_args(args)
+            fetch_args = self.sampled_texture_operation_args(func_name, args)
             if fetch_args is None:
-                return None
+                return self.unsupported_sampled_texture_call(
+                    func_name,
+                    self.sampled_texture_operation_unsupported_reason(func_name, args),
+                )
             texture_name, coord, extra_args = fetch_args
-            if not extra_args:
-                return None
 
             lod_or_sample = self.generate_expression(extra_args[0])
             texture_type = self.get_expression_type(args[0])
@@ -6174,6 +6181,72 @@ class SlangCodeGen:
 
     def sampled_texture_coord_index(self, args):
         return 2 if self.is_explicit_sampler_argument(args) else 1
+
+    def sampled_texture_operation_args(self, func_name, args):
+        sample_args = self.sampled_texture_args(args)
+        if sample_args is None:
+            return None
+
+        if not self.sampled_texture_operation_accepts_resource(func_name, args[0]):
+            return None
+
+        _texture_name, _coord, extra_args = sample_args
+        if not self.sampled_texture_operation_accepts_extra_args(func_name, extra_args):
+            return None
+
+        return sample_args
+
+    def sampled_texture_operation_accepts_extra_args(self, func_name, extra_args):
+        if func_name == "texture":
+            return len(extra_args) <= 1
+        if func_name in {"textureLod", "texelFetch"}:
+            return len(extra_args) == 1
+        if func_name == "textureGrad":
+            return len(extra_args) == 2
+        return False
+
+    def sampled_texture_operation_accepts_resource(self, func_name, texture_arg):
+        resource_type = self.resource_base_type(self.get_expression_type(texture_arg))
+        if resource_type is None:
+            return True
+        if func_name == "texelFetch":
+            return self.is_texel_fetch_sampler_type(resource_type)
+        return self.is_lod_query_sampler_type(resource_type)
+
+    def sampled_texture_operation_unsupported_reason(self, func_name, args):
+        if not args:
+            return "requires texture and coordinate arguments"
+
+        coord_index = self.sampled_texture_coord_index(args)
+        if len(args) <= coord_index:
+            return "requires texture and coordinate arguments"
+
+        if not self.sampled_texture_operation_accepts_resource(func_name, args[0]):
+            return self.sampled_texture_operation_resource_requirement(func_name)
+
+        return self.sampled_texture_operation_arity_requirement(func_name)
+
+    def sampled_texture_operation_resource_requirement(self, func_name):
+        if func_name == "texelFetch":
+            return "requires a non-shadow texel-fetchable sampled texture resource"
+        return "requires a non-shadow non-multisampled sampled texture resource"
+
+    def sampled_texture_operation_arity_requirement(self, func_name):
+        if func_name == "texture":
+            return "accepts coordinate and optional bias arguments"
+        if func_name == "textureLod":
+            return "requires one lod argument"
+        if func_name == "textureGrad":
+            return "requires gradient x and gradient y arguments"
+        if func_name == "texelFetch":
+            return "requires one lod/sample argument"
+        return "has unsupported arguments"
+
+    def unsupported_sampled_texture_call(self, func_name, reason):
+        return (
+            f"/* unsupported Slang sampled texture: "
+            f"{func_name} {reason} */ float4(0.0)"
+        )
 
     def generate_texture_offset(self, func_name, args):
         sample_args = self.sampled_texture_args(args)
@@ -6798,7 +6871,7 @@ class SlangCodeGen:
         }
 
     def is_explicit_sampler_argument(self, args):
-        if len(args) < 3:
+        if len(args) < 2:
             return False
         return self.is_sampler_state_type(self.get_expression_type(args[1]))
 
@@ -6853,6 +6926,17 @@ class SlangCodeGen:
 
     def is_multisample_sampler_type(self, type_name):
         return self.resource_base_type(type_name) in {
+            "sampler2DMS",
+            "sampler2DMSArray",
+        }
+
+    def is_texel_fetch_sampler_type(self, type_name):
+        return self.resource_base_type(type_name) in {
+            "sampler1D",
+            "sampler1DArray",
+            "sampler2D",
+            "sampler2DArray",
+            "sampler3D",
             "sampler2DMS",
             "sampler2DMSArray",
         }

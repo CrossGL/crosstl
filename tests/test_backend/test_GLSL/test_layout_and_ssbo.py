@@ -131,6 +131,45 @@ def test_parse_fragment_multiple_outputs_roundtrip():
     assert "\n    vec4 accum;" not in glsl
 
 
+def test_parse_fragment_blend_support_layout_roundtrip():
+    code = """
+    #version 460 core
+    #extension GL_KHR_blend_equation_advanced : enable
+    layout(location = 0, blend_support_colordodge) out highp vec4 outputColour;
+    layout(location = 1, blend_support_multiply) out vec4 overlayColour;
+    layout(blend_support_multiply, blend_support_screen) out;
+
+    void main() {
+        outputColour = vec4(1.0);
+        overlayColour = vec4(0.25);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert (
+        "out vec4 outputColour @location(0) @blend_support_colordodge @highp;"
+        in crossgl
+    )
+    assert "out vec4 overlayColour @location(1) @blend_support_multiply;" in crossgl
+    assert "layout(blend_support_multiply, blend_support_screen) out;" in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "#extension GL_KHR_blend_equation_advanced : enable" in glsl
+    assert "layout(blend_support_multiply, blend_support_screen) out;" in glsl
+    assert (
+        "layout(location = 0, blend_support_colordodge) out highp vec4 "
+        "outputColour;" in glsl
+    )
+    assert (
+        "layout(location = 1, blend_support_multiply) out vec4 overlayColour;" in glsl
+    )
+    assert "outputColour = vec4(1.0);" in glsl
+    assert "overlayColour = vec4(0.25);" in glsl
+    assert "fragColor" not in glsl
+
+
 def test_parse_fragment_color_and_depth_outputs_roundtrip():
     code = """
     #version 450 core

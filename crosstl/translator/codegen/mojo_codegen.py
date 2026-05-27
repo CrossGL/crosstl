@@ -480,6 +480,11 @@ MOJO_GENERIC_TEXTURE_BUILTINS = {
     "textureCompareProjGradOffset": ("texture_compare_proj_grad_offset", "float"),
     "textureGatherCompare": ("texture_gather_compare", "vec4"),
     "textureGatherCompareOffset": ("texture_gather_compare_offset", "vec4"),
+    "CalculateLevelOfDetail": ("calculate_level_of_detail", "float"),
+    "CalculateLevelOfDetailUnclamped": (
+        "calculate_level_of_detail_unclamped",
+        "float",
+    ),
 }
 
 MOJO_IMAGE_ATOMIC_BUILTINS = {
@@ -3514,6 +3519,38 @@ class MojoCodeGen:
                 ),
                 "vec4",
             ),
+            "GatherCmpRed": (
+                (
+                    "texture_gather_compare_offset"
+                    if argument_count >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
+            "GatherCmpGreen": (
+                (
+                    "texture_gather_compare_offset"
+                    if argument_count >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
+            "GatherCmpBlue": (
+                (
+                    "texture_gather_compare_offset"
+                    if argument_count >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
+            "GatherCmpAlpha": (
+                (
+                    "texture_gather_compare_offset"
+                    if argument_count >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
         }.get(operation)
         if resource_builtin is not None:
             helper_base, return_kind = resource_builtin
@@ -4284,6 +4321,15 @@ class MojoCodeGen:
             raise ValueError(
                 f"Unsupported {helper_base} for Mojo codegen; "
                 f"shadow texture required: {resource_type}"
+            )
+        if helper_base in {
+            "texture_query_lod",
+            "calculate_level_of_detail",
+            "calculate_level_of_detail_unclamped",
+        } and self.is_shadow_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"non-shadow texture required: {resource_type}"
             )
 
     def generate_image_atomic_call(self, args, helper_base):
@@ -5661,6 +5707,13 @@ class MojoCodeGen:
                 return "float"
             if operation == "textureQueryLod":
                 return "vec2"
+            if operation in MOJO_GENERIC_TEXTURE_BUILTINS:
+                _, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[operation]
+                if return_kind == "float":
+                    return "float"
+                if return_kind == "vec2":
+                    return "vec2"
+                return "vec4"
             if operation == "textureQueryLevels":
                 return "int"
             if operation in {"imageSamples", "textureSamples"}:
@@ -5820,10 +5873,14 @@ class MojoCodeGen:
             return "float"
         if member in {"GetDimensions", "textureSize"}:
             return self.resource_size_result_type_name(resource_type)
+        if member == "textureQueryLod":
+            return "vec2"
         if member == "textureQueryLevels":
             return "int"
         if member == "textureSamples":
             return "int"
+        if member in {"CalculateLevelOfDetail", "CalculateLevelOfDetailUnclamped"}:
+            return "float"
         return "vec4"
 
     def resource_size_result_type_name(self, resource_type):

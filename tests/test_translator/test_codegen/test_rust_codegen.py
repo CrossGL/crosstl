@@ -5679,6 +5679,276 @@ def test_nested_non_copy_array_access_infers_element_types_and_clones_compile(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_deep_nested_array_literals_and_access_target_types_compile(tmp_path):
+    generic_type = GenericType("T")
+    payload_type = NamedType("Payload")
+    float_type = PrimitiveType("float")
+    cube_generic_type = ArrayType(ArrayType(ArrayType(generic_type, 2), 2), 2)
+    cube_payload_type = ArrayType(ArrayType(ArrayType(payload_type, 2), 2), 2)
+    cube_box_payload_type = NamedType("CubeBox", [payload_type])
+    cube_box_float_type = NamedType("CubeBox", [float_type])
+    cube_choice_payload_type = NamedType("CubeChoice", [payload_type])
+    cube_row_payload_type = ArrayType(ArrayType(payload_type, 2), 2)
+
+    def int_array(*values):
+        return ArrayLiteralNode(
+            [LiteralNode(value, PrimitiveType("int")) for value in values]
+        )
+
+    def float_cube_literal():
+        return ArrayLiteralNode(
+            [
+                ArrayLiteralNode([int_array(1, 2), int_array(3, 4)]),
+                ArrayLiteralNode([int_array(5, 6), int_array(7, 8)]),
+            ]
+        )
+
+    def payload_row(*names):
+        return ArrayLiteralNode([IdentifierNode(name) for name in names])
+
+    def payload_cube_literal(prefix):
+        return ArrayLiteralNode(
+            [
+                ArrayLiteralNode(
+                    [
+                        payload_row(f"{prefix}0", f"{prefix}1"),
+                        payload_row(f"{prefix}2", f"{prefix}3"),
+                    ]
+                ),
+                ArrayLiteralNode(
+                    [
+                        payload_row(f"{prefix}4", f"{prefix}5"),
+                        payload_row(f"{prefix}6", f"{prefix}7"),
+                    ]
+                ),
+            ]
+        )
+
+    def payload_params(prefix):
+        return [ParameterNode(f"{prefix}{index}", payload_type) for index in range(8)]
+
+    def cube_cell():
+        return ArrayAccessNode(
+            ArrayAccessNode(
+                ArrayAccessNode(IdentifierNode("cube"), IdentifierNode("layer")),
+                IdentifierNode("row"),
+            ),
+            IdentifierNode("col"),
+        )
+
+    cube_choice_enum = EnumNode(
+        "CubeChoice",
+        [
+            EnumVariantNode("Cube", fields=[cube_generic_type]),
+        ],
+    )
+    cube_choice_enum.generic_params = [GenericParameterNode("T")]
+
+    ast = ShaderNode(
+        "DeepNestedArrayTargetTypes",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "CubeBox",
+                [
+                    StructMemberNode("cube", cube_generic_type),
+                ],
+                generic_params=[GenericParameterNode("T")],
+            ),
+            cube_choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "identity_payload_cube",
+                cube_payload_type,
+                [ParameterNode("cube", cube_payload_type)],
+                [ReturnNode(IdentifierNode("cube"))],
+            ),
+            FunctionNode(
+                "identity_payload_box",
+                cube_box_payload_type,
+                [ParameterNode("cubeBox", cube_box_payload_type)],
+                [ReturnNode(IdentifierNode("cubeBox"))],
+            ),
+            FunctionNode(
+                "identity_payload_choice",
+                cube_choice_payload_type,
+                [ParameterNode("choice", cube_choice_payload_type)],
+                [ReturnNode(IdentifierNode("choice"))],
+            ),
+            FunctionNode(
+                "build_float_box",
+                cube_box_float_type,
+                [],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            cube_box_float_type,
+                            [],
+                            named_arguments={"cube": float_cube_literal()},
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "assign_payload_box",
+                cube_box_payload_type,
+                payload_params("p"),
+                [
+                    VariableNode("selected", cube_box_payload_type),
+                    AssignmentNode(
+                        IdentifierNode("selected"),
+                        ConstructorNode(
+                            cube_box_payload_type,
+                            [],
+                            named_arguments={"cube": payload_cube_literal("p")},
+                        ),
+                    ),
+                    ReturnNode(IdentifierNode("selected")),
+                ],
+            ),
+            FunctionNode(
+                "call_payload_cube",
+                cube_payload_type,
+                payload_params("q"),
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("identity_payload_cube"),
+                            [payload_cube_literal("q")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "call_payload_box",
+                cube_box_payload_type,
+                payload_params("r"),
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("identity_payload_box"),
+                            [
+                                ConstructorNode(
+                                    cube_box_payload_type,
+                                    [],
+                                    named_arguments={"cube": payload_cube_literal("r")},
+                                )
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "call_payload_variant",
+                cube_choice_payload_type,
+                payload_params("s"),
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("identity_payload_choice"),
+                            [
+                                FunctionCallNode(
+                                    IdentifierNode("CubeChoice::Cube"),
+                                    [payload_cube_literal("s")],
+                                )
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "pick_cell",
+                payload_type,
+                [
+                    ParameterNode("cube", cube_payload_type),
+                    ParameterNode("layer", PrimitiveType("int")),
+                    ParameterNode("row", PrimitiveType("int")),
+                    ParameterNode("col", PrimitiveType("int")),
+                ],
+                [ReturnNode(cube_cell())],
+            ),
+            FunctionNode(
+                "pick_layer",
+                cube_row_payload_type,
+                [
+                    ParameterNode("cube", cube_payload_type),
+                    ParameterNode("layer", PrimitiveType("int")),
+                ],
+                [
+                    ReturnNode(
+                        ArrayAccessNode(IdentifierNode("cube"), IdentifierNode("layer"))
+                    )
+                ],
+            ),
+            FunctionNode(
+                "replace_cell",
+                cube_payload_type,
+                [
+                    ParameterNode("cube", cube_payload_type),
+                    ParameterNode("replacement", payload_type),
+                    ParameterNode("layer", PrimitiveType("int")),
+                    ParameterNode("row", PrimitiveType("int")),
+                    ParameterNode("col", PrimitiveType("int")),
+                ],
+                [
+                    AssignmentNode(cube_cell(), IdentifierNode("replacement")),
+                    ReturnNode(IdentifierNode("cube")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "pub cube: [[[T; 2]; 2]; 2]," in generated_code
+    assert "Cube([[[T; 2]; 2]; 2])," in generated_code
+    assert (
+        "CubeBox::<f32> { cube: [[[1.0, 2.0], [3.0, 4.0]], "
+        "[[5.0, 6.0], [7.0, 8.0]]] }"
+    ) in generated_code
+    assert (
+        "selected = CubeBox::<Payload> { cube: "
+        "[[[p0.clone(), p1.clone()], [p2.clone(), p3.clone()]], "
+        "[[p4.clone(), p5.clone()], [p6.clone(), p7.clone()]]] };"
+    ) in generated_code
+    assert (
+        "return identity_payload_cube([[[q0.clone(), q1.clone()], "
+        "[q2.clone(), q3.clone()]], [[q4.clone(), q5.clone()], "
+        "[q6.clone(), q7.clone()]]]);"
+    ) in generated_code
+    assert (
+        "return identity_payload_box(CubeBox::<Payload> { cube: "
+        "[[[r0.clone(), r1.clone()], [r2.clone(), r3.clone()]], "
+        "[[r4.clone(), r5.clone()], [r6.clone(), r7.clone()]]] });"
+    ) in generated_code
+    assert (
+        "return identity_payload_choice(CubeChoice::<Payload>::Cube("
+        "[[[s0.clone(), s1.clone()], [s2.clone(), s3.clone()]], "
+        "[[s4.clone(), s5.clone()], [s6.clone(), s7.clone()]]]));"
+    ) in generated_code
+    assert (
+        "return cube[layer as usize][row as usize][col as usize].clone();"
+        in generated_code
+    )
+    assert "return cube[layer as usize].clone();" in generated_code
+    assert "cube[layer as usize].clone()[row as usize]" not in generated_code
+    assert (
+        "cube[layer as usize][row as usize][col as usize] = replacement.clone();"
+        in generated_code
+    )
+    assert "CubeChoice::Cube" not in generated_code
+    assert "[1, 2]" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_struct_constructor_args_normalize_field_types_and_clone_non_copy_compile(
     tmp_path,
 ):

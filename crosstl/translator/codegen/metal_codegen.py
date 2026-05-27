@@ -399,6 +399,7 @@ class MetalCodeGen:
         self.current_metal_mesh_output_accumulators = {}
         self.current_metal_non_thread_payload_parameters = set()
         self.current_readonly_metal_mesh_payload_parameters = set()
+        self.current_readonly_metal_mesh_payload_reasons = {}
         self.current_readonly_raw_buffer_parameters = set()
         self.metal_program_mesh_payload_type = None
         self.function_metal_mesh_dispatch_contexts = {}
@@ -1707,6 +1708,9 @@ class MetalCodeGen:
         previous_readonly_metal_mesh_payload_parameters = (
             self.current_readonly_metal_mesh_payload_parameters
         )
+        previous_readonly_metal_mesh_payload_reasons = (
+            self.current_readonly_metal_mesh_payload_reasons
+        )
         previous_readonly_raw_buffer_parameters = (
             self.current_readonly_raw_buffer_parameters
         )
@@ -1740,6 +1744,7 @@ class MetalCodeGen:
         self.current_metal_mesh_output_accumulators = {}
         self.current_metal_non_thread_payload_parameters = set()
         self.current_readonly_metal_mesh_payload_parameters = set()
+        self.current_readonly_metal_mesh_payload_reasons = {}
         self.current_readonly_raw_buffer_parameters = set()
         self.local_variable_types = {}
         self.current_address_space_variables = {}
@@ -1803,8 +1808,14 @@ class MetalCodeGen:
                 self.current_metal_mesh_payload_parameter = p.name
                 self.current_metal_mesh_payload_type = self.map_type(raw_param_type)
                 self.current_address_space_variables[p.name] = "object_data"
-                if shader_type == "mesh":
+                readonly_reason = self.readonly_metal_mesh_payload_parameter_reason(
+                    shader_type, p
+                )
+                if readonly_reason is not None:
                     self.current_readonly_metal_mesh_payload_parameters.add(p.name)
+                    self.current_readonly_metal_mesh_payload_reasons[p.name] = (
+                        readonly_reason
+                    )
             if (
                 self.metal_ray_payload_parameter_declaration(
                     param_type, p.name, p, shader_type
@@ -1955,6 +1966,9 @@ class MetalCodeGen:
             )
             self.current_readonly_metal_mesh_payload_parameters = (
                 previous_readonly_metal_mesh_payload_parameters
+            )
+            self.current_readonly_metal_mesh_payload_reasons = (
+                previous_readonly_metal_mesh_payload_reasons
             )
             self.current_readonly_raw_buffer_parameters = (
                 previous_readonly_raw_buffer_parameters
@@ -2132,6 +2146,9 @@ class MetalCodeGen:
         )
         self.current_readonly_metal_mesh_payload_parameters = (
             previous_readonly_metal_mesh_payload_parameters
+        )
+        self.current_readonly_metal_mesh_payload_reasons = (
+            previous_readonly_metal_mesh_payload_reasons
         )
         self.current_readonly_raw_buffer_parameters = (
             previous_readonly_raw_buffer_parameters
@@ -5986,9 +6003,18 @@ class MetalCodeGen:
         root_name = self.assignment_target_root_name(target)
         if root_name not in self.current_readonly_metal_mesh_payload_parameters:
             return None
+        reason = self.current_readonly_metal_mesh_payload_reasons.get(
+            root_name, "const object_data"
+        )
+        if reason == "mesh stage payload":
+            reason_text = "const object_data in mesh stages"
+        elif reason == "const-qualified payload parameter":
+            reason_text = "const-qualified object_data"
+        else:
+            reason_text = reason
         return (
             "/* unsupported Metal mesh payload store: mesh payload "
-            f"'{root_name}' is const object_data in mesh stages */"
+            f"'{root_name}' is {reason_text} */"
         )
 
     def metal_mesh_payload_parameter_declaration(
@@ -5997,8 +6023,22 @@ class MetalCodeGen:
         if not self.is_metal_mesh_payload_parameter(shader_type, node):
             return None
 
-        address_space = "const object_data" if shader_type == "mesh" else "object_data"
-        return f"{address_space} {mapped_type}& {name}"
+        readonly_reason = self.readonly_metal_mesh_payload_parameter_reason(
+            shader_type, node
+        )
+        address_space = (
+            "const object_data" if readonly_reason is not None else "object_data"
+        )
+        payload_type = self.metal_mesh_payload_value_type(mapped_type) or mapped_type
+        return f"{address_space} {payload_type}& {name}"
+
+    def readonly_metal_mesh_payload_parameter_reason(self, shader_type, node):
+        if shader_type == "mesh":
+            return "mesh stage payload"
+        qualifiers = self.parameter_qualifier_names(node)
+        if qualifiers & {"const", "constant"}:
+            return "const-qualified payload parameter"
+        return None
 
     def is_metal_mesh_payload_parameter(self, shader_type, node):
         if shader_type not in {"object", "task", "amplification", "mesh"}:

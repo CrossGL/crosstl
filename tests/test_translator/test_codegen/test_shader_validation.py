@@ -2461,6 +2461,32 @@ shader MetalMeshPayloadAddressSpaceValidation {
 """
 
 
+METAL_CONST_OBJECT_PAYLOAD_SHADER = """
+shader MetalConstObjectPayloadValidation {
+    struct Payload {
+        vec4 color;
+    };
+
+    object {
+        void main(const Payload& payload @payload)
+            @max_total_threads_per_threadgroup(32)
+        {
+            payload.color = vec4(1.0, 0.0, 0.0, 1.0);
+            DispatchMesh(1, 1, 1);
+        }
+    }
+
+    mesh {
+        void main(Payload payload @payload)
+            @max_total_threads_per_threadgroup(32)
+        {
+            vec4 color = payload.color;
+        }
+    }
+}
+"""
+
+
 METAL_MESH_PAYLOAD_INVALID_SOURCE_SHADER = """
 shader MetalMeshPayloadInvalidSourceValidation {
     struct MeshPayload {
@@ -4949,6 +4975,48 @@ def test_generated_metal_mesh_payload_address_space_diagnostics_compile_with_met
     assert "unsupported Metal address-space call" in code
     assert "unsupported Metal mesh payload store" in code
     assert "mutate(payload)" not in code
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_const_object_payload_diagnostic_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "const_object_payload_diagnostic.metal"
+    output = tmp_path / "const_object_payload_diagnostic.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_CONST_OBJECT_PAYLOAD_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "const object_data Payload& payload [[payload]]" in code
+    assert "unsupported Metal mesh payload store" in code
+    assert "payload.color = float4(1.0, 0.0, 0.0, 1.0);" not in code
 
     run_validator(
         [

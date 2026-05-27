@@ -1487,6 +1487,10 @@ def test_hlsl_sampled_texture_aliases_compile_with_mojo(tmp_path):
     ivec2 querySplit() {
         return colorMap.GetDimensions();
     }
+    float queryMethodLod(vec2 uv) {
+        return colorMap.CalculateLevelOfDetail(linearSampler, uv) +
+            colorMap.CalculateLevelOfDetailUnclamped(linearSampler, uv);
+    }
     vec4 fetchSplit(ivec2 pixel, int sampleIndex) {
         return samples.Load(pixel, sampleIndex);
     }
@@ -1511,6 +1515,8 @@ def test_hlsl_sampled_texture_aliases_compile_with_mojo(tmp_path):
     assert "return sample_lod(colorMap, uv, 1.0)" in generated_code
     assert "return sample_grad(colorMap, uv, uv, uv)" in generated_code
     assert "return texture_size(colorMap)" in generated_code
+    assert "_crossgl_calculate_level_of_detail_Texture2D" in generated_code
+    assert "_crossgl_calculate_level_of_detail_unclamped_Texture2D" in generated_code
     assert "return texel_fetch(samples, pixel, sampleIndex)" in generated_code
     assert "return sample(shadowMap, uvDepth)" in generated_code
     assert "Texture2D<float4>" not in generated_code
@@ -1521,6 +1527,8 @@ def test_hlsl_sampled_texture_aliases_compile_with_mojo(tmp_path):
     assert ".SampleLevel(" not in generated_code
     assert ".SampleGrad(" not in generated_code
     assert ".GetDimensions(" not in generated_code
+    assert ".CalculateLevelOfDetail(" not in generated_code
+    assert ".CalculateLevelOfDetailUnclamped(" not in generated_code
     assert ".Load(" not in generated_code
 
     generated_code += "\nfn main():\n    pass\n"
@@ -3346,7 +3354,9 @@ def test_advanced_texture_placeholder_builtins_compile_with_mojo(tmp_path):
 
     code = """
     sampler2D colorMap;
+    sampler2DArray arrayMap;
     sampler2DShadow shadowMap;
+    sampler2DArrayShadow shadowLayers;
     sampler linearSampler;
 
     vec4 sampleAdvanced(
@@ -3367,6 +3377,10 @@ def test_advanced_texture_placeholder_builtins_compile_with_mojo(tmp_path):
 
     vec2 queryLod(sampler2D tex, sampler state, vec2 uv) {
         return textureQueryLod(tex, state, uv);
+    }
+
+    vec2 queryArrayLod(sampler2DArray tex, sampler state, vec3 uvLayer) {
+        return textureQueryLod(tex, state, uvLayer);
     }
 
     float compareShadow(
@@ -3391,16 +3405,44 @@ def test_advanced_texture_placeholder_builtins_compile_with_mojo(tmp_path):
         return textureGatherCompare(shadow, state, uv, depth) +
             textureGatherCompareOffset(shadow, state, uv, depth, offset);
     }
+
+    float compareShadowArray(
+        sampler2DArrayShadow shadow,
+        sampler state,
+        vec3 uvLayer,
+        float depth,
+        ivec2 offset
+    ) {
+        return textureCompare(shadow, state, uvLayer, depth) +
+            textureCompareOffset(shadow, state, uvLayer, depth, offset) +
+            textureCompareLod(shadow, state, uvLayer, depth, 1.0);
+    }
+
+    vec4 gatherShadowArray(
+        sampler2DArrayShadow shadow,
+        sampler state,
+        vec3 uvLayer,
+        float depth,
+        ivec2 offset
+    ) {
+        return textureGatherCompare(shadow, state, uvLayer, depth) +
+            textureGatherCompareOffset(shadow, state, uvLayer, depth, offset);
+    }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "struct Texture2DShadow:" in generated_code
+    assert "struct Texture2DArray:" in generated_code
+    assert "struct Texture2DArrayShadow:" in generated_code
     assert "_crossgl_sample_offset_Texture2D" in generated_code
     assert "_crossgl_texture_gather_Texture2D" in generated_code
     assert "_crossgl_sample_proj_Texture2D" in generated_code
     assert "_crossgl_texture_query_lod_Texture2D" in generated_code
+    assert "_crossgl_texture_query_lod_Texture2DArray" in generated_code
     assert "_crossgl_texture_compare_Texture2DShadow" in generated_code
     assert "_crossgl_texture_gather_compare_Texture2DShadow" in generated_code
+    assert "_crossgl_texture_compare_Texture2DArrayShadow" in generated_code
+    assert "_crossgl_texture_gather_compare_Texture2DArrayShadow" in generated_code
     assert "textureOffset" not in generated_code
     assert "textureLodOffset" not in generated_code
     assert "textureGradOffset" not in generated_code
@@ -3454,6 +3496,19 @@ def test_advanced_texture_builtins_reject_invalid_mojo_resources():
         ValueError, match="texture_gather.*non-multisample texture required"
     ):
         generate_code(parse_code(tokenize_code(multisample_resource)))
+
+    shadow_query_lod = """
+    sampler2DShadow shadowMap;
+    sampler linearSampler;
+
+    vec2 invalidShadowQuery(sampler2DShadow shadow, sampler state, vec2 uv) {
+        return textureQueryLod(shadow, state, uv);
+    }
+    """
+    with pytest.raises(
+        ValueError, match="texture_query_lod.*non-shadow texture required"
+    ):
+        generate_code(parse_code(tokenize_code(shadow_query_lod)))
 
 
 def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo(tmp_path):
@@ -4330,9 +4385,12 @@ def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
 def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast_repr():
     codegen = MojoCodeGen()
     tex = VariableNode("tex", PrimitiveType("sampler2D"))
+    array_tex = VariableNode("arrayTex", PrimitiveType("sampler2DArray"))
     shadow = VariableNode("shadow", PrimitiveType("sampler2DShadow"))
+    array_shadow = VariableNode("arrayShadow", PrimitiveType("sampler2DArrayShadow"))
     state = VariableNode("state", PrimitiveType("sampler"))
     uv = VariableNode("uv", VectorType(PrimitiveType("float"), 2))
+    uv_layer = VariableNode("uvLayer", VectorType(PrimitiveType("float"), 3))
     bias = VariableNode("bias", PrimitiveType("float"))
     lod = VariableNode("lod", PrimitiveType("float"))
     depth = VariableNode("depth", PrimitiveType("float"))
@@ -4341,9 +4399,12 @@ def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast
     ddy = VariableNode("ddy", VectorType(PrimitiveType("float"), 2))
 
     codegen.register_variable_type("tex", "sampler2D")
+    codegen.register_variable_type("arrayTex", "sampler2DArray")
     codegen.register_variable_type("shadow", "sampler2DShadow")
+    codegen.register_variable_type("arrayShadow", "sampler2DArrayShadow")
     codegen.register_variable_type("state", "sampler")
     codegen.register_variable_type("uv", "vec2")
+    codegen.register_variable_type("uvLayer", "vec3")
     codegen.register_variable_type("bias", "float")
     codegen.register_variable_type("lod", "float")
     codegen.register_variable_type("depth", "float")
@@ -4400,6 +4461,35 @@ def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast
             sampler_expr=state,
         )
     )
+    query_lod_call = codegen.generate_expression(
+        TextureOpNode("textureQueryLod", array_tex, [uv_layer], sampler_expr=state)
+    )
+    calculate_lod_call = codegen.generate_expression(
+        TextureOpNode(
+            "CalculateLevelOfDetail", array_tex, [uv_layer], sampler_expr=state
+        )
+    )
+    calculate_lod_unclamped_call = codegen.generate_expression(
+        TextureOpNode(
+            "CalculateLevelOfDetailUnclamped",
+            array_tex,
+            [uv_layer],
+            sampler_expr=state,
+        )
+    )
+    gather_cmp_red_call = codegen.generate_expression(
+        TextureOpNode(
+            "GatherCmpRed", array_shadow, [uv_layer, depth], sampler_expr=state
+        )
+    )
+    gather_cmp_alpha_offset_call = codegen.generate_expression(
+        TextureOpNode(
+            "GatherCmpAlpha",
+            array_shadow,
+            [uv_layer, depth, offset],
+            sampler_expr=state,
+        )
+    )
 
     assert bias_call.startswith("_crossgl_sample_bias_Texture2D")
     assert bias_call.endswith("(tex, uv, bias)")
@@ -4425,6 +4515,26 @@ def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast
     assert compare_proj_grad_offset_call.endswith(
         "(shadow, uv, depth, ddx, ddy, offset)"
     )
+    assert query_lod_call.startswith("_crossgl_texture_query_lod_Texture2DArray")
+    assert query_lod_call.endswith("(arrayTex, uvLayer)")
+    assert calculate_lod_call.startswith(
+        "_crossgl_calculate_level_of_detail_Texture2DArray"
+    )
+    assert calculate_lod_call.endswith("(arrayTex, uvLayer)")
+    assert calculate_lod_unclamped_call.startswith(
+        "_crossgl_calculate_level_of_detail_unclamped_Texture2DArray"
+    )
+    assert calculate_lod_unclamped_call.endswith("(arrayTex, uvLayer)")
+    assert gather_cmp_red_call.startswith(
+        "_crossgl_texture_gather_compare_Texture2DArrayShadow"
+    )
+    assert gather_cmp_red_call.endswith("(arrayShadow, uvLayer, depth)")
+    assert gather_cmp_alpha_offset_call.startswith(
+        "_crossgl_texture_gather_compare_offset_Texture2DArrayShadow"
+    )
+    assert gather_cmp_alpha_offset_call.endswith(
+        "(arrayShadow, uvLayer, depth, offset)"
+    )
     assert "TextureOpNode(" not in "\n".join(
         [
             bias_call,
@@ -4435,6 +4545,11 @@ def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast
             compare_grad_offset_call,
             gather_offsets_call,
             compare_proj_grad_offset_call,
+            query_lod_call,
+            calculate_lod_call,
+            calculate_lod_unclamped_call,
+            gather_cmp_red_call,
+            gather_cmp_alpha_offset_call,
         ]
     )
     assert (
@@ -4455,6 +4570,23 @@ def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast
         codegen.expression_result_type(
             TextureOpNode(
                 "SampleCmpGrad", shadow, [uv, depth, ddx, ddy], sampler_expr=state
+            )
+        )
+        == "float"
+    )
+    assert (
+        codegen.expression_result_type(
+            TextureOpNode("textureQueryLod", array_tex, [uv_layer], sampler_expr=state)
+        )
+        == "vec2"
+    )
+    assert (
+        codegen.expression_result_type(
+            TextureOpNode(
+                "CalculateLevelOfDetail",
+                array_tex,
+                [uv_layer],
+                sampler_expr=state,
             )
         )
         == "float"
@@ -4485,12 +4617,40 @@ def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast
         name.startswith("_crossgl_texture_compare_proj_grad_offset_Texture2DShadow")
         for name in helper_names
     )
+    assert any(
+        name.startswith("_crossgl_texture_query_lod_Texture2DArray")
+        for name in helper_names
+    )
+    assert any(
+        name.startswith("_crossgl_calculate_level_of_detail_Texture2DArray")
+        for name in helper_names
+    )
+    assert any(
+        name.startswith("_crossgl_calculate_level_of_detail_unclamped_Texture2DArray")
+        for name in helper_names
+    )
+    assert any(
+        name.startswith("_crossgl_texture_gather_compare_Texture2DArrayShadow")
+        for name in helper_names
+    )
 
     with pytest.raises(
         ValueError, match="texture_compare_grad.*shadow texture required"
     ):
         codegen.generate_expression(
             TextureOpNode("SampleCmpGrad", tex, [uv, depth, ddx, ddy])
+        )
+    with pytest.raises(
+        ValueError, match="texture_query_lod.*non-shadow texture required"
+    ):
+        codegen.generate_expression(
+            TextureOpNode("textureQueryLod", shadow, [uv], sampler_expr=state)
+        )
+    with pytest.raises(
+        ValueError, match="calculate_level_of_detail.*non-shadow texture required"
+    ):
+        codegen.generate_expression(
+            TextureOpNode("CalculateLevelOfDetail", shadow, [uv], sampler_expr=state)
         )
 
 

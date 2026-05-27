@@ -3096,6 +3096,44 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "sampler3D": 3,
         }.get(texture_type)
 
+    def expected_image_coordinate_count(self, image_type):
+        image_type = self.resource_base_type(image_type)
+        if not isinstance(image_type, str):
+            return None
+        if "1DArray" in image_type:
+            return 2
+        if "1D" in image_type:
+            return 1
+        if "3D" in image_type:
+            return 3
+        if "Cube" in image_type:
+            return 3
+        if "Array" in image_type:
+            return 3
+        if "2D" in image_type:
+            return 2
+        return None
+
+    def unsupported_image_coordinate_rank_call(self, func_name, image_type):
+        fallback = "((void)0)"
+        if func_name == "imageLoad":
+            fallback = self.zero_value_for_type(self.image_value_type(image_type))
+        return (
+            f"/* unsupported CUDA image resource call: "
+            f"{func_name} coordinate rank on {image_type} */ {fallback}"
+        )
+
+    def image_coordinate_rank_diagnostic(self, func_name, image_type, raw_coord):
+        expected_coord_count = self.expected_image_coordinate_count(image_type)
+        actual_coord_count = self.texel_fetch_coordinate_count(raw_coord)
+        if (
+            expected_coord_count is not None
+            and actual_coord_count is not None
+            and actual_coord_count != expected_coord_count
+        ):
+            return self.unsupported_image_coordinate_rank_call(func_name, image_type)
+        return None
+
     def generate_resource_call(self, func_name, raw_args, args):
         if func_name in {"textureSize", "imageSize"}:
             return self.generate_dimension_query(func_name, raw_args, args)
@@ -3394,6 +3432,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
             image_name = args[0]
             coord = args[1]
+            coordinate_diagnostic = self.image_coordinate_rank_diagnostic(
+                func_name, image_type, raw_args[1]
+            )
+            if coordinate_diagnostic is not None:
+                return coordinate_diagnostic
             value_type = self.image_value_type(image_type)
             x = self.surface_x_offset(coord, value_type)
             y = self.coord_component(coord, "y")
@@ -3437,6 +3480,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             image_name = args[0]
             coord = args[1]
             value = args[2]
+            coordinate_diagnostic = self.image_coordinate_rank_diagnostic(
+                func_name, image_type, raw_args[1]
+            )
+            if coordinate_diagnostic is not None:
+                return coordinate_diagnostic
             value_type = self.image_value_type(image_type)
             x = self.surface_x_offset(coord, value_type)
             y = self.coord_component(coord, "y")

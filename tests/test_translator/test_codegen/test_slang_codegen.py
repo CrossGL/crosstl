@@ -5333,6 +5333,157 @@ def test_explicit_sampler_texture_builtins_emit_combined_slang_methods():
     assert "textureGrad(" not in generated_code
 
 
+def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
+    code = """
+    shader InvalidSampledTextureOps {
+        sampler querySampler;
+        sampler2d colorMap;
+        sampler2dshadow shadowMap;
+        sampler2dms msTex;
+        samplercube cubeTex;
+        image2D colorImage;
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.25, 0.5);
+                vec2 ddx = vec2(0.1, 0.0);
+                vec2 ddy = vec2(0.0, 0.1);
+                ivec2 pixel = ivec2(2, 3);
+                vec4 missingTexture = texture();
+                vec4 missingCoord = texture(colorMap);
+                vec4 explicitMissingCoord = texture(colorMap, querySampler);
+                vec4 extraBias = texture(colorMap, uv, 0.5, 1.0);
+                vec4 samplerOnly = texture(querySampler, uv);
+                vec4 imageSample = texture(colorImage, uv);
+                vec4 shadowSample = texture(shadowMap, uv);
+                vec4 msSample = texture(msTex, uv);
+                vec4 missingLod = textureLod(colorMap, uv);
+                vec4 extraLod = textureLod(colorMap, querySampler, uv, 1.0, 2.0);
+                vec4 missingGrad = textureGrad(colorMap, uv, ddx);
+                vec4 extraGrad = textureGrad(
+                    colorMap,
+                    querySampler,
+                    uv,
+                    ddx,
+                    ddy,
+                    ddx
+                );
+                vec4 missingFetchLevel = texelFetch(colorMap, pixel);
+                vec4 extraFetchLevel = texelFetch(
+                    colorMap,
+                    querySampler,
+                    pixel,
+                    0,
+                    1
+                );
+                vec4 fetchSamplerOnly = texelFetch(querySampler, pixel, 0);
+                vec4 fetchImage = texelFetch(colorImage, pixel, 0);
+                vec4 fetchShadow = texelFetch(shadowMap, pixel, 0);
+                vec4 fetchCube = texelFetch(cubeTex, pixel, 0);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float4 missingTexture = /* unsupported Slang sampled texture: "
+        "texture requires texture and coordinate arguments */ float4(0.0);"
+        in generated_code
+    )
+    assert (
+        "float4 missingCoord = /* unsupported Slang sampled texture: "
+        "texture requires texture and coordinate arguments */ float4(0.0);"
+        in generated_code
+    )
+    assert (
+        "float4 explicitMissingCoord = /* unsupported Slang sampled texture: "
+        "texture requires texture and coordinate arguments */ float4(0.0);"
+        in generated_code
+    )
+    assert (
+        "float4 extraBias = /* unsupported Slang sampled texture: "
+        "texture accepts coordinate and optional bias arguments */ float4(0.0);"
+        in generated_code
+    )
+    assert (
+        "float4 samplerOnly = /* unsupported Slang sampled texture: "
+        "texture requires a non-shadow non-multisampled sampled texture resource */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 imageSample = /* unsupported Slang sampled texture: "
+        "texture requires a non-shadow non-multisampled sampled texture resource */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 shadowSample = /* unsupported Slang sampled texture: "
+        "texture requires a non-shadow non-multisampled sampled texture resource */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 msSample = /* unsupported Slang sampled texture: "
+        "texture requires a non-shadow non-multisampled sampled texture resource */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 missingLod = /* unsupported Slang sampled texture: "
+        "textureLod requires one lod argument */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 extraLod = /* unsupported Slang sampled texture: "
+        "textureLod requires one lod argument */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 missingGrad = /* unsupported Slang sampled texture: "
+        "textureGrad requires gradient x and gradient y arguments */ float4(0.0);"
+        in generated_code
+    )
+    assert (
+        "float4 extraGrad = /* unsupported Slang sampled texture: "
+        "textureGrad requires gradient x and gradient y arguments */ float4(0.0);"
+        in generated_code
+    )
+    assert (
+        "float4 missingFetchLevel = /* unsupported Slang sampled texture: "
+        "texelFetch requires one lod/sample argument */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 extraFetchLevel = /* unsupported Slang sampled texture: "
+        "texelFetch requires one lod/sample argument */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 fetchSamplerOnly = /* unsupported Slang sampled texture: "
+        "texelFetch requires a non-shadow texel-fetchable sampled texture resource */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 fetchImage = /* unsupported Slang sampled texture: "
+        "texelFetch requires a non-shadow texel-fetchable sampled texture resource */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 fetchShadow = /* unsupported Slang sampled texture: "
+        "texelFetch requires a non-shadow texel-fetchable sampled texture resource */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 fetchCube = /* unsupported Slang sampled texture: "
+        "texelFetch requires a non-shadow texel-fetchable sampled texture resource */ "
+        "float4(0.0);" in generated_code
+    )
+    assert generated_code.count("unsupported Slang sampled texture") == 18
+    assert "texture(" not in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureGrad(" not in generated_code
+    assert "texelFetch(" not in generated_code
+    assert "querySampler.Sample" not in generated_code
+    assert "colorImage.Sample" not in generated_code
+
+
 def test_texture_and_shadow_arrays_preserve_expression_sizes_and_group_indices():
     code = """
     shader TextureArrays {

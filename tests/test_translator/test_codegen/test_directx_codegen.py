@@ -5907,6 +5907,55 @@ def test_directx_advanced_stage_signatures_accept_hlsl_patch_and_stream_types():
     assert "float3 edges : SV_TessFactor;" not in generated
 
 
+def test_directx_tessellation_accepts_maximum_control_point_count():
+    code = """
+    shader maximum_tessellation_control_points {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec3 edges @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(InputPatch<HSInput, 32> patch) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 32> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(32)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<HSOutput, 32> patch, vec3 bary @ SV_DomainLocation)
+                @domain(tri) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "[outputcontrolpoints(32)]" in generated
+    assert "HSMain(InputPatch<HSInput, 32> patch" in generated
+    assert "DSMain(OutputPatch<HSOutput, 32> patch" in generated
+    assert "HSConst(InputPatch<HSInput, 32> patch)" in generated
+
+
 def test_directx_tessellation_signatures_preserve_extra_hlsl_parameters():
     code = """
     shader tessellation_signature_parameters {
@@ -6147,6 +6196,10 @@ def test_directx_advanced_stage_signature_validation_rejects_partial_hlsl_shapes
             "InputPatch<HSInput, 0> patch",
             r"tessellation_control.*InputPatch.*positive",
         ),
+        (
+            "InputPatch<HSInput, 33> patch",
+            r"tessellation_control.*InputPatch.*at most 32",
+        ),
     ],
 )
 def test_directx_tessellation_control_validates_inputpatch_generic_signature(
@@ -6195,6 +6248,10 @@ def test_directx_tessellation_control_validates_inputpatch_generic_signature(
         (
             "OutputPatch<HSOutput, 0> patch",
             r"tessellation_evaluation.*OutputPatch.*positive",
+        ),
+        (
+            "OutputPatch<HSOutput, 33> patch",
+            r"tessellation_evaluation.*OutputPatch.*at most 32",
         ),
     ],
 )
@@ -6734,6 +6791,10 @@ def test_directx_tessellation_control_validates_patch_constant_helper():
         (
             "InputPatch<HSInput, 0> patch",
             r"patchconstantfunc 'HSConst'.*InputPatch.*positive",
+        ),
+        (
+            "InputPatch<HSInput, 33> patch",
+            r"patchconstantfunc 'HSConst'.*InputPatch.*at most 32",
         ),
     ],
 )
@@ -7378,6 +7439,25 @@ def test_directx_tessellation_control_validates_outputcontrolpoints_positive():
     }
     """
     with pytest.raises(ValueError, match="outputcontrolpoints.*positive"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
+def test_directx_tessellation_control_validates_outputcontrolpoints_upper_bound():
+    code = """
+    shader bad_output_control_point_limit {
+        tessellation_control {
+            void main()
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(33)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="outputcontrolpoints.*at most 32"):
         HLSLCodeGen().generate_stage(
             crosstl.translator.parse(code), "tessellation_control"
         )

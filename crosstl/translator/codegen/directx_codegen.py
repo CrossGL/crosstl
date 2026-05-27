@@ -298,6 +298,8 @@ from .match_utils import (
 class HLSLCodeGen:
     """Emit HLSL source from the shared CrossGL translator AST."""
 
+    HLSL_PATCH_CONTROL_POINT_LIMIT = 32
+
     def __init__(self):
         """Initialize DirectX type maps and per-generation resource state."""
         self.texture_variables = set()
@@ -5118,6 +5120,12 @@ class HLSLCodeGen:
                 f"DirectX {context} {patch_type}{name_clause} control point "
                 f"count ({control_point_count}) must be positive"
             )
+        if control_point_count > self.HLSL_PATCH_CONTROL_POINT_LIMIT:
+            raise ValueError(
+                f"DirectX {context} {patch_type}{name_clause} control point "
+                f"count ({control_point_count}) must be at most "
+                f"{self.HLSL_PATCH_CONTROL_POINT_LIMIT}"
+            )
 
     def validate_hlsl_patch_parameter_signatures(self, parameters, patch_type, context):
         for parameter in parameters:
@@ -5160,6 +5168,12 @@ class HLSLCodeGen:
             raise ValueError(
                 "DirectX tessellation_control stage outputcontrolpoints "
                 f"({output_control_points}) must be positive"
+            )
+        if output_control_points > self.HLSL_PATCH_CONTROL_POINT_LIMIT:
+            raise ValueError(
+                "DirectX tessellation_control stage outputcontrolpoints "
+                f"({output_control_points}) must be at most "
+                f"{self.HLSL_PATCH_CONTROL_POINT_LIMIT}"
             )
 
     def validate_hlsl_max_vertex_count_value(self, func, shader_type):

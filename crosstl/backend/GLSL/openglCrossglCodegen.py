@@ -73,11 +73,30 @@ class GLSLToCrossGLConverter:
         "xfb_offset",
         "xfb_stride",
     )
+    BLEND_SUPPORT_LAYOUT_ATTRIBUTE_NAMES = (
+        "blend_support_multiply",
+        "blend_support_screen",
+        "blend_support_overlay",
+        "blend_support_darken",
+        "blend_support_lighten",
+        "blend_support_colordodge",
+        "blend_support_colorburn",
+        "blend_support_hardlight",
+        "blend_support_softlight",
+        "blend_support_difference",
+        "blend_support_exclusion",
+        "blend_support_hsl_hue",
+        "blend_support_hsl_saturation",
+        "blend_support_hsl_color",
+        "blend_support_hsl_luminosity",
+        "blend_support_all_equations",
+    )
     BARE_LAYOUT_ATTRIBUTE_NAMES = (
         "depth_any",
         "depth_greater",
         "depth_less",
         "depth_unchanged",
+        *BLEND_SUPPORT_LAYOUT_ATTRIBUTE_NAMES,
     )
     NON_STRUCT_STAGE_TYPES = {
         "compute",

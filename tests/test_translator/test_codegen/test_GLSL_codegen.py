@@ -1224,6 +1224,36 @@ def test_glsl_stage_interface_extended_layout_qualifiers():
     assert "layout(location = 0, index = 1) out vec4 fragColor;" in fragment_code
 
 
+def test_glsl_fragment_blend_support_layout_qualifiers():
+    code = """
+    shader AdvancedBlendOutput {
+        out vec4 outputColour
+            @location(0)
+            @blend_support_colordodge
+            @highp;
+
+        fragment {
+            layout(blend_support_multiply, blend_support_screen) out;
+
+            void main() {
+                outputColour = vec4(1.0);
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(blend_support_multiply, blend_support_screen) out;" in fragment_code
+    assert (
+        "layout(location = 0, blend_support_colordodge) out highp vec4 "
+        "outputColour;" in fragment_code
+    )
+    assert "outputColour = vec4(1.0);" in fragment_code
+
+
 @pytest.mark.parametrize(
     "depth_layout",
     ["depth_any", "depth_greater", "depth_less", "depth_unchanged"],

@@ -4282,6 +4282,47 @@ def test_metal_mesh_object_payload_parameters_use_object_data_address_space():
     assert "Payload payload [[payload]]" not in generated
 
 
+def test_metal_const_object_payload_rejects_object_data_writes():
+    code = """
+    shader meshpipe {
+        struct Payload {
+            vec4 color;
+        };
+
+        object {
+            void main(const Payload& payload @payload)
+                @max_total_threads_per_threadgroup(32)
+            {
+                payload.color = vec4(1.0, 0.0, 0.0, 1.0);
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            void main(Payload payload @payload)
+                @max_total_threads_per_threadgroup(32)
+            {
+                vec4 color = payload.color;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[object, max_total_threads_per_threadgroup(32)]] void object_main("
+        "const object_data Payload& payload [[payload]], "
+        "mesh_grid_properties _crossglMeshGrid)"
+    ) in generated
+    assert (
+        "/* unsupported Metal mesh payload store: mesh payload 'payload' is "
+        "const-qualified object_data */"
+    ) in generated
+    assert "payload.color = float4(1.0, 0.0, 0.0, 1.0);" not in generated
+    assert "_crossglMeshGrid.set_threadgroups_per_grid(uint3(1, 1, 1));" in generated
+    assert "DispatchMesh" not in generated
+
+
 def test_metal_mesh_object_payload_helper_address_space_and_const_writes():
     code = """
     shader meshpipe {

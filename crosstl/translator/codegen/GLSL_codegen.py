@@ -432,11 +432,30 @@ class GLSLCodeGen:
         "xfb_offset",
         "xfb_stride",
     )
+    GLSL_BLEND_SUPPORT_LAYOUT_NAMES = {
+        "blend_support_multiply",
+        "blend_support_screen",
+        "blend_support_overlay",
+        "blend_support_darken",
+        "blend_support_lighten",
+        "blend_support_colordodge",
+        "blend_support_colorburn",
+        "blend_support_hardlight",
+        "blend_support_softlight",
+        "blend_support_difference",
+        "blend_support_exclusion",
+        "blend_support_hsl_hue",
+        "blend_support_hsl_saturation",
+        "blend_support_hsl_color",
+        "blend_support_hsl_luminosity",
+        "blend_support_all_equations",
+    }
     GLSL_BARE_LAYOUT_ATTRIBUTE_NAMES = {
         "depth_any",
         "depth_greater",
         "depth_less",
         "depth_unchanged",
+        *GLSL_BLEND_SUPPORT_LAYOUT_NAMES,
     }
     GLSL_VARIABLE_QUALIFIER_ATTRIBUTE_NAMES = {
         "invariant",
@@ -2215,11 +2234,40 @@ class GLSLCodeGen:
         return ""
 
     def generate_fragment_stage_layout(self, func, stage_layout_qualifiers=None):
+        code = ""
         if self.glsl_stage_bare_attribute(
             func, {"early_fragment_tests"}, stage_layout_qualifiers, "in"
         ):
-            return "layout(early_fragment_tests) in;\n"
-        return ""
+            code += "layout(early_fragment_tests) in;\n"
+
+        blend_support = self.glsl_fragment_blend_support_layout_parts(
+            func, stage_layout_qualifiers
+        )
+        if blend_support:
+            code += f"layout({', '.join(blend_support)}) out;\n"
+        return code
+
+    def glsl_fragment_blend_support_layout_parts(
+        self, func, stage_layout_qualifiers=None
+    ):
+        parts = []
+        seen = set()
+
+        def add_if_blend_support(attr):
+            attr_name = self.glsl_stage_control_attribute_name(attr)
+            if attr_name not in self.GLSL_BLEND_SUPPORT_LAYOUT_NAMES:
+                return
+            if getattr(attr, "arguments", []) or attr_name in seen:
+                return
+            seen.add(attr_name)
+            parts.append(attr_name)
+
+        for attr in getattr(func, "attributes", []) or []:
+            add_if_blend_support(attr)
+        for attr in self.glsl_stage_layout_entries(stage_layout_qualifiers, "out"):
+            add_if_blend_support(attr)
+
+        return parts
 
     def generate_geometry_stage_layout(self, func, stage_layout_qualifiers=None):
         input_primitive = self.glsl_stage_bare_attribute(
@@ -9479,7 +9527,7 @@ class GLSLCodeGen:
             "triangle_strip",
             "vertices",
             "workgroup_size",
-        }
+        } | self.GLSL_BLEND_SUPPORT_LAYOUT_NAMES
         if normalized in valid_names:
             return normalized
         return None

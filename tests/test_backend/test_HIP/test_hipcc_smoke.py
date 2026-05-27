@@ -2177,3 +2177,131 @@ def test_native_hip_stream_callback_launch_config_parses_and_compiles_if_availab
         assert f"{raw_call}(" not in crossgl
 
     compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
+def test_native_hip_stream_priority_capture_info_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP priority streams and capture-info edge APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void stream_priority_capture_info_smoke() {
+        hipStream_t stream;
+        hipStream_t captured_stream;
+        hipEvent_t event;
+        hipGraph_t graph;
+        hipGraph_t captured_graph;
+        hipStreamCaptureStatus capture_status;
+        hipStreamCaptureMode capture_mode = hipStreamCaptureModeGlobal;
+        unsigned long long capture_id = 0;
+        size_t num_dependencies = 0;
+        int least_priority = 0;
+        int greatest_priority = 0;
+        int priority = 0;
+        unsigned int flags = 0;
+
+        hipDeviceGetStreamPriorityRange(&least_priority, &greatest_priority);
+        hipStreamCreateWithPriority(
+            &stream, hipStreamNonBlocking, greatest_priority
+        );
+        hipStreamGetFlags(stream, &flags);
+        hipStreamGetPriority(stream, &priority);
+        hipEventCreateWithFlags(&event, hipEventDisableTiming);
+        hipStreamBeginCapture(stream, hipStreamCaptureModeGlobal);
+        hipStreamIsCapturing(stream, &capture_status);
+        hipStreamGetCaptureInfo(stream, &capture_status, &capture_id);
+        hipStreamGetCaptureInfo_v2(
+            stream,
+            &capture_status,
+            &capture_id,
+            &captured_graph,
+            NULL,
+            &num_dependencies
+        );
+        hipStreamUpdateCaptureDependencies(stream, NULL, 0, 0);
+        hipEventRecord(event, stream);
+        hipStreamWaitEvent(stream, event, 0);
+        hipStreamEndCapture(stream, &graph);
+        hipThreadExchangeStreamCaptureMode(&capture_mode);
+        hipStreamCreateWithFlags(&captured_stream, hipStreamNonBlocking);
+        hipStreamDestroy(captured_stream);
+        hipGraphDestroy(graph);
+        hipEventDestroy(event);
+        hipStreamDestroy(stream);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    expected_fragments = (
+        "// Function: stream_priority_capture_info_smoke",
+        "void stream_priority_capture_info_smoke()",
+        "var stream: hipStream_t;",
+        "var captured_stream: hipStream_t;",
+        "var event: hipEvent_t;",
+        "var graph: hipGraph_t;",
+        "var captured_graph: hipGraph_t;",
+        "var capture_status: hipStreamCaptureStatus;",
+        "var capture_mode: hipStreamCaptureMode = hipStreamCaptureModeGlobal;",
+        "var capture_id: u64 = 0;",
+        "var num_dependencies: u32 = 0;",
+        "var least_priority: i32 = 0;",
+        "var greatest_priority: i32 = 0;",
+        "var priority: i32 = 0;",
+        "var flags: u32 = 0;",
+        "// HIP get stream priority range: "
+        "least output: least_priority, greatest output: greatest_priority",
+        "// HIP stream create: stream, flags: hipStreamNonBlocking, "
+        "priority: greatest_priority",
+        "// HIP get stream flags: stream: stream, output: flags",
+        "// HIP get stream priority: stream: stream, output: priority",
+        "// HIP event create: event, flags: hipEventDisableTiming",
+        "// HIP stream begin capture: stream: stream, "
+        "mode: hipStreamCaptureModeGlobal",
+        "// HIP stream is capturing: stream: stream, output: capture_status",
+        "// HIP stream capture info: stream: stream, "
+        "status output: capture_status, id output: capture_id",
+        "// HIP stream capture info: stream: stream, "
+        "status output: capture_status, id output: capture_id, "
+        "graph output: captured_graph, dependencies output: NULL, "
+        "dependency count output: num_dependencies",
+        "// HIP stream update capture dependencies: stream: stream, "
+        "dependencies: NULL, count: 0, flags: 0",
+        "// HIP event record: event, stream: stream",
+        "// HIP stream wait event: stream waits for event, flags: 0",
+        "// HIP stream end capture: stream: stream, graph output: graph",
+        "// HIP exchange stream capture mode: output: capture_mode",
+        "// HIP stream create: captured_stream, flags: hipStreamNonBlocking",
+        "// HIP stream destroy: captured_stream",
+        "// HIP graph destroy: graph",
+        "// HIP event destroy: event",
+        "// HIP stream destroy: stream",
+    )
+    for expected in expected_fragments:
+        assert expected in crossgl
+
+    raw_calls = (
+        "hipDeviceGetStreamPriorityRange",
+        "hipStreamCreateWithPriority",
+        "hipStreamGetFlags",
+        "hipStreamGetPriority",
+        "hipEventCreateWithFlags",
+        "hipStreamBeginCapture",
+        "hipStreamIsCapturing",
+        "hipStreamGetCaptureInfo",
+        "hipStreamGetCaptureInfo_v2",
+        "hipStreamUpdateCaptureDependencies",
+        "hipEventRecord",
+        "hipStreamWaitEvent",
+        "hipStreamEndCapture",
+        "hipThreadExchangeStreamCaptureMode",
+        "hipStreamCreateWithFlags",
+        "hipStreamDestroy",
+        "hipGraphDestroy",
+        "hipEventDestroy",
+    )
+    for raw_call in raw_calls:
+        assert f"{raw_call}(" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)

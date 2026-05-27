@@ -396,6 +396,21 @@ void main() {
 """
 
 
+MIXED_GLSL_FRAGMENT_BLEND_SUPPORT_SHADER = """
+#version 460 core
+#extension GL_KHR_blend_equation_advanced : enable
+layout(location = 0) in vec2 uv;
+layout(location = 0, blend_support_colordodge) out highp vec4 outputColour;
+layout(location = 1, blend_support_multiply) out vec4 overlayColour;
+layout(blend_support_multiply, blend_support_screen) out;
+
+void main() {
+    outputColour = vec4(uv, 0.0, 1.0);
+    overlayColour = vec4(0.25);
+}
+"""
+
+
 MIXED_GLSL_FRAGMENT_COLOR_DEPTH_SHADER = """
 #version 450 core
 layout(location = 0) in vec2 uv;
@@ -884,6 +899,31 @@ def _run_validator(command):
     assert result.returncode == 0, diagnostics
 
 
+def _run_validator_or_skip_unsupported_extension(command, extension):
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    diagnostics = "\n".join(
+        part for part in (result.stdout, result.stderr) if part.strip()
+    )
+    unsupported_markers = (
+        "not supported",
+        "unsupported",
+        "unrecognized extension",
+        "extension not supported",
+    )
+    if (
+        result.returncode != 0
+        and extension in diagnostics
+        and any(marker in diagnostics.lower() for marker in unsupported_markers)
+    ):
+        pytest.skip(f"{extension} is not supported by this validator build")
+    assert result.returncode == 0, diagnostics
+
+
 def test_generated_hlsl_fragment_compiles_with_dxc(tmp_path):
     dxc = _require_tool("dxc")
     shader_path = tmp_path / "validator_smoke.hlsl"
@@ -1299,6 +1339,35 @@ def test_mixed_glsl_fragment_multiple_outputs_validate_with_glslangvalidator(
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "frag", str(shader_path)])
+
+
+def test_mixed_glsl_fragment_blend_support_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "mixed_glsl_fragment_blend_support.frag"
+
+    code = GLSLCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_FRAGMENT_BLEND_SUPPORT_SHADER, "fragment")
+    )
+    assert "#extension GL_KHR_blend_equation_advanced : enable" in code
+    assert "layout(blend_support_multiply, blend_support_screen) out;" in code
+    assert (
+        "layout(location = 0, blend_support_colordodge) out highp vec4 "
+        "outputColour;" in code
+    )
+    assert (
+        "layout(location = 1, blend_support_multiply) out vec4 overlayColour;" in code
+    )
+    assert "outputColour = vec4(uv, 0.0, 1.0);" in code
+    assert "overlayColour = vec4(0.25);" in code
+    assert "fragColor" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator_or_skip_unsupported_extension(
+        [glslang, "-S", "frag", str(shader_path)],
+        "GL_KHR_blend_equation_advanced",
+    )
 
 
 def test_mixed_glsl_fragment_color_depth_validate_with_glslangvalidator(

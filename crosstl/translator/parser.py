@@ -385,12 +385,17 @@ class Parser:
         constants = []
         global_variables = []
         cbuffers = []
+        preprocessors = []
 
         shader_node = None
 
         while self.current_token[0] != "EOF":
-            if self.current_token[0] in ["IMPORT", "USE"]:
+            if self.current_token[0] in ["IMPORT", "USE", "FROM"]:
                 imports.append(self.parse_import())
+            elif self.current_token[0] == "PREPROCESSOR":
+                preprocessors.append(self.parse_preprocessor_directive())
+            elif self.current_token[0] == "PRECISION":
+                preprocessors.append(self.parse_precision_statement())
             elif self.current_token[0] == "SHADER":
                 shader_node = self.parse_shader_declaration()
             elif self.current_token_starts_attributed_cbuffer_declaration():
@@ -439,6 +444,9 @@ class Parser:
             if cbuffers:
                 shader_node.cbuffers = getattr(shader_node, "cbuffers", []) + cbuffers
             shader_node.imports.extend(imports)
+            shader_node.preprocessors = preprocessors + getattr(
+                shader_node, "preprocessors", []
+            )
             return self.finalize_shader(shader_node)
         else:
             shader = ShaderNode(
@@ -450,6 +458,7 @@ class Parser:
                 global_variables=global_variables,
                 constants=constants,
                 imports=imports,
+                preprocessors=preprocessors,
             )
             if cbuffers:
                 shader.cbuffers = cbuffers
@@ -468,11 +477,16 @@ class Parser:
         global_variables = []
         constants = []
         cbuffers = []
+        preprocessors = []
 
         self.eat("LBRACE")
 
         while self.current_token[0] != "RBRACE":
-            if self.current_token_starts_shader_stage_block():
+            if self.current_token[0] == "PREPROCESSOR":
+                preprocessors.append(self.parse_preprocessor_directive())
+            elif self.current_token[0] == "PRECISION":
+                preprocessors.append(self.parse_precision_statement())
+            elif self.current_token_starts_shader_stage_block():
                 stage_node = self.parse_shader_stage_block()
                 stages[stage_node.stage] = stage_node
             elif self.current_token_starts_attributed_cbuffer_declaration():
@@ -543,6 +557,7 @@ class Parser:
             functions=functions,
             global_variables=global_variables,
             constants=constants,
+            preprocessors=preprocessors,
         )
         if cbuffers:
             shader.cbuffers = cbuffers
@@ -676,26 +691,54 @@ class Parser:
         )
 
     def parse_import(self):
-        """Parse an ``import`` or ``use`` declaration."""
+        """Parse an ``import``, ``use``, or ``from ... import`` declaration."""
+        if self.current_token[0] == "FROM":
+            self.eat("FROM")
+            path = self.parse_import_path()
+            self.eat("IMPORT")
+
+            items = []
+            while True:
+                items.append(self.parse_import_path(allow_string=False))
+                if self.current_token[0] != "COMMA":
+                    break
+                self.eat("COMMA")
+
+            self.eat("SEMICOLON")
+            return ImportNode(path=path, items=items)
+
         if self.current_token[0] == "IMPORT":
             self.eat("IMPORT")
         else:
             self.eat("USE")
 
-        path = self.current_token[1]
-        self.eat("IDENTIFIER")
+        path = self.parse_import_path()
 
         alias = None
         items = None
 
         if self.current_token[0] == "AS":
             self.eat("AS")
-            alias = self.current_token[1]
-            self.eat("IDENTIFIER")
+            alias = self.parse_binding_identifier()
 
         self.eat("SEMICOLON")
 
         return ImportNode(path=path, alias=alias, items=items)
+
+    def parse_import_path(self, allow_string=True):
+        """Parse a module or file path in import declarations."""
+        if allow_string and self.current_token[0] == "STRING_LITERAL":
+            value = self.current_token[1]
+            self.eat("STRING_LITERAL")
+            return value[1:-1]
+
+        path = str(self.parse_binding_identifier())
+        while self.current_token[0] in {"DOT", "DOUBLE_COLON"}:
+            separator = "." if self.current_token[0] == "DOT" else "::"
+            self.eat(self.current_token[0])
+            path += separator + str(self.parse_binding_identifier())
+
+        return path
 
     def parse_square_attributes(self, allow_single_square=True):
         """Parse HLSL-style ``[attr]`` or Metal-style ``[[attr]]`` metadata."""
@@ -3755,7 +3798,7 @@ class Parser:
         if self.current_token[0] == "PRECISION":
             return self.parse_precision_statement()
 
-        if self.current_token[0] in ["IMPORT", "USE"]:
+        if self.current_token[0] in ["IMPORT", "USE", "FROM"]:
             return self.parse_import()
 
         if self.current_token[0] == "SHADER":

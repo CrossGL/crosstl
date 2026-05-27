@@ -3013,6 +3013,60 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_mesh_stage_set_mesh_output_counts_emits_ext_instruction(self, tmp_path):
+        source_code = """
+        shader MeshSPIRV {
+            mesh {
+                layout(local_size_x = 4, local_size_y = 2, local_size_z = 1) in;
+                layout(lines, max_vertices = 2, max_primitives = 1) out;
+
+                void main() {
+                    SetMeshOutputCounts(2, 1);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint MeshEXT %(\d+) "main"', spv_code)
+        assert entry_match is not None
+        entry_id = entry_match.group(1)
+        assert "; Version: 1.4" in spv_code
+        assert "OpCapability MeshShadingEXT" in spv_code
+        assert 'OpExtension "SPV_EXT_mesh_shader"' in spv_code
+        assert f"OpExecutionMode %{entry_id} LocalSize 4 2 1" in spv_code
+        assert f"OpExecutionMode %{entry_id} OutputVertices 2" in spv_code
+        assert f"OpExecutionMode %{entry_id} OutputPrimitivesEXT 1" in spv_code
+        assert f"OpExecutionMode %{entry_id} OutputLinesEXT" in spv_code
+        assert re.search(r"OpSetMeshOutputsEXT %\d+ %\d+", spv_code)
+        assert "SetMeshOutputCounts yet; using a default" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_set_mesh_output_counts_rejects_bad_arity(self):
+        source_code = """
+        shader MeshSPIRVBadArity {
+            mesh {
+                layout(triangles, max_vertices = 1, max_primitives = 1) out;
+
+                void main() {
+                    SetMeshOutputCounts(1);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh SetMeshOutputCounts requires exactly 2 arguments"
+            in spv_code
+        )
+        assert "OpSetMeshOutputsEXT" not in spv_code
+
     def test_ray_query_proceed_and_intersection_t_emit_khr_instructions(self, tmp_path):
         bool_type = PrimitiveType("bool")
         float_type = PrimitiveType("float")

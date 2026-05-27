@@ -135,8 +135,10 @@ class VulkanSPIRVCodeGen:
         self.function_storage_image_pointer_params = {}
         self.function_execution_models = {}
         self.current_execution_model = None
+        self.current_function_id = None
         self.current_stage = None
         self.current_return_type = None
+        self.mesh_output_counts_by_function = {}
 
         self.glsl_std450_id = None
         self.main_fn_id = None
@@ -3893,6 +3895,58 @@ class VulkanSPIRVCodeGen:
 
         return self.represented_ir_diagnostic_default_value("ray query", operation)
 
+    def process_mesh_operation(self, expr: MeshOpNode) -> SpirvId:
+        """Process represented mesh/task shader intrinsics."""
+        operation = expr.operation
+        if operation != "SetMeshOutputCounts":
+            return self.represented_ir_diagnostic_default_value(
+                "mesh shader", operation
+            )
+
+        if self.current_execution_model != "MeshEXT":
+            return self.represented_ir_diagnostic_default_value(
+                "mesh shader", operation
+            )
+
+        arguments = getattr(expr, "arguments", []) or []
+        if len(arguments) != 2:
+            self.emit(
+                "; WARNING: SPIR-V mesh SetMeshOutputCounts requires exactly "
+                "2 arguments"
+            )
+            return self.register_constant(0, self.register_primitive_type("uint"))
+
+        uint_type = self.register_primitive_type("uint")
+        vertex_count = self.process_expression(arguments[0])
+        primitive_count = self.process_expression(arguments[1])
+        if vertex_count is None or primitive_count is None:
+            self.emit(
+                "; WARNING: SPIR-V mesh SetMeshOutputCounts requires count operands"
+            )
+            return self.register_constant(0, uint_type)
+
+        vertex_count = self.convert_value_to_type(vertex_count, uint_type)
+        primitive_count = self.convert_value_to_type(primitive_count, uint_type)
+
+        self.require_capability("MeshShadingEXT")
+        self.require_extension("SPV_EXT_mesh_shader")
+        self.emit(f"OpSetMeshOutputsEXT %{vertex_count.id} %{primitive_count.id}")
+
+        if self.current_function_id is not None:
+            previous_vertices, previous_primitives = (
+                self.mesh_output_counts_by_function.get(
+                    self.current_function_id, (None, None)
+                )
+            )
+            observed_vertices = self.literal_int_argument(arguments[0])
+            observed_primitives = self.literal_int_argument(arguments[1])
+            self.mesh_output_counts_by_function[self.current_function_id] = (
+                self.max_optional_int(previous_vertices, observed_vertices),
+                self.max_optional_int(previous_primitives, observed_primitives),
+            )
+
+        return self.register_constant(0, uint_type)
+
     def flatten_vector_constructor_args(
         self,
         function_name: str,
@@ -5462,6 +5516,30 @@ class VulkanSPIRVCodeGen:
             return str(value.name)
         return str(value)
 
+    def literal_int_argument(self, value) -> Optional[int]:
+        """Return a literal integer value when an AST argument is constant."""
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, UnaryOpNode) and getattr(value, "op", None) == "-":
+            operand = self.literal_int_argument(value.operand)
+            return -operand if operand is not None else None
+        value_text = self.attribute_value_to_string(value)
+        if value_text is None:
+            return None
+        try:
+            return int(str(value_text), 0)
+        except ValueError:
+            return None
+
+    def max_optional_int(self, first: Optional[int], second: Optional[int]):
+        if first is None:
+            return second
+        if second is None:
+            return first
+        return max(first, second)
+
     def explicit_image_format(self, node) -> Optional[str]:
         if not hasattr(node, "attributes"):
             return None
@@ -6561,6 +6639,8 @@ class VulkanSPIRVCodeGen:
         self.begin_block()
 
         previous_execution_model = self.current_execution_model
+        previous_function_id = self.current_function_id
+        self.current_function_id = function_id.id
         if self.current_execution_model is None:
             execution_models = self.function_execution_models.get(
                 function_node.name, set()
@@ -6578,6 +6658,7 @@ class VulkanSPIRVCodeGen:
         self.end_function()
 
         self.current_execution_model = previous_execution_model
+        self.current_function_id = previous_function_id
         self.current_stage = previous_stage
         self.current_return_type = previous_return_type
         self.local_variables.clear()
@@ -7930,6 +8011,10 @@ class VulkanSPIRVCodeGen:
             "geometry",
             "tessellation_control",
             "tessellation_evaluation",
+            "mesh",
+            "task",
+            "object",
+            "amplification",
         }
         for func in getattr(ast, "functions", []):
             qualifier = self.get_function_qualifier(func)
@@ -9835,9 +9920,7 @@ class VulkanSPIRVCodeGen:
             return self.process_ray_query_operation(expr)
 
         elif isinstance(expr, MeshOpNode):
-            return self.represented_ir_diagnostic_default_value(
-                "mesh shader", expr.operation
-            )
+            return self.process_mesh_operation(expr)
 
         elif isinstance(expr, FunctionCallNode):
             ray_query_call = self.ray_query_call_from_function_call(expr)
@@ -10236,6 +10319,10 @@ class VulkanSPIRVCodeGen:
             "geometry": "Geometry",
             "tessellation_control": "TessellationControl",
             "tessellation_evaluation": "TessellationEvaluation",
+            "mesh": "MeshEXT",
+            "task": "TaskEXT",
+            "object": "TaskEXT",
+            "amplification": "TaskEXT",
         }
         return stage_map.get(stage_name or "fragment", "Fragment")
 
@@ -10253,6 +10340,91 @@ class VulkanSPIRVCodeGen:
             int(config.get("local_size_z", 1)),
         )
 
+    def stage_attribute_value(self, stage, attribute_name: str):
+        """Return the first argument for a stage entry-point attribute."""
+        entry_point = getattr(stage, "entry_point", None)
+        for attr in getattr(entry_point, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != attribute_name:
+                continue
+            arguments = getattr(attr, "arguments", None)
+            if arguments is None:
+                arguments = getattr(attr, "args", [])
+            if arguments:
+                return arguments[0]
+        return None
+
+    def stage_layout_value(self, stage, attribute_name: str):
+        """Return the first argument for a stage layout qualifier."""
+        for layout in getattr(stage, "layout_qualifiers", []) or []:
+            for entry in getattr(layout, "entries", []) or []:
+                if str(getattr(entry, "name", "")).lower() != attribute_name:
+                    continue
+                arguments = getattr(entry, "arguments", None)
+                if arguments is None:
+                    arguments = getattr(entry, "args", [])
+                if arguments:
+                    return arguments[0]
+        return None
+
+    def mesh_stage_limit(self, stage, attribute_name: str) -> Optional[int]:
+        """Return a literal mesh output limit from function or layout metadata."""
+        for value in (
+            self.stage_attribute_value(stage, attribute_name),
+            self.stage_layout_value(stage, attribute_name),
+        ):
+            limit = self.literal_int_argument(value)
+            if limit is not None:
+                return max(0, limit)
+        return None
+
+    def mesh_stage_topology_mode(self, stage) -> str:
+        """Return the SPIR-V mesh output-topology execution mode."""
+        topology = self.stage_attribute_value(stage, "outputtopology")
+        topology_name = self.attribute_value_to_string(topology)
+        if topology_name is None:
+            for layout in getattr(stage, "layout_qualifiers", []) or []:
+                if getattr(layout, "direction", None) != "out":
+                    continue
+                for entry in getattr(layout, "entries", []) or []:
+                    entry_name = str(getattr(entry, "name", "")).lower()
+                    if entry_name in {"point", "points", "line", "lines"}:
+                        topology_name = entry_name
+                        break
+                    if entry_name in {"triangle", "triangles"}:
+                        topology_name = entry_name
+                        break
+                if topology_name is not None:
+                    break
+
+        topology_modes = {
+            "point": "OutputPoints",
+            "points": "OutputPoints",
+            "line": "OutputLinesEXT",
+            "lines": "OutputLinesEXT",
+            "triangle": "OutputTrianglesEXT",
+            "triangles": "OutputTrianglesEXT",
+        }
+        normalized = str(topology_name or "triangle").lower()
+        if normalized not in topology_modes:
+            raise ValueError(
+                "SPIR-V mesh stage outputtopology must be point, line, or "
+                f"triangle: {topology_name}"
+            )
+        return topology_modes[normalized]
+
+    def mesh_stage_output_limits(self, function_id: SpirvId, stage) -> Tuple[int, int]:
+        """Return OutputVertices and OutputPrimitivesEXT execution-mode limits."""
+        observed_vertices, observed_primitives = (
+            self.mesh_output_counts_by_function.get(function_id.id, (None, None))
+        )
+        max_vertices = self.mesh_stage_limit(stage, "max_vertices")
+        max_primitives = self.mesh_stage_limit(stage, "max_primitives")
+        if observed_vertices is not None:
+            max_vertices = max(observed_vertices, max_vertices or 0)
+        if observed_primitives is not None:
+            max_primitives = max(observed_primitives, max_primitives or 0)
+        return max(1, max_vertices or 1), max(1, max_primitives or 1)
+
     def emit_entry_point(
         self, execution_model: str, function_id: SpirvId, name: str, stage=None
     ):
@@ -10267,7 +10439,7 @@ class VulkanSPIRVCodeGen:
         )
         if execution_model == "Fragment":
             self.emit(f"OpExecutionMode %{function_id.id} OriginUpperLeft")
-        elif execution_model == "GLCompute":
+        elif execution_model in {"GLCompute", "MeshEXT", "TaskEXT"}:
             x, y, z = self.compute_local_size(stage)
             if self.requires_compute_derivatives:
                 x = max(2, x + (x % 2))
@@ -10275,8 +10447,28 @@ class VulkanSPIRVCodeGen:
             self.emit(f"OpExecutionMode %{function_id.id} LocalSize {x} {y} {z}")
             if self.requires_compute_derivatives:
                 self.emit(f"OpExecutionMode %{function_id.id} DerivativeGroupQuadsKHR")
+            if execution_model in {"MeshEXT", "TaskEXT"}:
+                self.require_capability("MeshShadingEXT")
+                self.require_extension("SPV_EXT_mesh_shader")
+            if execution_model == "MeshEXT":
+                max_vertices, max_primitives = self.mesh_stage_output_limits(
+                    function_id, stage
+                )
+                self.emit(
+                    f"OpExecutionMode %{function_id.id} OutputVertices {max_vertices}"
+                )
+                self.emit(
+                    f"OpExecutionMode %{function_id.id} "
+                    f"OutputPrimitivesEXT {max_primitives}"
+                )
+                self.emit(
+                    f"OpExecutionMode %{function_id.id} "
+                    f"{self.mesh_stage_topology_mode(stage)}"
+                )
 
     def spirv_module_version(self) -> str:
+        if "MeshShadingEXT" in self.required_capabilities:
+            return "1.4"
         if any(
             capability.startswith("GroupNonUniform")
             for capability in self.required_capabilities
@@ -10495,6 +10687,10 @@ class VulkanSPIRVCodeGen:
                 "geometry",
                 "tessellation_control",
                 "tessellation_evaluation",
+                "mesh",
+                "task",
+                "object",
+                "amplification",
             ]:
                 top_level_entries.append((func, qualifier))
             else:

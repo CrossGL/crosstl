@@ -5276,6 +5276,162 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
         assert "CglResourceQueryInfo" not in cuda_code
 
+    def test_image_coordinate_shapes_emit_cuda_surface_helpers_or_diagnostics(self):
+        """Test CUDA imageLoad/imageStore lowers only representable coordinate ranks."""
+        source_code = """
+        shader ImageCoordinateShapes {
+            image1D lineImage;
+            image1DArray lineLayerImage;
+            image2D colorImage;
+            image2DArray layerImage;
+            image3D volumeImage;
+            imageCube cubeImage;
+            imageCubeArray cubeLayerImage;
+            uimage1D counterLine;
+            iimage2D signedImage;
+
+            void imageShapes(int x, ivec2 pixel, ivec3 voxel) {
+                vec4 line = imageLoad(lineImage, x);
+                imageStore(lineImage, x, line);
+                vec4 lineLayer = imageLoad(lineLayerImage, pixel);
+                imageStore(lineLayerImage, pixel, lineLayer);
+                vec4 regular = imageLoad(colorImage, pixel);
+                imageStore(colorImage, pixel, regular);
+                vec4 layered = imageLoad(layerImage, voxel);
+                imageStore(layerImage, voxel, layered);
+                vec4 volume = imageLoad(volumeImage, voxel);
+                imageStore(volumeImage, voxel, volume);
+                vec4 cubeFace = imageLoad(cubeImage, voxel);
+                imageStore(cubeImage, voxel, cubeFace);
+                vec4 cubeLayerFace = imageLoad(cubeLayerImage, voxel);
+                imageStore(cubeLayerImage, voxel, cubeLayerFace);
+                uint counter = imageLoad(counterLine, x);
+                imageStore(counterLine, x, counter);
+                int signedValue = imageLoad(signedImage, pixel);
+                imageStore(signedImage, pixel, signedValue);
+                vec4 badLine = imageLoad(lineImage, pixel);
+                imageStore(lineImage, pixel, line);
+                vec4 badLineLayer = imageLoad(lineLayerImage, x);
+                imageStore(lineLayerImage, x, lineLayer);
+                vec4 badRegular = imageLoad(colorImage, x);
+                imageStore(colorImage, x, regular);
+                vec4 badVolume = imageLoad(volumeImage, pixel);
+                imageStore(volumeImage, pixel, volume);
+                uint badCounter = imageLoad(counterLine, pixel);
+                imageStore(counterLine, pixel, counter);
+                int badSigned = imageLoad(signedImage, x);
+                imageStore(signedImage, x, signedValue);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "float4 line = surf1Dread<float4>(lineImage, x * sizeof(float4));"
+            in cuda_code
+        )
+        assert "surf1Dwrite(line, lineImage, x * sizeof(float4));" in cuda_code
+        assert (
+            "float4 lineLayer = surf1DLayeredread<float4>"
+            "(lineLayerImage, pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf1DLayeredwrite("
+            "lineLayer, lineLayerImage, pixel.x * sizeof(float4), pixel.y);"
+            in cuda_code
+        )
+        assert (
+            "float4 regular = surf2Dread<float4>"
+            "(colorImage, pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(regular, colorImage, pixel.x * sizeof(float4), pixel.y);"
+            in cuda_code
+        )
+        assert (
+            "float4 layered = surf2DLayeredread<float4>"
+            "(layerImage, voxel.x * sizeof(float4), voxel.y, voxel.z);" in cuda_code
+        )
+        assert (
+            "surf2DLayeredwrite(layered, layerImage, "
+            "voxel.x * sizeof(float4), voxel.y, voxel.z);" in cuda_code
+        )
+        assert (
+            "float4 volume = surf3Dread<float4>"
+            "(volumeImage, voxel.x * sizeof(float4), voxel.y, voxel.z);" in cuda_code
+        )
+        assert (
+            "float4 cubeFace = surfCubemapread<float4>"
+            "(cubeImage, voxel.x * sizeof(float4), voxel.y, voxel.z);" in cuda_code
+        )
+        assert (
+            "float4 cubeLayerFace = surfCubemapLayeredread<float4>"
+            "(cubeLayerImage, voxel.x * sizeof(float4), voxel.y, voxel.z);" in cuda_code
+        )
+        assert (
+            "uint counter = surf1Dread<uint>(counterLine, x * sizeof(uint));"
+            in cuda_code
+        )
+        assert (
+            "int signedValue = surf2Dread<int>"
+            "(signedImage, pixel.x * sizeof(int), pixel.y);" in cuda_code
+        )
+        assert (
+            "float4 badLine = /* unsupported CUDA image resource call: "
+            "imageLoad coordinate rank on image1D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "/* unsupported CUDA image resource call: "
+            "imageStore coordinate rank on image1D */ ((void)0);" in cuda_code
+        )
+        assert (
+            "float4 badLineLayer = /* unsupported CUDA image resource call: "
+            "imageLoad coordinate rank on image1DArray */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert "imageStore coordinate rank on image1DArray */ ((void)0);" in cuda_code
+        assert (
+            "float4 badRegular = /* unsupported CUDA image resource call: "
+            "imageLoad coordinate rank on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert "imageStore coordinate rank on image2D */ ((void)0);" in cuda_code
+        assert (
+            "float4 badVolume = /* unsupported CUDA image resource call: "
+            "imageLoad coordinate rank on image3D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert "imageStore coordinate rank on image3D */ ((void)0);" in cuda_code
+        assert (
+            "uint badCounter = /* unsupported CUDA image resource call: "
+            "imageLoad coordinate rank on uimage1D */ 0u;" in cuda_code
+        )
+        assert "imageStore coordinate rank on uimage1D */ ((void)0);" in cuda_code
+        assert (
+            "int badSigned = /* unsupported CUDA image resource call: "
+            "imageLoad coordinate rank on iimage2D */ 0;" in cuda_code
+        )
+        assert "imageStore coordinate rank on iimage2D */ ((void)0);" in cuda_code
+        assert "surf1Dread<float4>(lineImage, pixel" not in cuda_code
+        assert "surf1DLayeredread<float4>(lineLayerImage, x." not in cuda_code
+        assert "surf2Dread<float4>(colorImage, x." not in cuda_code
+        assert (
+            "surf3Dread<float4>(volumeImage, pixel.x, pixel.y, pixel.z)"
+            not in cuda_code
+        )
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+
     def test_texel_fetch_coordinate_shapes_emit_cuda_helpers_or_diagnostics(self):
         """Test CUDA texelFetch lowers only coordinate shapes it can represent."""
         source_code = """
