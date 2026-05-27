@@ -795,6 +795,44 @@ class TestCudaCodeGen:
         assert "pipe.consumer" not in result
         assert "None" not in result
 
+    def test_cuda_pipeline_primitive_intrinsics_emit_diagnostics(self):
+        """Test CUDA pipeline primitive intrinsics stay explicit."""
+        code = """
+        __global__ void primitive_async_copy(
+            int* shared,
+            const int* global,
+            __mbarrier_t* barrier
+        ) {
+            __pipeline_memcpy_async(shared, global, 16);
+            __pipeline_memcpy_async(shared + 16, global + 16, 16, 0);
+            __pipeline_commit();
+            __pipeline_wait_prior(1);
+            __pipeline_arrive_on(barrier);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert result.count("// cuda pipeline.memcpy_async not directly supported") == 2
+        assert "// cuda pipeline.commit not directly supported in CrossGL" in result
+        assert (
+            "// cuda pipeline.wait_prior not directly supported in CrossGL: 1" in result
+        )
+        assert (
+            "// cuda pipeline.arrive_on not directly supported in CrossGL: barrier"
+            in result
+        )
+        assert "__pipeline_memcpy_async" not in result
+        assert "__pipeline_commit" not in result
+        assert "__pipeline_wait_prior" not in result
+        assert "__pipeline_arrive_on" not in result
+        assert "None" not in result
+
     def test_inverse_trig_builtins_convert_to_crossgl(self):
         """Test CUDA inverse trig functions convert back to CrossGL names."""
         code = """

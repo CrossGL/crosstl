@@ -461,7 +461,7 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 51,
+        "unsupported_marker_count": 52,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -551,7 +551,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 286
+        "test_count": 289
       },
       "translator_codegen": {
         "exists": true,
@@ -629,7 +629,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 301
+        "test_count": 302
       },
       "translator_codegen": {
         "exists": true,
@@ -5515,9 +5515,10 @@
             "tests/test_backend/test_CUDA/test_codegen.py::def test_cooperative_groups_sync_factory_and_member_aliases_convert",
             "tests/test_backend/test_CUDA/test_codegen.py::def test_cooperative_groups_async_copy_wait_emit_diagnostics",
             "tests/test_backend/test_CUDA/test_codegen.py::def test_cuda_barrier_pipeline_async_copy_emit_diagnostics",
+            "tests/test_backend/test_CUDA/test_codegen.py::def test_cuda_pipeline_primitive_intrinsics_emit_diagnostics",
             "tests/test_backend/test_CUDA/test_codegen.py::def test_unsupported_cooperative_group_rank_is_expression_safe"
           ],
-          "notes": "Native CUDA barrier and cooperative-groups thread-block sync forms round-trip to CrossGL workgroup barriers, with unsupported non-workgroup cooperative scopes, cooperative-groups async copy/wait calls, and CUDA barrier/pipeline async-copy helper calls emitted as expression-safe diagnostics.",
+          "notes": "Native CUDA barrier and cooperative-groups thread-block sync forms round-trip to CrossGL workgroup barriers, with unsupported non-workgroup cooperative scopes, cooperative-groups async copy/wait calls, CUDA barrier/pipeline async-copy helper calls, and CUDA primitive pipeline intrinsics emitted as expression-safe diagnostics.",
           "status": "supported"
         },
         "directx": {

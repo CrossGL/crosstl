@@ -1799,11 +1799,12 @@
         },
         "cuda": {
           "status": "supported",
-          "notes": "Native CUDA barrier and cooperative-groups thread-block sync forms round-trip to CrossGL workgroup barriers, with unsupported non-workgroup cooperative scopes, cooperative-groups async copy/wait calls, and CUDA barrier/pipeline async-copy helper calls emitted as expression-safe diagnostics.",
+          "notes": "Native CUDA barrier and cooperative-groups thread-block sync forms round-trip to CrossGL workgroup barriers, with unsupported non-workgroup cooperative scopes, cooperative-groups async copy/wait calls, CUDA barrier/pipeline async-copy helper calls, and CUDA primitive pipeline intrinsics emitted as expression-safe diagnostics.",
           "evidence": [
             "tests/test_backend/test_CUDA/test_codegen.py::def test_cooperative_groups_sync_factory_and_member_aliases_convert",
             "tests/test_backend/test_CUDA/test_codegen.py::def test_cooperative_groups_async_copy_wait_emit_diagnostics",
             "tests/test_backend/test_CUDA/test_codegen.py::def test_cuda_barrier_pipeline_async_copy_emit_diagnostics",
+            "tests/test_backend/test_CUDA/test_codegen.py::def test_cuda_pipeline_primitive_intrinsics_emit_diagnostics",
             "tests/test_backend/test_CUDA/test_codegen.py::def test_unsupported_cooperative_group_rank_is_expression_safe"
           ]
         },

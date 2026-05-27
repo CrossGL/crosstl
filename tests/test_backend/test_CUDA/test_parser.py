@@ -1658,6 +1658,58 @@ class TestCudaParser:
         assert wait.name.object == "pipe"
         assert wait.name.member == "consumer_wait"
 
+    def test_cuda_pipeline_primitive_intrinsic_parsing(self):
+        """Test parsing CUDA pipeline primitive intrinsic calls."""
+        code = """
+        __global__ void kernel(int* shared, const int* global, __mbarrier_t* barrier) {
+            __pipeline_memcpy_async(shared, global, 16);
+            __pipeline_memcpy_async(shared + 16, global + 16, 16, 0);
+            __pipeline_commit();
+            __pipeline_wait_prior(1);
+            __pipeline_arrive_on(barrier);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        params = ast.kernels[0].params
+        assert [(param.vtype, param.name) for param in params] == [
+            ("int *", "shared"),
+            ("const int *", "global"),
+            ("__mbarrier_t *", "barrier"),
+        ]
+
+        body = ast.kernels[0].body
+        first_copy = body[0]
+        second_copy = body[1]
+        commit = body[2]
+        wait = body[3]
+        arrive = body[4]
+
+        assert isinstance(first_copy, FunctionCallNode)
+        assert first_copy.name == "__pipeline_memcpy_async"
+        assert first_copy.args == ["shared", "global", "16"]
+
+        assert isinstance(second_copy, FunctionCallNode)
+        assert second_copy.name == "__pipeline_memcpy_async"
+        assert isinstance(second_copy.args[0], BinaryOpNode)
+        assert isinstance(second_copy.args[1], BinaryOpNode)
+        assert second_copy.args[2:] == ["16", "0"]
+
+        assert isinstance(commit, FunctionCallNode)
+        assert commit.name == "__pipeline_commit"
+        assert commit.args == []
+
+        assert isinstance(wait, FunctionCallNode)
+        assert wait.name == "__pipeline_wait_prior"
+        assert wait.args == ["1"]
+
+        assert isinstance(arrive, FunctionCallNode)
+        assert arrive.name == "__pipeline_arrive_on"
+        assert arrive.args == ["barrier"]
+
     def test_fixed_arrays_and_initializer_lists_parsing(self):
         """Test fixed arrays and brace initializer lists"""
         code = """

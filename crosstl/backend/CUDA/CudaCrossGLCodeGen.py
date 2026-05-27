@@ -1325,7 +1325,22 @@ class CudaToCrossGLConverter:
         if base_name == "make_pipeline":
             return self.format_unsupported_cuda_async_expression("pipeline", base_name)
 
+        primitive_member = self.cuda_pipeline_primitive_member_name(base_name)
+        if primitive_member is not None:
+            return self.format_unsupported_cuda_async_statement(
+                "pipeline", primitive_member, node.args
+            )
+
         return None
+
+    def cuda_pipeline_primitive_member_name(self, base_name):
+        primitive_mapping = {
+            "__pipeline_memcpy_async": "memcpy_async",
+            "__pipeline_commit": "commit",
+            "__pipeline_wait_prior": "wait_prior",
+            "__pipeline_arrive_on": "arrive_on",
+        }
+        return primitive_mapping.get(base_name)
 
     def format_cuda_async_sync_member_call(self, metadata, member, args):
         kind = metadata["kind"]

@@ -1437,3 +1437,156 @@ def test_native_hip_ipc_handle_lifecycle_parses_and_compiles_if_available(
     assert "// HIP event destroy: event" in crossgl
 
     compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
+def test_native_hip_module_occupancy_launch_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP module, function, occupancy, and cooperative launch APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    __global__ void occupancy_kernel(float* out) {
+        out[threadIdx.x] = 0.0f;
+    }
+
+    void module_occupancy_launch_smoke(hipStream_t stream, float* out) {
+        hipModule_t module;
+        hipFunction_t function;
+        hipFunction_t symbol_function;
+        hipFuncAttributes attrs;
+        hipDeviceptr_t global_ptr;
+        size_t global_bytes = 0;
+        unsigned int function_count = 0;
+        int min_grid = 0;
+        int block_size = 0;
+        int active_blocks = 0;
+        int attr_value = 0;
+        void* kernel_params[] = { &out };
+
+        hipModuleLoad(&module, "kernel.hsaco");
+        hipModuleGetFunction(&function, module, "occupancy_kernel");
+        hipModuleGetFunctionCount(&function_count, module);
+        hipModuleGetGlobal(&global_ptr, &global_bytes, module, "device_symbol");
+        hipGetFuncBySymbol(&symbol_function, (const void*)occupancy_kernel);
+        hipFuncGetAttribute(
+            &attr_value,
+            hipFuncAttributeMaxThreadsPerBlock,
+            symbol_function
+        );
+        hipFuncGetAttributes(&attrs, symbol_function);
+        hipFuncSetAttribute(
+            symbol_function,
+            hipFuncAttributeMaxDynamicSharedMemorySize,
+            0
+        );
+        hipFuncSetCacheConfig(symbol_function, hipFuncCachePreferL1);
+        hipFuncSetSharedMemConfig(
+            symbol_function, hipSharedMemBankSizeFourByte
+        );
+        hipOccupancyMaxPotentialBlockSize(
+            &min_grid, &block_size, occupancy_kernel, 0, 0
+        );
+        hipOccupancyMaxActiveBlocksPerMultiprocessor(
+            &active_blocks, occupancy_kernel, block_size, 0
+        );
+        hipModuleLaunchKernel(
+            function,
+            1, 1, 1,
+            block_size, 1, 1,
+            0,
+            stream,
+            kernel_params,
+            NULL
+        );
+        hipLaunchCooperativeKernel(
+            (const void*)occupancy_kernel,
+            dim3(1),
+            dim3(block_size),
+            kernel_params,
+            0,
+            stream
+        );
+        hipModuleUnload(module);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Kernel: occupancy_kernel" in crossgl
+    assert "// Function: module_occupancy_launch_smoke" in crossgl
+    assert (
+        "void module_occupancy_launch_smoke(hipStream_t stream, ptr<f32> out)"
+        in crossgl
+    )
+    assert "var module: hipModule_t;" in crossgl
+    assert "var function: hipFunction_t;" in crossgl
+    assert "var symbol_function: hipFunction_t;" in crossgl
+    assert "var attrs: hipFuncAttributes;" in crossgl
+    assert "var global_bytes: u32 = 0;" in crossgl
+    assert "var function_count: u32 = 0;" in crossgl
+    assert "var min_grid: i32 = 0;" in crossgl
+    assert "var block_size: i32 = 0;" in crossgl
+    assert "var active_blocks: i32 = 0;" in crossgl
+    assert "var attr_value: i32 = 0;" in crossgl
+    assert '// HIP module load: output: module, file: "kernel.hsaco"' in crossgl
+    assert (
+        "// HIP module get function: output: function, module: module, "
+        'name: "occupancy_kernel"'
+    ) in crossgl
+    assert (
+        "// HIP module get function count: output: function_count, module: module"
+        in crossgl
+    )
+    assert (
+        "// HIP module get global: pointer output: global_ptr, "
+        'size output: global_bytes, module: module, name: "device_symbol"'
+    ) in crossgl
+    assert (
+        "// HIP get function by symbol: output: symbol_function, "
+        "symbol: ptr<void>(occupancy_kernel)"
+    ) in crossgl
+    assert (
+        "// HIP function get attribute: output: attr_value, "
+        "attribute: hipFuncAttributeMaxThreadsPerBlock, "
+        "function: symbol_function"
+    ) in crossgl
+    assert (
+        "// HIP function get attributes: output: attrs, " "function: symbol_function"
+    ) in crossgl
+    assert (
+        "// HIP function set attribute: function: symbol_function, "
+        "attribute: hipFuncAttributeMaxDynamicSharedMemorySize, value: 0"
+    ) in crossgl
+    assert (
+        "// HIP function set cache config: function: symbol_function, "
+        "config: hipFuncCachePreferL1"
+    ) in crossgl
+    assert (
+        "// HIP function set shared memory config: function: symbol_function, "
+        "config: hipSharedMemBankSizeFourByte"
+    ) in crossgl
+    assert (
+        "// HIP occupancy max potential block size: grid output: min_grid, "
+        "block output: block_size, kernel: occupancy_kernel, "
+        "dynamic shared memory: 0, block size limit: 0"
+    ) in crossgl
+    assert (
+        "// HIP occupancy active blocks per multiprocessor: "
+        "output: active_blocks, kernel: occupancy_kernel, "
+        "block size: block_size, dynamic shared memory: 0"
+    ) in crossgl
+    assert (
+        "// HIP module launch kernel: function: function, grid: (1, 1, 1), "
+        "block: (block_size, 1, 1), shared memory: 0, stream: stream, "
+        "params: kernel_params, extra: NULL"
+    ) in crossgl
+    assert (
+        "// HIP cooperative kernel launch: "
+        "function: ptr<void>(occupancy_kernel), grid: vec3<u32>(1), "
+        "block: vec3<u32>(block_size), params: kernel_params, "
+        "shared memory: 0, stream: stream"
+    ) in crossgl
+    assert "// HIP module unload: module" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
