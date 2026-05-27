@@ -2168,6 +2168,54 @@ shader MetalConstReferenceHelperValidation {
 """
 
 
+METAL_CONST_POINTER_ARRAY_HELPER_SHADER = """
+shader MetalConstPointerArrayHelperValidation {
+    struct Payload {
+        float value;
+    };
+
+    float readPointer(const Payload* payload) {
+        return payload->value;
+    }
+
+    void mutatePointer(Payload* payload) {
+        payload->value = 2.0;
+    }
+
+    void rejectPointerWrite(const Payload* payload) {
+        payload->value = 1.0;
+        mutatePointer(payload);
+    }
+
+    float readArray(const float values[], int index) {
+        return values[index];
+    }
+
+    void mutateArray(float values[]) {
+        values[0] = 3.0;
+    }
+
+    void rejectArrayWrite(const float values[]) {
+        values[0] = 4.0;
+        mutateArray(values);
+    }
+
+    compute {
+        void main() {
+            Payload payload;
+            float values[2];
+            values[0] = 1.0;
+            values[1] = 2.0;
+            float a = readPointer(&payload);
+            rejectPointerWrite(&payload);
+            float b = readArray(values, 1);
+            rejectArrayWrite(values);
+        }
+    }
+}
+"""
+
+
 METAL_ADDRESS_SPACE_MISMATCH_CALL_SHADER = """
 shader MetalAddressSpaceMismatchCallValidation {
     struct Payload {
@@ -6046,6 +6094,35 @@ def test_generated_metal_const_reference_helpers_compile_with_metal(tmp_path):
     assert "unsupported Metal parameter call" in code
     assert "payload.value = 1.0;" not in code
     assert "mutate(payload);" not in code
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_const_pointer_array_helpers_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "const_pointer_array_helpers.metal"
+    output = tmp_path / "const_pointer_array_helpers.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_CONST_POINTER_ARRAY_HELPER_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "float readPointer(const thread Payload* payload)" in code
+    assert "return payload->value;" in code
+    assert "float readArray(const thread float values[], int index)" in code
+    assert "unsupported Metal parameter store" in code
+    assert "unsupported Metal parameter call" in code
+    assert "PointerAccessNode" not in code
+    assert "payload->value = 1.0;" not in code
+    assert "mutatePointer(payload);" not in code
+    assert "values[0] = 4.0;" not in code
+    assert "mutateArray(values);" not in code
 
     run_validator(
         [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]

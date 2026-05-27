@@ -9406,9 +9406,11 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
     code = """
     shader UnsupportedResourceQueries {
         sampler querySampler;
+        sampler1d line;
         sampler2d colorMap;
         sampler2dms msTex;
         sampler2dmsarray msLayers;
+        image1D values;
         image2D colorImage;
         image2DMS msImage;
 
@@ -9437,6 +9439,12 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
                 int extraTextureSamples = textureSamples(msTex, 0);
                 int extraImageSamples = imageSamples(msImage, 0);
                 int extraLevels = textureQueryLevels(colorMap, 0);
+                ivec3 scalarTextureTarget = textureSize(line, 0);
+                int vectorTextureTarget = textureSize(colorMap, 0);
+                ivec2 scalarImageTarget = imageSize(values);
+                int vectorImageTarget = imageSize(colorImage);
+                ivec2 assignedTarget;
+                assignedTarget = imageSize(values);
             }
         }
     }
@@ -9538,7 +9546,27 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "int extraLevels = /* unsupported Slang resource query: "
         "textureQueryLevels accepts only a resource argument */ 0;" in generated_code
     )
-    assert generated_code.count("unsupported Slang resource query") == 22
+    assert (
+        "int3 scalarTextureTarget = /* unsupported Slang resource query: "
+        "textureSize returns int but target expects int3 */ int3(0);" in generated_code
+    )
+    assert (
+        "int vectorTextureTarget = /* unsupported Slang resource query: "
+        "textureSize returns int2 but target expects int */ 0;" in generated_code
+    )
+    assert (
+        "int2 scalarImageTarget = /* unsupported Slang resource query: "
+        "imageSize returns int but target expects int2 */ int2(0);" in generated_code
+    )
+    assert (
+        "int vectorImageTarget = /* unsupported Slang resource query: "
+        "imageSize returns int2 but target expects int */ 0;" in generated_code
+    )
+    assert (
+        "assignedTarget = /* unsupported Slang resource query: "
+        "imageSize returns int but target expects int2 */ int2(0);" in generated_code
+    )
+    assert generated_code.count("unsupported Slang resource query") == 27
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
     assert "textureQueryLevels(" not in generated_code

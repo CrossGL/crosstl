@@ -21,6 +21,7 @@ from ..ast import (
     MemberAccessNode,
     MeshOpNode,
     PreprocessorNode,
+    PointerAccessNode,
     RayQueryOpNode,
     RayTracingOpNode,
     RangeNode,
@@ -3301,6 +3302,19 @@ class MetalCodeGen:
             if len(member_types) == 1:
                 return next(iter(member_types))
             return None
+        if isinstance(expr, PointerAccessNode):
+            object_type = self.expression_result_type(
+                expr.pointer_expr
+            ) or self.unsupported_glsl_buffer_block_expression_type(expr.pointer_expr)
+            object_type = self.pointer_pointee_type_name(object_type) or object_type
+            member = str(expr.member)
+            if object_type:
+                member_type = self.struct_member_types.get(
+                    self.type_name_string(object_type), {}
+                ).get(member)
+                if member_type:
+                    return member_type
+            return None
         if isinstance(expr, ConstructorNode):
             return infer_enum_constructor_type(
                 self, expr
@@ -4235,6 +4249,9 @@ class MetalCodeGen:
             if self.member_access_uses_pointer_operator(expr):
                 return f"{obj}->{expr.member}"
             return f"{obj}.{expr.member}"
+        elif isinstance(expr, PointerAccessNode):
+            pointer = self.generate_expression_with_expected(expr.pointer_expr, None)
+            return f"{pointer}->{expr.member}"
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition)} ? {self.generate_expression(expr.true_expr)} : {self.generate_expression(expr.false_expr)}"
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
@@ -5903,11 +5920,13 @@ class MetalCodeGen:
 
         if self.is_array_type_node(raw_param_type):
             binding = self.explicit_buffer_binding_index(node)
+            qualifiers = self.parameter_qualifier_names(node)
             address_space = self.effective_parameter_address_space(
                 raw_param_type,
                 node,
                 shader_type,
-                default_for_stage_binding=binding is not None,
+                default_for_stage_binding=binding is not None
+                or bool(qualifiers & {"const", "readonly"}),
             )
             if address_space is None:
                 return None
@@ -6205,6 +6224,10 @@ class MetalCodeGen:
         if isinstance(target, MemberAccessNode):
             return self.assignment_target_root_name(
                 getattr(target, "object", getattr(target, "object_expr", None))
+            )
+        if isinstance(target, PointerAccessNode):
+            return self.assignment_target_root_name(
+                getattr(target, "pointer_expr", None)
             )
         if isinstance(target, ArrayAccessNode):
             return self.assignment_target_root_name(

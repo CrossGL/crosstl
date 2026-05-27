@@ -2000,6 +2000,191 @@ def test_hlsl_typed_writable_image_arrays_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_hlsl_typed_writable_image_array_struct_members_preserve_mojo_placeholders():
+    code = """
+    struct ResourceGroup {
+        RWTexture2D<float2> rgImages[2];
+        RasterizerOrderedTexture2DArray<uint4> counters[3];
+    };
+
+    float2 readStruct(ResourceGroup group, int slot, int2 pixel) {
+        return group.rgImages[slot].Load(pixel);
+    }
+    void writeStruct(ResourceGroup group, int slot, int2 pixel, float2 value) {
+        group.rgImages[slot].Store(pixel, value);
+    }
+    uint4 readCounterStruct(ResourceGroup group, int slot, int4 pixelLayer) {
+        return group.counters[slot].Load(pixelLayer);
+    }
+    void writeCounterStruct(ResourceGroup group, int slot, int4 pixelLayer, uint4 value) {
+        group.counters[slot].Store(pixelLayer, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct ResourceGroup:" in generated_code
+    assert "var rgImages: InlineArray[Image2DFloat2, 2]" in generated_code
+    assert "var counters: InlineArray[UImage2DArrayUInt4, 3]" in generated_code
+    assert (
+        "fn image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.float32, 2]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: UImage2DArrayUInt4, coord: SIMD[DType.int32, 4], "
+        "value: SIMD[DType.uint32, 4]):" in generated_code
+    )
+    assert "return image_load(group.rgImages[int(slot)], pixel)" in generated_code
+    assert "image_store(group.rgImages[int(slot)], pixel, value)" in generated_code
+    assert "return image_load(group.counters[int(slot)], pixelLayer)" in generated_code
+    assert "image_store(group.counters[int(slot)], pixelLayer, value)" in generated_code
+    assert "RWTexture2D<float2>" not in generated_code
+    assert "RasterizerOrderedTexture2DArray<uint4>" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+
+
+def test_hlsl_typed_writable_image_array_parameters_preserve_mojo_placeholders():
+    code = """
+    float2 readParam(RWTexture2D<float2> images[2], int slot, int2 pixel) {
+        return images[slot].Load(pixel);
+    }
+    void writeParam(RWTexture2D<float2> images[2], int slot, int2 pixel, float2 value) {
+        images[slot].Store(pixel, value);
+    }
+    uint4 readCounterParam(RasterizerOrderedTexture2DArray<uint4> counters[3], int slot, int4 pixelLayer) {
+        return counters[slot].Load(pixelLayer);
+    }
+    void writeCounterParam(RasterizerOrderedTexture2DArray<uint4> counters[3], int slot, int4 pixelLayer, uint4 value) {
+        counters[slot].Store(pixelLayer, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn readParam(images: InlineArray[Image2DFloat2, 2], slot: Int32, "
+        "pixel: SIMD[DType.int32, 2]) -> SIMD[DType.float32, 2]:" in generated_code
+    )
+    assert (
+        "fn writeParam(images: InlineArray[Image2DFloat2, 2], slot: Int32, "
+        "pixel: SIMD[DType.int32, 2], value: SIMD[DType.float32, 2]) -> None:"
+        in generated_code
+    )
+    assert (
+        "fn readCounterParam(counters: InlineArray[UImage2DArrayUInt4, 3], "
+        "slot: Int32, pixelLayer: SIMD[DType.int32, 4]) -> "
+        "SIMD[DType.uint32, 4]:" in generated_code
+    )
+    assert "return image_load(images[int(slot)], pixel)" in generated_code
+    assert "image_store(images[int(slot)], pixel, value)" in generated_code
+    assert "return image_load(counters[int(slot)], pixelLayer)" in generated_code
+    assert "image_store(counters[int(slot)], pixelLayer, value)" in generated_code
+    assert "RWTexture2D<float2>" not in generated_code
+    assert "RasterizerOrderedTexture2DArray<uint4>" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("code", "pattern"),
+    [
+        (
+            """
+            float2 invalidRead(writeonly RWTexture2D<float2> images[2], int slot, int2 pixel) {
+                return images[slot].Load(pixel);
+            }
+            """,
+            r"imageLoad.*images.*writeonly",
+        ),
+        (
+            """
+            void invalidStore(readonly RWTexture2D<float2> images[2], int slot, int2 pixel, float2 value) {
+                images[slot].Store(pixel, value);
+            }
+            """,
+            r"imageStore.*images.*readonly",
+        ),
+        (
+            """
+            struct Resources {
+                writeonly RWTexture2D<float2> images[2];
+            };
+
+            Resources resources;
+
+            float2 invalidRead(int slot, int2 pixel) {
+                return resources.images[slot].Load(pixel);
+            }
+            """,
+            r"imageLoad.*resources\.images.*writeonly",
+        ),
+        (
+            """
+            struct Resources {
+                readonly RWTexture2D<float2> images[2];
+            };
+
+            Resources resources;
+
+            void invalidStore(int slot, int2 pixel, float2 value) {
+                resources.images[slot].Store(pixel, value);
+            }
+            """,
+            r"imageStore.*resources\.images.*readonly",
+        ),
+    ],
+)
+def test_typed_writable_image_array_access_qualifiers_apply_to_members_and_params(
+    code, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_hlsl_typed_writable_image_array_members_and_parameters_compile_with_mojo(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct ResourceGroup {
+        RWTexture2D<float2> rgImages[2];
+        RasterizerOrderedTexture2DArray<uint4> counters[3];
+    };
+
+    float2 readStruct(ResourceGroup group, int slot, int2 pixel) {
+        return group.rgImages[slot].Load(pixel);
+    }
+    void writeStruct(ResourceGroup group, int slot, int2 pixel, float2 value) {
+        group.rgImages[slot].Store(pixel, value);
+    }
+    uint4 readCounterStruct(ResourceGroup group, int slot, int4 pixelLayer) {
+        return group.counters[slot].Load(pixelLayer);
+    }
+    void writeCounterStruct(ResourceGroup group, int slot, int4 pixelLayer, uint4 value) {
+        group.counters[slot].Store(pixelLayer, value);
+    }
+    float2 readParam(RWTexture2D<float2> images[2], int slot, int2 pixel) {
+        return images[slot].Load(pixel);
+    }
+    void writeParam(RWTexture2D<float2> images[2], int slot, int2 pixel, float2 value) {
+        images[slot].Store(pixel, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "hlsl_typed_writable_image_array_members_params.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize(
     ("resource_type", "value_type"),
     [

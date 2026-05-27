@@ -967,6 +967,41 @@ def test_codegen_texture_method_descriptors():
     assert converter.texture_method_descriptor("Load", 1)["function"] == "buffer_load"
     assert converter.texture_method_descriptor("Load", 2)["function"] == "texelFetch"
     assert (
+        converter.resource_method_descriptor("Load", 1, "Texture2D")["function"]
+        == "texelFetch"
+    )
+    assert (
+        converter.resource_method_descriptor("Load", 2, "Texture2D")["function"]
+        == "texelFetchOffset"
+    )
+    assert converter.resource_method_descriptor("Load", 3, "Texture2D")[
+        "dropped_parameters"
+    ] == ["status output"]
+    assert converter.resource_method_descriptor("Load", 2, "RWTexture2D<float4>") == {
+        "member": "Load",
+        "function": "imageLoad",
+        "texture_function": "texelFetch",
+        "buffer_function": "buffer_load",
+        "component": None,
+        "usage": "regular",
+        "buffer_when_max_args": 1,
+        "resource_type": "RWTexture2D<float4>",
+        "diagnostic_kind": "tiled_resource_status",
+        "drop_trailing_args": 1,
+        "dropped_parameters": ["status output"],
+        "resource": "image",
+        "operation": "load",
+    }
+    assert (
+        converter.resource_method_descriptor("Load", 4, "Texture2DMS<float4>")[
+            "function"
+        ]
+        == "texelFetchOffset"
+    )
+    assert converter.resource_method_descriptor("Load", 4, "Texture2DMS<float4>")[
+        "dropped_parameters"
+    ] == ["status output"]
+    assert (
         converter.texture_method_descriptor("GetDimensions", 1)["function"]
         == "buffer_dimensions"
     )
@@ -1343,6 +1378,51 @@ def test_codegen_cube_texture_status_overloads_do_not_become_offset_calls():
     assert "cubeShadow.GatherCmp(compareSampler, direction, depth)" in hlsl
     assert "0.0, status" not in hlsl
     assert "direction, status" not in hlsl
+
+
+def test_codegen_tiled_resource_status_loads_import_as_diagnostics():
+    code = textwrap.dedent("""
+        Texture2D colorMap : register(t0);
+        Texture2DMS<float4> msMap : register(t1);
+        RWTexture2D<float4> outputImage : register(u0);
+
+        float4 main(
+            int2 pixel : TEXCOORD0,
+            int sampleIndex : TEXCOORD1,
+            int2 offset : TEXCOORD2
+        ) : SV_Target0 {
+            uint status = 0;
+            float4 fetched = colorMap.Load(int3(pixel, 0), offset, status);
+            float4 stored = outputImage.Load(pixel, status);
+            float4 ms = msMap.Load(pixel, sampleIndex, offset, status);
+            bool mapped = CheckAccessFullyMapped(status);
+            return mapped ? fetched + stored + ms : float4(0.0, 0.0, 0.0, 0.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert (
+        crossgl.count(
+            "unsupported DirectX tiled-resource status for Load: "
+            "dropped status output"
+        )
+        == 3
+    )
+    assert (
+        "unsupported DirectX tiled-resource status check: "
+        "CheckAccessFullyMapped assumed fully mapped"
+    ) in crossgl
+    assert "texelFetchOffset(colorMap, pixel, 0, offset)" in crossgl
+    assert "imageLoad(outputImage, pixel)" in crossgl
+    assert "texelFetchOffset(msMap, pixel, sampleIndex, offset)" in crossgl
+    assert "bool mapped = " in crossgl
+    assert "true;" in crossgl
+    assert "CheckAccessFullyMapped(" not in crossgl
+    assert ".Load(" not in crossgl
+    assert ", status" not in crossgl
+
+    parse_crossgl(crossgl)
 
 
 def test_codegen_resource_array_receivers_use_canonical_calls():

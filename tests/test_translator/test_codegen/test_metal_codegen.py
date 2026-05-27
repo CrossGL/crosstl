@@ -551,6 +551,88 @@ def test_metal_const_reference_helper_parameters_are_readonly():
     assert "rejectWrite(payload);" in generated_code
 
 
+def test_metal_const_pointer_and_array_helper_parameters_are_readonly():
+    shader = """
+    shader MetalConstPointerArrayHelpers {
+        struct Payload {
+            float value;
+        };
+
+        float readPointer(const Payload* payload) {
+            return payload->value;
+        }
+
+        void mutatePointer(Payload* payload) {
+            payload->value = 2.0;
+        }
+
+        void rejectPointerWrite(const Payload* payload) {
+            payload->value = 1.0;
+            mutatePointer(payload);
+        }
+
+        float readArray(const float values[], int index) {
+            return values[index];
+        }
+
+        void mutateArray(float values[]) {
+            values[0] = 3.0;
+        }
+
+        void rejectArrayWrite(const float values[]) {
+            values[0] = 4.0;
+            mutateArray(values);
+        }
+
+        compute {
+            void main() {
+                Payload payload;
+                float values[2];
+                values[0] = 1.0;
+                values[1] = 2.0;
+                float a = readPointer(&payload);
+                rejectPointerWrite(&payload);
+                float b = readArray(values, 1);
+                rejectArrayWrite(values);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "float readPointer(const thread Payload* payload)" in generated_code
+    assert "return payload->value;" in generated_code
+    assert "void mutatePointer(thread Payload* payload)" in generated_code
+    assert "float readArray(const thread float values[], int index)" in generated_code
+    assert "void rejectArrayWrite(const thread float values[])" in generated_code
+    assert (
+        "/* unsupported Metal parameter store: parameter 'payload' is "
+        "const-qualified */"
+    ) in generated_code
+    assert (
+        "/* unsupported Metal parameter store: parameter 'values' is "
+        "const-qualified */"
+    ) in generated_code
+    assert (
+        "/* unsupported Metal parameter call: readonly parameter 'payload' "
+        "cannot be passed to mutable parameter 'payload' of 'mutatePointer' */"
+    ) in generated_code
+    assert (
+        "/* unsupported Metal parameter call: readonly parameter 'values' "
+        "cannot be passed to mutable parameter 'values' of 'mutateArray' */"
+    ) in generated_code
+    assert "PointerAccessNode" not in generated_code
+    assert "payload->value = 1.0;" not in generated_code
+    assert "mutatePointer(payload);" not in generated_code
+    assert "values[0] = 4.0;" not in generated_code
+    assert "mutateArray(values);" not in generated_code
+    assert "float a = readPointer(&payload);" in generated_code
+    assert "float b = readArray(values, 1);" in generated_code
+
+
 def test_metal_incompatible_helper_address_spaces_emit_diagnostics():
     shader = """
     shader MetalAddressSpaceMismatchCalls {

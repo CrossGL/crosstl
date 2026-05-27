@@ -6175,6 +6175,17 @@ class SlangCodeGen:
         if arity_reason:
             return self.unsupported_resource_query_call(func_name, arity_reason)
 
+        result_type = self.query_return_type(spec["dimensions"])
+        expected_reason = self.dimension_query_expected_type_unsupported_reason(
+            func_name, result_type
+        )
+        if expected_reason:
+            return self.unsupported_resource_query_call(
+                func_name,
+                expected_reason,
+                self.zero_value_for_type(self.current_expression_expected_type),
+            )
+
         resource_name = self.generate_expression(args[0])
         resource_slang_type = self.resource_query_slang_type(args[0], resource_type)
         base_helper_name = self.resource_query_helper_name(
@@ -6220,6 +6231,19 @@ class SlangCodeGen:
                 args[1], "mip argument"
             )
         return None
+
+    def dimension_query_expected_type_unsupported_reason(self, func_name, result_type):
+        expected_type = self.convert_type(self.current_expression_expected_type)
+        if not expected_type or expected_type == "auto":
+            return None
+        if not (
+            self.is_scalar_value_type(expected_type)
+            or self.is_vector_value_type(expected_type)
+        ):
+            return None
+        if expected_type == result_type:
+            return None
+        return f"returns {result_type} but target expects {expected_type}"
 
     def generate_sample_count_query(self, func_name, args):
         if not args:

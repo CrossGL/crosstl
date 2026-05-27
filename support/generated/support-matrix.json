@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 278,
+        "unsupported_marker_count": 280,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 561
+        "test_count": 563
       },
       "translator_codegen": {
         "exists": true,
@@ -260,7 +260,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 374,
+        "unsupported_marker_count": 375,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 517
+        "test_count": 518
       },
       "translator_codegen": {
         "exists": true,
@@ -743,7 +743,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 329
+        "test_count": 333
       },
       "translator_codegen": {
         "exists": true,
@@ -857,7 +857,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 507
+        "test_count": 508
       },
       "translator_codegen": {
         "exists": true,
@@ -881,7 +881,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 214,
+        "unsupported_marker_count": 217,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",

@@ -667,6 +667,44 @@ def test_parse_texture_status_and_clamp_overloads_keep_member_calls():
     }.issubset(set(members))
 
 
+def test_parse_tiled_resource_status_loads_and_checks_keep_calls():
+    code = """
+    Texture2D colorMap : register(t0);
+    Texture2DMS<float4> msMap : register(t1);
+    RWTexture2D<float4> outputImage : register(u0);
+
+    float4 main(
+        int2 pixel : TEXCOORD0,
+        int sampleIndex : TEXCOORD1,
+        int2 offset : TEXCOORD2
+    ) : SV_Target0 {
+        uint status = 0;
+        float4 fetched = colorMap.Load(int3(pixel, 0), offset, status);
+        float4 stored = outputImage.Load(pixel, status);
+        float4 ms = msMap.Load(pixel, sampleIndex, offset, status);
+        bool mapped = CheckAccessFullyMapped(status);
+        return mapped ? fetched + stored + ms : float4(0.0, 0.0, 0.0, 0.0);
+    }
+    """
+
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    member_calls = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    free_calls = [
+        node.name
+        for node in nodes
+        if isinstance(node, FunctionCallNode) and isinstance(node.name, str)
+    ]
+    assert member_calls.count("Load") == 3
+    assert "CheckAccessFullyMapped" in free_calls
+
+
 def test_parse_resource_method_ast_shapes():
     code = """
     Texture2D tex : register(t0);

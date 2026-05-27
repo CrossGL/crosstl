@@ -6582,6 +6582,231 @@ def test_array_lambda_captures_and_nested_helper_closures_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_array_lambda_block_bodies_return_places_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    payload_cube_type = ArrayType(payload_matrix_type, 2)
+    wrapper_type = NamedType("MatrixWrapper")
+    closure_type = GenericType("F")
+    closure_bound = NamedType(
+        "FnOnce([[Payload; 2]; 2]) -> [[Payload; 2]; 2]",
+    )
+
+    def identity_call(expr):
+        if isinstance(expr, str):
+            expr = IdentifierNode(expr)
+        return FunctionCallNode(
+            IdentifierNode("identity_payload_matrix"),
+            [expr],
+        )
+
+    def apply_call(matrix, transform):
+        if isinstance(matrix, str):
+            matrix = IdentifierNode(matrix)
+        return FunctionCallNode(
+            IdentifierNode("apply_payload_matrix"),
+            [matrix, transform],
+        )
+
+    def matrix_lambda(param_name, body, captures=None):
+        return LambdaNode(
+            [ParameterNode(param_name, payload_matrix_type)],
+            body,
+            captures=captures or [],
+        )
+
+    def block_tail(marker, tail):
+        return BlockNode(
+            [
+                VariableNode(
+                    "marker",
+                    PrimitiveType("int"),
+                    LiteralNode(marker, PrimitiveType("int")),
+                ),
+                ExpressionStatementNode(tail, is_tail_expression=True),
+            ]
+        )
+
+    def explicit_return_block(marker, value):
+        return BlockNode(
+            [
+                VariableNode(
+                    "marker",
+                    PrimitiveType("int"),
+                    LiteralNode(marker, PrimitiveType("int")),
+                ),
+                ReturnNode(value),
+            ]
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaBlockBodyReturnPlaces",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixWrapper",
+                [StructMemberNode("matrix", payload_matrix_type)],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "identity_payload_matrix",
+                payload_matrix_type,
+                [ParameterNode("matrix", payload_matrix_type)],
+                [ReturnNode(IdentifierNode("matrix"))],
+            ),
+            FunctionNode(
+                "apply_payload_matrix",
+                payload_matrix_type,
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("matrix")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "closure_block_tail_captures_payload_matrix",
+                payload_matrix_type,
+                [
+                    ParameterNode("left", payload_matrix_type),
+                    ParameterNode("right", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        apply_call(
+                            "right",
+                            matrix_lambda(
+                                "matrix",
+                                block_tail(1, identity_call("left")),
+                                captures=["left"],
+                            ),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "closure_explicit_return_captures_payload_matrix",
+                payload_matrix_type,
+                [
+                    ParameterNode("left", payload_matrix_type),
+                    ParameterNode("right", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        apply_call(
+                            "right",
+                            matrix_lambda(
+                                "matrix",
+                                explicit_return_block(2, identity_call("left")),
+                                captures=["left"],
+                            ),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "closure_returns_captured_member",
+                payload_matrix_type,
+                [
+                    ParameterNode("wrapper", wrapper_type),
+                    ParameterNode("fallback", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        apply_call(
+                            "fallback",
+                            matrix_lambda(
+                                "matrix",
+                                block_tail(
+                                    3,
+                                    MemberAccessNode(
+                                        IdentifierNode("wrapper"),
+                                        "matrix",
+                                    ),
+                                ),
+                                captures=["wrapper"],
+                            ),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "closure_explicit_returns_captured_index",
+                payload_matrix_type,
+                [
+                    ParameterNode("rows", payload_cube_type),
+                    ParameterNode("fallback", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        apply_call(
+                            "fallback",
+                            matrix_lambda(
+                                "matrix",
+                                explicit_return_block(
+                                    4,
+                                    ArrayAccessNode(
+                                        IdentifierNode("rows"),
+                                        LiteralNode(0, PrimitiveType("int")),
+                                    ),
+                                ),
+                                captures=["rows"],
+                            ),
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "return apply_payload_matrix(right, |matrix: [[Payload; 2]; 2]| {\n"
+        "        let marker: i32 = 1;\n"
+        "        identity_payload_matrix(left)\n"
+        "    });"
+    ) in generated_code
+    assert (
+        "return apply_payload_matrix(right, |matrix: [[Payload; 2]; 2]| {\n"
+        "        let marker: i32 = 2;\n"
+        "        return identity_payload_matrix(left);\n"
+        "    });"
+    ) in generated_code
+    assert (
+        "return apply_payload_matrix(fallback, |matrix: [[Payload; 2]; 2]| {\n"
+        "        let marker: i32 = 3;\n"
+        "        wrapper.matrix\n"
+        "    });"
+    ) in generated_code
+    assert (
+        "return apply_payload_matrix(fallback, |matrix: [[Payload; 2]; 2]| {\n"
+        "        let marker: i32 = 4;\n"
+        "        return rows[0].clone();\n"
+        "    });"
+    ) in generated_code
+    assert "return rows[0];" not in generated_code
+    assert "LambdaNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_struct_constructor_args_normalize_field_types_and_clone_non_copy_compile(
     tmp_path,
 ):

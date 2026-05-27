@@ -348,7 +348,51 @@ class HLSLToCrossGLConverter:
             "TextureCubeArray",
         }
 
-        if member in {"Load", "GetDimensions"}:
+        if member == "Load":
+            texture_function = self.texture_method_map[member]
+            buffer_function = self.buffer_method_map[member]
+            resource_base = self.raw_type_base(resource_type)
+            dropped_parameters = []
+            is_multisample = resource_base in {
+                "Texture2DMS",
+                "Texture2DMSArray",
+                "RWTexture2DMS",
+                "RWTexture2DMSArray",
+                "RasterizerOrderedTexture2DMS",
+                "RasterizerOrderedTexture2DMSArray",
+            }
+            if self.is_rw_texture_type(resource_type):
+                function = "imageLoad"
+                if arg_count == (3 if is_multisample else 2):
+                    dropped_parameters.append("status output")
+            elif resource_base.startswith(("Texture", "FeedbackTexture")):
+                has_offset = arg_count is not None and arg_count >= (
+                    3 if is_multisample else 2
+                )
+                function = "texelFetchOffset" if has_offset else texture_function
+                if arg_count == (4 if is_multisample else 3):
+                    dropped_parameters.append("status output")
+            else:
+                function = (
+                    buffer_function
+                    if arg_count is not None and arg_count <= 1
+                    else texture_function
+                )
+            return with_dropped_parameters(
+                {
+                    "member": member,
+                    "function": function,
+                    "texture_function": texture_function,
+                    "buffer_function": buffer_function,
+                    "component": None,
+                    "usage": "regular",
+                    "buffer_when_max_args": 1,
+                    "resource_type": resource_type,
+                    "diagnostic_kind": "tiled_resource_status",
+                },
+                dropped_parameters,
+            )
+        if member == "GetDimensions":
             texture_function = self.texture_method_map[member]
             buffer_function = self.buffer_method_map[member]
             use_buffer = arg_count is not None and arg_count <= 1
@@ -524,7 +568,10 @@ class HLSLToCrossGLConverter:
                 descriptor["buffer_function"] is not None
                 and descriptor["function"] == descriptor["buffer_function"]
             )
-            descriptor["resource"] = "buffer" if uses_buffer else "texture"
+            if descriptor["function"] == "imageLoad":
+                descriptor["resource"] = "image"
+            else:
+                descriptor["resource"] = "buffer" if uses_buffer else "texture"
             descriptor["operation"] = {
                 "Load": "load",
                 "GetDimensions": "dimensions",
@@ -565,10 +612,22 @@ class HLSLToCrossGLConverter:
             }
         return None
 
-    def resource_method_arguments(self, obj, member, rendered_args, descriptor):
+    def resource_method_arguments(
+        self, obj, member, rendered_args, descriptor, raw_args=None, is_main=False
+    ):
         drop_trailing_args = descriptor.get("drop_trailing_args", 0)
         if drop_trailing_args:
             rendered_args = rendered_args[:-drop_trailing_args]
+            if raw_args is not None:
+                raw_args = raw_args[:-drop_trailing_args]
+
+        if member == "Load" and descriptor["function"] in {
+            "texelFetch",
+            "texelFetchOffset",
+        }:
+            return self.texture_load_method_arguments(
+                obj, rendered_args, descriptor, raw_args or [], is_main
+            )
 
         if (
             member == "SampleBias"
@@ -584,11 +643,77 @@ class HLSLToCrossGLConverter:
             method_args.append(descriptor["component"])
         return method_args
 
+    def texture_load_method_arguments(
+        self, obj, rendered_args, descriptor, raw_args, is_main=False
+    ):
+        resource_base = self.raw_type_base(descriptor.get("resource_type"))
+        is_multisample = resource_base in {"Texture2DMS", "Texture2DMSArray"}
+        if is_multisample:
+            return [obj, *rendered_args]
+
+        split_location = None
+        if raw_args:
+            split_location = self.split_texture_load_location(
+                raw_args[0], resource_base, is_main
+            )
+
+        if split_location:
+            coord, lod = split_location
+            if descriptor["function"] == "texelFetchOffset" and len(rendered_args) >= 2:
+                return [obj, coord, lod, rendered_args[1]]
+            return [obj, coord, lod]
+
+        if descriptor["function"] == "texelFetchOffset":
+            descriptor["function"] = "texelFetch"
+        if descriptor["function"] == "texelFetch" and len(rendered_args) == 1:
+            return [obj, rendered_args[0], "0"]
+        return [obj, *rendered_args]
+
+    def split_texture_load_location(self, location_arg, resource_base, is_main=False):
+        coord_components = {
+            "Texture1D": 1,
+            "Texture1DArray": 2,
+            "Texture2D": 2,
+            "Texture2DArray": 3,
+            "Texture3D": 3,
+        }.get(resource_base)
+        if coord_components is None:
+            return None
+
+        if not isinstance(location_arg, VectorConstructorNode):
+            return None
+
+        ctor_args = getattr(location_arg, "args", None)
+        if not ctor_args:
+            return None
+
+        if len(ctor_args) == 2 and coord_components > 1:
+            return (
+                self.generate_expression(ctor_args[0], is_main),
+                self.generate_expression(ctor_args[1], is_main),
+            )
+
+        if len(ctor_args) != coord_components + 1:
+            return None
+
+        lod = self.generate_expression(ctor_args[-1], is_main)
+        coord_args = [self.generate_expression(arg, is_main) for arg in ctor_args[:-1]]
+        if coord_components == 1:
+            coord = coord_args[0]
+        else:
+            coord = f"ivec{coord_components}({', '.join(coord_args)})"
+        return coord, lod
+
     def resource_method_diagnostic(self, member, descriptor):
         dropped_parameters = descriptor.get("dropped_parameters")
         if not dropped_parameters:
             return None
         parameters = ", ".join(dropped_parameters)
+        if descriptor.get("diagnostic_kind") == "tiled_resource_status":
+            return (
+                f"/* unsupported DirectX tiled-resource status for {member}: "
+                f"dropped {parameters} */"
+            )
         return (
             f"/* unsupported DirectX texture overload extras for {member}: "
             f"dropped {parameters} */"
@@ -1457,7 +1582,12 @@ class HLSLToCrossGLConverter:
                 )
                 if descriptor:
                     method_args = self.resource_method_arguments(
-                        obj, member, rendered_args, descriptor
+                        obj,
+                        member,
+                        rendered_args,
+                        descriptor,
+                        expr.args,
+                        is_main,
                     )
                     call = f"{descriptor['function']}({', '.join(method_args)})"
                     diagnostic = self.resource_method_diagnostic(member, descriptor)
@@ -1471,6 +1601,11 @@ class HLSLToCrossGLConverter:
                 if isinstance(expr.name, str)
                 else self.generate_expression(expr.name, is_main)
             )
+            if func_name == "CheckAccessFullyMapped":
+                return (
+                    "/* unsupported DirectX tiled-resource status check: "
+                    "CheckAccessFullyMapped assumed fully mapped */ true"
+                )
             interlocked_image_atomic = self.interlocked_storage_image_atomic_expression(
                 func_name, expr.args, is_main
             )
