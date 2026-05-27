@@ -1634,6 +1634,89 @@ def test_native_hip_device_error_runtime_parses_and_compiles_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_peer_access_copy_parses_and_compiles_if_available(tmp_path):
+    """Smoke native HIP peer access and peer copy APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void peer_access_copy(
+        float* dst,
+        float* src,
+        hipStream_t stream,
+        size_t n
+    ) {
+        int can_access = 0;
+        int p2p_attribute = 0;
+        int device = 0;
+        int peer_device = 1;
+        unsigned int link_type = 0;
+        unsigned int hop_count = 0;
+        size_t bytes = n * sizeof(float);
+
+        hipDeviceCanAccessPeer(&can_access, device, peer_device);
+        hipDeviceGetP2PAttribute(
+            &p2p_attribute,
+            hipDevP2PAttrPerformanceRank,
+            device,
+            peer_device
+        );
+        hipDeviceEnablePeerAccess(peer_device, 0);
+        hipMemcpyPeer(dst, peer_device, src, device, bytes);
+        hipMemcpyPeerAsync(dst, peer_device, src, device, bytes, stream);
+        hipExtGetLinkTypeAndHopCount(
+            device, peer_device, &link_type, &hop_count
+        );
+        hipDeviceDisablePeerAccess(peer_device);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    expected_fragments = (
+        "// Function: peer_access_copy",
+        "void peer_access_copy("
+        "ptr<f32> dst, ptr<f32> src, hipStream_t stream, u32 n)",
+        "var can_access: i32 = 0;",
+        "var p2p_attribute: i32 = 0;",
+        "var device: i32 = 0;",
+        "var peer_device: i32 = 1;",
+        "var link_type: u32 = 0;",
+        "var hop_count: u32 = 0;",
+        "var bytes: u32 = (n * sizeof(float));",
+        "// HIP device can access peer: output: can_access, "
+        "device: device, peer device: peer_device",
+        "// HIP get P2P attribute: output: p2p_attribute, "
+        "attribute: hipDevP2PAttrPerformanceRank, source device: device, "
+        "destination device: peer_device",
+        "// HIP enable peer access: peer device: peer_device, flags: 0",
+        "// HIP peer memory copy: source: src, source device: device, "
+        "destination: dst, destination device: peer_device, bytes: bytes",
+        "// HIP peer memory copy: source: src, source device: device, "
+        "destination: dst, destination device: peer_device, bytes: bytes, "
+        "stream: stream",
+        "// HIP get link type and hop count: device 1: device, "
+        "device 2: peer_device, link type output: link_type, "
+        "hop count output: hop_count",
+        "// HIP disable peer access: peer device: peer_device",
+    )
+    for expected in expected_fragments:
+        assert expected in crossgl
+
+    raw_calls = (
+        "hipDeviceCanAccessPeer",
+        "hipDeviceGetP2PAttribute",
+        "hipDeviceEnablePeerAccess",
+        "hipMemcpyPeer",
+        "hipMemcpyPeerAsync",
+        "hipExtGetLinkTypeAndHopCount",
+        "hipDeviceDisablePeerAccess",
+    )
+    for raw_call in raw_calls:
+        assert f"{raw_call}(" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_host_pinned_memory_parses_and_compiles_if_available(
     tmp_path,
 ):

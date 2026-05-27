@@ -3140,6 +3140,50 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
         return None
 
+    def expected_texture_gradient_coordinate_counts(self, texture_type):
+        return {
+            "sampler1D": {1},
+            "sampler1DArray": {1},
+            "sampler2D": {2},
+            "sampler2DArray": {2},
+            "sampler3D": {3, 4},
+            "samplerCube": {3, 4},
+            "samplerCubeArray": {3, 4},
+        }.get(texture_type)
+
+    def texture_gradient_rank_diagnostic(self, texture_type, *raw_gradients):
+        expected_gradient_counts = self.expected_texture_gradient_coordinate_counts(
+            texture_type
+        )
+        if expected_gradient_counts is None:
+            return None
+
+        for raw_gradient in raw_gradients:
+            actual_gradient_count = self.texel_fetch_coordinate_count(raw_gradient)
+            if (
+                actual_gradient_count is not None
+                and actual_gradient_count not in expected_gradient_counts
+            ):
+                return self.unsupported_sampled_resource_call(
+                    "textureGrad derivative rank",
+                    texture_type,
+                    [],
+                )
+        return None
+
+    def cuda_texture_gradient_argument(self, texture_type, raw_gradient, gradient):
+        if texture_type not in {"sampler3D", "samplerCube", "samplerCubeArray"}:
+            return gradient
+
+        gradient_count = self.texel_fetch_coordinate_count(raw_gradient)
+        if gradient_count == 3:
+            return (
+                f"make_float4({self.coord_component(gradient, 'x')}, "
+                f"{self.coord_component(gradient, 'y')}, "
+                f"{self.coord_component(gradient, 'z')}, 0.0f)"
+            )
+        return gradient
+
     def expected_image_coordinate_count(self, image_type):
         image_type = self.resource_base_type(image_type)
         if not isinstance(image_type, str):
@@ -3342,6 +3386,26 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
             if coordinate_diagnostic is not None:
                 return coordinate_diagnostic
+            grad_x = None
+            grad_y = None
+            if func_name == "textureGrad" and len(args) >= 4:
+                gradient_diagnostic = self.texture_gradient_rank_diagnostic(
+                    texture_type,
+                    raw_args[2],
+                    raw_args[3],
+                )
+                if gradient_diagnostic is not None:
+                    return gradient_diagnostic
+                grad_x = self.cuda_texture_gradient_argument(
+                    texture_type,
+                    raw_args[2],
+                    args[2],
+                )
+                grad_y = self.cuda_texture_gradient_argument(
+                    texture_type,
+                    raw_args[3],
+                    args[3],
+                )
 
             texture_name = args[0]
             coord = args[1]
@@ -3351,7 +3415,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 if func_name == "textureLod" and len(args) >= 3:
                     return f"tex1DLod({texture_name}, {coord}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
-                    return f"tex1DGrad({texture_name}, {coord}, {args[2]}, {args[3]})"
+                    return f"tex1DGrad({texture_name}, {coord}, {grad_x}, {grad_y})"
 
             if texture_type == "sampler1DArray":
                 coord_args = (
@@ -3366,7 +3430,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 if func_name == "textureGrad" and len(args) >= 4:
                     return (
                         f"tex1DLayeredGrad<float4>"
-                        f"({coord_args}, {args[2]}, {args[3]})"
+                        f"({coord_args}, {grad_x}, {grad_y})"
                     )
 
             if texture_type == "sampler2D":
@@ -3380,7 +3444,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 if func_name == "textureLod" and len(args) >= 3:
                     return f"tex2DLod({coord_args}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
-                    return f"tex2DGrad({coord_args}, {args[2]}, {args[3]})"
+                    return f"tex2DGrad({coord_args}, {grad_x}, {grad_y})"
 
             if texture_type == "sampler2DArray":
                 coord_args = (
@@ -3396,7 +3460,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 if func_name == "textureGrad" and len(args) >= 4:
                     return (
                         f"tex2DLayeredGrad<float4>"
-                        f"({coord_args}, {args[2]}, {args[3]})"
+                        f"({coord_args}, {grad_x}, {grad_y})"
                     )
 
             if texture_type == "sampler3D":
@@ -3411,7 +3475,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 if func_name == "textureLod" and len(args) >= 3:
                     return f"tex3DLod({coord_args}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
-                    return f"tex3DGrad({coord_args}, {args[2]}, {args[3]})"
+                    return f"tex3DGrad({coord_args}, {grad_x}, {grad_y})"
 
             if texture_type == "samplerCube":
                 coord_args = (
@@ -3425,7 +3489,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 if func_name == "textureLod" and len(args) >= 3:
                     return f"texCubemapLod({coord_args}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
-                    return f"texCubemapGrad({coord_args}, {args[2]}, {args[3]})"
+                    return f"texCubemapGrad({coord_args}, {grad_x}, {grad_y})"
 
             if texture_type == "samplerCubeArray":
                 coord_args = (
@@ -3442,7 +3506,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 if func_name == "textureGrad" and len(args) >= 4:
                     return (
                         f"texCubemapLayeredGrad<float4>"
-                        f"({coord_args}, {args[2]}, {args[3]})"
+                        f"({coord_args}, {grad_x}, {grad_y})"
                     )
 
         if func_name == "texelFetch" and len(args) >= 3:
