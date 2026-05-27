@@ -6134,14 +6134,22 @@ class SlangCodeGen:
 
     def generate_sample_count_query(self, func_name, args):
         if not args:
-            return None
+            return self.unsupported_resource_query_call(
+                func_name, "requires a resource argument"
+            )
 
-        resource_name = self.generate_expression(args[0])
         resource_type = self.resource_base_type(self.get_expression_type(args[0]))
         spec = self.dimension_query_spec(resource_type)
+        if not self.sample_count_query_accepts_resource(func_name, resource_type):
+            return self.unsupported_resource_query_call(
+                func_name, self.sample_count_query_requirement(func_name)
+            )
         if spec is None or not spec["samples"]:
-            return None
+            return self.unsupported_resource_query_call(
+                func_name, self.sample_count_query_requirement(func_name)
+            )
 
+        resource_name = self.generate_expression(args[0])
         resource_slang_type = self.resource_query_slang_type(args[0], resource_type)
         base_helper_name = self.resource_query_helper_name(
             func_name, resource_type, resource_slang_type
@@ -6533,14 +6541,23 @@ class SlangCodeGen:
 
     def generate_texture_query_levels(self, args):
         if not args:
-            return None
+            return self.unsupported_resource_query_call(
+                "textureQueryLevels", "requires a resource argument"
+            )
 
-        resource_name = self.generate_expression(args[0])
         resource_type = self.resource_base_type(self.get_expression_type(args[0]))
         spec = self.dimension_query_spec(resource_type)
-        if spec is None or not spec["mip"]:
-            return None
+        if (
+            spec is None
+            or not spec["mip"]
+            or not self.is_sampled_texture_resource_type(resource_type)
+        ):
+            return self.unsupported_resource_query_call(
+                "textureQueryLevels",
+                "requires a mipmapped sampled texture resource",
+            )
 
+        resource_name = self.generate_expression(args[0])
         base_helper_name = f"cgl_textureQueryLevels_{resource_type}"
         helper_name = self.helper_function_name(base_helper_name)
         self.register_helper_function(
@@ -6548,6 +6565,23 @@ class SlangCodeGen:
             self.build_texture_query_levels_helper(helper_name, resource_type, spec),
         )
         return f"{helper_name}({resource_name})"
+
+    def sample_count_query_accepts_resource(self, func_name, resource_type):
+        if func_name == "textureSamples":
+            return self.is_sampled_texture_resource_type(resource_type)
+        if func_name == "imageSamples":
+            return self.is_storage_image_type(resource_type)
+        return False
+
+    def sample_count_query_requirement(self, func_name):
+        if func_name == "textureSamples":
+            return "requires a multisampled texture resource"
+        if func_name == "imageSamples":
+            return "requires a multisampled image resource"
+        return "requires a multisampled resource"
+
+    def unsupported_resource_query_call(self, func_name, reason):
+        return f"/* unsupported Slang resource query: {func_name} {reason} */ 0"
 
     def generate_texture_query_lod(self, args):
         query_args = self.texture_query_lod_args(args)
@@ -6750,6 +6784,14 @@ class SlangCodeGen:
             and resource_type != "sampler"
             and "MS" not in resource_type
             and "Shadow" not in resource_type
+        )
+
+    def is_sampled_texture_resource_type(self, type_name):
+        resource_type = self.resource_base_type(type_name)
+        return (
+            isinstance(resource_type, str)
+            and resource_type.startswith("sampler")
+            and resource_type != "sampler"
         )
 
     def get_expression_type(self, node):

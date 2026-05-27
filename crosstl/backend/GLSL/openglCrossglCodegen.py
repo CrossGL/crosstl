@@ -496,6 +496,8 @@ class GLSLToCrossGLConverter:
             return "textureGatherCompare"
         if name == "textureGatherOffset" and len(args) >= 4:
             return "textureGatherCompareOffset"
+        if name == "textureGatherOffsets" and len(args) >= 4:
+            return "textureGatherCompareOffsets"
         return name
 
     def _is_image_resource_type(self, type_name):

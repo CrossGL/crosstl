@@ -4738,6 +4738,55 @@ def test_codegen_native_shadow_gather_imports_compare_helpers():
     assert "textureGatherCompare" not in regenerated_glsl
 
 
+def test_codegen_native_shadow_gather_offsets_imports_compare_helper():
+    code = """
+    #version 460 core
+    layout(binding = 0) uniform sampler2DShadow shadowMaps[2];
+    layout(binding = 2) uniform sampler2DArrayShadow shadowArrays[2];
+    layout(location = 0) out vec4 fragColor;
+
+    vec4 gatherOffsets(sampler2DShadow maps[2], sampler2DArrayShadow arrays[2], int layer, vec2 uv, vec3 uvLayer, float depth, ivec2 offsets[4]) {
+        vec4 planar = textureGatherOffsets(maps[layer], uv, depth, offsets);
+        vec4 layered = textureGatherOffsets(arrays[layer], uvLayer, depth, offsets);
+        return planar + layered;
+    }
+
+    void main() {
+        fragColor = vec4(0.0);
+    }
+    """
+
+    output = generate_crossgl(code, "fragment")
+
+    assert (
+        "vec4 planar = textureGatherCompareOffsets(maps[layer], uv, depth, "
+        "offsets);" in output
+    )
+    assert (
+        "vec4 layered = textureGatherCompareOffsets(arrays[layer], uvLayer, "
+        "depth, offsets);" in output
+    )
+    assert "textureGatherOffsets(maps[layer], uv, depth, offsets)" not in output
+
+    shader_ast = parse_crossgl(output)
+    regenerated_glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "textureGatherCompareOffsets" not in regenerated_glsl
+    assert "textureGatherOffsets(" not in regenerated_glsl
+    assert "textureGatherOffset(maps[layer], uv, depth, offsets[0]).x" in (
+        regenerated_glsl
+    )
+    assert "textureGatherOffset(maps[layer], uv, depth, offsets[3]).w" in (
+        regenerated_glsl
+    )
+    assert "textureGatherOffset(arrays[layer], uvLayer, depth, offsets[0]).x" in (
+        regenerated_glsl
+    )
+    assert "textureGatherOffset(arrays[layer], uvLayer, depth, offsets[3]).w" in (
+        regenerated_glsl
+    )
+
+
 def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types():
     crossgl = """
     shader MultisampleArrayFallbacks {

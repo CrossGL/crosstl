@@ -401,6 +401,8 @@ class MetalCodeGen:
         self.current_readonly_metal_mesh_payload_parameters = set()
         self.current_readonly_raw_buffer_parameters = set()
         self.metal_program_mesh_payload_type = None
+        self.function_metal_mesh_dispatch_contexts = {}
+        self.function_metal_mesh_dispatch_contexts_by_id = {}
         self.lowered_glsl_buffer_block_struct_names = set()
         self.glsl_buffer_block_lowering_failures = {}
         self.glsl_buffer_block_struct_lowering_failures = {}
@@ -806,6 +808,8 @@ class MetalCodeGen:
         self.current_metal_mesh_payload_type = None
         self.current_metal_mesh_output_accumulators = {}
         self.current_metal_non_thread_payload_parameters = set()
+        self.function_metal_mesh_dispatch_contexts = {}
+        self.function_metal_mesh_dispatch_contexts_by_id = {}
         self.metal_program_mesh_payload_type = self.metal_mesh_payload_type_for_program(
             ast
         )
@@ -972,6 +976,11 @@ class MetalCodeGen:
                     generic_function_specializations.values()
                 )
             )
+        self.function_metal_mesh_dispatch_contexts = (
+            self.collect_function_metal_mesh_dispatch_contexts(
+                list(all_functions) + list(generic_function_specializations.values())
+            )
+        )
         code = "\n"
         preprocessors = getattr(ast, "preprocessors", []) or []
         pre_lines = []
@@ -1856,6 +1865,11 @@ class MetalCodeGen:
             )
             params_str = self.append_required_global_resource_parameters(
                 params_str, self.current_function_name
+            )
+            params_str = self.append_metal_mesh_dispatch_context_parameters(
+                params_str,
+                func,
+                reserved_parameter_names,
             )
 
         if hasattr(func, "return_type"):
@@ -4018,6 +4032,11 @@ class MetalCodeGen:
             )
             if address_space_call is not None:
                 return address_space_call
+            mesh_context_call = self.metal_mesh_dispatch_context_call_diagnostic(
+                func_name
+            )
+            if mesh_context_call is not None:
+                return mesh_context_call
             self.validate_function_image_access_arguments(func_name, expr.args)
             args = self.generate_function_call_arguments(argument_func_name, expr.args)
             if func_name in self.user_function_names:
@@ -4026,6 +4045,9 @@ class MetalCodeGen:
                     for cbuffer in self.required_function_cbuffers(func_name)
                 )
                 args.extend(self.required_function_resource_argument_names(func_name))
+                args.extend(
+                    self.required_metal_mesh_dispatch_context_arguments(func_name)
+                )
             args = ", ".join(args)
             return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
@@ -4863,7 +4885,7 @@ class MetalCodeGen:
 
         payload_type = self.expression_result_type(payload_expr)
         if payload_type is not None:
-            mapped_payload_type = self.map_type(payload_type)
+            mapped_payload_type = self.metal_mesh_payload_value_type(payload_type)
             if (
                 self.current_metal_mesh_payload_type is not None
                 and mapped_payload_type != self.current_metal_mesh_payload_type
@@ -6989,6 +7011,189 @@ class MetalCodeGen:
         except (TypeError, ValueError):
             return None
 
+    def collect_function_metal_mesh_dispatch_contexts(self, functions):
+        functions = list(functions)
+        functions_by_name = {
+            func.name: func for func in functions if getattr(func, "name", None)
+        }
+        contexts_by_id = {
+            id(func): self.direct_metal_mesh_dispatch_context(func)
+            for func in functions
+        }
+
+        changed = True
+        while changed:
+            changed = False
+            for func in functions:
+                name = getattr(func, "name", None)
+                if not name:
+                    continue
+                context = contexts_by_id.setdefault(id(func), {})
+                for called_name in self.called_user_function_names(func):
+                    called_func = functions_by_name.get(called_name)
+                    called_context = (
+                        contexts_by_id.get(id(called_func))
+                        if called_func is not None
+                        else None
+                    )
+                    if not called_context:
+                        continue
+                    if self.merge_metal_mesh_dispatch_context(
+                        context, called_context, name, called_name
+                    ):
+                        changed = True
+
+        self.function_metal_mesh_dispatch_contexts_by_id = {
+            func_id: context for func_id, context in contexts_by_id.items() if context
+        }
+        return {
+            getattr(func, "name", None): context
+            for func in functions
+            for context in [contexts_by_id.get(id(func), {})]
+            if getattr(func, "name", None) and context
+        }
+
+    def direct_metal_mesh_dispatch_context(self, func):
+        context = {}
+        if self.function_contains_mesh_op(
+            func, "DispatchMesh", argument_counts={1, 3, 4}
+        ):
+            context["grid"] = True
+        if not self.function_contains_mesh_op(
+            func, "DispatchMesh", argument_counts={4}
+        ):
+            return context
+
+        dispatch_payload_type = self.metal_dispatch_mesh_payload_argument_type(func)
+        expected_payload_type = self.metal_program_mesh_payload_type
+        if (
+            dispatch_payload_type is not None
+            and expected_payload_type is not None
+            and dispatch_payload_type != expected_payload_type
+        ):
+            raise ValueError(
+                "Metal DispatchMesh payload type "
+                f"'{dispatch_payload_type}' must match mesh payload type "
+                f"'{expected_payload_type}'"
+            )
+
+        payload_type = expected_payload_type or dispatch_payload_type
+        if payload_type is None:
+            raise ValueError("Metal DispatchMesh payload argument type is unknown")
+        context["payload"] = True
+        context["payload_type"] = payload_type
+        return context
+
+    def merge_metal_mesh_dispatch_context(
+        self, context, called_context, func_name, called_name
+    ):
+        changed = False
+        if called_context.get("grid") and not context.get("grid"):
+            context["grid"] = True
+            changed = True
+        if called_context.get("payload"):
+            if not context.get("payload"):
+                context["payload"] = True
+                changed = True
+            payload_type = context.get("payload_type")
+            called_payload_type = called_context.get("payload_type")
+            if (
+                payload_type
+                and called_payload_type
+                and payload_type != called_payload_type
+            ):
+                raise ValueError(
+                    "Metal mesh dispatch helper payload type mismatch: "
+                    f"'{func_name}' calls '{called_name}' requiring "
+                    f"'{called_payload_type}' but already requires '{payload_type}'"
+                )
+            if called_payload_type and payload_type != called_payload_type:
+                context["payload_type"] = called_payload_type
+                changed = True
+        return changed
+
+    def metal_mesh_dispatch_context_for_function(self, func_or_name):
+        if not isinstance(func_or_name, str):
+            context = self.function_metal_mesh_dispatch_contexts_by_id.get(
+                id(func_or_name)
+            )
+            if context is not None:
+                return context
+        name = (
+            getattr(func_or_name, "name", None)
+            if not isinstance(func_or_name, str)
+            else func_or_name
+        )
+        if not name:
+            return {}
+        return self.function_metal_mesh_dispatch_contexts.get(name, {})
+
+    def append_metal_mesh_dispatch_context_parameters(
+        self, params_str, func, reserved_parameter_names
+    ):
+        context = self.metal_mesh_dispatch_context_for_function(func)
+        if not context:
+            return params_str
+
+        reserved_names = set(reserved_parameter_names or ())
+        reserved_names.update(self.metal_function_local_variable_names(func))
+        if context.get("payload"):
+            payload_type = (
+                context.get("payload_type") or self.metal_program_mesh_payload_type
+            )
+            payload_name = self.unique_metal_generated_name(
+                "_crossglMeshPayload", reserved_names
+            )
+            reserved_names.add(payload_name)
+            params_str = self.append_parameter_declaration(
+                params_str,
+                f"object_data {payload_type}& {payload_name}",
+            )
+            self.current_metal_mesh_payload_parameter = payload_name
+            self.current_metal_mesh_payload_type = payload_type
+            self.current_address_space_variables[payload_name] = "object_data"
+
+        if context.get("grid"):
+            grid_name = self.unique_metal_generated_name(
+                "_crossglMeshGrid", reserved_names
+            )
+            params_str = self.append_parameter_declaration(
+                params_str,
+                f"mesh_grid_properties {grid_name}",
+            )
+            self.current_metal_mesh_grid_properties_parameter = grid_name
+        return params_str
+
+    def required_metal_mesh_dispatch_context_arguments(self, func_name):
+        context = self.metal_mesh_dispatch_context_for_function(func_name)
+        if not context:
+            return []
+        args = []
+        if context.get("payload"):
+            args.append(self.current_metal_mesh_payload_parameter)
+        if context.get("grid"):
+            args.append(self.current_metal_mesh_grid_properties_parameter)
+        return [arg for arg in args if arg]
+
+    def metal_mesh_dispatch_context_call_diagnostic(self, func_name):
+        context = self.metal_mesh_dispatch_context_for_function(func_name)
+        if not context:
+            return None
+        if context.get("payload") and not self.current_metal_mesh_payload_parameter:
+            return (
+                "/* unsupported Metal mesh dispatch helper call: function "
+                f"'{func_name}' requires an object_data payload context */"
+            )
+        if (
+            context.get("grid")
+            and not self.current_metal_mesh_grid_properties_parameter
+        ):
+            return (
+                "/* unsupported Metal mesh dispatch helper call: function "
+                f"'{func_name}' requires mesh_grid_properties context */"
+            )
+        return None
+
     def metal_mesh_payload_type_for_program(self, ast):
         payload_types = set()
         for stage_type, stage in (getattr(ast, "stages", {}) or {}).items():
@@ -7017,13 +7222,12 @@ class MetalCodeGen:
             return None
         if self.current_metal_mesh_payload_parameter is not None:
             return None
-        if not self.function_contains_mesh_op(
-            func, "DispatchMesh", argument_counts={4}
-        ):
+        context = self.metal_mesh_dispatch_context_for_function(func)
+        if not context.get("payload"):
             return None
 
-        dispatch_payload_type = self.metal_dispatch_mesh_payload_argument_type(func)
         expected_payload_type = self.metal_program_mesh_payload_type
+        dispatch_payload_type = context.get("payload_type")
         if (
             dispatch_payload_type is not None
             and expected_payload_type is not None
@@ -7070,13 +7274,35 @@ class MetalCodeGen:
 
     def metal_dispatch_mesh_payload_type(self, expr, declared_types):
         if isinstance(expr, ArrayAccessNode):
-            payload_type = self.expression_result_type(expr)
-            return self.map_type(payload_type) if payload_type else None
+            payload_type = self.metal_dispatch_mesh_payload_type(
+                getattr(expr, "array", getattr(expr, "array_expr", None)),
+                declared_types,
+            )
+            return self.metal_mesh_payload_value_type(payload_type)
+        if isinstance(expr, MemberAccessNode):
+            object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
+            object_type = self.metal_dispatch_mesh_payload_type(
+                object_expr, declared_types
+            )
+            object_type = self.metal_mesh_payload_value_type(object_type)
+            member_type = self.struct_member_types.get(object_type, {}).get(expr.member)
+            if member_type is not None:
+                return self.metal_mesh_payload_value_type(member_type)
         expr_name = self.expression_name(expr)
         if expr_name in declared_types:
-            return self.map_type(declared_types[expr_name])
+            return self.metal_mesh_payload_value_type(declared_types[expr_name])
         payload_type = self.expression_result_type(expr)
-        return self.map_type(payload_type) if payload_type else None
+        return self.metal_mesh_payload_value_type(payload_type)
+
+    def metal_mesh_payload_value_type(self, payload_type):
+        if not payload_type:
+            return None
+        payload_type = self.type_name_string(payload_type).strip()
+        while payload_type.endswith(("&", "*")):
+            payload_type = payload_type[:-1].strip()
+        if "[" in payload_type and "]" in payload_type:
+            payload_type, _ = split_array_type_suffix(payload_type)
+        return self.map_type(payload_type)
 
     def metal_function_declared_value_types(self, func):
         declared_types = {}
@@ -7115,9 +7341,8 @@ class MetalCodeGen:
     ):
         if shader_type not in {"object", "task", "amplification"}:
             return None
-        if not self.function_contains_mesh_op(
-            func, "DispatchMesh", argument_counts={1, 3, 4}
-        ):
+        context = self.metal_mesh_dispatch_context_for_function(func)
+        if not context.get("grid"):
             return None
         return self.unique_metal_generated_name(
             "_crossglMeshGrid", reserved_parameter_names

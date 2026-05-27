@@ -7757,6 +7757,65 @@ def test_directx_tessellation_evaluation_validates_outputpatch_count_against_hul
     assert "float4 DSMain(OutputPatch<HSOutput, 4> patch" in generated
 
 
+def test_directx_tessellation_evaluation_validates_outputpatch_element_type_against_hull():
+    mismatched_code = """
+    shader mismatched_domain_patch_element_type {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct OtherOutput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSConstData {
+            vec4 edges @ SV_TessFactor;
+            vec2 inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            HSConstData HSConst(InputPatch<HSInput, 4> patch) {
+                HSConstData constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 4> patch, uint id @ SV_OutputControlPointID)
+                @domain(quad)
+                @partitioning(fractional_even)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(4)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<OtherOutput, 4> patch, vec2 uv @ SV_DomainLocation)
+                @domain(quad) {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="OutputPatch element type.*HSOutput"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(mismatched_code), "tessellation_evaluation"
+        )
+
+    matching_code = mismatched_code.replace(
+        "OutputPatch<OtherOutput, 4>", "OutputPatch<HSOutput, 4>"
+    )
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(matching_code), "tessellation_evaluation"
+    )
+    assert "float4 DSMain(OutputPatch<HSOutput, 4> patch" in generated
+
+
 def test_directx_tessellation_evaluation_validates_domain_matches_hull_domain():
     mismatched_code = """
     shader mismatched_tessellation_domain {

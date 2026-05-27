@@ -1103,8 +1103,10 @@ class RustCodeGen:
             return True
 
         if self.is_array_type_name(type_name):
-            base_type, size = parse_array_type(str(type_name))
-            return size is not None and self.type_is_copy_derivable(
+            base_type, sizes = self.c_array_type_parts(type_name)
+            return all(
+                size is not None for size in sizes
+            ) and self.type_is_copy_derivable(
                 base_type,
                 generic_names,
                 non_copy_type_names,
@@ -1851,7 +1853,8 @@ class RustCodeGen:
         if not self.is_array_type_name(target_type):
             return False
 
-        base_type, size = parse_array_type(str(target_type))
+        base_type, sizes = self.c_array_type_parts(target_type)
+        size = sizes[0] if sizes else None
         if size is None:
             return True
 
@@ -4396,6 +4399,55 @@ class RustCodeGen:
     def is_array_type_name(self, type_name):
         return type_name is not None and "[" in str(type_name) and "]" in str(type_name)
 
+    def c_array_type_parts(self, type_name):
+        if type_name is None:
+            return None, []
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            type_name = self.convert_type_node_to_string(type_name)
+        else:
+            type_name = str(type_name)
+
+        if "[" not in type_name or "]" not in type_name:
+            return type_name, []
+
+        open_bracket = type_name.find("[")
+        base_type = type_name[:open_bracket]
+        suffix = type_name[open_bracket:]
+        sizes = []
+        while suffix.startswith("["):
+            close_bracket = suffix.find("]")
+            if close_bracket < 0:
+                return type_name, []
+
+            size_text = suffix[1:close_bracket].strip()
+            if not size_text:
+                sizes.append(None)
+            else:
+                try:
+                    sizes.append(int(size_text))
+                except ValueError:
+                    sizes.append(None)
+            suffix = suffix[close_bracket + 1 :]
+
+        if suffix:
+            return type_name, []
+        return base_type, sizes
+
+    def format_c_array_type(self, base_type, sizes):
+        suffix = "".join(f"[{'' if size is None else size}]" for size in sizes)
+        return f"{base_type}{suffix}"
+
+    def c_array_outer_element_type_and_size(self, type_name):
+        base_type, sizes = self.c_array_type_parts(type_name)
+        if not sizes:
+            return None, None
+        element_type = (
+            self.format_c_array_type(base_type, sizes[1:])
+            if len(sizes) > 1
+            else base_type
+        )
+        return element_type, sizes[0]
+
     def generate_array_literal_expression(
         self, expr, target_type=None, static_context=False
     ):
@@ -4403,7 +4455,9 @@ class RustCodeGen:
         target_size = None
 
         if self.is_array_type_name(target_type):
-            element_target_type, target_size = parse_array_type(str(target_type))
+            element_target_type, target_size = self.c_array_outer_element_type_and_size(
+                target_type
+            )
 
         elements = []
         for element in expr.elements:
@@ -7174,9 +7228,9 @@ class RustCodeGen:
             return substitutions[type_name]
 
         if self.is_array_type_name(type_name):
-            base_type, size = parse_array_type(type_name)
+            base_type, sizes = self.c_array_type_parts(type_name)
             mapped_base = self.substitute_type_parameters(base_type, substitutions)
-            return f"{mapped_base}[{size}]" if size is not None else f"{mapped_base}[]"
+            return self.format_c_array_type(mapped_base, sizes)
 
         base_type, generic_args = self.generic_type_parts(type_name)
         if not generic_args:
@@ -7227,8 +7281,8 @@ class RustCodeGen:
             array_type = str(array_type)
         if "[" not in array_type or "]" not in array_type:
             return None
-        base_type, _ = parse_array_type(array_type)
-        return base_type or None
+        element_type, _size = self.c_array_outer_element_type_and_size(array_type)
+        return element_type or None
 
     def vector_type_info(self, type_name):
         if type_name is None:
@@ -7384,12 +7438,15 @@ class RustCodeGen:
             vtype_str = str(vtype)
 
         if "[" in vtype_str and "]" in vtype_str:
-            base_type, size = parse_array_type(vtype_str)
+            base_type, sizes = self.c_array_type_parts(vtype_str)
             base_mapped = self.type_mapping.get(base_type, base_type)
-            if size:
-                return f"[{self.qualify_colliding_runtime_type(base_mapped)}; {size}]"
-            else:
-                return f"Vec<{self.qualify_colliding_runtime_type(base_mapped)}>"
+            rust_type = self.qualify_colliding_runtime_type(base_mapped)
+            for size in reversed(sizes):
+                if size is None:
+                    rust_type = f"Vec<{rust_type}>"
+                else:
+                    rust_type = f"[{rust_type}; {size}]"
+            return rust_type
 
         mapped_type = self.type_mapping.get(vtype_str)
         if mapped_type is not None:

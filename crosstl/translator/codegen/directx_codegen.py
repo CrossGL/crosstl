@@ -344,6 +344,7 @@ class HLSLCodeGen:
         self.current_generic_function_substitutions = {}
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
+        self.current_hlsl_hull_output_element_type = None
         self.current_hlsl_hull_domain = None
         self.current_hlsl_mesh_payload_types = set()
         self.current_hlsl_dispatch_mesh_payload_types = set()
@@ -612,6 +613,7 @@ class HLSLCodeGen:
         self.current_global_resource_declaration_nodes = None
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
+        self.current_hlsl_hull_output_element_type = None
         self.current_hlsl_hull_domain = None
         self.current_hlsl_mesh_payload_types = set()
         self.current_hlsl_dispatch_mesh_payload_types = set()
@@ -1420,6 +1422,9 @@ class HLSLCodeGen:
         stage_entry_names = self.stage_entry_names(ast, target_stage)
         self.current_hlsl_hull_output_control_points = (
             self.hlsl_program_hull_output_control_points(ast)
+        )
+        self.current_hlsl_hull_output_element_type = (
+            self.hlsl_program_hull_output_element_type(ast)
         )
         self.current_hlsl_hull_domain = self.hlsl_program_hull_domain(ast)
         self.current_hlsl_mesh_payload_types = self.hlsl_program_mesh_payload_types(ast)
@@ -5146,6 +5151,18 @@ class HLSLCodeGen:
                 f"({hull_output_control_points})"
             )
 
+    def validate_hlsl_domain_output_patch_element_type(self, parameters):
+        hull_output_type = self.current_hlsl_hull_output_element_type
+        output_patch_type = self.hlsl_patch_element_type(parameters, "OutputPatch")
+        if hull_output_type is None or output_patch_type is None:
+            return
+        if output_patch_type != hull_output_type:
+            raise ValueError(
+                "DirectX tessellation_evaluation stage OutputPatch element type "
+                f"'{output_patch_type}' must match tessellation_control output "
+                f"type '{hull_output_type}'"
+            )
+
     def validate_hlsl_domain_matches_hull(self, func, shader_type):
         if shader_type != "tessellation_evaluation":
             return
@@ -6283,6 +6300,7 @@ class HLSLCodeGen:
                     "an OutputPatch<T, N> parameter"
                 )
             self.validate_hlsl_domain_output_patch_control_points(parameters)
+            self.validate_hlsl_domain_output_patch_element_type(parameters)
             if not any(
                 self.hlsl_parameter_has_semantic(parameter, "SV_DomainLocation")
                 for parameter in parameters
@@ -7858,6 +7876,19 @@ class HLSLCodeGen:
         counts.discard(None)
         if len(counts) == 1:
             return next(iter(counts))
+        return None
+
+    def hlsl_program_hull_output_element_type(self, ast):
+        output_types = set()
+        for func in self.hlsl_stage_entry_functions(ast, "tessellation_control"):
+            return_type = self.type_name_string(
+                getattr(func, "return_type", getattr(func, "vtype", None))
+            )
+            if not return_type or self.map_type(return_type) == "void":
+                continue
+            output_types.add(self.map_type(return_type))
+        if len(output_types) == 1:
+            return next(iter(output_types))
         return None
 
     def hlsl_program_hull_domain(self, ast):

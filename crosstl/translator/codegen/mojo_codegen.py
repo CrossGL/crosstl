@@ -596,6 +596,23 @@ MOJO_BYTE_ADDRESS_STORE_METHODS = {
     "Store4": 4,
 }
 
+MOJO_BYTE_ADDRESS_ATOMIC_METHODS = {
+    "InterlockedAdd",
+    "InterlockedAnd",
+    "InterlockedCompareExchange",
+    "InterlockedCompareStore",
+    "InterlockedExchange",
+    "InterlockedMax",
+    "InterlockedMin",
+    "InterlockedOr",
+    "InterlockedXor",
+}
+
+MOJO_BUFFER_COUNTER_METHODS = {
+    "DecrementCounter",
+    "IncrementCounter",
+}
+
 MOJO_BUFFER_OP_ALIASES = {
     "Append": "Append",
     "append": "Append",
@@ -4054,6 +4071,14 @@ class MojoCodeGen:
                 )
                 return f"buffer_store{width}({generated_args})"
 
+            if member in MOJO_BYTE_ADDRESS_ATOMIC_METHODS:
+                self.validate_resource_read_write_access(obj_expr, member)
+                raise ValueError(
+                    "Unsupported Mojo byte-address buffer atomic method "
+                    f"{member}; byte-address atomics are not available in "
+                    "the Mojo placeholder backend"
+                )
+
         if member == "Load" and element_type is not None:
             self.validate_resource_read_access(obj_expr, "Load")
             self.validate_buffer_operation(
@@ -4110,6 +4135,14 @@ class MojoCodeGen:
                 [obj, *[self.generate_expression(arg) for arg in args]]
             )
             return f"buffer_dimensions({generated_args})"
+
+        if member in MOJO_BUFFER_COUNTER_METHODS:
+            self.validate_resource_read_write_access(obj_expr, member)
+            raise ValueError(
+                "Unsupported Mojo buffer counter method "
+                f"{member}; structured-buffer counters are not available "
+                "in the Mojo placeholder backend"
+            )
 
         return None
 

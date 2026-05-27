@@ -4382,6 +4382,171 @@ def test_metal_mesh_payload_dispatch_argument_generates_object_data_payload():
     assert "DispatchMesh" not in generated
 
 
+def test_metal_mesh_payload_dispatch_helpers_forward_object_data_context():
+    code = """
+    shader meshpipe {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        task {
+            void dispatchOne(threadgroup MeshPayload& payload) {
+                DispatchMesh(1, 1, 1, payload);
+            }
+
+            void launch(threadgroup MeshPayload& payload) {
+                dispatchOne(payload);
+            }
+
+            void main() @numthreads(1, 1, 1) {
+                groupshared MeshPayload payload;
+                payload.meshlet = 7u;
+                launch(payload);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[1],
+                @indices out uint points[1]
+            ) @numthreads(1, 1, 1) @outputtopology(point) {
+                SetMeshOutputCounts(1, 1);
+                verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+                points[0] = 0u;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void dispatchOne(threadgroup MeshPayload& payload, "
+        "object_data MeshPayload& _crossglMeshPayload, "
+        "mesh_grid_properties _crossglMeshGrid)"
+    ) in generated
+    assert (
+        "void launch(threadgroup MeshPayload& payload, "
+        "object_data MeshPayload& _crossglMeshPayload, "
+        "mesh_grid_properties _crossglMeshGrid)"
+    ) in generated
+    assert (
+        "object_data MeshPayload& _crossglMeshPayload [[payload]], "
+        "mesh_grid_properties _crossglMeshGrid"
+    ) in generated
+    assert "dispatchOne(payload, _crossglMeshPayload, _crossglMeshGrid);" in generated
+    assert "launch(payload, _crossglMeshPayload, _crossglMeshGrid);" in generated
+    assert "_crossglMeshPayload = payload;" in generated
+    assert "_crossglMeshGrid.set_threadgroups_per_grid(uint3(1, 1, 1));" in generated
+    assert "unsupported Metal mesh dispatch helper call" not in generated
+    assert "unsupported Metal mesh payload dispatch" not in generated
+    assert "DispatchMesh" not in generated
+
+
+def test_metal_mesh_dispatch_helper_calls_receive_payload_and_grid_context():
+    code = """
+    shader meshpipe {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        void issue(threadgroup MeshPayload& payload) {
+            DispatchMesh(1, 1, 1, payload);
+        }
+
+        void wrapper(threadgroup MeshPayload& payload) {
+            issue(payload);
+        }
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                groupshared MeshPayload payload;
+                payload.meshlet = 7u;
+                wrapper(payload);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[1],
+                @indices out uint points[1]
+            ) @numthreads(1, 1, 1) @outputtopology(point) {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void issue(threadgroup MeshPayload& payload, "
+        "object_data MeshPayload& _crossglMeshPayload, "
+        "mesh_grid_properties _crossglMeshGrid)"
+    ) in generated
+    assert (
+        "void wrapper(threadgroup MeshPayload& payload, "
+        "object_data MeshPayload& _crossglMeshPayload, "
+        "mesh_grid_properties _crossglMeshGrid)"
+    ) in generated
+    assert "issue(payload, _crossglMeshPayload, _crossglMeshGrid);" in generated
+    assert "wrapper(payload, _crossglMeshPayload, _crossglMeshGrid);" in generated
+    assert "_crossglMeshPayload = payload;" in generated
+    assert "_crossglMeshGrid.set_threadgroups_per_grid(uint3(1, 1, 1));" in generated
+    assert "DispatchMesh" not in generated
+
+
+def test_metal_mesh_dispatch_helper_call_without_stage_context_is_diagnostic():
+    code = """
+    shader meshpipe {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        void issue(threadgroup MeshPayload& payload) {
+            DispatchMesh(1, 1, 1, payload);
+        }
+
+        compute {
+            void main() {
+                groupshared MeshPayload payload;
+                issue(payload);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[1],
+                @indices out uint points[1]
+            ) @numthreads(1, 1, 1) @outputtopology(point) {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "/* unsupported Metal mesh dispatch helper call: function 'issue' "
+        "requires an object_data payload context */"
+    ) in generated
+    assert "issue(payload);" not in generated
+    assert "DispatchMesh" not in generated
+
+
 def test_metal_mesh_payload_dispatch_accepts_threadgroup_array_elements():
     code = """
     shader meshpipe {

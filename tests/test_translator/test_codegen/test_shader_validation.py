@@ -2307,6 +2307,47 @@ shader MetalMeshPayloadDispatchValidation {
 """
 
 
+METAL_MESH_PAYLOAD_HELPER_DISPATCH_SHADER = """
+shader MetalMeshPayloadHelperDispatchValidation {
+    struct MeshPayload {
+        uint meshlet;
+    };
+
+    struct MeshVertex {
+        vec4 position @ gl_Position;
+    };
+
+    task {
+        void dispatchOne(threadgroup MeshPayload& payload) {
+            DispatchMesh(1, 1, 1, payload);
+        }
+
+        void launch(threadgroup MeshPayload& payload) {
+            dispatchOne(payload);
+        }
+
+        void main() @numthreads(1, 1, 1) {
+            groupshared MeshPayload payload;
+            payload.meshlet = 7u;
+            launch(payload);
+        }
+    }
+
+    mesh {
+        void main(
+            @mesh_payload in MeshPayload payload,
+            @vertices out MeshVertex verts[1],
+            @indices out uint points[1]
+        ) @numthreads(1, 1, 1) @outputtopology(point) {
+            SetMeshOutputCounts(1, 1);
+            verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+            points[0] = 0u;
+        }
+    }
+}
+"""
+
+
 METAL_MESH_PAYLOAD_ARRAY_SOURCE_SHADER = """
 shader MetalMeshPayloadArraySourceValidation {
     struct MeshPayload {
@@ -4697,6 +4738,49 @@ def test_generated_metal_mesh_payload_dispatch_compiles_with_metal3(tmp_path):
     assert "const object_data MeshPayload& payload [[payload]]" in code
     assert "_crossglMeshPayload = payload;" in code
     assert "[[mesh_payload]]" not in code
+    assert "DispatchMesh" not in code
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_mesh_payload_helper_dispatch_compiles_with_metal3(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "mesh_payload_helper_dispatch.metal"
+    output = tmp_path / "mesh_payload_helper_dispatch.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_MESH_PAYLOAD_HELPER_DISPATCH_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "object_data MeshPayload& _crossglMeshPayload [[payload]]" in code
+    assert "mesh_grid_properties _crossglMeshGrid" in code
+    assert "dispatchOne(payload, _crossglMeshPayload, _crossglMeshGrid);" in code
+    assert "launch(payload, _crossglMeshPayload, _crossglMeshGrid);" in code
+    assert "_crossglMeshPayload = payload;" in code
     assert "DispatchMesh" not in code
 
     run_validator(

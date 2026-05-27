@@ -2501,6 +2501,62 @@ def test_struct_resource_field_access_qualifiers_are_enforced_for_mojo_codegen()
         generate_code(parse_code(tokenize_code(invalid_raw_free_read)))
 
 
+def test_unsupported_buffer_counter_and_byte_address_atomic_methods_are_diagnostic():
+    invalid_byte_address_atomic = """
+    RWByteAddressBuffer rawBuffer;
+
+    void invalidAtomic(uint offset, uint value) {
+        rawBuffer.InterlockedAdd(offset, value);
+    }
+    """
+    with pytest.raises(
+        ValueError, match="byte-address buffer atomic method InterlockedAdd"
+    ):
+        generate_code(parse_code(tokenize_code(invalid_byte_address_atomic)))
+
+    invalid_compare_store = """
+    RWByteAddressBuffer rawBuffer;
+
+    void invalidCompareStore(uint offset, uint compare, uint value) {
+        rawBuffer.InterlockedCompareStore(offset, compare, value);
+    }
+    """
+    with pytest.raises(
+        ValueError, match="byte-address buffer atomic method InterlockedCompareStore"
+    ):
+        generate_code(parse_code(tokenize_code(invalid_compare_store)))
+
+    invalid_readonly_atomic = """
+    readonly RWByteAddressBuffer rawBuffer;
+
+    void invalidReadonlyAtomic(uint offset, uint value) {
+        rawBuffer.InterlockedOr(offset, value);
+    }
+    """
+    with pytest.raises(ValueError, match="InterlockedOr.*rawBuffer.*readonly"):
+        generate_code(parse_code(tokenize_code(invalid_readonly_atomic)))
+
+    invalid_counter = """
+    RWStructuredBuffer<int> values;
+
+    uint invalidCounter() {
+        return values.IncrementCounter();
+    }
+    """
+    with pytest.raises(ValueError, match="buffer counter method IncrementCounter"):
+        generate_code(parse_code(tokenize_code(invalid_counter)))
+
+    invalid_readonly_counter = """
+    readonly RWStructuredBuffer<int> values;
+
+    uint invalidReadonlyCounter() {
+        return values.DecrementCounter();
+    }
+    """
+    with pytest.raises(ValueError, match="DecrementCounter.*values.*readonly"):
+        generate_code(parse_code(tokenize_code(invalid_readonly_counter)))
+
+
 def test_struct_resource_field_buffer_access_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -3119,6 +3175,86 @@ def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen(
     """
     with pytest.raises(ValueError, match="Unsupported Consume.*ByteAddressBuffer"):
         generate_code(parse_code(tokenize_code(invalid_consume)))
+
+
+def test_unsupported_buffer_counter_methods_are_rejected_for_mojo_codegen():
+    invalid_increment = """
+    RWStructuredBuffer<int> values;
+
+    uint invalidIncrement() {
+        return values.IncrementCounter();
+    }
+    """
+    with pytest.raises(ValueError, match="buffer counter method IncrementCounter"):
+        generate_code(parse_code(tokenize_code(invalid_increment)))
+
+    invalid_decrement = """
+    AppendStructuredBuffer<int> values;
+
+    uint invalidDecrement() {
+        return values.DecrementCounter();
+    }
+    """
+    with pytest.raises(ValueError, match="buffer counter method DecrementCounter"):
+        generate_code(parse_code(tokenize_code(invalid_decrement)))
+
+    readonly_increment = """
+    readonly RWStructuredBuffer<int> values;
+
+    uint invalidReadonlyIncrement() {
+        return values.IncrementCounter();
+    }
+    """
+    with pytest.raises(ValueError, match="IncrementCounter.*values.*readonly"):
+        generate_code(parse_code(tokenize_code(readonly_increment)))
+
+
+def test_unsupported_byte_address_atomic_methods_are_rejected_for_mojo_codegen():
+    invalid_interlocked_add = """
+    RWByteAddressBuffer rawBytes;
+
+    void invalidAtomic(uint offset, uint value, uint original) {
+        rawBytes.InterlockedAdd(offset, value, original);
+    }
+    """
+    with pytest.raises(
+        ValueError, match="byte-address buffer atomic method InterlockedAdd"
+    ):
+        generate_code(parse_code(tokenize_code(invalid_interlocked_add)))
+
+    invalid_interlocked_compare_exchange = """
+    RWByteAddressBuffer rawBytes[2];
+
+    void invalidAtomic(
+        int slot,
+        uint offset,
+        uint compare,
+        uint value,
+        uint original
+    ) {
+        rawBytes[slot].InterlockedCompareExchange(
+            offset,
+            compare,
+            value,
+            original
+        );
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="byte-address buffer atomic method InterlockedCompareExchange",
+    ):
+        generate_code(parse_code(tokenize_code(invalid_interlocked_compare_exchange)))
+
+    readonly_interlocked_add = """
+    readonly RWByteAddressBuffer rawBytes;
+
+    void invalidReadonlyAtomic(uint offset, uint value, uint original) {
+        rawBytes.InterlockedAdd(offset, value, original);
+    }
+    """
+    with pytest.raises(ValueError, match="InterlockedAdd.*rawBytes.*readonly"):
+        generate_code(parse_code(tokenize_code(readonly_interlocked_add)))
 
 
 def test_advanced_texture_placeholder_builtins_compile_with_mojo(tmp_path):

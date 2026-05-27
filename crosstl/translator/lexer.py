@@ -230,6 +230,7 @@ TOKENS = OrderedDict(
         # Operators - Arithmetic
         ("INCREMENT", r"\+\+"),
         ("DECREMENT", r"--"),
+        ("ARROW", r"->"),
         ("POWER", r"\*\*"),
         ("PLUS", r"\+"),
         ("MINUS", r"-"),
@@ -237,7 +238,6 @@ TOKENS = OrderedDict(
         ("DIVIDE", r"/"),
         ("MOD", r"%"),
         # Operators - Other
-        ("ARROW", r"->"),
         ("FAT_ARROW", r"=>"),
         ("DOUBLE_COLON", r"::"),
         ("RANGE_INCLUSIVE", r"\.\.="),

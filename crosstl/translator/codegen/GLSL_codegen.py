@@ -6650,6 +6650,29 @@ class GLSLCodeGen:
             component_values.append(f"{gather}.{component_suffixes[index]}")
         return f"vec4({', '.join(component_values)})"
 
+    def texture_gather_compare_offsets_args(self, extra_args):
+        if not extra_args:
+            return None, None
+
+        compare_arg = extra_args[0]
+        offset_args, component_arg = self.texture_gather_offsets_args(extra_args[1:])
+        if component_arg is not None:
+            return None, None
+        return compare_arg, offset_args
+
+    def texture_gather_compare_offsets_expression(
+        self, texture_name, coord, compare, offset_args
+    ):
+        component_suffixes = ("x", "y", "z", "w")
+        component_values = []
+        for index, offset_arg in enumerate(offset_args):
+            offset = self.generate_expression(offset_arg)
+            gather = (
+                f"textureGatherOffset({texture_name}, {coord}, {compare}, {offset})"
+            )
+            component_values.append(f"{gather}.{component_suffixes[index]}")
+        return f"vec4({', '.join(component_values)})"
+
     def texture_gather_dynamic_component_expression(self, build_expression, component):
         component_calls = [build_expression(index) for index in range(4)]
         return (
@@ -7379,6 +7402,93 @@ class GLSLCodeGen:
     def texture_gather_compare_offset_supported(self, texture_type):
         return self.texture_sampling_capabilities(texture_type)["gather_compare_offset"]
 
+    def validate_texture_gather_compare_offsets_argument(
+        self, func_name, texture_type, offset_arg
+    ):
+        offset_type = self.expression_result_type(offset_arg)
+        if offset_type is None:
+            return
+        if not self.is_integer_coordinate_type(offset_type):
+            raise ValueError(
+                operation_argument_type_error(
+                    "OpenGL",
+                    "resource",
+                    func_name,
+                    "an integer",
+                    "offset",
+                    expression_debug_name(offset_arg),
+                    self.type_name_string(offset_type),
+                )
+            )
+        expected_dimension = self.resource_offset_dimension(
+            "textureGatherCompareOffset", texture_type
+        )
+        offset_dimension = integer_coordinate_dimension_from_type_name(
+            self.type_name_string(offset_type), self.map_type
+        )
+        if offset_dimension is None or offset_dimension == expected_dimension:
+            return
+        raise ValueError(
+            operation_dimension_argument_error(
+                "OpenGL",
+                "resource",
+                func_name,
+                expected_dimension,
+                "integer",
+                "offset",
+                self.resource_base_type(texture_type),
+                expression_debug_name(offset_arg),
+                self.type_name_string(offset_type),
+            )
+        )
+
+    def generate_texture_gather_compare_offsets_call(self, func_name, args):
+        parts = self.texture_call_parts(args)
+        if parts is None:
+            return self.unsupported_texture_gather_compare_call(
+                func_name, texture_coordinate_arguments_error()
+            )
+
+        texture_name, coord, extra_args = parts
+        texture_type = self.texture_resource_type(args[0])
+        if self.is_multisample_texture_resource_type(texture_type):
+            return self.unsupported_multisample_texture_gather_compare_call(
+                func_name, texture_type
+            )
+
+        compare_arg, offset_args = self.texture_gather_compare_offsets_args(extra_args)
+        if offset_args is None:
+            return self.unsupported_texture_gather_compare_call(
+                func_name, "requires compare and typed offsets array or four offsets"
+            )
+        if not self.texture_gather_compare_offset_supported(texture_type):
+            return self.unsupported_texture_gather_compare_call(
+                func_name, texture_compare_offset_capability_error("GLSL")
+            )
+
+        compare_type = self.expression_result_type(compare_arg)
+        if compare_type is not None and not self.is_scalar_floating_type(compare_type):
+            raise ValueError(
+                operation_argument_type_error(
+                    "OpenGL",
+                    "texture compare",
+                    func_name,
+                    "a scalar floating",
+                    "compare",
+                    expression_debug_name(compare_arg),
+                    self.type_name_string(compare_type),
+                )
+            )
+        for offset_arg in offset_args:
+            self.validate_texture_gather_compare_offsets_argument(
+                func_name, texture_type, offset_arg
+            )
+
+        compare = self.generate_expression(compare_arg)
+        return self.texture_gather_compare_offsets_expression(
+            texture_name, coord, compare, offset_args
+        )
+
     def generate_texture_gather_compare_call(self, func_name, args):
         parts = self.texture_call_parts(args)
         if parts is None:
@@ -7827,6 +7937,9 @@ class GLSLCodeGen:
 
         if is_texture_compare_operation(func_name):
             return self.generate_texture_compare_call(func_name, args)
+
+        if func_name == "textureGatherCompareOffsets":
+            return self.generate_texture_gather_compare_offsets_call(func_name, args)
 
         if is_texture_gather_compare_operation(func_name):
             return self.generate_texture_gather_compare_call(func_name, args)

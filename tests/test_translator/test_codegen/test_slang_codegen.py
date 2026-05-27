@@ -8828,6 +8828,81 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
     assert "textureQueryLevels(" not in generated_code
 
 
+def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
+    code = """
+    shader UnsupportedResourceQueries {
+        sampler2d colorMap;
+        sampler2dms msTex;
+        sampler2dmsarray msLayers;
+        image2D colorImage;
+        image2DMS msImage;
+
+        compute {
+            void main() {
+                int msLevels = textureQueryLevels(msTex);
+                int msArrayLevels = textureQueryLevels(msLayers);
+                int plainTextureSamples = textureSamples(colorMap);
+                int plainImageSamples = imageSamples(colorImage);
+                int imageSamplesFromSampler = imageSamples(msTex);
+                int textureSamplesFromImage = textureSamples(msImage);
+                int missingTextureSamples = textureSamples();
+                int missingImageSamples = imageSamples();
+                int missingLevels = textureQueryLevels();
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "int msLevels = /* unsupported Slang resource query: "
+        "textureQueryLevels requires a mipmapped sampled texture resource */ 0;"
+        in generated_code
+    )
+    assert (
+        "int msArrayLevels = /* unsupported Slang resource query: "
+        "textureQueryLevels requires a mipmapped sampled texture resource */ 0;"
+        in generated_code
+    )
+    assert (
+        "int plainTextureSamples = /* unsupported Slang resource query: "
+        "textureSamples requires a multisampled texture resource */ 0;"
+        in generated_code
+    )
+    assert (
+        "int plainImageSamples = /* unsupported Slang resource query: "
+        "imageSamples requires a multisampled image resource */ 0;" in generated_code
+    )
+    assert (
+        "int imageSamplesFromSampler = /* unsupported Slang resource query: "
+        "imageSamples requires a multisampled image resource */ 0;" in generated_code
+    )
+    assert (
+        "int textureSamplesFromImage = /* unsupported Slang resource query: "
+        "textureSamples requires a multisampled texture resource */ 0;"
+        in generated_code
+    )
+    assert (
+        "int missingTextureSamples = /* unsupported Slang resource query: "
+        "textureSamples requires a resource argument */ 0;" in generated_code
+    )
+    assert (
+        "int missingImageSamples = /* unsupported Slang resource query: "
+        "imageSamples requires a resource argument */ 0;" in generated_code
+    )
+    assert (
+        "int missingLevels = /* unsupported Slang resource query: "
+        "textureQueryLevels requires a resource argument */ 0;" in generated_code
+    )
+    assert generated_code.count("unsupported Slang resource query") == 9
+    assert "textureQueryLevels(" not in generated_code
+    assert "textureSamples(" not in generated_code
+    assert "imageSamples(" not in generated_code
+
+
 def test_slangc_smoke_compiles_generated_resource_query_helpers_if_available(
     tmp_path,
 ):

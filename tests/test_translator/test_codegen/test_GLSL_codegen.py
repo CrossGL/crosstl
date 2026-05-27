@@ -7143,6 +7143,10 @@ def test_opengl_rejects_wrong_offset_dimension_for_resource_operation(call, oper
             "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset3)",
             "textureGatherCompareOffset",
         ),
+        (
+            "textureGatherCompareOffsets(shadowMap, compareSampler, input.uv, input.depth, input.offset3, input.offset3, input.offset3, input.offset3)",
+            "textureGatherCompareOffsets",
+        ),
     ],
 )
 def test_opengl_rejects_wrong_offset_dimension_for_extended_resource_operation(
@@ -7218,6 +7222,10 @@ def test_opengl_rejects_float_offset_for_resource_operation():
         (
             "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset)",
             "textureGatherCompareOffset",
+        ),
+        (
+            "textureGatherCompareOffsets(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.offset, input.offset, input.offset)",
+            "textureGatherCompareOffsets",
         ),
     ],
 )
@@ -9101,6 +9109,91 @@ def test_opengl_texture_gather_offset_variants_filter_sampler_arguments():
     assert "linearSampler" not in generated_code
     assert ", s, uv" not in generated_code
     assert ", s, uvLayer" not in generated_code
+
+
+def test_opengl_texture_gather_compare_offsets_filter_sampler_arguments():
+    shader = """
+    shader GatherCompareOffsets {
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth @ TEXCOORD1;
+            ivec2 offset0 @ TEXCOORD2;
+            ivec2 offset1 @ TEXCOORD3;
+            ivec2 offset2 @ TEXCOORD4;
+            ivec2 offset3 @ TEXCOORD5;
+        };
+
+        vec4 gatherShadowOffsets(
+            sampler2DShadow tex,
+            sampler s,
+            vec2 uv,
+            float depth,
+            ivec2 offsets[4],
+            ivec2 offset0,
+            ivec2 offset1,
+            ivec2 offset2,
+            ivec2 offset3
+        ) {
+            vec4 arrayOffsets = textureGatherCompareOffsets(
+                tex,
+                s,
+                uv,
+                depth,
+                offsets
+            );
+            vec4 directOffsets = textureGatherCompareOffsets(
+                tex,
+                s,
+                uv,
+                depth,
+                offset0,
+                offset1,
+                offset2,
+                offset3
+            );
+            return arrayOffsets + directOffsets;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                ivec2 offsets[4];
+                offsets[0] = input.offset0;
+                offsets[1] = input.offset1;
+                offsets[2] = input.offset2;
+                offsets[3] = input.offset3;
+                return gatherShadowOffsets(
+                    shadowMap,
+                    compareSampler,
+                    input.uv,
+                    input.depth,
+                    offsets,
+                    input.offset0,
+                    input.offset1,
+                    input.offset2,
+                    input.offset3
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "sampler compareSampler" not in generated_code
+    assert "sampler s" not in generated_code
+    assert "textureGatherCompareOffsets" not in generated_code
+    assert "textureGatherOffsets(" not in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offsets[0]).x" in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offsets[1]).y" in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offsets[2]).z" in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offsets[3]).w" in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offset0).x" in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offset3).w" in generated_code
 
 
 def test_opengl_texture_gather_offsets_mix_literal_and_dynamic_offsets():

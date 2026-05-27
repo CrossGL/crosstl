@@ -5469,6 +5469,138 @@ def test_target_typed_array_literals_in_generic_constructors_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_nested_array_literals_and_tuple_enum_payloads_compile(tmp_path):
+    generic_type = GenericType("T")
+    float_type = PrimitiveType("float")
+    matrix_type = ArrayType(ArrayType(generic_type, 2), 2)
+    matrix_box_float_type = NamedType("MatrixBox", [float_type])
+    matrix_choice_float_type = NamedType("MatrixChoice", [float_type])
+
+    def int_array(*values):
+        return ArrayLiteralNode(
+            [LiteralNode(value, PrimitiveType("int")) for value in values]
+        )
+
+    def matrix_literal(*rows):
+        return ArrayLiteralNode([int_array(*row) for row in rows])
+
+    matrix_choice_enum = EnumNode(
+        "MatrixChoice",
+        [
+            EnumVariantNode("Grid", fields=[matrix_type]),
+        ],
+    )
+    matrix_choice_enum.generic_params = [GenericParameterNode("T")]
+
+    ast = ShaderNode(
+        "NestedArrayTupleEnumTargets",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "MatrixBox",
+                [
+                    StructMemberNode("values", matrix_type),
+                ],
+                generic_params=[GenericParameterNode("T")],
+            ),
+            matrix_choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "identity_choice",
+                matrix_choice_float_type,
+                [ParameterNode("choice", matrix_choice_float_type)],
+                [ReturnNode(IdentifierNode("choice"))],
+            ),
+            FunctionNode(
+                "build_struct",
+                matrix_box_float_type,
+                [],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_box_float_type,
+                            [],
+                            named_arguments={
+                                "values": matrix_literal((1, 2), (3,)),
+                            },
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "build_tuple_variant",
+                matrix_choice_float_type,
+                [],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("MatrixChoice::Grid"),
+                            [matrix_literal((4, 5), (6, 7))],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "assign_tuple_variant",
+                matrix_choice_float_type,
+                [],
+                [
+                    VariableNode("selected", matrix_choice_float_type),
+                    AssignmentNode(
+                        IdentifierNode("selected"),
+                        FunctionCallNode(
+                            IdentifierNode("MatrixChoice::Grid"),
+                            [matrix_literal((8, 9), (10, 11))],
+                        ),
+                    ),
+                    ReturnNode(IdentifierNode("selected")),
+                ],
+            ),
+            FunctionNode(
+                "call_tuple_variant",
+                matrix_choice_float_type,
+                [],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("identity_choice"),
+                            [
+                                FunctionCallNode(
+                                    IdentifierNode("MatrixChoice::Grid"),
+                                    [matrix_literal((12, 13), (14, 15))],
+                                )
+                            ],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "pub values: [[T; 2]; 2]," in generated_code
+    assert "Grid([[T; 2]; 2])," in generated_code
+    assert (
+        "MatrixBox::<f32> { values: [[1.0, 2.0], " "[3.0, Default::default()]] }"
+    ) in generated_code
+    assert (
+        "return MatrixChoice::<f32>::Grid([[4.0, 5.0], [6.0, 7.0]]);" in generated_code
+    )
+    assert (
+        "selected = MatrixChoice::<f32>::Grid([[8.0, 9.0], [10.0, 11.0]]);"
+        in generated_code
+    )
+    assert (
+        "return identity_choice(MatrixChoice::<f32>::Grid("
+        "[[12.0, 13.0], [14.0, 15.0]]));"
+    ) in generated_code
+    assert "MatrixChoice::Grid" not in generated_code
+    assert "T[])," not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_struct_constructor_args_normalize_field_types_and_clone_non_copy_compile(
     tmp_path,
 ):
