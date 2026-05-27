@@ -4416,6 +4416,11 @@ class MetalCodeGen:
         if self.metal_atomic_target_needs_address(args[0], rendered_args[0]):
             rendered_args[0] = f"&{rendered_args[0]}"
         if self.is_metal_atomic_compare_exchange_name(func_name) and len(args) >= 2:
+            expected_diagnostic = (
+                self.metal_compare_exchange_expected_address_space_diagnostic(args[1])
+            )
+            if expected_diagnostic is not None:
+                return expected_diagnostic
             if self.metal_compare_exchange_expected_needs_address(
                 args[1], rendered_args[1]
             ):
@@ -4441,6 +4446,33 @@ class MetalCodeGen:
         if isinstance(arg, (ArrayAccessNode, MemberAccessNode)):
             return True
         return self.expression_name(arg) is not None
+
+    def metal_compare_exchange_expected_address_space_diagnostic(self, arg):
+        root_name = self.atomic_expected_storage_root_name(arg)
+        if root_name is None:
+            return None
+        address_space = self.current_address_space_variables.get(root_name)
+        if address_space is None and root_name in self.local_variable_types:
+            address_space = "thread"
+        if address_space in {None, "thread"}:
+            return None
+        return (
+            "false /* unsupported Metal atomic compare-exchange expected pointer: "
+            f"expected storage '{root_name}' uses {address_space} address space; "
+            "Metal requires thread storage */"
+        )
+
+    def atomic_expected_storage_root_name(self, arg):
+        if isinstance(arg, UnaryOpNode) and getattr(arg, "operator", None) == "&":
+            return self.atomic_expected_storage_root_name(arg.operand)
+        if isinstance(arg, BinaryOpNode) and getattr(arg, "operator", None) in {
+            "+",
+            "-",
+        }:
+            return self.atomic_expected_storage_root_name(
+                getattr(arg, "left", None)
+            ) or self.atomic_expected_storage_root_name(getattr(arg, "right", None))
+        return self.assignment_target_root_name(arg)
 
     def is_metal_address_expression(self, arg, rendered_arg):
         if isinstance(arg, UnaryOpNode) and getattr(arg, "operator", None) == "&":

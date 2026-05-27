@@ -5732,6 +5732,102 @@ def test_metal_atomic_compare_exchange_addresses_targets_and_expected_values():
     assert "atomic_compare_exchange_strong_explicit" not in generated
 
 
+def test_metal_device_atomic_compare_exchange_preserves_expected_address_space():
+    code = """
+    shader MetalDeviceAtomicCompareExchangeValidation {
+        bool claimDevice(
+            device atomic_uint* counters,
+            thread uint* expectedValues,
+            uint index,
+            uint desired
+        ) {
+            return atomic_compare_exchange_strong_explicit(
+                counters + index,
+                expectedValues + index,
+                desired,
+                memory_order_relaxed,
+                memory_order_relaxed
+            );
+        }
+
+        bool rejectDeviceExpected(
+            device atomic_uint* counters,
+            device uint* expectedValues,
+            uint index,
+            uint desired
+        ) {
+            return atomic_compare_exchange_weak_explicit(
+                counters + index,
+                expectedValues + index,
+                desired,
+                memory_order_relaxed,
+                memory_order_relaxed
+            );
+        }
+
+        compute {
+            void main(
+                device atomic_uint* counters @buffer(0),
+                device uint* deviceExpected @buffer(1),
+                uint index @gl_LocalInvocationIndex
+            ) {
+                uint expectedValues[64];
+                expectedValues[index] = 0u;
+                bool pointerClaimed = claimDevice(
+                    counters,
+                    expectedValues,
+                    index,
+                    1u
+                );
+                bool rejected = rejectDeviceExpected(
+                    counters,
+                    deviceExpected,
+                    index,
+                    2u
+                );
+                uint expected = pointerClaimed ? 1u : 0u;
+                bool directClaimed = atomic_compare_exchange_strong_explicit(
+                    counters[index],
+                    expected,
+                    3u,
+                    memory_order_relaxed,
+                    memory_order_relaxed
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "bool claimDevice(device atomic_uint* counters, thread uint* expectedValues, "
+        "uint index, uint desired)"
+    ) in generated
+    assert (
+        "return atomic_compare_exchange_weak_explicit(counters + index, "
+        "expectedValues + index, desired, memory_order_relaxed, "
+        "memory_order_relaxed);"
+    ) in generated
+    assert (
+        "return false /* unsupported Metal atomic compare-exchange expected pointer: "
+        "expected storage 'expectedValues' uses device address space; Metal requires "
+        "thread storage */;"
+    ) in generated
+    assert (
+        "bool directClaimed = atomic_compare_exchange_weak_explicit(&counters[index], "
+        "&expected, 3u, memory_order_relaxed, memory_order_relaxed);"
+    ) in generated
+    assert (
+        "atomic_compare_exchange_weak_explicit(counters + index, deviceExpected"
+        not in generated
+    )
+    assert (
+        "atomic_compare_exchange_weak_explicit(counters + index, expectedValues + index"
+        in generated
+    )
+    assert "atomic_compare_exchange_strong_explicit" not in generated
+
+
 def test_compute_builtin_semantics_roundtrip():
     code = """
     shader cs {
