@@ -9404,6 +9404,13 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
 
 def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
     code = """
+    struct QueryShapeResult {
+        int scalarTextureSize;
+        ivec2 vectorTextureSize;
+        int scalarImageSize;
+        ivec2 vectorImageSize;
+    };
+
     shader UnsupportedResourceQueries {
         sampler querySampler;
         sampler1d line;
@@ -9445,6 +9452,17 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
                 int vectorImageTarget = imageSize(colorImage);
                 ivec2 assignedTarget;
                 assignedTarget = imageSize(values);
+                QueryShapeResult fields;
+                fields.vectorTextureSize = textureSize(line, 0);
+                fields.scalarTextureSize = textureSize(colorMap, 0);
+                fields.vectorImageSize = imageSize(values);
+                fields.scalarImageSize = imageSize(colorImage);
+                QueryShapeResult constructed = QueryShapeResult(
+                    textureSize(colorMap, 0),
+                    textureSize(line, 0),
+                    imageSize(colorImage),
+                    imageSize(values)
+                );
             }
         }
     }
@@ -9566,7 +9584,34 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "assignedTarget = /* unsupported Slang resource query: "
         "imageSize returns int but target expects int2 */ int2(0);" in generated_code
     )
-    assert generated_code.count("unsupported Slang resource query") == 27
+    assert (
+        "fields.vectorTextureSize = /* unsupported Slang resource query: "
+        "textureSize returns int but target expects int2 */ int2(0);" in generated_code
+    )
+    assert (
+        "fields.scalarTextureSize = /* unsupported Slang resource query: "
+        "textureSize returns int2 but target expects int */ 0;" in generated_code
+    )
+    assert (
+        "fields.vectorImageSize = /* unsupported Slang resource query: "
+        "imageSize returns int but target expects int2 */ int2(0);" in generated_code
+    )
+    assert (
+        "fields.scalarImageSize = /* unsupported Slang resource query: "
+        "imageSize returns int2 but target expects int */ 0;" in generated_code
+    )
+    assert (
+        "QueryShapeResult constructed = QueryShapeResult("
+        "/* unsupported Slang resource query: textureSize returns int2 but target "
+        "expects int */ 0, "
+        "/* unsupported Slang resource query: textureSize returns int but target "
+        "expects int2 */ int2(0), "
+        "/* unsupported Slang resource query: imageSize returns int2 but target "
+        "expects int */ 0, "
+        "/* unsupported Slang resource query: imageSize returns int but target "
+        "expects int2 */ int2(0));" in generated_code
+    )
+    assert generated_code.count("unsupported Slang resource query") == 35
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
     assert "textureQueryLevels(" not in generated_code

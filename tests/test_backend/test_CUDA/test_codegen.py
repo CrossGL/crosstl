@@ -1355,6 +1355,60 @@ class TestCudaCodeGen:
         assert "cudaExternalMemoryGetMappedMipmappedArray(" not in result
         assert "cudaDestroyExternalMemory(" not in result
 
+    def test_cuda_external_semaphore_runtime_conversion(self):
+        """Test CUDA external-semaphore APIs emit metadata comments."""
+        code = """
+        void syncExternalSemaphore(
+            cudaExternalSemaphoreHandleDesc handleDesc,
+            cudaStream_t stream
+        ) {
+            cudaExternalSemaphore_t semaphore;
+            cudaExternalSemaphoreSignalParams signalParams;
+            cudaExternalSemaphoreWaitParams waitParams;
+            cudaImportExternalSemaphore(&semaphore, &handleDesc);
+            cudaError_t err = cudaSignalExternalSemaphoresAsync(
+                &semaphore,
+                &signalParams,
+                1,
+                stream
+            );
+            err = cudaWaitExternalSemaphoresAsync(
+                &semaphore,
+                &waitParams,
+                1,
+                stream
+            );
+            err = cudaDestroyExternalSemaphore(semaphore);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA external semaphore import: output: semaphore, "
+            "handle: (&handleDesc)"
+        ) in result
+        assert (
+            "// CUDA external semaphore signal: semaphores: (&semaphore), "
+            "params: (&signalParams), count: 1, stream: stream"
+        ) in result
+        assert (
+            "// CUDA external semaphore wait: semaphores: (&semaphore), "
+            "params: (&waitParams), count: 1, stream: stream"
+        ) in result
+        assert "// CUDA external semaphore destroy: semaphore" in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        assert "cudaImportExternalSemaphore(" not in result
+        assert "cudaSignalExternalSemaphoresAsync(" not in result
+        assert "cudaWaitExternalSemaphoresAsync(" not in result
+        assert "cudaDestroyExternalSemaphore(" not in result
+
     def test_cuda_runtime_event_api_conversion(self):
         """Test CUDA stream and event API calls emit metadata comments"""
         code = """

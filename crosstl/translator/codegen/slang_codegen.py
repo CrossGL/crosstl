@@ -40,6 +40,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from .array_utils import (
+    collect_struct_member_types,
     evaluate_literal_int_expression,
     format_c_style_array_declaration,
     get_array_size_from_node,
@@ -124,6 +125,7 @@ class SlangCodeGen:
         self.user_function_names = set()
         self.user_function_return_types = {}
         self.user_struct_names = set()
+        self.struct_member_types = {}
         self.stage_entry_name_overrides = {}
         self.identifier_aliases = {}
         self.slang_resource_register_cursors = {}
@@ -202,6 +204,9 @@ class SlangCodeGen:
                 ast
             )
             self.user_struct_names = self.collect_user_struct_names(ast)
+            self.struct_member_types = collect_struct_member_types(
+                self.collect_user_structs(ast), self.type_name_string
+            )
             self.stage_entry_name_overrides = {}
             self.identifier_aliases = {}
             self.slang_resource_register_cursors = {}
@@ -372,6 +377,37 @@ class SlangCodeGen:
         collect(node)
         return_types.pop(None, None)
         return return_types
+
+    def collect_user_structs(self, node):
+        structs = []
+        seen = set()
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, StructNode):
+                node_id = id(current)
+                if node_id not in seen:
+                    seen.add(node_id)
+                    structs.append(current)
+            for struct in getattr(current, "structs", []) or []:
+                collect(struct)
+            for function in getattr(current, "functions", []) or []:
+                collect(function)
+            for function in getattr(current, "local_functions", []) or []:
+                collect(function)
+            collect(getattr(current, "entry_point", None))
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        return structs
 
     def collect_user_struct_names(self, node):
         names = set()
@@ -4039,6 +4075,9 @@ class SlangCodeGen:
                     return component_type
                 if component_type:
                     return f"{component_type}{len(member)}"
+            member_type = self.struct_member_type(object_type, member)
+            if member_type is not None:
+                return member_type
             return None
         if isinstance(expr, RayQueryOpNode):
             return self.slang_ray_query_method_return_type(expr.operation)
@@ -4090,6 +4129,8 @@ class SlangCodeGen:
             )
             if structured_result_type is not None:
                 return structured_result_type
+            if isinstance(func_name, str) and func_name in self.user_struct_names:
+                return func_name
             if isinstance(func_name, str) and func_name in {
                 "float",
                 "double",
@@ -4124,6 +4165,36 @@ class SlangCodeGen:
                 return str(func_name)
             return self.user_function_return_types.get(func_name)
         return None
+
+    def struct_member_type(self, object_type, member_name):
+        if object_type is None or member_name is None:
+            return None
+        object_type = self.type_name_string(object_type)
+        if not object_type:
+            return None
+        object_type, _array_suffix = split_array_type_suffix(object_type)
+        return self.struct_member_types.get(object_type, {}).get(member_name)
+
+    def struct_constructor_argument_types(self, struct_name):
+        member_types = self.struct_member_types.get(struct_name)
+        if not member_types:
+            return []
+        return list(member_types.values())
+
+    def generate_struct_constructor_arguments(self, struct_name, args):
+        expected_types = self.struct_constructor_argument_types(struct_name)
+        generated_args = []
+        for index, arg in enumerate(args):
+            expected_type = (
+                expected_types[index] if index < len(expected_types) else None
+            )
+            if expected_type is None:
+                generated_args.append(self.generate_expression(arg))
+            else:
+                generated_args.append(
+                    self.generate_expression_with_expected(arg, expected_type)
+                )
+        return ", ".join(generated_args)
 
     def generate_literal(self, node):
         value = node.value
@@ -4268,6 +4339,13 @@ class SlangCodeGen:
                 lambda_expr = self.generate_lambda_expression(node.args)
                 if lambda_expr is not None:
                     return lambda_expr
+            if (
+                isinstance(callee, str)
+                and callee in self.user_struct_names
+                and callee not in self.user_function_names
+            ):
+                args = self.generate_struct_constructor_arguments(callee, node.args)
+                return f"{self.convert_type(callee)}({args})"
             args = ", ".join([self.generate_expression(arg) for arg in node.args])
             callee = self.convert_type(callee)
             if (

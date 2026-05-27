@@ -739,6 +739,31 @@ class CudaToCrossGLConverter:
         elif name == "cudaDestroyExternalMemory":
             if args:
                 return [f"// CUDA external memory destroy: {args[0]}"]
+        elif name == "cudaImportExternalSemaphore":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA external semaphore import: output: {output}, "
+                    f"handle: {args[1]}"
+                ]
+        elif name in {
+            "cudaSignalExternalSemaphoresAsync",
+            "cudaWaitExternalSemaphoresAsync",
+        }:
+            if len(args) >= 3:
+                operation = (
+                    "signal" if name == "cudaSignalExternalSemaphoresAsync" else "wait"
+                )
+                comment = (
+                    f"// CUDA external semaphore {operation}: "
+                    f"semaphores: {args[0]}, params: {args[1]}, count: {args[2]}"
+                )
+                if len(args) >= 4:
+                    comment += f", stream: {args[3]}"
+                return [comment]
+        elif name == "cudaDestroyExternalSemaphore":
+            if args:
+                return [f"// CUDA external semaphore destroy: {args[0]}"]
 
         return None
 
