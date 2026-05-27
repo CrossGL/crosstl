@@ -19,6 +19,7 @@ from crosstl.translator.ast import (
     MemberAccessNode,
     NamedType,
     PointerType,
+    PointerAccessNode,
     PreprocessorNode,
     PrimitiveType,
     RangeNode,
@@ -26,6 +27,7 @@ from crosstl.translator.ast import (
     ShaderNode,
     ShaderStage,
     StructPatternNode,
+    UnaryOpNode,
     VariableNode,
     VectorType,
     WaveOpNode,
@@ -4668,6 +4670,55 @@ def test_mesh_intrinsic_parses_to_node():
     body = stage.entry_point.body.statements
     var_decl = next(stmt for stmt in body if isinstance(stmt, VariableNode))
     assert isinstance(var_decl.initial_value, MeshOpNode)
+
+
+def test_stage_body_preserves_address_of_pointer_locals_and_arrow_access():
+    code = """
+    shader main {
+        struct Payload {
+            vec4 color;
+        };
+
+        object {
+            void main(Payload payload @payload) {
+                Payload* alias = &payload;
+                alias = &payload;
+                alias->color = vec4(1.0, 0.0, 0.0, 1.0);
+                DispatchMesh(1, 1, 1);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    stage = ast.stages[ShaderStage.OBJECT]
+    body = stage.entry_point.body.statements
+
+    assert len(body) == 4
+
+    declaration = body[0]
+    assert isinstance(declaration, VariableNode)
+    assert isinstance(declaration.var_type, PointerType)
+    assert isinstance(declaration.initial_value, UnaryOpNode)
+    assert declaration.initial_value.op == "&"
+    assert declaration.initial_value.operand.name == "payload"
+
+    assignment = body[1].expression
+    assert isinstance(assignment, AssignmentNode)
+    assert assignment.target.name == "alias"
+    assert isinstance(assignment.value, UnaryOpNode)
+    assert assignment.value.op == "&"
+    assert assignment.value.operand.name == "payload"
+
+    pointer_write = body[2].expression
+    assert isinstance(pointer_write, AssignmentNode)
+    assert isinstance(pointer_write.target, PointerAccessNode)
+    assert pointer_write.target.pointer_expr.name == "alias"
+    assert pointer_write.target.member == "color"
+
+    dispatch = body[3].expression
+    assert isinstance(dispatch, MeshOpNode)
+    assert dispatch.operation == "DispatchMesh"
 
 
 def test_rayquery_method_parses_to_node():

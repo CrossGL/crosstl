@@ -9405,6 +9405,7 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
 def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
     code = """
     shader UnsupportedResourceQueries {
+        sampler querySampler;
         sampler2d colorMap;
         sampler2dms msTex;
         sampler2dmsarray msLayers;
@@ -9413,6 +9414,17 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
 
         compute {
             void main() {
+                vec2 badMip = vec2(0.0, 1.0);
+                int missingTextureSize = textureSize();
+                int missingImageSize = imageSize();
+                int textureSizeFromSampler = textureSize(querySampler, 0);
+                int textureSizeFromImage = textureSize(colorImage, 0);
+                int imageSizeFromTexture = imageSize(colorMap);
+                int imageSizeFromSampler = imageSize(querySampler);
+                int extraTextureSize = textureSize(colorMap, 0, 1);
+                int badTextureMip = textureSize(colorMap, badMip);
+                int badMultisampleTextureMip = textureSize(msTex, badMip);
+                int extraImageSize = imageSize(colorImage, 0);
                 int msLevels = textureQueryLevels(msTex);
                 int msArrayLevels = textureQueryLevels(msLayers);
                 int plainTextureSamples = textureSamples(colorMap);
@@ -9434,6 +9446,46 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
+    assert (
+        "int missingTextureSize = /* unsupported Slang resource query: "
+        "textureSize requires a resource argument */ 0;" in generated_code
+    )
+    assert (
+        "int missingImageSize = /* unsupported Slang resource query: "
+        "imageSize requires a resource argument */ 0;" in generated_code
+    )
+    assert (
+        "int textureSizeFromSampler = /* unsupported Slang resource query: "
+        "textureSize requires a sampled texture resource */ 0;" in generated_code
+    )
+    assert (
+        "int textureSizeFromImage = /* unsupported Slang resource query: "
+        "textureSize requires a sampled texture resource */ 0;" in generated_code
+    )
+    assert (
+        "int imageSizeFromTexture = /* unsupported Slang resource query: "
+        "imageSize requires an image resource */ 0;" in generated_code
+    )
+    assert (
+        "int imageSizeFromSampler = /* unsupported Slang resource query: "
+        "imageSize requires an image resource */ 0;" in generated_code
+    )
+    assert (
+        "int extraTextureSize = /* unsupported Slang resource query: "
+        "textureSize accepts resource and optional mip argument */ 0;" in generated_code
+    )
+    assert (
+        "int badTextureMip = /* unsupported Slang resource query: "
+        "textureSize requires a scalar mip argument */ 0;" in generated_code
+    )
+    assert (
+        "int badMultisampleTextureMip = /* unsupported Slang resource query: "
+        "textureSize requires a scalar mip argument */ 0;" in generated_code
+    )
+    assert (
+        "int extraImageSize = /* unsupported Slang resource query: "
+        "imageSize accepts only a resource argument */ 0;" in generated_code
+    )
     assert (
         "int msLevels = /* unsupported Slang resource query: "
         "textureQueryLevels requires a mipmapped sampled texture resource */ 0;"
@@ -9486,7 +9538,9 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "int extraLevels = /* unsupported Slang resource query: "
         "textureQueryLevels accepts only a resource argument */ 0;" in generated_code
     )
-    assert generated_code.count("unsupported Slang resource query") == 12
+    assert generated_code.count("unsupported Slang resource query") == 22
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
     assert "textureQueryLevels(" not in generated_code
     assert "textureSamples(" not in generated_code
     assert "imageSamples(" not in generated_code

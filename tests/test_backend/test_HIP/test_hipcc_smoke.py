@@ -474,6 +474,124 @@ def test_native_hip_texture_layer_cube_modes_parse_and_compile_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_surface_layer_cube_modes_parse_and_compile_if_available(
+    tmp_path,
+):
+    """Smoke native HIP layered and cubemap surface intrinsics."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    __global__ void surface_layer_cube_modes(
+        hipSurfaceObject_t lineLayer,
+        hipSurfaceObject_t layers,
+        hipSurfaceObject_t cube,
+        hipSurfaceObject_t cubeLayers,
+        float4* out
+    ) {
+        int x = threadIdx.x;
+        int y = 1;
+        int face = 2;
+        int layer = 3;
+        float4 lineLoaded;
+        float4 layerLoaded;
+        float4 cubeLoaded;
+        float4 probeLoaded;
+        surf1DLayeredread<float4>(
+            &lineLoaded,
+            lineLayer,
+            x * sizeof(float4),
+            layer
+        );
+        surf2DLayeredread<float4>(
+            &layerLoaded,
+            layers,
+            x * sizeof(float4),
+            y,
+            layer
+        );
+        surfCubemapread<float4>(
+            &cubeLoaded,
+            cube,
+            x * sizeof(float4),
+            y,
+            face
+        );
+        surfCubemapLayeredread<float4>(
+            &probeLoaded,
+            cubeLayers,
+            x * sizeof(float4),
+            y,
+            face,
+            layer
+        );
+        surf1DLayeredwrite(lineLoaded, lineLayer, x * sizeof(float4), layer);
+        surf2DLayeredwrite(layerLoaded, layers, x * sizeof(float4), y, layer);
+        surfCubemapwrite(cubeLoaded, cube, x * sizeof(float4), y, face);
+        surfCubemapLayeredwrite(
+            &probeLoaded,
+            cubeLayers,
+            x * sizeof(float4),
+            y,
+            face,
+            layer
+        );
+        out[threadIdx.x] = make_float4(
+            lineLoaded.x,
+            layerLoaded.y,
+            cubeLoaded.z,
+            probeLoaded.w
+        );
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    expected_fragments = (
+        "// Kernel: surface_layer_cube_modes",
+        "image1DArray lineLayer",
+        "image2DArray layers",
+        "imageCube cube",
+        "imageCubeArray cubeLayers",
+        "@group(0) @binding(4) var<storage, read_write> out: array<vec4<f32>>",
+        "var x: i32 = gl_LocalInvocationID.x;",
+        "var y: i32 = 1;",
+        "var face: i32 = 2;",
+        "var layer: i32 = 3;",
+        "var lineLoaded: vec4<f32>;",
+        "var layerLoaded: vec4<f32>;",
+        "var cubeLoaded: vec4<f32>;",
+        "var probeLoaded: vec4<f32>;",
+        "lineLoaded = imageLoad(lineLayer, vec2<i32>(x, layer));",
+        "layerLoaded = imageLoad(layers, vec3<i32>(x, y, layer));",
+        "cubeLoaded = imageLoad(cube, vec3<i32>(x, y, face));",
+        "probeLoaded = imageLoad(cubeLayers, vec4<i32>(x, y, face, layer));",
+        "imageStore(lineLayer, vec2<i32>(x, layer), lineLoaded);",
+        "imageStore(layers, vec3<i32>(x, y, layer), layerLoaded);",
+        "imageStore(cube, vec3<i32>(x, y, face), cubeLoaded);",
+        "imageStore(cubeLayers, vec4<i32>(x, y, face, layer), probeLoaded);",
+        (
+            "out[gl_LocalInvocationID.x] = vec4<f32>("
+            "lineLoaded.x, layerLoaded.y, cubeLoaded.z, probeLoaded.w);"
+        ),
+    )
+    for fragment in expected_fragments:
+        assert fragment in crossgl
+
+    for raw_intrinsic in (
+        "surf1DLayeredread",
+        "surf1DLayeredwrite",
+        "surf2DLayeredread",
+        "surf2DLayeredwrite",
+        "surfCubemapread",
+        "surfCubemapwrite",
+        "surfCubemapLayeredread",
+        "surfCubemapLayeredwrite",
+    ):
+        assert raw_intrinsic not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_texture_surface_lifecycle_parses_and_compiles_if_available(
     tmp_path,
 ):

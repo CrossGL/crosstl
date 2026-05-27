@@ -855,22 +855,62 @@ def test_codegen_texture_method_descriptors():
         converter.texture_method_descriptor("SampleBias", 4)["function"]
         == "textureOffset"
     )
+    assert converter.texture_method_descriptor("Sample", 5) == {
+        "member": "Sample",
+        "function": "textureOffset",
+        "texture_function": "textureOffset",
+        "buffer_function": None,
+        "component": None,
+        "usage": "regular",
+        "buffer_when_max_args": None,
+        "drop_trailing_args": 2,
+        "dropped_parameters": ["LOD clamp", "status output"],
+    }
+    assert converter.texture_method_descriptor("SampleBias", 6)[
+        "dropped_parameters"
+    ] == ["LOD clamp", "status output"]
+    assert (
+        converter.texture_method_descriptor("SampleLevel", 5)["function"]
+        == "textureLodOffset"
+    )
+    assert converter.texture_method_descriptor("SampleLevel", 5)[
+        "dropped_parameters"
+    ] == ["status output"]
+    assert (
+        converter.texture_method_descriptor("SampleGrad", 7)["function"]
+        == "textureGradOffset"
+    )
+    assert converter.texture_method_descriptor("SampleGrad", 7)[
+        "dropped_parameters"
+    ] == ["LOD clamp", "status output"]
     assert (
         converter.texture_method_descriptor("SampleCmp", 4)["function"]
         == "textureCompareOffset"
     )
+    assert converter.texture_method_descriptor("SampleCmp", 6)[
+        "dropped_parameters"
+    ] == ["LOD clamp", "status output"]
     assert (
         converter.texture_method_descriptor("SampleCmpLevelZero", 4)["function"]
         == "textureCompareOffset"
     )
+    assert converter.texture_method_descriptor("SampleCmpLevelZero", 5)[
+        "dropped_parameters"
+    ] == ["status output"]
     assert (
         converter.texture_method_descriptor("Gather", 3)["function"]
         == "textureGatherOffset"
     )
+    assert converter.texture_method_descriptor("Gather", 4)["dropped_parameters"] == [
+        "status output"
+    ]
     assert (
         converter.texture_method_descriptor("GatherCmp", 4)["function"]
         == "textureGatherCompareOffset"
     )
+    assert converter.texture_method_descriptor("GatherCmp", 5)[
+        "dropped_parameters"
+    ] == ["status output"]
     assert converter.texture_method_descriptor("GatherBlue", 2) == {
         "member": "GatherBlue",
         "function": "textureGather",
@@ -883,6 +923,46 @@ def test_codegen_texture_method_descriptors():
     assert (
         converter.texture_method_descriptor("GatherBlue", 3)["function"]
         == "textureGatherOffset"
+    )
+    assert (
+        converter.texture_method_descriptor("GatherBlue", 6)["function"]
+        == "textureGatherOffsets"
+    )
+    assert converter.texture_method_descriptor("GatherBlue", 7)[
+        "dropped_parameters"
+    ] == ["status output"]
+    assert converter.texture_method_descriptor("Sample", 3, "TextureCube") == {
+        "member": "Sample",
+        "function": "texture",
+        "texture_function": "texture",
+        "buffer_function": None,
+        "component": None,
+        "usage": "regular",
+        "buffer_when_max_args": None,
+        "drop_trailing_args": 1,
+        "dropped_parameters": ["LOD clamp"],
+    }
+    assert (
+        converter.texture_method_descriptor("SampleLevel", 4, "TextureCube")["function"]
+        == "textureLod"
+    )
+    assert (
+        converter.texture_method_descriptor("SampleGrad", 6, "TextureCubeArray")[
+            "function"
+        ]
+        == "textureGrad"
+    )
+    assert (
+        converter.texture_method_descriptor("SampleCmp", 5, "TextureCube")["function"]
+        == "textureCompare"
+    )
+    assert (
+        converter.texture_method_descriptor("Gather", 3, "TextureCubeArray")["function"]
+        == "textureGather"
+    )
+    assert (
+        converter.texture_method_descriptor("GatherCmp", 4, "TextureCube")["function"]
+        == "textureGatherCompare"
     )
     assert converter.texture_method_descriptor("Load", 1)["function"] == "buffer_load"
     assert converter.texture_method_descriptor("Load", 2)["function"] == "texelFetch"
@@ -1079,6 +1159,190 @@ def test_codegen_texture_compare_and_gather_offsets_roundtrip_through_translator
     assert "textureCompareOffset(" not in hlsl
     assert "textureGatherOffset(" not in hlsl
     assert "textureGatherCompareOffset(" not in hlsl
+
+
+def test_codegen_texture_status_and_clamp_overloads_import_as_valid_crossgl():
+    code = textwrap.dedent("""
+        Texture2D colorMap : register(t0);
+        Texture2D<float> shadowMap : register(t1);
+        SamplerState linearSampler : register(s0);
+        SamplerComparisonState compareSampler : register(s1);
+
+        float4 main(
+            float2 uv : TEXCOORD0,
+            float depth : TEXCOORD1,
+            float lod : TEXCOORD2,
+            float bias : TEXCOORD3,
+            float2 ddx : TEXCOORD4,
+            float2 ddy : TEXCOORD5,
+            int2 offset : TEXCOORD6,
+            uint status : TEXCOORD7
+        ) : SV_Target {
+            float4 plain = colorMap.Sample(
+                linearSampler, uv, offset, 0.0, status
+            );
+            float4 biased = colorMap.SampleBias(
+                linearSampler, uv, bias, offset, 0.0, status
+            );
+            float4 mip = colorMap.SampleLevel(
+                linearSampler, uv, lod, offset, status
+            );
+            float4 grad = colorMap.SampleGrad(
+                linearSampler, uv, ddx, ddy, offset, 0.0, status
+            );
+            float cmp = shadowMap.SampleCmp(
+                compareSampler, uv, depth, offset, 0.0, status
+            );
+            float cmpZero = shadowMap.SampleCmpLevelZero(
+                compareSampler, uv, depth, offset, status
+            );
+            float4 gather = colorMap.Gather(linearSampler, uv, offset, status);
+            float4 gatherRed = colorMap.GatherRed(
+                linearSampler, uv, offset, status
+            );
+            float4 gatherOffsets = colorMap.GatherRed(
+                linearSampler, uv, offset, offset, offset, offset, status
+            );
+            float4 gatherCmp = shadowMap.GatherCmp(
+                compareSampler, uv, depth, offset, status
+            );
+            return (
+                plain + biased + mip + grad + gather + gatherRed + gatherOffsets
+                + gatherCmp + float4(cmp + cmpZero)
+            );
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert (
+        "unsupported DirectX texture overload extras for Sample: "
+        "dropped LOD clamp, status output"
+    ) in crossgl
+    assert (
+        "unsupported DirectX texture overload extras for SampleLevel: "
+        "dropped status output"
+    ) in crossgl
+    assert (
+        "unsupported DirectX texture overload extras for GatherRed: "
+        "dropped status output"
+    ) in crossgl
+    assert "textureOffset(colorMap, linearSampler, uv, offset)" in crossgl
+    assert "textureOffset(colorMap, linearSampler, uv, offset, bias)" in crossgl
+    assert "textureLodOffset(colorMap, linearSampler, uv, lod, offset)" in crossgl
+    assert "textureGradOffset(colorMap, linearSampler, uv, ddx, ddy, offset)" in crossgl
+    assert (
+        "textureCompareOffset(shadowMap, compareSampler, uv, depth, offset)" in crossgl
+    )
+    assert "textureGatherOffset(colorMap, linearSampler, uv, offset)" in crossgl
+    assert "textureGatherOffset(colorMap, linearSampler, uv, offset, 0)" in crossgl
+    assert (
+        "textureGatherOffsets(colorMap, linearSampler, uv, offset, offset, "
+        "offset, offset, 0)"
+    ) in crossgl
+    assert (
+        "textureGatherCompareOffset(shadowMap, compareSampler, uv, depth, offset)"
+        in crossgl
+    )
+    assert ".Sample(" not in crossgl
+    assert ".Gather" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "colorMap.Sample(linearSampler, uv, offset)" in hlsl
+    assert "colorMap.SampleBias(linearSampler, uv, bias, offset)" in hlsl
+    assert "colorMap.SampleLevel(linearSampler, uv, lod, offset)" in hlsl
+    assert "colorMap.SampleGrad(linearSampler, uv, ddx, ddy, offset)" in hlsl
+    assert "shadowMap.SampleCmp(compareSampler, uv, depth, offset)" in hlsl
+    assert "colorMap.Gather(linearSampler, uv, offset)" in hlsl
+    assert "colorMap.GatherRed(linearSampler, uv, offset)" in hlsl
+    assert (
+        "colorMap.GatherRed(linearSampler, uv, offset, offset, offset, offset)" in hlsl
+    )
+    assert "shadowMap.GatherCmp(compareSampler, uv, depth, offset)" in hlsl
+    assert "0.0, status" not in hlsl
+    assert "offset, status" not in hlsl
+
+
+def test_codegen_cube_texture_status_overloads_do_not_become_offset_calls():
+    code = textwrap.dedent("""
+        TextureCube cubeMap : register(t0);
+        TextureCube<float> cubeShadow : register(t1);
+        SamplerState linearSampler : register(s0);
+        SamplerComparisonState compareSampler : register(s1);
+
+        float4 main(
+            float3 direction : TEXCOORD0,
+            float depth : TEXCOORD1,
+            float lod : TEXCOORD2,
+            float bias : TEXCOORD3,
+            float3 ddx : TEXCOORD4,
+            float3 ddy : TEXCOORD5,
+            uint status : TEXCOORD6
+        ) : SV_Target {
+            float4 plain = cubeMap.Sample(linearSampler, direction, 0.0, status);
+            float4 biased = cubeMap.SampleBias(
+                linearSampler, direction, bias, 0.0, status
+            );
+            float4 mip = cubeMap.SampleLevel(linearSampler, direction, lod, status);
+            float4 grad = cubeMap.SampleGrad(
+                linearSampler, direction, ddx, ddy, 0.0, status
+            );
+            float cmp = cubeShadow.SampleCmp(
+                compareSampler, direction, depth, 0.0, status
+            );
+            float cmpZero = cubeShadow.SampleCmpLevelZero(
+                compareSampler, direction, depth, status
+            );
+            float4 gather = cubeMap.Gather(linearSampler, direction, status);
+            float4 gatherRed = cubeMap.GatherRed(linearSampler, direction, status);
+            float4 gatherCmp = cubeShadow.GatherCmp(
+                compareSampler, direction, depth, status
+            );
+            return (
+                plain + biased + mip + grad + gather + gatherRed + gatherCmp
+                + float4(cmp + cmpZero)
+            );
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert (
+        "unsupported DirectX texture overload extras for Sample: "
+        "dropped LOD clamp, status output"
+    ) in crossgl
+    assert (
+        "unsupported DirectX texture overload extras for Gather: "
+        "dropped status output"
+    ) in crossgl
+    assert "texture(cubeMap, linearSampler, direction)" in crossgl
+    assert "texture(cubeMap, linearSampler, direction, bias)" in crossgl
+    assert "textureLod(cubeMap, linearSampler, direction, lod)" in crossgl
+    assert "textureGrad(cubeMap, linearSampler, direction, ddx, ddy)" in crossgl
+    assert "textureCompare(cubeShadow, compareSampler, direction, depth)" in crossgl
+    assert "textureGather(cubeMap, linearSampler, direction)" in crossgl
+    assert "textureGather(cubeMap, linearSampler, direction, 0)" in crossgl
+    assert (
+        "textureGatherCompare(cubeShadow, compareSampler, direction, depth)" in crossgl
+    )
+    assert "textureOffset(" not in crossgl
+    assert "textureLodOffset(" not in crossgl
+    assert "textureGradOffset(" not in crossgl
+    assert "textureCompareOffset(" not in crossgl
+    assert "textureGatherOffset(" not in crossgl
+    assert "textureGatherCompareOffset(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "cubeMap.Sample(linearSampler, direction)" in hlsl
+    assert "cubeMap.SampleBias(linearSampler, direction, bias)" in hlsl
+    assert "cubeMap.SampleLevel(linearSampler, direction, lod)" in hlsl
+    assert "cubeMap.SampleGrad(linearSampler, direction, ddx, ddy)" in hlsl
+    assert "cubeShadow.SampleCmp(compareSampler, direction, depth)" in hlsl
+    assert "cubeMap.Gather(linearSampler, direction)" in hlsl
+    assert "cubeMap.GatherRed(linearSampler, direction)" in hlsl
+    assert "cubeShadow.GatherCmp(compareSampler, direction, depth)" in hlsl
+    assert "0.0, status" not in hlsl
+    assert "direction, status" not in hlsl
 
 
 def test_codegen_resource_array_receivers_use_canonical_calls():

@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 277,
+        "unsupported_marker_count": 278,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 558
+        "test_count": 561
       },
       "translator_codegen": {
         "exists": true,
@@ -260,7 +260,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 372,
+        "unsupported_marker_count": 374,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 516
+        "test_count": 517
       },
       "translator_codegen": {
         "exists": true,
@@ -551,7 +551,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 303
+        "test_count": 304
       },
       "translator_codegen": {
         "exists": true,
@@ -629,7 +629,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 317
+        "test_count": 318
       },
       "translator_codegen": {
         "exists": true,
@@ -653,11 +653,27 @@
         "path": "crosstl/backend/Mojo"
       },
       "signals": {
-        "unsupported_marker_count": 55,
+        "unsupported_marker_count": 59,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES = {"
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
             "text": "f\"Unsupported {stage_name} shader stage for Mojo codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "if base_name in MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES:"
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "\"Unsupported writable texture resource for Mojo codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "f\"multisample writable texture alias is not supported: {base_name}\""
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
@@ -718,22 +734,6 @@
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
             "text": "raise ValueError(f\"Unsupported Mojo texture operation {operation}\")"
-          },
-          {
-            "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "\"Unsupported Mojo synchronization operation \""
-          },
-          {
-            "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "f\"{sync_type}; arguments are not supported\""
-          },
-          {
-            "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "raise ValueError(f\"Unsupported Mojo synchronization operation {sync_type}\")"
-          },
-          {
-            "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "raise ValueError(f\"Unsupported Mojo atomic operation {operation}\")"
           }
         ]
       },
@@ -743,7 +743,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 326
+        "test_count": 329
       },
       "translator_codegen": {
         "exists": true,
@@ -857,7 +857,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 506
+        "test_count": 507
       },
       "translator_codegen": {
         "exists": true,
@@ -881,7 +881,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 207,
+        "unsupported_marker_count": 214,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",

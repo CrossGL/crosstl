@@ -356,6 +356,13 @@ MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING = {
     "RasterizerOrderedTexture3D": ("Image3D", "IImage3D", "UImage3D"),
 }
 
+MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES = {
+    "RWTexture2DMS",
+    "RWTexture2DMSArray",
+    "RasterizerOrderedTexture2DMS",
+    "RasterizerOrderedTexture2DMSArray",
+}
+
 MOJO_TYPED_IMAGE_DTYPE_SUFFIX = {
     "DType.float16": "Half",
     "DType.float32": "Float",
@@ -1344,9 +1351,14 @@ class MojoCodeGen:
         return None
 
     def writable_texture_resource_alias(self, base_type, element_type=None):
-        image_aliases = MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING.get(
-            self.type_name(base_type)
-        )
+        base_name = self.type_name(base_type)
+        if base_name in MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES:
+            raise ValueError(
+                "Unsupported writable texture resource for Mojo codegen; "
+                f"multisample writable texture alias is not supported: {base_name}"
+            )
+
+        image_aliases = MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING.get(base_name)
         if image_aliases is None:
             return None
 

@@ -658,6 +658,7 @@ class TestHipCodeGen:
                 cubeLayerSurface,
                 pixel.x * sizeof(float4),
                 pixel.y,
+                0,
                 0
             );
             float4 lineLoaded;
@@ -771,7 +772,7 @@ class TestHipCodeGen:
         )
         assert (
             "var cubeLayerLoaded: vec4<f32> = imageLoad("
-            "cubeLayerSurface, vec3<i32>(pixel.x, pixel.y, 0));" in result
+            "cubeLayerSurface, vec4<i32>(pixel.x, pixel.y, 0, 0));" in result
         )
         assert "lineLoaded = imageLoad(lineSurface, pixel.x);" in result
         assert "lineLoaded = imageLoad(lineSurf, pixel.x);" in result

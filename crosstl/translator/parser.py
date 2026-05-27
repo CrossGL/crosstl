@@ -2992,6 +2992,7 @@ class Parser:
             "MINUS",
             "PLUS",
             "BITWISE_NOT",
+            "BITWISE_AND",
             "INCREMENT",
             "DECREMENT",
         ]:
@@ -3012,6 +3013,10 @@ class Parser:
                 member = self.current_token[1]
                 self.eat("IDENTIFIER")
                 left = MemberAccessNode(left, member)
+            elif self.is_arrow_token():
+                self.eat_arrow()
+                member = self.parse_binding_identifier()
+                left = PointerAccessNode(left, member)
             elif self.current_token[0] == "DOUBLE_COLON":
                 self.eat("DOUBLE_COLON")
                 member = str(self.current_token[1])

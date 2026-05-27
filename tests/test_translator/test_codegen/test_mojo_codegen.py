@@ -1923,6 +1923,113 @@ def test_typed_vector_image_atomics_require_scalar_integer_diagnostics():
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_hlsl_typed_writable_image_arrays_preserve_mojo_element_placeholders():
+    code = """
+    RWTexture2D<float2> rgImages[2];
+    RasterizerOrderedTexture2DArray<uint4> counters[3];
+
+    float2 readRg(int slot, int2 pixel) {
+        return rgImages[slot].Load(pixel);
+    }
+    void writeRg(int slot, int2 pixel, float2 value) {
+        rgImages[slot].Store(pixel, value);
+    }
+    uint4 readCounter(int slot, int4 pixelLayer) {
+        return counters[slot].Load(pixelLayer);
+    }
+    void writeCounter(int slot, int4 pixelLayer, uint4 value) {
+        counters[slot].Store(pixelLayer, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Image2DFloat2:" in generated_code
+    assert "struct UImage2DArrayUInt4:" in generated_code
+    assert "var rgImages = InlineArray[Image2DFloat2, 2]" in generated_code
+    assert "var counters = InlineArray[UImage2DArrayUInt4, 3]" in generated_code
+    assert (
+        "fn image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.float32, 2]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: UImage2DArrayUInt4, coord: SIMD[DType.int32, 4], "
+        "value: SIMD[DType.uint32, 4]):" in generated_code
+    )
+    assert "return image_load(rgImages[int(slot)], pixel)" in generated_code
+    assert "image_store(rgImages[int(slot)], pixel, value)" in generated_code
+    assert "return image_load(counters[int(slot)], pixelLayer)" in generated_code
+    assert "image_store(counters[int(slot)], pixelLayer, value)" in generated_code
+    assert "RWTexture2D<float2>" not in generated_code
+    assert "RasterizerOrderedTexture2DArray<uint4>" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+
+
+def test_hlsl_typed_writable_image_arrays_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    RWTexture2D<float2> rgImages[2];
+    RasterizerOrderedTexture2DArray<uint4> counters[3];
+
+    float2 readRg(int slot, int2 pixel) {
+        return rgImages[slot].Load(pixel);
+    }
+    void writeRg(int slot, int2 pixel, float2 value) {
+        rgImages[slot].Store(pixel, value);
+    }
+    uint4 readCounter(int slot, int4 pixelLayer) {
+        return counters[slot].Load(pixelLayer);
+    }
+    void writeCounter(int slot, int4 pixelLayer, uint4 value) {
+        counters[slot].Store(pixelLayer, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "hlsl_typed_writable_image_arrays.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("resource_type", "value_type"),
+    [
+        ("RWTexture2DMS<float4>", "float4"),
+        ("RWTexture2DMSArray<uint>", "uint"),
+        ("RasterizerOrderedTexture2DMS<float4>", "float4"),
+        ("RasterizerOrderedTexture2DMSArray<int>", "int"),
+    ],
+)
+def test_hlsl_multisample_writable_texture_aliases_emit_unsupported_diagnostic(
+    resource_type, value_type
+):
+    code = f"""
+    {resource_type} msImage;
+
+    {value_type} invalidRead(int2 pixel, int sampleIndex) {{
+        return msImage.Load(pixel, sampleIndex);
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Unsupported writable texture resource for Mojo codegen; "
+            "multisample writable texture alias is not supported"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_hlsl_rasterizer_ordered_texture_aliases_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 

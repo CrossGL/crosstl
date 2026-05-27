@@ -25,6 +25,7 @@ from crosstl.translator.ast import (
     IdentifierNode,
     IdentifierPatternNode,
     IfNode,
+    LambdaNode,
     LiteralPatternNode,
     LiteralNode,
     MatchArmNode,
@@ -6439,6 +6440,145 @@ def test_array_early_returns_and_nested_block_expressions_compile(tmp_path):
     ) in return_helper_body
     assert "return BlockNode" not in generated_code
     assert "BlockNode(statements=" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_captures_and_nested_helper_closures_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    closure_type = GenericType("F")
+    closure_bound = NamedType(
+        "FnOnce([[Payload; 2]; 2]) -> [[Payload; 2]; 2]",
+    )
+
+    def identity_call(expr):
+        if isinstance(expr, str):
+            expr = IdentifierNode(expr)
+        return FunctionCallNode(
+            IdentifierNode("identity_payload_matrix"),
+            [expr],
+        )
+
+    def apply_call(matrix, transform):
+        if isinstance(matrix, str):
+            matrix = IdentifierNode(matrix)
+        return FunctionCallNode(
+            IdentifierNode("apply_payload_matrix"),
+            [matrix, transform],
+        )
+
+    def matrix_lambda(param_name, body, captures=None):
+        return LambdaNode(
+            [ParameterNode(param_name, payload_matrix_type)],
+            body,
+            captures=captures or [],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaCaptureContexts",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "identity_payload_matrix",
+                payload_matrix_type,
+                [ParameterNode("matrix", payload_matrix_type)],
+                [ReturnNode(IdentifierNode("matrix"))],
+            ),
+            FunctionNode(
+                "apply_payload_matrix",
+                payload_matrix_type,
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("matrix")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "closure_captures_payload_matrix",
+                payload_matrix_type,
+                [
+                    ParameterNode("left", payload_matrix_type),
+                    ParameterNode("right", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        apply_call(
+                            "right",
+                            matrix_lambda(
+                                "matrix",
+                                identity_call("left"),
+                                captures=["left"],
+                            ),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "nested_closure_captures_payload_matrix",
+                payload_matrix_type,
+                [
+                    ParameterNode("left", payload_matrix_type),
+                    ParameterNode("right", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        apply_call(
+                            "right",
+                            matrix_lambda(
+                                "outer",
+                                apply_call(
+                                    "outer",
+                                    matrix_lambda(
+                                        "inner",
+                                        identity_call("left"),
+                                        captures=["left"],
+                                    ),
+                                ),
+                                captures=["left"],
+                            ),
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn apply_payload_matrix<F: FnOnce([[Payload; 2]; 2]) -> "
+        "[[Payload; 2]; 2]>"
+    ) in generated_code
+    assert (
+        "return apply_payload_matrix(right, |matrix: [[Payload; 2]; 2]| "
+        "identity_payload_matrix(left));"
+    ) in generated_code
+    assert (
+        "return apply_payload_matrix(right, |outer: [[Payload; 2]; 2]| "
+        "apply_payload_matrix(outer, |inner: [[Payload; 2]; 2]| "
+        "identity_payload_matrix(left)));"
+    ) in generated_code
+    assert "LambdaNode" not in generated_code
+    assert "left.clone())" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

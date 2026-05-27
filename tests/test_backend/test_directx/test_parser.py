@@ -594,6 +594,79 @@ def test_parse_texture_compare_and_gather_offset_methods_keep_member_calls():
     }.issubset(set(members))
 
 
+def test_parse_texture_status_and_clamp_overloads_keep_member_calls():
+    code = """
+    Texture2D colorMap : register(t0);
+    Texture2D<float> shadowMap : register(t1);
+    SamplerState linearSampler : register(s0);
+    SamplerComparisonState compareSampler : register(s1);
+
+    float4 main(
+        float2 uv : TEXCOORD0,
+        float depth : TEXCOORD1,
+        float lod : TEXCOORD2,
+        float bias : TEXCOORD3,
+        float2 ddx : TEXCOORD4,
+        float2 ddy : TEXCOORD5,
+        int2 offset : TEXCOORD6,
+        uint status : TEXCOORD7
+    ) : SV_Target0 {
+        float4 plain = colorMap.Sample(
+            linearSampler, uv, offset, 0.0, status
+        );
+        float4 biased = colorMap.SampleBias(
+            linearSampler, uv, bias, offset, 0.0, status
+        );
+        float4 mip = colorMap.SampleLevel(
+            linearSampler, uv, lod, offset, status
+        );
+        float4 grad = colorMap.SampleGrad(
+            linearSampler, uv, ddx, ddy, offset, 0.0, status
+        );
+        float cmp = shadowMap.SampleCmp(
+            compareSampler, uv, depth, offset, 0.0, status
+        );
+        float cmpZero = shadowMap.SampleCmpLevelZero(
+            compareSampler, uv, depth, offset, status
+        );
+        float4 gather = colorMap.Gather(linearSampler, uv, offset, status);
+        float4 gatherRed = colorMap.GatherRed(linearSampler, uv, offset, status);
+        float4 gatherOffsets = colorMap.GatherRed(
+            linearSampler, uv, offset, offset, offset, offset, status
+        );
+        float4 gatherCmp = shadowMap.GatherCmp(
+            compareSampler, uv, depth, offset, status
+        );
+        return (
+            plain + biased + mip + grad + gather + gatherRed + gatherOffsets
+            + gatherCmp + float4(cmp + cmpZero)
+        );
+    }
+    """
+
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    assert not [node for node in nodes if isinstance(node, TextureSampleNode)]
+    members = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    assert {
+        "Sample",
+        "SampleBias",
+        "SampleLevel",
+        "SampleGrad",
+        "SampleCmp",
+        "SampleCmpLevelZero",
+        "Gather",
+        "GatherRed",
+        "GatherCmp",
+    }.issubset(set(members))
+
+
 def test_parse_resource_method_ast_shapes():
     code = """
     Texture2D tex : register(t0);

@@ -6153,14 +6153,29 @@ class SlangCodeGen:
 
     def generate_dimension_query(self, func_name, args):
         if not args:
-            return None
+            return self.unsupported_resource_query_call(
+                func_name, "requires a resource argument"
+            )
 
-        resource_name = self.generate_expression(args[0])
         resource_type = self.resource_base_type(self.get_expression_type(args[0]))
+        if not self.dimension_query_accepts_resource(func_name, resource_type):
+            return self.unsupported_resource_query_call(
+                func_name, self.dimension_query_requirement(func_name)
+            )
+
         spec = self.dimension_query_spec(resource_type)
         if spec is None:
-            return None
+            return self.unsupported_resource_query_call(
+                func_name, self.dimension_query_requirement(func_name)
+            )
 
+        arity_reason = self.dimension_query_arity_unsupported_reason(
+            func_name, args, spec
+        )
+        if arity_reason:
+            return self.unsupported_resource_query_call(func_name, arity_reason)
+
+        resource_name = self.generate_expression(args[0])
         resource_slang_type = self.resource_query_slang_type(args[0], resource_type)
         base_helper_name = self.resource_query_helper_name(
             func_name, resource_type, resource_slang_type
@@ -6177,6 +6192,34 @@ class SlangCodeGen:
             lod = self.generate_expression(args[1]) if len(args) > 1 else "0"
             return f"{helper_name}({resource_name}, {lod})"
         return f"{helper_name}({resource_name})"
+
+    def dimension_query_accepts_resource(self, func_name, resource_type):
+        if func_name == "textureSize":
+            return self.is_sampled_texture_resource_type(resource_type)
+        if func_name == "imageSize":
+            return self.is_storage_image_type(resource_type)
+        return False
+
+    def dimension_query_requirement(self, func_name):
+        if func_name == "textureSize":
+            return "requires a sampled texture resource"
+        if func_name == "imageSize":
+            return "requires an image resource"
+        return "requires a resource"
+
+    def dimension_query_arity_unsupported_reason(self, func_name, args, spec):
+        if func_name == "imageSize":
+            if len(args) != 1:
+                return "accepts only a resource argument"
+            return None
+
+        if len(args) > 2:
+            return "accepts resource and optional mip argument"
+        if len(args) == 2:
+            return self.scalar_texture_argument_rank_unsupported_reason(
+                args[1], "mip argument"
+            )
+        return None
 
     def generate_sample_count_query(self, func_name, args):
         if not args:

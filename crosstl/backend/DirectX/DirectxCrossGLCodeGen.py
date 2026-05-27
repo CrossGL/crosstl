@@ -336,7 +336,18 @@ class HLSLToCrossGLConverter:
 
         return type_map
 
-    def texture_method_descriptor(self, member, arg_count=None):
+    def texture_method_descriptor(self, member, arg_count=None, resource_type=None):
+        def with_dropped_parameters(descriptor, parameters):
+            if parameters:
+                descriptor["drop_trailing_args"] = len(parameters)
+                descriptor["dropped_parameters"] = list(parameters)
+            return descriptor
+
+        cube_family_resource = self.raw_type_base(resource_type) in {
+            "TextureCube",
+            "TextureCubeArray",
+        }
+
         if member in {"Load", "GetDimensions"}:
             texture_function = self.texture_method_map[member]
             buffer_function = self.buffer_method_map[member]
@@ -351,52 +362,162 @@ class HLSLToCrossGLConverter:
                 "buffer_when_max_args": 1,
             }
         if member in self.texture_gather_component_map:
-            texture_function = (
-                "textureGatherOffset" if arg_count == 3 else "textureGather"
+            dropped_parameters = []
+            if cube_family_resource and arg_count == 3:
+                texture_function = "textureGather"
+                dropped_parameters.append("status output")
+            elif arg_count in {3, 4}:
+                texture_function = "textureGatherOffset"
+                if arg_count == 4:
+                    dropped_parameters.append("status output")
+            elif arg_count in {6, 7}:
+                texture_function = "textureGatherOffsets"
+                if arg_count == 7:
+                    dropped_parameters.append("status output")
+            else:
+                texture_function = "textureGather"
+            return with_dropped_parameters(
+                {
+                    "member": member,
+                    "function": texture_function,
+                    "texture_function": texture_function,
+                    "buffer_function": None,
+                    "component": self.texture_gather_component_map[member],
+                    "usage": "regular",
+                    "buffer_when_max_args": None,
+                },
+                dropped_parameters,
             )
-            return {
-                "member": member,
-                "function": texture_function,
-                "texture_function": texture_function,
-                "buffer_function": None,
-                "component": self.texture_gather_component_map[member],
-                "usage": "regular",
-                "buffer_when_max_args": None,
-            }
         if member in self.texture_method_map:
             texture_function = self.texture_method_map[member]
-            if member == "Sample" and arg_count == 3:
+            dropped_parameters = []
+            if member == "Sample" and cube_family_resource and arg_count in {3, 4}:
+                texture_function = "texture"
+                if arg_count == 3:
+                    dropped_parameters.append("LOD clamp")
+                else:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif member == "Sample" and arg_count in {3, 4, 5}:
                 texture_function = "textureOffset"
-            elif member == "SampleLevel" and arg_count == 4:
+                if arg_count == 4:
+                    dropped_parameters.append("LOD clamp")
+                elif arg_count == 5:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif member == "SampleLevel" and cube_family_resource and arg_count == 4:
+                texture_function = "textureLod"
+                dropped_parameters.append("status output")
+            elif member == "SampleLevel" and arg_count in {4, 5}:
                 texture_function = "textureLodOffset"
-            elif member == "SampleGrad" and arg_count == 5:
+                if arg_count == 5:
+                    dropped_parameters.append("status output")
+            elif (
+                member == "SampleGrad"
+                and cube_family_resource
+                and arg_count
+                in {
+                    5,
+                    6,
+                }
+            ):
+                texture_function = "textureGrad"
+                if arg_count == 5:
+                    dropped_parameters.append("LOD clamp")
+                else:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif member == "SampleGrad" and arg_count in {5, 6, 7}:
                 texture_function = "textureGradOffset"
-            elif member in {"SampleCmp", "SampleCmpLevelZero"} and arg_count == 4:
-                texture_function = "textureCompareOffset"
-            elif member == "Gather" and arg_count == 3:
-                texture_function = "textureGatherOffset"
-            elif member == "GatherCmp" and arg_count == 4:
-                texture_function = "textureGatherCompareOffset"
-            if member == "SampleBias" and arg_count is not None and arg_count >= 4:
+                if arg_count == 6:
+                    dropped_parameters.append("LOD clamp")
+                elif arg_count == 7:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif (
+                member == "SampleBias"
+                and cube_family_resource
+                and arg_count
+                in {
+                    4,
+                    5,
+                }
+            ):
+                texture_function = "texture"
+                if arg_count == 4:
+                    dropped_parameters.append("LOD clamp")
+                else:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif member == "SampleBias" and arg_count in {4, 5, 6}:
                 texture_function = "textureOffset"
+                if arg_count == 5:
+                    dropped_parameters.append("LOD clamp")
+                elif arg_count == 6:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif (
+                member == "SampleCmp"
+                and cube_family_resource
+                and arg_count
+                in {
+                    4,
+                    5,
+                }
+            ):
+                texture_function = "textureCompare"
+                if arg_count == 4:
+                    dropped_parameters.append("LOD clamp")
+                else:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif member == "SampleCmp" and arg_count in {4, 5, 6}:
+                texture_function = "textureCompareOffset"
+                if arg_count == 5:
+                    dropped_parameters.append("LOD clamp")
+                elif arg_count == 6:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif (
+                member == "SampleCmpLevelZero"
+                and cube_family_resource
+                and arg_count == 4
+            ):
+                texture_function = "textureCompare"
+                dropped_parameters.append("status output")
+            elif member == "SampleCmpLevelZero" and arg_count in {4, 5}:
+                texture_function = "textureCompareOffset"
+                if arg_count == 5:
+                    dropped_parameters.append("status output")
+            elif member == "Gather" and cube_family_resource and arg_count == 3:
+                texture_function = "textureGather"
+                dropped_parameters.append("status output")
+            elif member == "Gather" and arg_count in {3, 4}:
+                texture_function = "textureGatherOffset"
+                if arg_count == 4:
+                    dropped_parameters.append("status output")
+            elif member == "GatherCmp" and cube_family_resource and arg_count == 4:
+                texture_function = "textureGatherCompare"
+                dropped_parameters.append("status output")
+            elif member == "GatherCmp" and arg_count in {4, 5}:
+                texture_function = "textureGatherCompareOffset"
+                if arg_count == 5:
+                    dropped_parameters.append("status output")
             usage = (
                 "comparison"
                 if member in {"SampleCmp", "SampleCmpLevelZero", "GatherCmp"}
                 else "regular"
             )
-            return {
-                "member": member,
-                "function": texture_function,
-                "texture_function": texture_function,
-                "buffer_function": None,
-                "component": None,
-                "usage": usage,
-                "buffer_when_max_args": None,
-            }
+            return with_dropped_parameters(
+                {
+                    "member": member,
+                    "function": texture_function,
+                    "texture_function": texture_function,
+                    "buffer_function": None,
+                    "component": None,
+                    "usage": usage,
+                    "buffer_when_max_args": None,
+                },
+                dropped_parameters,
+            )
         return None
 
-    def resource_method_descriptor(self, member, arg_count=None):
-        texture_descriptor = self.texture_method_descriptor(member, arg_count)
+    def resource_method_descriptor(self, member, arg_count=None, resource_type=None):
+        texture_descriptor = self.texture_method_descriptor(
+            member, arg_count, resource_type
+        )
         if texture_descriptor:
             descriptor = dict(texture_descriptor)
             uses_buffer = (
@@ -445,6 +566,10 @@ class HLSLToCrossGLConverter:
         return None
 
     def resource_method_arguments(self, obj, member, rendered_args, descriptor):
+        drop_trailing_args = descriptor.get("drop_trailing_args", 0)
+        if drop_trailing_args:
+            rendered_args = rendered_args[:-drop_trailing_args]
+
         if (
             member == "SampleBias"
             and descriptor["function"] == "textureOffset"
@@ -458,6 +583,16 @@ class HLSLToCrossGLConverter:
         if descriptor["component"] is not None:
             method_args.append(descriptor["component"])
         return method_args
+
+    def resource_method_diagnostic(self, member, descriptor):
+        dropped_parameters = descriptor.get("dropped_parameters")
+        if not dropped_parameters:
+            return None
+        parameters = ", ".join(dropped_parameters)
+        return (
+            f"/* unsupported DirectX texture overload extras for {member}: "
+            f"dropped {parameters} */"
+        )
 
     def get_indent(self):
         return "    " * self.indentation
@@ -1316,12 +1451,19 @@ class HLSLToCrossGLConverter:
                     self.generate_expression(arg, is_main) for arg in expr.args
                 ]
                 args = ", ".join(rendered_args)
-                descriptor = self.resource_method_descriptor(member, len(expr.args))
+                resource_type = self.expression_raw_type(expr.name.object)
+                descriptor = self.resource_method_descriptor(
+                    member, len(expr.args), resource_type
+                )
                 if descriptor:
                     method_args = self.resource_method_arguments(
                         obj, member, rendered_args, descriptor
                     )
-                    return f"{descriptor['function']}({', '.join(method_args)})"
+                    call = f"{descriptor['function']}({', '.join(method_args)})"
+                    diagnostic = self.resource_method_diagnostic(member, descriptor)
+                    if diagnostic:
+                        return f"{diagnostic} {call}"
+                    return call
                 return f"{obj}.{member}({args})"
 
             func_name = (

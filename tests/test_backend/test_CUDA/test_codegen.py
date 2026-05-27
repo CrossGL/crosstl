@@ -1234,6 +1234,47 @@ class TestCudaCodeGen:
         assert "cudaGetLastError(" not in result
         assert "cudaPeekAtLastError(" not in result
 
+    def test_cuda_texture_object_descriptor_query_conversion(self):
+        """Test CUDA texture-object descriptor queries emit metadata comments."""
+        code = """
+        void queryTextureObject(cudaTextureObject_t objectTex) {
+            cudaResourceDesc resourceDesc;
+            cudaTextureDesc textureDesc;
+            cudaResourceViewDesc viewDesc;
+            cudaGetTextureObjectResourceDesc(&resourceDesc, objectTex);
+            cudaError_t err = cudaGetTextureObjectTextureDesc(
+                &textureDesc,
+                objectTex
+            );
+            err = cudaGetTextureObjectResourceViewDesc(&viewDesc, objectTex);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA texture object resource descriptor query: "
+            "objectTex, output: resourceDesc"
+        ) in result
+        assert (
+            "// CUDA texture object texture descriptor query: "
+            "objectTex, output: textureDesc"
+        ) in result
+        assert (
+            "// CUDA texture object resource view descriptor query: "
+            "objectTex, output: viewDesc"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        assert "cudaGetTextureObjectResourceDesc(" not in result
+        assert "cudaGetTextureObjectTextureDesc(" not in result
+        assert "cudaGetTextureObjectResourceViewDesc(" not in result
+
     def test_cuda_runtime_event_api_conversion(self):
         """Test CUDA stream and event API calls emit metadata comments"""
         code = """

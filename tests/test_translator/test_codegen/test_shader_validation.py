@@ -2138,6 +2138,36 @@ shader MetalReadonlyRawBufferMutableHelperCallValidation {
 """
 
 
+METAL_CONST_REFERENCE_HELPER_SHADER = """
+shader MetalConstReferenceHelperValidation {
+    struct Payload {
+        float value;
+    };
+
+    float readPayload(const Payload& payload) {
+        return payload.value;
+    }
+
+    void mutate(Payload& payload) {
+        payload.value = 2.0;
+    }
+
+    void rejectWrite(const Payload& payload) {
+        payload.value = 1.0;
+        mutate(payload);
+    }
+
+    compute {
+        void main() {
+            Payload payload;
+            float value = readPayload(payload);
+            rejectWrite(payload);
+        }
+    }
+}
+"""
+
+
 METAL_ADDRESS_SPACE_MISMATCH_CALL_SHADER = """
 shader MetalAddressSpaceMismatchCallValidation {
     struct Payload {
@@ -5991,6 +6021,31 @@ def test_generated_metal_readonly_raw_buffer_mutable_helper_call_compiles_with_m
         "compute",
     )
     source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_const_reference_helpers_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "const_reference_helpers.metal"
+    output = tmp_path / "const_reference_helpers.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_CONST_REFERENCE_HELPER_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "float readPayload(const thread Payload& payload)" in code
+    assert "void rejectWrite(const thread Payload& payload)" in code
+    assert "unsupported Metal parameter store" in code
+    assert "unsupported Metal parameter call" in code
+    assert "payload.value = 1.0;" not in code
+    assert "mutate(payload);" not in code
 
     run_validator(
         [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]

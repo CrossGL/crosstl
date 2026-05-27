@@ -499,6 +499,58 @@ def test_metal_readonly_raw_buffer_calls_to_mutable_helpers_emit_diagnostic():
     assert "mutate(payload, values);" not in generated_code
 
 
+def test_metal_const_reference_helper_parameters_are_readonly():
+    shader = """
+    shader MetalConstReferenceHelpers {
+        struct Payload {
+            float value;
+        };
+
+        float readPayload(const Payload& payload) {
+            return payload.value;
+        }
+
+        void mutate(Payload& payload) {
+            payload.value = 2.0;
+        }
+
+        void rejectWrite(const Payload& payload) {
+            payload.value = 1.0;
+            mutate(payload);
+        }
+
+        compute {
+            void main() {
+                Payload payload;
+                float value = readPayload(payload);
+                rejectWrite(payload);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "float readPayload(const thread Payload& payload)" in generated_code
+    assert "void rejectWrite(const thread Payload& payload)" in generated_code
+    assert "void mutate(thread Payload& payload)" in generated_code
+    assert "return payload.value;" in generated_code
+    assert (
+        "/* unsupported Metal parameter store: parameter 'payload' is "
+        "const-qualified */"
+    ) in generated_code
+    assert (
+        "/* unsupported Metal parameter call: readonly parameter 'payload' "
+        "cannot be passed to mutable parameter 'payload' of 'mutate' */"
+    ) in generated_code
+    assert "payload.value = 1.0;" not in generated_code
+    assert "mutate(payload);" not in generated_code
+    assert "float value = readPayload(payload);" in generated_code
+    assert "rejectWrite(payload);" in generated_code
+
+
 def test_metal_incompatible_helper_address_spaces_emit_diagnostics():
     shader = """
     shader MetalAddressSpaceMismatchCalls {

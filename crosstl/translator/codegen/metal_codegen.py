@@ -401,6 +401,8 @@ class MetalCodeGen:
         self.current_readonly_metal_mesh_payload_parameters = set()
         self.current_readonly_metal_mesh_payload_reasons = {}
         self.current_readonly_raw_buffer_parameters = set()
+        self.current_readonly_metal_parameters = set()
+        self.current_readonly_metal_parameter_reasons = {}
         self.metal_program_mesh_payload_type = None
         self.function_metal_mesh_dispatch_contexts = {}
         self.function_metal_mesh_dispatch_contexts_by_id = {}
@@ -1714,6 +1716,10 @@ class MetalCodeGen:
         previous_readonly_raw_buffer_parameters = (
             self.current_readonly_raw_buffer_parameters
         )
+        previous_readonly_metal_parameters = self.current_readonly_metal_parameters
+        previous_readonly_metal_parameter_reasons = (
+            self.current_readonly_metal_parameter_reasons
+        )
         self.current_function_name = getattr(func, "name", None)
         self.current_function_return_wrapper = None
         self.current_generic_function_substitutions = (
@@ -1746,6 +1752,8 @@ class MetalCodeGen:
         self.current_readonly_metal_mesh_payload_parameters = set()
         self.current_readonly_metal_mesh_payload_reasons = {}
         self.current_readonly_raw_buffer_parameters = set()
+        self.current_readonly_metal_parameters = set()
+        self.current_readonly_metal_parameter_reasons = {}
         self.local_variable_types = {}
         self.current_address_space_variables = {}
         for p in param_list:
@@ -1767,6 +1775,14 @@ class MetalCodeGen:
                 self.current_address_space_variables[p.name] = address_space
             if self.is_readonly_raw_buffer_parameter(raw_param_type, p, shader_type):
                 self.current_readonly_raw_buffer_parameters.add(p.name)
+            readonly_parameter_reason = self.readonly_metal_parameter_reason(
+                raw_param_type, p, shader_type
+            )
+            if readonly_parameter_reason is not None:
+                self.current_readonly_metal_parameters.add(p.name)
+                self.current_readonly_metal_parameter_reasons[p.name] = (
+                    readonly_parameter_reason
+                )
 
             if self.is_metal_mesh_output_parameter(shader_type, p):
                 continue
@@ -1973,6 +1989,10 @@ class MetalCodeGen:
             self.current_readonly_raw_buffer_parameters = (
                 previous_readonly_raw_buffer_parameters
             )
+            self.current_readonly_metal_parameters = previous_readonly_metal_parameters
+            self.current_readonly_metal_parameter_reasons = (
+                previous_readonly_metal_parameter_reasons
+            )
             return code
 
         if shader_type == "vertex":
@@ -2152,6 +2172,10 @@ class MetalCodeGen:
         )
         self.current_readonly_raw_buffer_parameters = (
             previous_readonly_raw_buffer_parameters
+        )
+        self.current_readonly_metal_parameters = previous_readonly_metal_parameters
+        self.current_readonly_metal_parameter_reasons = (
+            previous_readonly_metal_parameter_reasons
         )
         self.current_function_name = previous_function_name
         self.current_function_return_type = previous_function_return_type
@@ -3547,6 +3571,11 @@ class MetalCodeGen:
         )
         if readonly_raw_buffer_store is not None:
             return readonly_raw_buffer_store
+        readonly_parameter_store = self.readonly_metal_parameter_assignment_diagnostic(
+            target
+        )
+        if readonly_parameter_store is not None:
+            return readonly_parameter_store
 
         lhs = self.generate_expression(target)
         return f"{lhs} {op} {rhs}"
@@ -4162,6 +4191,11 @@ class MetalCodeGen:
             )
             if readonly_raw_buffer_call is not None:
                 return readonly_raw_buffer_call
+            readonly_parameter_call = self.readonly_metal_parameter_call_diagnostic(
+                argument_func_name, expr.args
+            )
+            if readonly_parameter_call is not None:
+                return readonly_parameter_call
             mesh_context_call = self.metal_mesh_dispatch_context_call_diagnostic(
                 func_name
             )
@@ -5966,10 +6000,11 @@ class MetalCodeGen:
         return address_space or None
 
     def readonly_qualified_address_space(self, address_space, node=None):
-        if address_space == "device" and "readonly" in self.parameter_qualifier_names(
-            node
-        ):
+        qualifiers = self.parameter_qualifier_names(node)
+        if address_space == "device" and "readonly" in qualifiers:
             return "const device"
+        if "const" in qualifiers and address_space not in {None, "constant"}:
+            return f"const {address_space}"
         return address_space
 
     def parameter_variable_address_space(
@@ -5989,6 +6024,35 @@ class MetalCodeGen:
                 is not None,
             )
         )
+
+    def readonly_metal_parameter_reason(
+        self, raw_param_type, node=None, shader_type=None
+    ):
+        if self.is_metal_mesh_payload_parameter(shader_type, node):
+            return None
+        if not (
+            isinstance(raw_param_type, (PointerType, ReferenceType))
+            or self.is_array_type_node(raw_param_type)
+        ):
+            return None
+        qualifiers = self.parameter_qualifier_names(node)
+        if "const" in qualifiers:
+            return "const-qualified"
+        if "constant" in qualifiers:
+            return "constant address space"
+        if "readonly" in qualifiers and not self.is_raw_buffer_parameter_type(
+            raw_param_type, node
+        ):
+            return "readonly"
+        return None
+
+    def is_mutable_metal_parameter(self, raw_param_type, node=None):
+        if not (
+            isinstance(raw_param_type, (PointerType, ReferenceType))
+            or self.is_array_type_node(raw_param_type)
+        ):
+            return False
+        return self.readonly_metal_parameter_reason(raw_param_type, node) is None
 
     def is_readonly_raw_buffer_parameter(
         self, raw_param_type, node=None, shader_type=None
@@ -6050,6 +6114,30 @@ class MetalCodeGen:
             parameter_name = getattr(parameter, "name", f"arg{index}")
             return (
                 "/* unsupported Metal raw buffer call: readonly buffer "
+                f"'{arg_name}' cannot be passed to mutable parameter "
+                f"'{parameter_name}' of '{func_name}' */"
+            )
+        return None
+
+    def readonly_metal_parameter_call_diagnostic(self, func_name, call_args):
+        if func_name not in self.user_function_names:
+            return None
+        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        for index, arg in enumerate(call_args):
+            if index >= len(parameter_nodes):
+                continue
+            arg_name = self.assignment_target_root_name(arg)
+            if arg_name not in self.current_readonly_metal_parameters:
+                continue
+            parameter = parameter_nodes[index]
+            raw_param_type = getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            if not self.is_mutable_metal_parameter(raw_param_type, parameter):
+                continue
+            parameter_name = getattr(parameter, "name", f"arg{index}")
+            return (
+                "/* unsupported Metal parameter call: readonly parameter "
                 f"'{arg_name}' cannot be passed to mutable parameter "
                 f"'{parameter_name}' of '{func_name}' */"
             )
@@ -6131,6 +6219,18 @@ class MetalCodeGen:
         return (
             "/* unsupported Metal raw buffer store: readonly buffer "
             f"'{root_name}' cannot be written */"
+        )
+
+    def readonly_metal_parameter_assignment_diagnostic(self, target):
+        root_name = self.assignment_target_root_name(target)
+        if root_name not in self.current_readonly_metal_parameters:
+            return None
+        reason = self.current_readonly_metal_parameter_reasons.get(
+            root_name, "readonly"
+        )
+        return (
+            "/* unsupported Metal parameter store: parameter "
+            f"'{root_name}' is {reason} */"
         )
 
     def readonly_metal_mesh_payload_assignment_diagnostic(self, target):

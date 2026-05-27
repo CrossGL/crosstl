@@ -25,6 +25,7 @@ from ..ast import (
     IdentifierNode,
     IdentifierPatternNode,
     IfNode,
+    LambdaNode,
     LiteralNode,
     LiteralPatternNode,
     LoopNode,
@@ -3779,6 +3780,8 @@ class RustCodeGen:
         )
 
     def generate_expression_with_type(self, expr, target_type, static_context=False):
+        if isinstance(expr, LambdaNode):
+            return self.generate_lambda_node_expression(expr)
         if isinstance(expr, BlockNode):
             return self.generate_block_expression(expr, target_type=target_type)
         if isinstance(expr, MatchNode):
@@ -3814,6 +3817,8 @@ class RustCodeGen:
                 target_type=target_type,
                 return_context=True,
             )
+        if isinstance(expr, LambdaNode):
+            return self.generate_lambda_node_expression(expr)
         if isinstance(expr, BlockNode):
             return self.generate_block_expression(
                 expr,
@@ -3846,6 +3851,8 @@ class RustCodeGen:
                 target_type=target_type,
                 return_context=True,
             )
+        if isinstance(expr, LambdaNode):
+            return self.generate_lambda_node_expression(expr)
         if isinstance(expr, BlockNode):
             return self.generate_block_expression(
                 expr,
@@ -5084,6 +5091,8 @@ class RustCodeGen:
             return self.generate_constructor_expression(expr)
         elif isinstance(expr, BlockNode):
             return self.generate_block_expression(expr)
+        elif isinstance(expr, LambdaNode):
+            return self.generate_lambda_node_expression(expr)
         elif isinstance(expr, MatchNode):
             return self.generate_match_expression(expr)
         elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
@@ -5403,6 +5412,34 @@ class RustCodeGen:
         params = ", ".join(self.generate_lambda_parameter(arg) for arg in args[:-1])
         body = self.generate_lambda_body(args[-1])
         return f"|{params}| {body}"
+
+    def generate_lambda_node_expression(self, node):
+        """Render a first-class LambdaNode as a native Rust closure."""
+        saved_variable_types = self.variable_types.copy()
+        saved_local_variable_names = self.local_variable_names.copy()
+        try:
+            params = []
+            for param in getattr(node, "parameters", []) or []:
+                param_type = self.function_parameter_type(param)
+                self.register_variable_type(param.name, param_type, scope="local")
+                params.append(self.generate_lambda_node_parameter(param, param_type))
+
+            body = self.generate_lambda_node_body(getattr(node, "body", None))
+            return f"|{', '.join(params)}| {body}"
+        finally:
+            self.variable_types = saved_variable_types
+            self.local_variable_names = saved_local_variable_names
+
+    def generate_lambda_node_parameter(self, param, param_type):
+        if self.is_inferred_declaration_type(param_type):
+            return param.name
+        return f"{param.name}: {self.map_type(param_type)}"
+
+    def generate_lambda_node_body(self, body):
+        if isinstance(body, BlockNode):
+            return self.generate_block_expression(body, return_context=True)
+
+        return self.generate_return_branch_expression_with_type(body, None)
 
     def generate_lambda_parameter(self, arg):
         raw = self.lambda_raw_argument_text(arg).strip()

@@ -692,6 +692,22 @@ class CudaToCrossGLConverter:
             return ["// CUDA get last error"]
         elif name == "cudaPeekAtLastError":
             return ["// CUDA peek at last error"]
+        elif name in {
+            "cudaGetTextureObjectResourceDesc",
+            "cudaGetTextureObjectTextureDesc",
+            "cudaGetTextureObjectResourceViewDesc",
+        }:
+            if len(node.args) >= 2:
+                descriptor_kind = {
+                    "cudaGetTextureObjectResourceDesc": "resource",
+                    "cudaGetTextureObjectTextureDesc": "texture",
+                    "cudaGetTextureObjectResourceViewDesc": "resource view",
+                }[name]
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA texture object {descriptor_kind} descriptor query: "
+                    f"{args[1]}, output: {output}"
+                ]
 
         return None
 

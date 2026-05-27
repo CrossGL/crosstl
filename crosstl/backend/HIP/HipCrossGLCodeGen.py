@@ -3299,7 +3299,7 @@ class HipToCrossGLConverter:
                 "surf3Dread": 3,
                 "surf2DLayeredread": 3,
                 "surfCubemapread": 3,
-                "surfCubemapLayeredread": 3,
+                "surfCubemapLayeredread": 4,
             }[base_name]
             return self.format_hip_surface_read(args, dimensions, value_type)
 
@@ -3319,9 +3319,14 @@ class HipToCrossGLConverter:
                 "surf3Dwrite": 3,
                 "surf2DLayeredwrite": 3,
                 "surfCubemapwrite": 3,
-                "surfCubemapLayeredwrite": 3,
+                "surfCubemapLayeredwrite": 4,
             }[base_name]
-            return self.format_hip_surface_write(args, dimensions, value_type)
+            return self.format_hip_surface_write(
+                args,
+                dimensions,
+                value_type,
+                value_is_pointer=base_name == "surfCubemapLayeredwrite",
+            )
 
         return None
 
@@ -3387,10 +3392,18 @@ class HipToCrossGLConverter:
             return f"{output_target} = {image_load}"
         return image_load
 
-    def format_hip_surface_write(self, args, dimensions, value_type):
+    def format_hip_surface_write(
+        self,
+        args,
+        dimensions,
+        value_type,
+        value_is_pointer=False,
+    ):
         if len(args) < dimensions + 2:
             return None
         value = args[0]
+        if value_is_pointer:
+            value = self.strip_surface_output_target(value)
         surface_name = args[1]
         coord_args = [self.strip_surface_byte_offset(args[2], value_type)]
         coord_args.extend(args[3 : dimensions + 2])
