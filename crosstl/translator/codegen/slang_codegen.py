@@ -6031,17 +6031,43 @@ class SlangCodeGen:
                 )
 
             texture_name, coord, extra_args = sample_args
+            coord_node = args[self.sampled_texture_coord_index(args)]
+            coord_reason = self.sampled_texture_coordinate_rank_unsupported_reason(
+                args[0], coord_node
+            )
+            if coord_reason:
+                return self.unsupported_sampled_texture_call(func_name, coord_reason)
+
             if func_name == "texture":
                 if extra_args:
+                    bias_reason = self.scalar_texture_argument_rank_unsupported_reason(
+                        extra_args[0], "bias argument"
+                    )
+                    if bias_reason:
+                        return self.unsupported_sampled_texture_call(
+                            func_name, bias_reason
+                        )
                     bias = self.generate_expression(extra_args[0])
                     return f"{texture_name}.SampleBias({coord}, {bias})"
                 return f"{texture_name}.Sample({coord})"
 
             if func_name == "textureLod" and extra_args:
+                lod_reason = self.scalar_texture_argument_rank_unsupported_reason(
+                    extra_args[0], "lod argument"
+                )
+                if lod_reason:
+                    return self.unsupported_sampled_texture_call(func_name, lod_reason)
                 lod = self.generate_expression(extra_args[0])
                 return f"{texture_name}.SampleLevel({coord}, {lod})"
 
             if func_name == "textureGrad" and len(extra_args) >= 2:
+                grad_reason = self.texture_gradient_rank_unsupported_reason(
+                    args[0], extra_args[0]
+                ) or self.texture_gradient_rank_unsupported_reason(
+                    args[0], extra_args[1]
+                )
+                if grad_reason:
+                    return self.unsupported_sampled_texture_call(func_name, grad_reason)
                 ddx = self.generate_expression(extra_args[0])
                 ddy = self.generate_expression(extra_args[1])
                 return f"{texture_name}.SampleGrad({coord}, {ddx}, {ddy})"
@@ -6091,6 +6117,19 @@ class SlangCodeGen:
                 )
             texture_name, coord, extra_args = fetch_args
 
+            coord_node = args[self.sampled_texture_coord_index(args)]
+            coord_reason = self.texel_fetch_coordinate_rank_unsupported_reason(
+                args[0], coord_node
+            )
+            if coord_reason:
+                return self.unsupported_sampled_texture_call(func_name, coord_reason)
+            fetch_index_reason = self.scalar_texture_argument_rank_unsupported_reason(
+                extra_args[0], "fetch index argument"
+            )
+            if fetch_index_reason:
+                return self.unsupported_sampled_texture_call(
+                    func_name, fetch_index_reason
+                )
             lod_or_sample = self.generate_expression(extra_args[0])
             texture_type = self.get_expression_type(args[0])
             if self.is_multisample_sampler_type(texture_type):
@@ -6730,6 +6769,13 @@ class SlangCodeGen:
             coord, expected_rank, resource_type, "coordinate"
         )
 
+    def texel_fetch_coordinate_rank_unsupported_reason(self, texture_node, coord):
+        resource_type = self.resource_base_type(self.get_expression_type(texture_node))
+        expected_rank = self.texel_fetch_coordinate_rank(resource_type)
+        return self.texture_rank_unsupported_reason(
+            coord, expected_rank, resource_type, "coordinate"
+        )
+
     def texture_offset_rank_unsupported_reason(self, texture_node, offset):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
         if resource_type is None:
@@ -6815,6 +6861,12 @@ class SlangCodeGen:
             return None
         return "requires a scalar compare reference"
 
+    def scalar_texture_argument_rank_unsupported_reason(self, node, role):
+        actual_rank = self.expression_value_rank(node)
+        if actual_rank is None or actual_rank == 1:
+            return None
+        return f"requires {self.texture_rank_phrase(1, role)}"
+
     def texture_rank_unsupported_reason(
         self, node, expected_rank, resource_type, role, array_element=False
     ):
@@ -6855,6 +6907,17 @@ class SlangCodeGen:
             "sampler3D": 3,
             "samplerCube": 3,
             "samplerCubeArray": 4,
+        }.get(resource_type)
+
+    def texel_fetch_coordinate_rank(self, resource_type):
+        return {
+            "sampler1D": 1,
+            "sampler1DArray": 2,
+            "sampler2D": 2,
+            "sampler2DArray": 3,
+            "sampler3D": 3,
+            "sampler2DMS": 2,
+            "sampler2DMSArray": 3,
         }.get(resource_type)
 
     def texture_offset_rank(self, resource_type):

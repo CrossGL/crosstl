@@ -4377,6 +4377,92 @@ def test_metal_mesh_object_payload_helper_address_space_and_const_writes():
     assert "float4 color = payload.color;" in generated
 
 
+def test_metal_mesh_object_payload_local_reference_aliases_use_object_data():
+    code = """
+    shader meshpipe {
+        struct Payload {
+            vec4 color;
+        };
+
+        object {
+            void main(Payload payload @payload)
+                @max_total_threads_per_threadgroup(32)
+            {
+                Payload& alias = payload;
+                alias.color = vec4(1.0, 0.0, 0.0, 1.0);
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            void main(Payload payload @payload)
+                @max_total_threads_per_threadgroup(32)
+            {
+                Payload& alias = payload;
+                alias.color = vec4(0.0, 1.0, 0.0, 1.0);
+                vec4 color = alias.color;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "object_data Payload& alias = payload;" in generated
+    assert "const object_data Payload& alias = payload;" in generated
+    assert "alias.color = float4(1.0, 0.0, 0.0, 1.0);" in generated
+    assert (
+        "/* unsupported Metal mesh payload store: mesh payload 'alias' is const "
+        "object_data in mesh stages */"
+    ) in generated
+    assert "alias.color = float4(0.0, 1.0, 0.0, 1.0);" not in generated
+    assert "\n    Payload& alias = payload;" not in generated
+    assert "\n    thread Payload& alias = payload;" not in generated
+    assert "float4 color = alias.color;" in generated
+
+
+def test_metal_object_payload_explicit_thread_alias_is_diagnostic():
+    code = """
+    shader meshpipe {
+        struct Payload {
+            vec4 color;
+        };
+
+        object {
+            void main(Payload payload @payload)
+                @max_total_threads_per_threadgroup(32)
+            {
+                thread Payload& alias = payload;
+                alias.color = vec4(1.0, 0.0, 0.0, 1.0);
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            void main(Payload payload @payload)
+                @max_total_threads_per_threadgroup(32)
+            {
+                vec4 color = payload.color;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "/* unsupported Metal address-space local alias: initializer 'payload' "
+        "uses object_data address space but local 'alias' was declared thread; "
+        "using read-only object_data alias */"
+    ) in generated
+    assert "const object_data Payload& alias = payload;" in generated
+    assert (
+        "/* unsupported Metal mesh payload store: mesh payload 'alias' is "
+        "read-only object_data after address-space mismatch */"
+    ) in generated
+    assert "alias.color = float4(1.0, 0.0, 0.0, 1.0);" not in generated
+    assert "\n    thread Payload& alias = payload;" not in generated
+    assert "\n    Payload& alias = payload;" not in generated
+
+
 def test_metal_mesh_payload_dispatch_argument_generates_object_data_payload():
     code = """
     shader meshpipe {

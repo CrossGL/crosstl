@@ -8,6 +8,7 @@ from ..ast import (
     ArrayLiteralNode,
     AssignmentNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     CaseNode,
     CbufferNode,
@@ -2640,6 +2641,8 @@ class RustCodeGen:
                     init_expr = self.normalize_assignment_rhs(
                         vtype, initial_value, init_expr, "="
                     )
+                if self.expression_contains_block_node(initial_value):
+                    init_expr = self.indent_multiline_expression(init_expr, indent)
                 return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = {init_expr};\n"
             elif self.is_generated_struct_type(vtype):
                 return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = Default::default();\n"
@@ -2650,6 +2653,11 @@ class RustCodeGen:
 
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)
+
+        elif isinstance(stmt, BlockNode):
+            return (
+                f"{indent_str}{self.generate_block_expression(stmt, indent=indent)}\n"
+            )
 
         elif isinstance(stmt, AssignmentNode):
             return f"{indent_str}{self.generate_assignment(stmt)};\n"
@@ -2695,6 +2703,11 @@ class RustCodeGen:
                     return_expr = self.normalize_assignment_rhs(
                         self.current_return_type, stmt.value, return_expr, "="
                     )
+                    if self.expression_contains_block_node(stmt.value):
+                        return_expr = self.indent_multiline_expression(
+                            return_expr,
+                            indent,
+                        )
                     return f"{indent_str}return {return_expr};\n"
             else:
                 # Void return
@@ -3498,6 +3511,7 @@ class RustCodeGen:
                 ArrayAccessNode,
                 ArrayLiteralNode,
                 BinaryOpNode,
+                BlockNode,
                 ConstructorNode,
                 FunctionCallNode,
                 IdentifierNode,
@@ -3539,6 +3553,180 @@ class RustCodeGen:
         if body is None:
             return []
         return [body]
+
+    def block_tail_expression(self, tail):
+        if isinstance(tail, ExpressionStatementNode) and getattr(
+            tail,
+            "is_tail_expression",
+            False,
+        ):
+            return tail.expression
+        if isinstance(
+            tail,
+            (
+                ArrayAccessNode,
+                ArrayLiteralNode,
+                BinaryOpNode,
+                BlockNode,
+                ConstructorNode,
+                FunctionCallNode,
+                IdentifierNode,
+                LiteralNode,
+                MatchNode,
+                MemberAccessNode,
+                TernaryOpNode,
+                UnaryOpNode,
+            ),
+        ) or isinstance(tail, str):
+            return tail
+        return None
+
+    def indent_multiline_expression(self, expression, indent, indent_first=False):
+        if not isinstance(expression, str):
+            return expression
+
+        prefix = "    " * indent
+        if "\n" not in expression:
+            return f"{prefix}{expression}" if indent_first else expression
+
+        lines = expression.split("\n")
+        start_index = 0 if indent_first else 1
+        for index in range(start_index, len(lines)):
+            if lines[index]:
+                lines[index] = f"{prefix}{lines[index]}"
+        return "\n".join(lines)
+
+    def expression_contains_block_node(self, node):
+        if node is None:
+            return False
+        if isinstance(node, BlockNode):
+            return True
+        if isinstance(node, list):
+            return any(self.expression_contains_block_node(item) for item in node)
+        if isinstance(node, tuple):
+            return any(self.expression_contains_block_node(item) for item in node)
+
+        if isinstance(node, ExpressionStatementNode):
+            return self.expression_contains_block_node(node.expression)
+        if isinstance(node, ReturnNode):
+            return self.expression_contains_block_node(node.value)
+        if isinstance(node, VariableNode):
+            return self.expression_contains_block_node(
+                getattr(node, "initial_value", None)
+            )
+        if isinstance(node, AssignmentNode):
+            return self.expression_contains_block_node(
+                [node.target, node.value],
+            )
+        if isinstance(node, IfNode):
+            return self.expression_contains_block_node(
+                [node.condition, node.then_branch, node.else_branch],
+            )
+        if isinstance(node, MatchNode):
+            pieces = [node.expression]
+            for arm in getattr(node, "arms", []) or []:
+                pieces.append(getattr(arm, "guard", None))
+                pieces.append(getattr(arm, "body", None))
+            return self.expression_contains_block_node(pieces)
+        if isinstance(node, FunctionCallNode):
+            return self.expression_contains_block_node(
+                [
+                    getattr(node, "function", getattr(node, "name", None)),
+                    getattr(node, "arguments", getattr(node, "args", [])),
+                ]
+            )
+        if isinstance(node, ConstructorNode):
+            return self.expression_contains_block_node(
+                [
+                    getattr(node, "arguments", []),
+                    list((getattr(node, "named_arguments", {}) or {}).values()),
+                ]
+            )
+        if isinstance(node, ArrayLiteralNode):
+            return self.expression_contains_block_node(getattr(node, "elements", []))
+        if isinstance(node, TernaryOpNode):
+            return self.expression_contains_block_node(
+                [node.condition, node.true_expr, node.false_expr],
+            )
+        if isinstance(node, BinaryOpNode):
+            return self.expression_contains_block_node([node.left, node.right])
+        if isinstance(node, UnaryOpNode):
+            return self.expression_contains_block_node(node.operand)
+        if isinstance(node, MemberAccessNode):
+            return self.expression_contains_block_node(
+                getattr(node, "object_expr", getattr(node, "object", None))
+            )
+        if isinstance(node, ArrayAccessNode):
+            return self.expression_contains_block_node(
+                [
+                    getattr(node, "array_expr", getattr(node, "array", None)),
+                    getattr(node, "index_expr", getattr(node, "index", None)),
+                ]
+            )
+        return False
+
+    def generate_block_expression(
+        self,
+        node,
+        target_type=None,
+        return_context=False,
+        indent=0,
+    ):
+        statements = self.statement_list(node)
+        explicit_tail = getattr(node, "expression", None)
+        if explicit_tail is not None:
+            prefix_statements = statements
+            tail_expression = explicit_tail
+        elif statements:
+            prefix_statements = statements[:-1]
+            tail_expression = self.block_tail_expression(statements[-1])
+        else:
+            prefix_statements = []
+            tail_expression = None
+
+        indent_str = "    " * indent
+        body_indent = indent + 1
+        code = "{\n"
+
+        saved_variable_types = self.variable_types.copy()
+        saved_local_variable_names = self.local_variable_names.copy()
+        try:
+            for statement in prefix_statements:
+                code += self.generate_statement(statement, body_indent)
+
+            if tail_expression is not None:
+                if return_context:
+                    tail_value = self.generate_return_branch_expression_with_type(
+                        tail_expression,
+                        target_type,
+                    )
+                else:
+                    tail_value = self.generate_expression_with_type(
+                        tail_expression,
+                        target_type,
+                    )
+                tail_value = self.normalize_assignment_rhs(
+                    target_type,
+                    tail_expression,
+                    tail_value,
+                    "=",
+                )
+                code += (
+                    self.indent_multiline_expression(
+                        tail_value,
+                        body_indent,
+                        indent_first=True,
+                    )
+                    + "\n"
+                )
+            elif statements:
+                code += self.generate_statement(statements[-1], body_indent)
+        finally:
+            self.variable_types = saved_variable_types
+            self.local_variable_names = saved_local_variable_names
+
+        code += f"{indent_str}}}"
+        return code
 
     def active_do_while_context(self):
         if not self.do_while_contexts:
@@ -3614,6 +3802,8 @@ class RustCodeGen:
         )
 
     def generate_expression_with_type(self, expr, target_type, static_context=False):
+        if isinstance(expr, BlockNode):
+            return self.generate_block_expression(expr, target_type=target_type)
         if isinstance(expr, MatchNode):
             return self.generate_match_expression(expr, target_type=target_type)
         if isinstance(expr, ArrayLiteralNode):
@@ -3647,6 +3837,12 @@ class RustCodeGen:
                 target_type=target_type,
                 return_context=True,
             )
+        if isinstance(expr, BlockNode):
+            return self.generate_block_expression(
+                expr,
+                target_type=target_type,
+                return_context=True,
+            )
         if isinstance(expr, ConstructorNode):
             return self.generate_return_constructor_expression(expr, target_type)
         if isinstance(expr, FunctionCallNode):
@@ -3669,6 +3865,12 @@ class RustCodeGen:
             return self.generate_return_ternary_expression(expr, target_type)
         if isinstance(expr, MatchNode):
             return self.generate_match_expression(
+                expr,
+                target_type=target_type,
+                return_context=True,
+            )
+        if isinstance(expr, BlockNode):
+            return self.generate_block_expression(
                 expr,
                 target_type=target_type,
                 return_context=True,
@@ -3884,7 +4086,13 @@ class RustCodeGen:
                         target_type,
                     )
 
-        arg_expr = self.generate_expression_with_type(arg, target_type)
+        if isinstance(arg, BlockNode):
+            arg_expr = self.generate_return_branch_expression_with_type(
+                arg,
+                target_type,
+            )
+        else:
+            arg_expr = self.generate_expression_with_type(arg, target_type)
         return self.normalize_typed_expression_value(arg, arg_expr, target_type)
 
     def return_move_place_counts(self, args):
@@ -4897,6 +5105,8 @@ class RustCodeGen:
             return self.generate_array_literal_expression(expr)
         elif isinstance(expr, ConstructorNode):
             return self.generate_constructor_expression(expr)
+        elif isinstance(expr, BlockNode):
+            return self.generate_block_expression(expr)
         elif isinstance(expr, MatchNode):
             return self.generate_match_expression(expr)
         elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
@@ -6452,6 +6662,23 @@ class RustCodeGen:
             return self.get_expression_name(array_expr)
         return None
 
+    def block_expression_result_type(self, expr):
+        explicit_tail = getattr(expr, "expression", None)
+        if explicit_tail is not None:
+            return self.expression_result_type(explicit_tail)
+
+        statements = self.statement_list(expr)
+        if not statements:
+            return None
+
+        tail = statements[-1]
+        tail_expression = self.block_tail_expression(tail)
+        if tail_expression is not None:
+            return self.expression_result_type(tail_expression)
+        if isinstance(tail, ReturnNode):
+            return self.expression_result_type(getattr(tail, "value", None))
+        return None
+
     def expression_result_type(self, expr):
         if expr is None:
             return None
@@ -6470,6 +6697,8 @@ class RustCodeGen:
             if isinstance(expr.value, int):
                 return "int"
             return None
+        if isinstance(expr, BlockNode):
+            return self.block_expression_result_type(expr)
         if isinstance(expr, ConstructorNode):
             return self.constructor_result_type(expr)
         if isinstance(expr, MatchNode):

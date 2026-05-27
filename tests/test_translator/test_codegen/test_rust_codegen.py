@@ -13,6 +13,7 @@ from crosstl.translator.ast import (
     ArrayType,
     AssignmentNode,
     BinaryOpNode,
+    BlockNode,
     ConstructorNode,
     ConstructorPatternNode,
     ExecutionModel,
@@ -23,6 +24,7 @@ from crosstl.translator.ast import (
     GenericType,
     IdentifierNode,
     IdentifierPatternNode,
+    IfNode,
     LiteralPatternNode,
     LiteralNode,
     MatchArmNode,
@@ -6305,6 +6307,138 @@ def test_array_block_tail_and_loop_carried_contexts_compile(tmp_path):
     assert "while (i < 2) {" in generated_code
     assert "selected = identity_payload_matrix(right.clone());" in generated_code
     assert "return selected;" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_early_returns_and_nested_block_expressions_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+
+    def identity_call(expr):
+        if isinstance(expr, str):
+            expr = IdentifierNode(expr)
+        return FunctionCallNode(
+            IdentifierNode("identity_payload_matrix"),
+            [expr],
+        )
+
+    def block_tail(marker, tail):
+        return BlockNode(
+            [
+                VariableNode(
+                    "marker",
+                    PrimitiveType("int"),
+                    LiteralNode(marker, PrimitiveType("int")),
+                ),
+                ExpressionStatementNode(tail, is_tail_expression=True),
+            ]
+        )
+
+    def nested_block(outer_marker, inner_marker, tail):
+        return BlockNode(
+            [
+                VariableNode(
+                    "outer_marker",
+                    PrimitiveType("int"),
+                    LiteralNode(outer_marker, PrimitiveType("int")),
+                ),
+                ExpressionStatementNode(
+                    block_tail(inner_marker, tail),
+                    is_tail_expression=True,
+                ),
+            ]
+        )
+
+    ast = ShaderNode(
+        "ArrayEarlyReturnAndBlockExpressions",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "identity_payload_matrix",
+                payload_matrix_type,
+                [ParameterNode("matrix", payload_matrix_type)],
+                [ReturnNode(IdentifierNode("matrix"))],
+            ),
+            FunctionNode(
+                "early_return_nested_block",
+                payload_matrix_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("left", payload_matrix_type),
+                    ParameterNode("right", payload_matrix_type),
+                ],
+                [
+                    IfNode(
+                        IdentifierNode("flag"),
+                        BlockNode(
+                            [ReturnNode(nested_block(1, 2, identity_call("left")))]
+                        ),
+                    ),
+                    ReturnNode(nested_block(3, 4, identity_call("right"))),
+                ],
+            ),
+            FunctionNode(
+                "local_nested_block",
+                payload_matrix_type,
+                [ParameterNode("left", payload_matrix_type)],
+                [
+                    VariableNode(
+                        "selected",
+                        payload_matrix_type,
+                        nested_block(5, 6, identity_call("left")),
+                    ),
+                    ReturnNode(IdentifierNode("selected")),
+                ],
+            ),
+            FunctionNode(
+                "return_helper_with_block_arg",
+                payload_matrix_type,
+                [ParameterNode("left", payload_matrix_type)],
+                [ReturnNode(identity_call(nested_block(7, 8, identity_call("left"))))],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "if flag {\n        return {\n" in generated_code
+    assert "let outer_marker: i32 = 1;" in generated_code
+    assert "let marker: i32 = 2;" in generated_code
+    assert "identity_payload_matrix(left)" in generated_code
+    assert "let outer_marker: i32 = 3;" in generated_code
+    assert "let marker: i32 = 4;" in generated_code
+    assert "identity_payload_matrix(right)" in generated_code
+    assert "let selected: [[Payload; 2]; 2] = {\n" in generated_code
+    assert "let outer_marker: i32 = 5;" in generated_code
+    assert "identity_payload_matrix(left.clone())" in generated_code
+    assert "return identity_payload_matrix({\n" in generated_code
+    assert "let outer_marker: i32 = 7;" in generated_code
+    assert "let marker: i32 = 8;" in generated_code
+    return_helper_body = generated_code.split(
+        "pub fn return_helper_with_block_arg",
+        1,
+    )[1]
+    assert "identity_payload_matrix(left.clone())" not in return_helper_body
+    assert (
+        "return identity_payload_matrix({\n"
+        "        let outer_marker: i32 = 7;\n"
+        "        {\n"
+        "            let marker: i32 = 8;\n"
+        "            identity_payload_matrix(left)\n"
+        "        }\n"
+        "    });"
+    ) in return_helper_body
+    assert "return BlockNode" not in generated_code
+    assert "BlockNode(statements=" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

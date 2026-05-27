@@ -1574,10 +1574,10 @@ def test_hlsl_rw_texture_aliases_emit_mojo_image_helpers():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "struct Image2D:" in generated_code
+    assert "struct Image2DFloat4:" in generated_code
     assert "struct IImage2D:" in generated_code
     assert "struct UImage2D:" in generated_code
-    assert "var outColor: Image2D = Image2D()" in generated_code
+    assert "var outColor: Image2DFloat4 = Image2DFloat4()" in generated_code
     assert "var signedImage: IImage2D = IImage2D()" in generated_code
     assert "var counters: UImage2D = UImage2D()" in generated_code
     assert (
@@ -1688,15 +1688,15 @@ def test_hlsl_rasterizer_ordered_texture_aliases_emit_mojo_image_helpers():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "struct Image1D:" in generated_code
+    assert "struct Image1DFloat:" in generated_code
     assert "struct IImage1DArray:" in generated_code
     assert "struct UImage2D:" in generated_code
-    assert "struct Image2DArray:" in generated_code
+    assert "struct Image2DArrayFloat4:" in generated_code
     assert "struct IImage3D:" in generated_code
-    assert "var row: Image1D = Image1D()" in generated_code
+    assert "var row: Image1DFloat = Image1DFloat()" in generated_code
     assert "var signedRows: IImage1DArray = IImage1DArray()" in generated_code
     assert "var counters: UImage2D = UImage2D()" in generated_code
-    assert "var layers: Image2DArray = Image2DArray()" in generated_code
+    assert "var layers: Image2DArrayFloat4 = Image2DArrayFloat4()" in generated_code
     assert "var volume: IImage3D = IImage3D()" in generated_code
     assert (
         "# CrossGL resource metadata: name=counters kind=image set=3 "
@@ -1717,6 +1717,134 @@ def test_hlsl_rasterizer_ordered_texture_aliases_emit_mojo_image_helpers():
     assert ".Load(" not in generated_code
     assert ".Store(" not in generated_code
     assert ".GetDimensions(" not in generated_code
+
+
+def test_hlsl_typed_float_image_aliases_preserve_mojo_value_signatures():
+    code = """
+    RWTexture1D<float> scalarImage;
+    RWTexture2D<float2> rgImage;
+    RWTexture2D<float3> normalImage;
+    RasterizerOrderedTexture2DArray<float4> layers;
+
+    float readScalar(int pixel) {
+        return scalarImage.Load(pixel);
+    }
+    void writeScalar(int pixel, float value) {
+        scalarImage.Store(pixel, value);
+    }
+    float2 readRg(int2 pixel) {
+        return rgImage.Load(pixel);
+    }
+    void writeRg(int2 pixel, float2 value) {
+        rgImage.Store(pixel, value);
+    }
+    float3 readNormal(int2 pixel) {
+        return normalImage.Load(pixel);
+    }
+    void writeNormal(int2 pixel, float3 value) {
+        normalImage.Store(pixel, value);
+    }
+    float4 readLayer(int4 pixelLayer) {
+        return layers.Load(pixelLayer);
+    }
+    void writeLayer(int4 pixelLayer, float4 value) {
+        layers.Store(pixelLayer, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Image1DFloat:" in generated_code
+    assert "struct Image2DFloat2:" in generated_code
+    assert "struct Image2DFloat3:" in generated_code
+    assert "struct Image2DArrayFloat4:" in generated_code
+    assert "var scalarImage: Image1DFloat = Image1DFloat()" in generated_code
+    assert "var rgImage: Image2DFloat2 = Image2DFloat2()" in generated_code
+    assert "var normalImage: Image2DFloat3 = Image2DFloat3()" in generated_code
+    assert "var layers: Image2DArrayFloat4 = Image2DArrayFloat4()" in generated_code
+    assert "struct Image1D:\n" not in generated_code
+    assert "struct Image2D:\n" not in generated_code
+    assert (
+        "fn image_load(image: Image1DFloat, coord: Int32) -> Float32:" in generated_code
+    )
+    assert (
+        "fn image_store(image: Image1DFloat, coord: Int32, value: Float32):"
+        in generated_code
+    )
+    assert (
+        "fn image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.float32, 2]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: Image2DFloat2, coord: SIMD[DType.int32, 2], "
+        "value: SIMD[DType.float32, 2]):" in generated_code
+    )
+    assert (
+        "fn image_load(image: Image2DFloat3, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: Image2DFloat3, coord: SIMD[DType.int32, 2], "
+        "value: SIMD[DType.float32, 4]):" in generated_code
+    )
+    assert (
+        "fn image_store(image: Image2DArrayFloat4, coord: SIMD[DType.int32, 4], "
+        "value: SIMD[DType.float32, 4]):" in generated_code
+    )
+
+
+def test_hlsl_typed_float_image_store_rejects_mismatched_value_width():
+    code = """
+    RWTexture2D<float2> rgImage;
+
+    void invalidStore(int2 pixel, float4 value) {
+        rgImage.Store(pixel, value);
+    }
+    """
+
+    with pytest.raises(ValueError, match="image_store.*value.*Image2DFloat2"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_hlsl_typed_integer_image_aliases_preserve_vector_value_signatures():
+    code = """
+    RWTexture2D<int2> signedPairs;
+    RWTexture2D<uint4> counters;
+
+    int2 readSigned(int2 pixel) {
+        return signedPairs.Load(pixel);
+    }
+    void writeSigned(int2 pixel, int2 value) {
+        signedPairs.Store(pixel, value);
+    }
+    uint4 readCounters(int2 pixel) {
+        return counters.Load(pixel);
+    }
+    void writeCounters(int2 pixel, uint4 value) {
+        counters.Store(pixel, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct IImage2DInt2:" in generated_code
+    assert "struct UImage2DUInt4:" in generated_code
+    assert "var signedPairs: IImage2DInt2 = IImage2DInt2()" in generated_code
+    assert "var counters: UImage2DUInt4 = UImage2DUInt4()" in generated_code
+    assert (
+        "fn image_load(image: IImage2DInt2, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.int32, 2]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: IImage2DInt2, coord: SIMD[DType.int32, 2], "
+        "value: SIMD[DType.int32, 2]):" in generated_code
+    )
+    assert (
+        "fn image_load(image: UImage2DUInt4, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.uint32, 4]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: UImage2DUInt4, coord: SIMD[DType.int32, 2], "
+        "value: SIMD[DType.uint32, 4]):" in generated_code
+    )
 
 
 def test_hlsl_rasterizer_ordered_texture_aliases_compile_with_mojo(tmp_path):

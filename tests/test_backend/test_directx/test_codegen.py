@@ -855,6 +855,22 @@ def test_codegen_texture_method_descriptors():
         converter.texture_method_descriptor("SampleBias", 4)["function"]
         == "textureOffset"
     )
+    assert (
+        converter.texture_method_descriptor("SampleCmp", 4)["function"]
+        == "textureCompareOffset"
+    )
+    assert (
+        converter.texture_method_descriptor("SampleCmpLevelZero", 4)["function"]
+        == "textureCompareOffset"
+    )
+    assert (
+        converter.texture_method_descriptor("Gather", 3)["function"]
+        == "textureGatherOffset"
+    )
+    assert (
+        converter.texture_method_descriptor("GatherCmp", 4)["function"]
+        == "textureGatherCompareOffset"
+    )
     assert converter.texture_method_descriptor("GatherBlue", 2) == {
         "member": "GatherBlue",
         "function": "textureGather",
@@ -864,6 +880,10 @@ def test_codegen_texture_method_descriptors():
         "usage": "regular",
         "buffer_when_max_args": None,
     }
+    assert (
+        converter.texture_method_descriptor("GatherBlue", 3)["function"]
+        == "textureGatherOffset"
+    )
     assert converter.texture_method_descriptor("Load", 1)["function"] == "buffer_load"
     assert converter.texture_method_descriptor("Load", 2)["function"] == "texelFetch"
     assert (
@@ -1009,6 +1029,56 @@ def test_codegen_texture_sample_offsets_roundtrip_through_translator_codegen():
     assert "textureOffset(" not in hlsl
     assert "textureLodOffset(" not in hlsl
     assert "textureGradOffset(" not in hlsl
+
+
+def test_codegen_texture_compare_and_gather_offsets_roundtrip_through_translator_codegen():
+    code = textwrap.dedent("""
+        Texture2D colorMap : register(t0);
+        Texture2D<float> shadowMap : register(t1);
+        SamplerState linearSampler : register(s0);
+        SamplerComparisonState compareSampler : register(s1);
+
+        float4 main(
+            float2 uv : TEXCOORD0,
+            float depth : TEXCOORD1,
+            int2 offset : TEXCOORD2
+        ) : SV_Target {
+            float cmp = shadowMap.SampleCmp(compareSampler, uv, depth, offset);
+            float cmpZero = shadowMap.SampleCmpLevelZero(
+                compareSampler, uv, depth, offset
+            );
+            float4 gather = colorMap.GatherRed(linearSampler, uv, offset);
+            float4 gatherAny = colorMap.Gather(linearSampler, uv, offset);
+            float4 gatherCmp = shadowMap.GatherCmp(
+                compareSampler, uv, depth, offset
+            );
+            return gather + gatherAny + gatherCmp + float4(cmp + cmpZero);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert (
+        "textureCompareOffset(shadowMap, compareSampler, uv, depth, offset)" in crossgl
+    )
+    assert "textureGatherOffset(colorMap, linearSampler, uv, offset, 0)" in crossgl
+    assert "textureGatherOffset(colorMap, linearSampler, uv, offset)" in crossgl
+    assert (
+        "textureGatherCompareOffset(shadowMap, compareSampler, uv, depth, offset)"
+        in crossgl
+    )
+    assert "textureCompare(shadowMap, compareSampler, uv, depth, offset)" not in crossgl
+    assert "textureGather(colorMap, linearSampler, uv, offset" not in crossgl
+    assert ".GatherCmp(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "shadowMap.SampleCmp(compareSampler, uv, depth, offset)" in hlsl
+    assert "colorMap.GatherRed(linearSampler, uv, offset)" in hlsl
+    assert "colorMap.Gather(linearSampler, uv, offset)" in hlsl
+    assert "shadowMap.GatherCmp(compareSampler, uv, depth, offset)" in hlsl
+    assert "textureCompareOffset(" not in hlsl
+    assert "textureGatherOffset(" not in hlsl
+    assert "textureGatherCompareOffset(" not in hlsl
 
 
 def test_codegen_resource_array_receivers_use_canonical_calls():

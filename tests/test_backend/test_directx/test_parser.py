@@ -551,6 +551,49 @@ def test_parse_texture_sample_offset_methods_keep_member_calls():
     assert {"Sample", "SampleLevel", "SampleGrad"}.issubset(set(members))
 
 
+def test_parse_texture_compare_and_gather_offset_methods_keep_member_calls():
+    code = """
+    Texture2D colorMap : register(t0);
+    Texture2D<float> shadowMap : register(t1);
+    SamplerState linearSampler : register(s0);
+    SamplerComparisonState compareSampler : register(s1);
+
+    float4 main(
+        float2 uv : TEXCOORD0,
+        float depth : TEXCOORD1,
+        int2 offset : TEXCOORD2
+    ) : SV_Target0 {
+        float cmp = shadowMap.SampleCmp(compareSampler, uv, depth, offset);
+        float cmpZero = shadowMap.SampleCmpLevelZero(
+            compareSampler, uv, depth, offset
+        );
+        float4 gather = colorMap.GatherRed(linearSampler, uv, offset);
+        float4 gatherAny = colorMap.Gather(linearSampler, uv, offset);
+        float4 gatherCmp = shadowMap.GatherCmp(
+            compareSampler, uv, depth, offset
+        );
+        return gather + gatherAny + gatherCmp + float4(cmp + cmpZero);
+    }
+    """
+
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    members = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    assert {
+        "SampleCmp",
+        "SampleCmpLevelZero",
+        "GatherRed",
+        "Gather",
+        "GatherCmp",
+    }.issubset(set(members))
+
+
 def test_parse_resource_method_ast_shapes():
     code = """
     Texture2D tex : register(t0);

@@ -2823,6 +2823,7 @@ class MetalCodeGen:
             self.current_address_space_variables[stmt.name] = (
                 self.local_variable_address_space(stmt)
             )
+            self.record_readonly_metal_mesh_payload_local_alias(stmt)
             is_atomic_local = self.is_metal_atomic_value_type(var_type)
             if self.is_unsupported_glsl_buffer_block_struct_type(var_type):
                 self.current_unsupported_glsl_buffer_block_local_variables.add(
@@ -2853,13 +2854,21 @@ class MetalCodeGen:
                 init_expr = self.generate_expression_with_expected(
                     initial_value, var_type
                 )
+                address_space_mismatch = (
+                    self.local_variable_address_space_mismatch_diagnostic(stmt)
+                )
                 if is_atomic_local:
                     return (
                         f"{indent_str}{declaration};\n"
                         f"{indent_str}atomic_store_explicit(&{stmt.name}, {init_expr}, "
                         "memory_order_relaxed);\n"
                     )
-                return f"{indent_str}{declaration} = {init_expr};\n"
+                diagnostic_prefix = (
+                    f"{indent_str}{address_space_mismatch}\n"
+                    if address_space_mismatch is not None
+                    else ""
+                )
+                return f"{diagnostic_prefix}{indent_str}{declaration} = {init_expr};\n"
             else:
                 return f"{indent_str}{declaration};\n"
         elif isinstance(stmt, ArrayNode):
@@ -2973,6 +2982,14 @@ class MetalCodeGen:
             var_type = self.expression_result_type(getattr(stmt, "initial_value", None))
         return self.type_name_string(var_type) or "float"
 
+    def local_variable_type_node(self, stmt):
+        return getattr(stmt, "var_type", None) or getattr(stmt, "vtype", None)
+
+    def local_variable_is_address_space_alias(self, node):
+        return isinstance(
+            self.local_variable_type_node(node), (PointerType, ReferenceType)
+        )
+
     def local_variable_qualifier(self, node):
         qualifiers = {
             str(qualifier).lower()
@@ -2982,6 +2999,18 @@ class MetalCodeGen:
             str(getattr(attribute, "name", "")).lower()
             for attribute in getattr(node, "attributes", []) or []
         }
+        if self.local_variable_is_address_space_alias(node):
+            address_space = self.local_variable_address_space(node)
+            if address_space is not None:
+                const_prefix = ""
+                if address_space != "constant" and (
+                    "const" in qualifiers
+                    or self.local_variable_inherits_readonly_mesh_payload(node)
+                    or self.local_variable_address_space_mismatch_diagnostic(node)
+                    is not None
+                ):
+                    const_prefix = "const "
+                return f"{const_prefix}{address_space} "
         if (qualifiers | attributes) & {"shared", "groupshared", "threadgroup"}:
             return "threadgroup "
         if self.is_metal_atomic_value_type(self.local_variable_declared_type(node)):
@@ -2991,12 +3020,84 @@ class MetalCodeGen:
         return ""
 
     def local_variable_address_space(self, node):
-        address_space = self.parameter_address_space(node)
-        if address_space is not None:
-            return self.normalized_address_space(address_space)
+        explicit_address_space = self.normalized_address_space(
+            self.parameter_address_space(node)
+        )
+        initializer_address_space = self.local_variable_initializer_address_space(node)
+        if (
+            self.local_variable_is_address_space_alias(node)
+            and explicit_address_space is not None
+            and initializer_address_space is not None
+            and explicit_address_space != initializer_address_space
+        ):
+            return initializer_address_space
+        if explicit_address_space is not None:
+            return explicit_address_space
+        if (
+            self.local_variable_is_address_space_alias(node)
+            and initializer_address_space is not None
+        ):
+            return initializer_address_space
         if self.is_metal_atomic_value_type(self.local_variable_declared_type(node)):
             return "threadgroup"
         return "thread"
+
+    def local_variable_initializer_address_space(self, node):
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is None:
+            return None
+        return self.argument_address_space(initial_value)
+
+    def local_variable_inherits_readonly_mesh_payload(self, node):
+        if not self.local_variable_is_address_space_alias(node):
+            return False
+        initial_value = getattr(node, "initial_value", None)
+        root_name = self.assignment_target_root_name(initial_value)
+        return root_name in self.current_readonly_metal_mesh_payload_parameters
+
+    def local_variable_address_space_mismatch_diagnostic(self, node):
+        if not self.local_variable_is_address_space_alias(node):
+            return None
+        explicit_address_space = self.normalized_address_space(
+            self.parameter_address_space(node)
+        )
+        initializer_address_space = self.local_variable_initializer_address_space(node)
+        if (
+            explicit_address_space is None
+            or initializer_address_space is None
+            or explicit_address_space == initializer_address_space
+        ):
+            return None
+        initial_value = getattr(node, "initial_value", None)
+        initializer_name = self.assignment_target_root_name(initial_value) or "<expr>"
+        return (
+            "/* unsupported Metal address-space local alias: initializer "
+            f"'{initializer_name}' uses {initializer_address_space} address space "
+            f"but local '{node.name}' was declared {explicit_address_space}; "
+            f"using read-only {initializer_address_space} alias */"
+        )
+
+    def record_readonly_metal_mesh_payload_local_alias(self, node):
+        if self.local_variable_address_space(node) != "object_data":
+            return
+        if not self.local_variable_is_address_space_alias(node):
+            return
+
+        qualifiers = self.parameter_qualifier_names(node)
+        reason = None
+        if self.local_variable_address_space_mismatch_diagnostic(node) is not None:
+            reason = "address-space mismatch alias"
+        elif qualifiers & {"const", "constant"}:
+            reason = "const-qualified payload parameter"
+        else:
+            initial_value = getattr(node, "initial_value", None)
+            root_name = self.assignment_target_root_name(initial_value)
+            reason = self.current_readonly_metal_mesh_payload_reasons.get(root_name)
+
+        if reason is None:
+            return
+        self.current_readonly_metal_mesh_payload_parameters.add(node.name)
+        self.current_readonly_metal_mesh_payload_reasons[node.name] = reason
 
     def is_metal_atomic_value_type(self, vtype):
         type_name = self.type_name_string(vtype)
@@ -5994,6 +6095,8 @@ class MetalCodeGen:
         return self.pointer_pointee_type_name(object_type) is not None
 
     def assignment_target_root_name(self, target):
+        if isinstance(target, UnaryOpNode) and getattr(target, "operator", None) == "&":
+            return self.assignment_target_root_name(getattr(target, "operand", None))
         if isinstance(target, MemberAccessNode):
             return self.assignment_target_root_name(
                 getattr(target, "object", getattr(target, "object_expr", None))
@@ -6024,6 +6127,8 @@ class MetalCodeGen:
             reason_text = "const object_data in mesh stages"
         elif reason == "const-qualified payload parameter":
             reason_text = "const-qualified object_data"
+        elif reason == "address-space mismatch alias":
+            reason_text = "read-only object_data after address-space mismatch"
         else:
             reason_text = reason
         return (

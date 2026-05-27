@@ -2464,6 +2464,63 @@ class TestCudaCodeGen:
         assert "tex2DLayeredLod<float4>(" not in result
         assert "tex2DLayeredGrad<float4>(" not in result
 
+    def test_cuda_sparse_3d_texture_helpers_emit_diagnostics(self):
+        """Test sparse CUDA 3D texture fetches import as diagnostics."""
+        code = """
+        void sparseVolumeFetchOps(
+            cudaTextureObject_t objectVolume,
+            bool* resident,
+            float3 uvw,
+            float lod
+        ) {
+            float4 sparseVolume = tex3D<float4>(
+                objectVolume,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                resident
+            );
+            float4 sparseVolumeLod = tex3DLod<float4>(
+                objectVolume,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                lod,
+                resident
+            );
+            float4 sparseVolumeGrad = tex3DGrad<float4>(
+                objectVolume,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                uvw,
+                uvw,
+                resident
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "sampler3D objectVolume" in result
+        for name, helper in (
+            ("sparseVolume", "tex3D"),
+            ("sparseVolumeLod", "tex3DLod"),
+            ("sparseVolumeGrad", "tex3DGrad"),
+        ):
+            assert (
+                f"var {name}: vec4<f32> = "
+                f"(/* cuda texture.{helper} sparse residency not directly "
+                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
+            ) in result
+        assert "tex3D<float4>(" not in result
+        assert "tex3DLod<float4>(" not in result
+        assert "tex3DGrad<float4>(" not in result
+
     def test_qualified_resource_object_pointer_array_conversion(self):
         """Test qualified CUDA resource object arrays retain inferred shapes."""
         code = """

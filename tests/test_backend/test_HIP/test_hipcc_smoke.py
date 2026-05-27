@@ -187,6 +187,102 @@ def test_native_hip_texture_fetch_modes_parse_and_compile_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_texture_lod_grad_modes_parse_and_compile_if_available(
+    tmp_path,
+):
+    """Smoke native HIP texture LOD and gradient intrinsics."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    __global__ void texture_lod_grad_modes(
+        hipTextureObject_t ramp,
+        hipTextureObject_t tex,
+        hipTextureObject_t volume,
+        float4* out
+    ) {
+        float u = 0.25f;
+        float2 uv = make_float2(0.25f, 0.75f);
+        float3 uvw = make_float3(0.25f, 0.5f, 0.75f);
+        float du = 0.125f;
+        float2 dxy = make_float2(0.125f, 0.25f);
+        float4 dxyz = make_float4(0.125f, 0.25f, 0.5f, 0.0f);
+        float4 rampLod = tex1DLod<float4>(ramp, u, 1.0f);
+        float4 rampGrad = tex1DGrad<float4>(ramp, u, du, du);
+        float4 texLod = tex2DLod<float4>(tex, uv.x, uv.y, 1.0f);
+        float4 texGrad = tex2DGrad<float4>(tex, uv.x, uv.y, dxy, dxy);
+        float4 volumeLod = tex3DLod<float4>(
+            volume,
+            uvw.x,
+            uvw.y,
+            uvw.z,
+            1.0f
+        );
+        float4 volumeGrad = tex3DGrad<float4>(
+            volume,
+            uvw.x,
+            uvw.y,
+            uvw.z,
+            dxyz,
+            dxyz
+        );
+        out[threadIdx.x] = make_float4(
+            rampLod.x + rampGrad.x,
+            texLod.y + texGrad.y,
+            volumeLod.z + volumeGrad.z,
+            volumeGrad.w
+        );
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Kernel: texture_lod_grad_modes" in crossgl
+    assert "sampler1D ramp" in crossgl
+    assert "sampler2D tex" in crossgl
+    assert "sampler3D volume" in crossgl
+    assert (
+        "@group(0) @binding(3) var<storage, read_write> out: array<vec4<f32>>"
+        in crossgl
+    )
+    assert "var u: f32 = 0.25f;" in crossgl
+    assert "var uv: vec2<f32> = vec2<f32>(0.25f, 0.75f);" in crossgl
+    assert "var uvw: vec3<f32> = vec3<f32>(0.25f, 0.5f, 0.75f);" in crossgl
+    assert "var du: f32 = 0.125f;" in crossgl
+    assert "var dxy: vec2<f32> = vec2<f32>(0.125f, 0.25f);" in crossgl
+    assert "var dxyz: vec4<f32> = vec4<f32>(0.125f, 0.25f, 0.5f, 0.0f);" in crossgl
+    assert "var rampLod: vec4<f32> = textureLod(ramp, u, 1.0f);" in crossgl
+    assert "var rampGrad: vec4<f32> = textureGrad(ramp, u, du, du);" in crossgl
+    assert (
+        "var texLod: vec4<f32> = textureLod("
+        "tex, vec2<f32>(uv.x, uv.y), 1.0f);" in crossgl
+    )
+    assert (
+        "var texGrad: vec4<f32> = textureGrad("
+        "tex, vec2<f32>(uv.x, uv.y), dxy, dxy);" in crossgl
+    )
+    assert (
+        "var volumeLod: vec4<f32> = textureLod("
+        "volume, vec3<f32>(uvw.x, uvw.y, uvw.z), 1.0f);" in crossgl
+    )
+    assert (
+        "var volumeGrad: vec4<f32> = textureGrad("
+        "volume, vec3<f32>(uvw.x, uvw.y, uvw.z), dxyz, dxyz);" in crossgl
+    )
+    assert (
+        "out[gl_LocalInvocationID.x] = vec4<f32>("
+        "(rampLod.x + rampGrad.x), (texLod.y + texGrad.y), "
+        "(volumeLod.z + volumeGrad.z), volumeGrad.w);" in crossgl
+    )
+    assert "tex1DLod<" not in crossgl
+    assert "tex1DGrad<" not in crossgl
+    assert "tex2DLod<" not in crossgl
+    assert "tex2DGrad<" not in crossgl
+    assert "tex3DLod<" not in crossgl
+    assert "tex3DGrad<" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_texture_surface_lifecycle_parses_and_compiles_if_available(
     tmp_path,
 ):

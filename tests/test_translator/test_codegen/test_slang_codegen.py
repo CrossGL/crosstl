@@ -5345,10 +5345,15 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
 
         compute {
             void main() {
+                float scalarCoord = 0.25;
                 vec2 uv = vec2(0.25, 0.5);
+                vec3 badUv = vec3(0.25, 0.5, 0.75);
                 vec2 ddx = vec2(0.1, 0.0);
                 vec2 ddy = vec2(0.0, 0.1);
                 ivec2 pixel = ivec2(2, 3);
+                ivec3 badPixel = ivec3(2, 3, 4);
+                vec2 badLod = vec2(0.0, 1.0);
+                ivec2 badSampleIndex = ivec2(0, 1);
                 vec4 missingTexture = texture();
                 vec4 missingCoord = texture(colorMap);
                 vec4 explicitMissingCoord = texture(colorMap, querySampler);
@@ -5368,6 +5373,18 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
                     ddy,
                     ddx
                 );
+                vec4 badCoordRank = texture(colorMap, scalarCoord);
+                vec4 badExplicitCoordRank = textureLod(
+                    colorMap,
+                    querySampler,
+                    scalarCoord,
+                    1.0
+                );
+                vec4 badBiasRank = texture(colorMap, uv, badUv);
+                vec4 badLodCoordRank = textureLod(colorMap, badUv, 1.0);
+                vec4 badLodRank = textureLod(colorMap, uv, badLod);
+                vec4 badGradCoordRank = textureGrad(colorMap, scalarCoord, ddx, ddy);
+                vec4 badGradRank = textureGrad(colorMap, uv, badUv, ddy);
                 vec4 missingFetchLevel = texelFetch(colorMap, pixel);
                 vec4 extraFetchLevel = texelFetch(
                     colorMap,
@@ -5380,6 +5397,8 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
                 vec4 fetchImage = texelFetch(colorImage, pixel, 0);
                 vec4 fetchShadow = texelFetch(shadowMap, pixel, 0);
                 vec4 fetchCube = texelFetch(cubeTex, pixel, 0);
+                vec4 badFetchCoordRank = texelFetch(colorMap, badPixel, 0);
+                vec4 badFetchIndexRank = texelFetch(msTex, pixel, badSampleIndex);
             }
         }
     }
@@ -5448,6 +5467,39 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
         in generated_code
     )
     assert (
+        "float4 badCoordRank = /* unsupported Slang sampled texture: "
+        "texture requires a 2-component coordinate for sampler2D */ float4(0.0);"
+        in generated_code
+    )
+    assert (
+        "float4 badExplicitCoordRank = /* unsupported Slang sampled texture: "
+        "textureLod requires a 2-component coordinate for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badBiasRank = /* unsupported Slang sampled texture: "
+        "texture requires a scalar bias argument */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badLodCoordRank = /* unsupported Slang sampled texture: "
+        "textureLod requires a 2-component coordinate for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badLodRank = /* unsupported Slang sampled texture: "
+        "textureLod requires a scalar lod argument */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badGradCoordRank = /* unsupported Slang sampled texture: "
+        "textureGrad requires a 2-component coordinate for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badGradRank = /* unsupported Slang sampled texture: "
+        "textureGrad requires a 2-component gradient for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
         "float4 missingFetchLevel = /* unsupported Slang sampled texture: "
         "texelFetch requires one lod/sample argument */ float4(0.0);" in generated_code
     )
@@ -5475,7 +5527,17 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
         "texelFetch requires a non-shadow texel-fetchable sampled texture resource */ "
         "float4(0.0);" in generated_code
     )
-    assert generated_code.count("unsupported Slang sampled texture") == 18
+    assert (
+        "float4 badFetchCoordRank = /* unsupported Slang sampled texture: "
+        "texelFetch requires a 2-component coordinate for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badFetchIndexRank = /* unsupported Slang sampled texture: "
+        "texelFetch requires a scalar fetch index argument */ float4(0.0);"
+        in generated_code
+    )
+    assert generated_code.count("unsupported Slang sampled texture") == 27
     assert "texture(" not in generated_code
     assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code

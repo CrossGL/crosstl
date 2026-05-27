@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 556
+        "test_count": 558
       },
       "translator_codegen": {
         "exists": true,
@@ -260,7 +260,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 371,
+        "unsupported_marker_count": 372,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 512
+        "test_count": 514
       },
       "translator_codegen": {
         "exists": true,
@@ -551,7 +551,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 301
+        "test_count": 302
       },
       "translator_codegen": {
         "exists": true,
@@ -629,7 +629,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 315
+        "test_count": 316
       },
       "translator_codegen": {
         "exists": true,
@@ -743,7 +743,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 321
+        "test_count": 324
       },
       "translator_codegen": {
         "exists": true,
@@ -857,7 +857,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 505
+        "test_count": 506
       },
       "translator_codegen": {
         "exists": true,
@@ -881,7 +881,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 187,
+        "unsupported_marker_count": 203,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",

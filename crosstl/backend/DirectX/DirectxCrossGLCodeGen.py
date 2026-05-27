@@ -174,6 +174,7 @@ class HLSLToCrossGLConverter:
             "SampleCmpLevelZero": "textureCompare",
             "Load": "texelFetch",
             "Gather": "textureGather",
+            "GatherCmp": "textureGatherCompare",
             "GetDimensions": "texture_dimensions",
         }
         self.texture_gather_component_map = {
@@ -350,10 +351,13 @@ class HLSLToCrossGLConverter:
                 "buffer_when_max_args": 1,
             }
         if member in self.texture_gather_component_map:
+            texture_function = (
+                "textureGatherOffset" if arg_count == 3 else "textureGather"
+            )
             return {
                 "member": member,
-                "function": self.texture_method_map["Gather"],
-                "texture_function": self.texture_method_map["Gather"],
+                "function": texture_function,
+                "texture_function": texture_function,
                 "buffer_function": None,
                 "component": self.texture_gather_component_map[member],
                 "usage": "regular",
@@ -367,11 +371,17 @@ class HLSLToCrossGLConverter:
                 texture_function = "textureLodOffset"
             elif member == "SampleGrad" and arg_count == 5:
                 texture_function = "textureGradOffset"
+            elif member in {"SampleCmp", "SampleCmpLevelZero"} and arg_count == 4:
+                texture_function = "textureCompareOffset"
+            elif member == "Gather" and arg_count == 3:
+                texture_function = "textureGatherOffset"
+            elif member == "GatherCmp" and arg_count == 4:
+                texture_function = "textureGatherCompareOffset"
             if member == "SampleBias" and arg_count is not None and arg_count >= 4:
                 texture_function = "textureOffset"
             usage = (
                 "comparison"
-                if member in {"SampleCmp", "SampleCmpLevelZero"}
+                if member in {"SampleCmp", "SampleCmpLevelZero", "GatherCmp"}
                 else "regular"
             )
             return {
@@ -408,6 +418,7 @@ class HLSLToCrossGLConverter:
                 "GatherGreen": "gather",
                 "GatherBlue": "gather",
                 "GatherAlpha": "gather",
+                "GatherCmp": "gather_compare",
             }.get(member)
             return descriptor
 

@@ -356,6 +356,34 @@ MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING = {
     "RasterizerOrderedTexture3D": ("Image3D", "IImage3D", "UImage3D"),
 }
 
+MOJO_TYPED_IMAGE_DTYPE_SUFFIX = {
+    "DType.float16": "Half",
+    "DType.float32": "Float",
+    "DType.float64": "Double",
+    "DType.int16": "Int16",
+    "DType.int32": "Int",
+    "DType.uint16": "UInt16",
+    "DType.uint32": "UInt",
+}
+
+MOJO_TYPED_IMAGE_SUFFIX_INFO = {
+    suffix if width == 1 else f"{suffix}{width}": (dtype, width)
+    for dtype, suffix in MOJO_TYPED_IMAGE_DTYPE_SUFFIX.items()
+    for width in (1, 2, 3, 4)
+}
+
+MOJO_IMAGE_RESOURCE_BASE_TYPES = tuple(
+    sorted(
+        {
+            resource_type
+            for resource_type in MOJO_RESOURCE_TYPE_MAPPING.values()
+            if resource_type.startswith(("Image", "IImage", "UImage"))
+        },
+        key=len,
+        reverse=True,
+    )
+)
+
 MOJO_RESOURCE_SAMPLE_COORDS = {
     "Texture1D": "Float32",
     "Texture1DArray": "SIMD[DType.float32, 2]",
@@ -1322,14 +1350,30 @@ class MojoCodeGen:
         if image_aliases is None:
             return None
 
-        dtype = self.resource_element_dtype(element_type)
+        element_info = self.resource_element_value_info(element_type)
+        dtype = element_info[0] if element_info is not None else None
         if dtype in {"DType.uint16", "DType.uint32"}:
-            return image_aliases[2]
-        if dtype in {"DType.int16", "DType.int32"}:
-            return image_aliases[1]
-        return image_aliases[0]
+            image_alias = image_aliases[2]
+        elif dtype in {"DType.int16", "DType.int32"}:
+            image_alias = image_aliases[1]
+        else:
+            image_alias = image_aliases[0]
+
+        if element_info is None:
+            return image_alias
+
+        _, source_width, _ = element_info
+        if source_width == 1 and dtype in {"DType.int32", "DType.uint32"}:
+            return image_alias
+        return self.typed_image_resource_type(image_alias, dtype, source_width)
 
     def resource_element_dtype(self, element_type):
+        element_info = self.resource_element_value_info(element_type)
+        if element_info is not None:
+            return element_info[0]
+        return None
+
+    def resource_element_value_info(self, element_type):
         if element_type is None:
             return None
 
@@ -1338,8 +1382,52 @@ class MojoCodeGen:
         )
         vector_info = self.vector_type_info(type_name)
         if vector_info is not None:
-            return vector_info[0]
-        return MOJO_SCALAR_DTYPES.get(type_name)
+            dtype, source_width, _, _ = vector_info
+            return dtype, source_width, self.map_type(type_name)
+
+        dtype = MOJO_SCALAR_DTYPES.get(type_name)
+        if dtype is None:
+            return None
+        return dtype, 1, self.map_type(type_name)
+
+    def typed_image_resource_type(self, base_image_type, dtype, source_width):
+        suffix = MOJO_TYPED_IMAGE_DTYPE_SUFFIX.get(dtype)
+        if suffix is None:
+            return base_image_type
+        if source_width != 1:
+            suffix = f"{suffix}{source_width}"
+        return f"{base_image_type}{suffix}"
+
+    def typed_image_resource_info(self, resource_type):
+        if not isinstance(resource_type, str):
+            return None
+        for base_image_type in MOJO_IMAGE_RESOURCE_BASE_TYPES:
+            if not resource_type.startswith(base_image_type):
+                continue
+            suffix = resource_type[len(base_image_type) :]
+            if not suffix:
+                return None
+            suffix_info = MOJO_TYPED_IMAGE_SUFFIX_INFO.get(suffix)
+            if suffix_info is not None:
+                dtype, source_width = suffix_info
+                return base_image_type, dtype, source_width
+        return None
+
+    def image_resource_base_type(self, resource_type):
+        typed_info = self.typed_image_resource_info(resource_type)
+        if typed_info is not None:
+            return typed_info[0]
+        return resource_type
+
+    def resource_texel_coord_type(self, resource_type):
+        return MOJO_RESOURCE_TEXEL_COORDS.get(
+            self.image_resource_base_type(resource_type)
+        )
+
+    def resource_size_return_type(self, resource_type):
+        return MOJO_RESOURCE_SIZE_RETURNS.get(
+            self.image_resource_base_type(resource_type)
+        )
 
     def mapped_buffer_type(self, buffer_type, element_type=None):
         buffer_type = self.canonical_buffer_resource_type(buffer_type)
@@ -3976,7 +4064,7 @@ class MojoCodeGen:
             return f"{helper_name}()"
 
         resource_type = self.map_type(self.expression_result_type(args[0]))
-        if resource_type in MOJO_RESOURCE_SIZE_RETURNS:
+        if self.resource_size_return_type(resource_type) is not None:
             self.required_resource_size_types.add(resource_type)
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
@@ -4070,7 +4158,7 @@ class MojoCodeGen:
             self.validate_resource_read_access(args[0], "imageLoad")
             resource_type = self.map_type(self.expression_result_type(args[0]))
             self.validate_image_load_args(args, resource_type)
-            if resource_type in MOJO_RESOURCE_TEXEL_COORDS:
+            if self.resource_texel_coord_type(resource_type) is not None:
                 self.required_image_load_types.add(resource_type)
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
@@ -4081,7 +4169,7 @@ class MojoCodeGen:
             self.validate_resource_write_access(args[0], "imageStore")
             resource_type = self.map_type(self.expression_result_type(args[0]))
             self.validate_image_store_args(args, resource_type)
-            if resource_type in MOJO_RESOURCE_TEXEL_COORDS:
+            if self.resource_texel_coord_type(resource_type) is not None:
                 self.required_image_store_types.add(resource_type)
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
@@ -4093,7 +4181,8 @@ class MojoCodeGen:
                 "Unsupported image_load for Mojo codegen; "
                 f"image resource required: {resource_type}"
             )
-        if resource_type not in MOJO_RESOURCE_TEXEL_COORDS:
+        coord_type = self.resource_texel_coord_type(resource_type)
+        if coord_type is None:
             raise ValueError(
                 "Unsupported image_load for Mojo codegen; "
                 f"loadable image resource required: {resource_type}"
@@ -4109,7 +4198,7 @@ class MojoCodeGen:
 
         self.validate_resource_argument_type(
             args[1],
-            MOJO_RESOURCE_TEXEL_COORDS[resource_type],
+            coord_type,
             "image_load",
             resource_type,
             "coordinate",
@@ -4125,7 +4214,8 @@ class MojoCodeGen:
                 "Unsupported image_store for Mojo codegen; "
                 f"image resource required: {resource_type}"
             )
-        if resource_type not in MOJO_RESOURCE_TEXEL_COORDS:
+        coord_type = self.resource_texel_coord_type(resource_type)
+        if coord_type is None:
             raise ValueError(
                 "Unsupported image_store for Mojo codegen; "
                 f"storable image resource required: {resource_type}"
@@ -4141,7 +4231,7 @@ class MojoCodeGen:
 
         self.validate_resource_argument_type(
             args[1],
-            MOJO_RESOURCE_TEXEL_COORDS[resource_type],
+            coord_type,
             "image_store",
             resource_type,
             "coordinate",
@@ -4157,8 +4247,6 @@ class MojoCodeGen:
     def validate_image_store_value_type(self, value_arg, resource_type):
         expected_type = self.image_value_type(resource_type)
         actual_type = self.resource_builtin_arg_type(value_arg)
-        if expected_type == "SIMD[DType.float32, 4]" and actual_type == "Float32":
-            return
         if actual_type != expected_type:
             raise ValueError(
                 "Unsupported image_store for Mojo codegen; value for "
@@ -5373,7 +5461,7 @@ class MojoCodeGen:
         return code
 
     def generate_resource_size_helper(self, resource_type):
-        return_type = MOJO_RESOURCE_SIZE_RETURNS[resource_type]
+        return_type = self.resource_size_return_type(resource_type)
         zero_value = self.zero_mojo_value(return_type)
         code = f"fn texture_size(tex: {resource_type}) -> {return_type}:\n"
         code += f"    return {zero_value}\n\n"
@@ -5404,7 +5492,7 @@ class MojoCodeGen:
         return code
 
     def generate_image_load_helper(self, resource_type):
-        coord_type = MOJO_RESOURCE_TEXEL_COORDS[resource_type]
+        coord_type = self.resource_texel_coord_type(resource_type)
         value_type = self.image_value_type(resource_type)
         if self.is_multisample_resource_type(resource_type):
             code = (
@@ -5420,7 +5508,7 @@ class MojoCodeGen:
         return code
 
     def generate_image_store_helper(self, resource_type):
-        coord_type = MOJO_RESOURCE_TEXEL_COORDS[resource_type]
+        coord_type = self.resource_texel_coord_type(resource_type)
         value_type = self.image_value_type(resource_type)
         if self.is_multisample_resource_type(resource_type):
             code = (
@@ -5464,6 +5552,14 @@ class MojoCodeGen:
         return "SIMD[DType.float32, 4]"
 
     def image_value_type(self, resource_type):
+        typed_info = self.typed_image_resource_info(resource_type)
+        if typed_info is not None:
+            _, dtype, source_width = typed_info
+            if source_width == 1:
+                return self.map_type(MOJO_DTYPE_INFO[dtype][0])
+            return self.map_type(
+                self.vector_type_name_for_dtype_width(dtype, source_width)
+            )
         if resource_type.startswith("IImage"):
             return "Int32"
         if resource_type.startswith("UImage"):
@@ -6080,7 +6176,7 @@ class MojoCodeGen:
                 return "int"
             if func_name in {"textureSize", "imageSize"} and expr.args:
                 resource_type = self.map_type(self.expression_result_type(expr.args[0]))
-                size_type = MOJO_RESOURCE_SIZE_RETURNS.get(resource_type)
+                size_type = self.resource_size_return_type(resource_type)
                 if size_type == "Int32":
                     return "int"
                 if size_type == "SIMD[DType.int32, 2]":
@@ -6089,12 +6185,7 @@ class MojoCodeGen:
                     return "ivec3"
             if func_name == "imageLoad" and expr.args:
                 resource_type = self.map_type(self.expression_result_type(expr.args[0]))
-                value_type = self.image_value_type(resource_type)
-                if value_type == "Int32":
-                    return "int"
-                if value_type == "UInt32":
-                    return "uint"
-                return "vec4"
+                return self.image_result_type_name(resource_type)
             if func_name == "imageStore":
                 return "void"
             if func_name == "buffer_load" and expr.args:
@@ -6192,7 +6283,7 @@ class MojoCodeGen:
                 resource_type = self.map_type(
                     self.expression_result_type(expr.texture_expr)
                 )
-                size_type = MOJO_RESOURCE_SIZE_RETURNS.get(resource_type)
+                size_type = self.resource_size_return_type(resource_type)
                 if size_type == "Int32":
                     return "int"
                 if size_type == "SIMD[DType.int32, 2]":
@@ -6354,7 +6445,7 @@ class MojoCodeGen:
         return "vec4"
 
     def resource_size_result_type_name(self, resource_type):
-        size_type = MOJO_RESOURCE_SIZE_RETURNS.get(resource_type)
+        size_type = self.resource_size_return_type(resource_type)
         if size_type == "Int32":
             return "int"
         if size_type == "SIMD[DType.int32, 2]":
@@ -6364,6 +6455,13 @@ class MojoCodeGen:
         return None
 
     def image_result_type_name(self, resource_type):
+        typed_info = self.typed_image_resource_info(resource_type)
+        if typed_info is not None:
+            _, dtype, source_width = typed_info
+            if source_width == 1:
+                return MOJO_DTYPE_INFO[dtype][0]
+            return self.vector_type_name_for_dtype_width(dtype, source_width)
+
         value_type = self.image_value_type(resource_type)
         if value_type == "Int32":
             return "int"
@@ -6588,7 +6686,10 @@ class MojoCodeGen:
         )
 
     def is_mojo_resource_type(self, type_name):
-        return type_name in set(MOJO_RESOURCE_TYPE_MAPPING.values())
+        return (
+            type_name in set(MOJO_RESOURCE_TYPE_MAPPING.values())
+            or self.typed_image_resource_info(type_name) is not None
+        )
 
     def map_operator(self, op):
         op_map = {
