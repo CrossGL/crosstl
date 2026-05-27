@@ -2075,6 +2075,7 @@ def test_native_hip_pitched_array_memory_copy_parses_and_compiles_if_available(
         HIP_ARRAY_DESCRIPTOR array_desc;
         HIP_ARRAY3D_DESCRIPTOR array3d_desc;
         hipChannelFormatDesc channel_desc;
+        hipChannelFormatDesc queried_channel_desc;
         hipExtent extent = make_hipExtent(width_bytes, 4, 2);
         hipMemcpy3DParms copy_params = {0};
         HIP_MEMCPY3D driver_copy_params = {0};
@@ -2090,6 +2091,7 @@ def test_native_hip_pitched_array_memory_copy_parses_and_compiles_if_available(
         hipArrayGetDescriptor(&array_desc, array);
         hipArray3DGetDescriptor(&array3d_desc, array_3d);
         hipArrayGetInfo(&channel_desc, &extent, &flags, array);
+        hipGetChannelDesc(&queried_channel_desc, array);
         hipMemcpy2D(
             pitched_device, pitch, host, width_bytes, width_bytes, 4,
             hipMemcpyHostToDevice
@@ -2161,6 +2163,7 @@ def test_native_hip_pitched_array_memory_copy_parses_and_compiles_if_available(
     assert "var array_desc: HIP_ARRAY_DESCRIPTOR;" in crossgl
     assert "var array3d_desc: HIP_ARRAY3D_DESCRIPTOR;" in crossgl
     assert "var channel_desc: hipChannelFormatDesc;" in crossgl
+    assert "var queried_channel_desc: hipChannelFormatDesc;" in crossgl
     assert "var extent: hipExtent = make_hipExtent(width_bytes, 4, 2);" in crossgl
     assert "var copy_params: hipMemcpy3DParms = {0};" in crossgl
     assert "var driver_copy_params: HIP_MEMCPY3D = {0};" in crossgl
@@ -2192,6 +2195,9 @@ def test_native_hip_pitched_array_memory_copy_parses_and_compiles_if_available(
         "// HIP array get info: desc output: channel_desc, "
         "extent output: extent, flags output: flags, array: array"
     ) in crossgl
+    assert (
+        "// HIP get channel desc: output: queried_channel_desc, array: array" in crossgl
+    )
     assert (
         "// HIP 2D memory copy: host -> pitched_device, dst pitch: pitch, "
         "src pitch: width_bytes, width: width_bytes, height: 4, "
@@ -2309,6 +2315,7 @@ def test_native_hip_pitched_array_memory_copy_parses_and_compiles_if_available(
         "hipArrayGetDescriptor",
         "hipArray3DGetDescriptor",
         "hipArrayGetInfo",
+        "hipGetChannelDesc",
         "hipMemcpy2D",
         "hipMemcpy2DAsync",
         "hipMemcpyToArray",
