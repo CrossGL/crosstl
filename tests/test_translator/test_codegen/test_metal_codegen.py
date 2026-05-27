@@ -1352,6 +1352,127 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
     assert "size_t" not in generated_code
 
 
+def test_metal_glsl_buffer_block_atomic_compare_helpers_cover_signed_and_parameters():
+    shader = """
+    shader BufferBlockAtomicCompareMetal {
+        struct AtomicBlock {
+            uint counter;
+            uint bins[];
+        };
+
+        struct SignedAtomicBlock {
+            int counter;
+            int bins[];
+        };
+
+        AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(17);
+        SignedAtomicBlock signedAtomicBlock @glsl_buffer_block(std430) @binding(18);
+
+        uint swapUnsigned(
+            AtomicBlock block @glsl_buffer_block(std430),
+            uint index,
+            uint compareValue,
+            uint value
+        ) {
+            return atomicCompSwap(block.bins[index], compareValue, value);
+        }
+
+        int swapSigned(
+            SignedAtomicBlock block @glsl_buffer_block(std430),
+            uint index,
+            int compareValue,
+            int value
+        ) {
+            return atomicCompSwap(block.bins[index], compareValue, value);
+        }
+
+        compute {
+            void main() {
+                uint resultU = swapUnsigned(
+                    atomicBlock,
+                    1u,
+                    atomicBlock.counter,
+                    9u
+                );
+                int resultS = swapSigned(
+                    signedAtomicBlock,
+                    1u,
+                    signedAtomicBlock.counter,
+                    -3
+                );
+                uint oldCounter = atomicCompSwap(
+                    atomicBlock.counter,
+                    0u,
+                    resultU
+                );
+                int oldSignedCounter = atomicCompSwap(
+                    signedAtomicBlock.counter,
+                    0,
+                    resultS
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "uint __crossgl_buffer_atomic_compare_exchange_uint("
+        "device uchar* buffer, uint offset, uint compareValue, uint value)"
+        in generated_code
+    )
+    assert (
+        "int __crossgl_buffer_atomic_compare_exchange_int("
+        "device uchar* buffer, uint offset, int compareValue, int value)"
+        in generated_code
+    )
+    assert (
+        "device atomic_uint* target = reinterpret_cast<device atomic_uint*>(buffer + offset);"
+        in generated_code
+    )
+    assert (
+        "device atomic_int* target = reinterpret_cast<device atomic_int*>(buffer + offset);"
+        in generated_code
+    )
+    assert (
+        "uint swapUnsigned(device uchar* block, uint index, uint compareValue, uint value)"
+        in generated_code
+    )
+    assert (
+        "int swapSigned(device uchar* block, uint index, int compareValue, int value)"
+        in generated_code
+    )
+    assert (
+        "return __crossgl_buffer_atomic_compare_exchange_uint(block, (4 + index * 4), compareValue, value);"
+        in generated_code
+    )
+    assert (
+        "return __crossgl_buffer_atomic_compare_exchange_int(block, (4 + index * 4), compareValue, value);"
+        in generated_code
+    )
+    assert (
+        "uint resultU = swapUnsigned(atomicBlock, 1u, "
+        "(*reinterpret_cast<const device uint*>(atomicBlock + 0)), 9u);"
+        in generated_code
+    )
+    assert (
+        "int resultS = swapSigned(signedAtomicBlock, 1u, "
+        "(*reinterpret_cast<const device int*>(signedAtomicBlock + 0)), -3);"
+        in generated_code
+    )
+    assert (
+        "uint oldCounter = __crossgl_buffer_atomic_compare_exchange_uint(atomicBlock, 0, 0u, resultU);"
+        in generated_code
+    )
+    assert (
+        "int oldSignedCounter = __crossgl_buffer_atomic_compare_exchange_int(signedAtomicBlock, 0, 0, resultS);"
+        in generated_code
+    )
+    assert "atomicCompSwap(" not in generated_code
+    assert "atomic_compare_exchange_strong_explicit" not in generated_code
+
+
 def test_structured_buffer_operations_lower_to_device_buffer():
     code = """
     shader StructuredBufferMetal {

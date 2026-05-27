@@ -24,13 +24,13 @@ implicitly supported.
 
    "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "547", "277", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "732", "146", "GLSL 4.60 specification; OpenGL registry"
-   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "500", "366", "Apple Metal resources; Metal Shading Language specification"
+   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "501", "366", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "397", "12", "SPIR-V unified specification; Khronos SPIR-V registry"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "286", "51", "CUDA C++ programming guide"
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "301", "11", "ROCm HIP documentation"
    "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "309", "33", "Mojo manual"
    "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "498", "35", "Rust reference"
-   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "317", "97", "Slang user guide"
+   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "318", "98", "Slang user guide"
 
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
@@ -342,7 +342,7 @@ need an audit before implementation work can be scoped accurately.
    "HIP", "images", "Image atomics", "unknown", ""
    "Mojo", "images", "Image atomics", "partial", "Integer image atomic add/min/max/bitwise/exchange/compare-exchange forms lower to compile-smoke Mojo placeholder helpers, float-image atomics are rejected, and readonly/writeonly image atomics emit deterministic diagnostics. Native atomic memory semantics are not implemented."
    "Rust", "images", "Image atomics", "unknown", ""
-   "Slang", "images", "Image atomics", "partial", "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, direct AtomicOpNode lowering, image arrays, deterministic readonly/writeonly access diagnostics, and diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete."
+   "Slang", "images", "Image atomics", "partial", "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, direct AtomicOpNode lowering, expression-valued atomic preludes where evaluation order is preserved, loop-context diagnostics where hoisting would change semantics, image arrays, deterministic readonly/writeonly access diagnostics, and diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete."
    "Vulkan SPIR-V", "images", "Multisample storage images", "unknown", ""
    "CUDA", "images", "Multisample storage images", "unknown", ""
    "HIP", "images", "Multisample storage images", "unknown", ""

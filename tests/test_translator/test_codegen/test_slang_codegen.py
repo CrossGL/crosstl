@@ -1891,7 +1891,7 @@ def test_generated_helper_names_avoid_user_symbol_collisions():
         vec3 _crossgl_select_bool3_float3;
         int cgl_textureSize_sampler2D;
         int cgl_textureQueryLevels_sampler2D;
-        uint cgl_imageAtomicAdd_uimage2D;
+        uint cgl_imageAtomicAdd_original;
         sampler2d colorMap;
         uimage2D counters @r32ui;
 
@@ -1916,7 +1916,7 @@ def test_generated_helper_names_avoid_user_symbol_collisions():
     assert "float3 _crossgl_select_bool3_float3;" in generated_code
     assert "int cgl_textureSize_sampler2D;" in generated_code
     assert "int cgl_textureQueryLevels_sampler2D;" in generated_code
-    assert "uint cgl_imageAtomicAdd_uimage2D;" in generated_code
+    assert "uint cgl_imageAtomicAdd_original;" in generated_code
     assert (
         "float3 _crossgl_select_bool3_float3_1("
         "bool3 mask, float3 trueValue, float3 falseValue)" in generated_code
@@ -1930,10 +1930,6 @@ def test_generated_helper_names_avoid_user_symbol_collisions():
         in generated_code
     )
     assert (
-        "uint cgl_imageAtomicAdd_uimage2D_1("
-        "RWTexture2D<uint> image, int2 coord, uint value)" in generated_code
-    )
-    assert (
         "float3 selected = _crossgl_select_bool3_float3_1(mask, b, a);"
         in generated_code
     )
@@ -1941,14 +1937,16 @@ def test_generated_helper_names_avoid_user_symbol_collisions():
     assert (
         "int levels = cgl_textureQueryLevels_sampler2D_1(colorMap);" in generated_code
     )
+    assert "uint cgl_imageAtomicAdd_original_1;" in generated_code
     assert (
-        "uint oldValue = cgl_imageAtomicAdd_uimage2D_1("
-        "counters, int2(0, 0), 1u);" in generated_code
+        "InterlockedAdd(counters[int2(0, 0)], 1u, "
+        "cgl_imageAtomicAdd_original_1);" in generated_code
     )
+    assert "uint oldValue = cgl_imageAtomicAdd_original_1;" in generated_code
     assert "float3 _crossgl_select_bool3_float3(" not in generated_code
     assert "int2 cgl_textureSize_sampler2D(" not in generated_code
     assert "int cgl_textureQueryLevels_sampler2D(" not in generated_code
-    assert "uint cgl_imageAtomicAdd_uimage2D(" not in generated_code
+    assert generated_code.count("uint cgl_imageAtomicAdd_original;") == 1
 
 
 def test_lambda_call_emits_slang_lambda_for_explicit_simple_parameters():
@@ -5160,25 +5158,23 @@ def test_one_dimensional_resources_emit_slang_methods_and_helpers():
         "int2 layerValueSize = cgl_imageSize_image1DArray(layerValues);"
         in generated_code
     )
+    assert "uint cgl_imageAtomicAdd_original;" in generated_code
     assert (
-        "uint cgl_imageAtomicAdd_uimage1D("
-        "RWTexture1D<uint> image, int coord, uint value)" in generated_code
-    )
-    assert (
-        "uint cgl_imageAtomicExchange_uimage1DArray("
-        "RWTexture1DArray<uint> image, int2 coord, uint value)" in generated_code
-    )
-    assert (
-        "uint previous = cgl_imageAtomicAdd_uimage1D(counters, 2, 1u);"
+        "InterlockedAdd(counters[2], 1u, cgl_imageAtomicAdd_original);"
         in generated_code
     )
+    assert "uint previous = cgl_imageAtomicAdd_original;" in generated_code
+    assert "uint cgl_imageAtomicExchange_original;" in generated_code
     assert (
-        "uint layerPrevious = cgl_imageAtomicExchange_uimage1DArray("
-        "layerCounters, int2(2, 1), previous);" in generated_code
+        "InterlockedExchange(layerCounters[int2(2, 1)], previous, "
+        "cgl_imageAtomicExchange_original);" in generated_code
     )
+    assert "uint layerPrevious = cgl_imageAtomicExchange_original;" in generated_code
     assert "sampler1d" not in generated_code
     assert "imageAtomicAdd(counters" not in generated_code
     assert "imageAtomicExchange(layerCounters" not in generated_code
+    assert "uint cgl_imageAtomicAdd_uimage1D(" not in generated_code
+    assert "uint cgl_imageAtomicExchange_uimage1DArray(" not in generated_code
 
 
 def test_non_resource_arrays_preserve_expression_sizes():
@@ -8914,10 +8910,12 @@ def test_storage_image_access_qualifiers_emit_slang_diagnostics():
         "requires readable image resource */ float4(0.0);" in generated_code
     )
     assert "target[pixel] = color;" in generated_code
+    assert "uint cgl_imageAtomicAdd_original;" in generated_code
     assert (
-        "uint count = cgl_imageAtomicAdd_uimage2D(counters, pixel, 1u);"
+        "InterlockedAdd(counters[pixel], 1u, cgl_imageAtomicAdd_original);"
         in generated_code
     )
+    assert "uint count = cgl_imageAtomicAdd_original;" in generated_code
     assert (
         "uint readOnlyAtomic = /* unsupported Slang image atomic: imageAtomicAdd "
         "requires readwrite image resource */ 0u;" in generated_code
@@ -8930,6 +8928,7 @@ def test_storage_image_access_qualifiers_emit_slang_diagnostics():
     assert "float4 blocked = target[pixel];" not in generated_code
     assert "cgl_imageAtomicAdd_uimage2D(readOnlyCounters" not in generated_code
     assert "cgl_imageAtomicAdd_uimage2D(writeOnlyCounters" not in generated_code
+    assert "uint cgl_imageAtomicAdd_uimage2D(" not in generated_code
 
 
 def test_explicit_image_formats_emit_slang_storage_element_types():
@@ -9122,80 +9121,76 @@ def test_integer_image_atomics_emit_slang_interlocked_helpers():
     assert "RWTexture2D<int> signedCounters : register(u1);" in generated_code
     assert "RWTexture3D<uint> unsignedVolume : register(u2);" in generated_code
     assert "RWTexture2DArray<int> signedLayers : register(u3);" in generated_code
+    assert "uint cgl_imageAtomicAdd_original;" in generated_code
     assert (
-        "uint cgl_imageAtomicAdd_uimage2D(RWTexture2D<uint> image, "
-        "int2 coord, uint value)" in generated_code
-    )
-    assert (
-        "int cgl_imageAtomicMin_iimage2D(RWTexture2D<int> image, "
-        "int2 coord, int value)" in generated_code
-    )
-    assert (
-        "uint cgl_imageAtomicCompSwap_uimage3D(RWTexture3D<uint> image, "
-        "int3 coord, uint compareValue, uint value)" in generated_code
-    )
-    assert (
-        "int cgl_imageAtomicExchange_iimage2DArray(RWTexture2DArray<int> image, "
-        "int3 coord, int value)" in generated_code
-    )
-    for intrinsic in [
-        "InterlockedAdd",
-        "InterlockedMin",
-        "InterlockedMax",
-        "InterlockedAnd",
-        "InterlockedOr",
-        "InterlockedXor",
-        "InterlockedExchange",
-    ]:
-        assert f"{intrinsic}(image[coord], value, original);" in generated_code
-    assert (
-        "InterlockedCompareExchange(image[coord], compareValue, value, original);"
+        "InterlockedAdd(image[pixel], value, cgl_imageAtomicAdd_original);"
         in generated_code
     )
+    assert "uint added = cgl_imageAtomicAdd_original;" in generated_code
+    assert "uint cgl_imageAtomicMin_original;" in generated_code
     assert (
-        "uint added = cgl_imageAtomicAdd_uimage2D(image, pixel, value);"
+        "InterlockedMin(image[pixel], value, cgl_imageAtomicMin_original);"
         in generated_code
     )
+    assert "uint minValue = cgl_imageAtomicMin_original;" in generated_code
+    assert "uint cgl_imageAtomicMax_original;" in generated_code
     assert (
-        "uint minValue = cgl_imageAtomicMin_uimage2D(image, pixel, value);"
+        "InterlockedMax(image[pixel], value, cgl_imageAtomicMax_original);"
         in generated_code
     )
+    assert "uint maxValue = cgl_imageAtomicMax_original;" in generated_code
+    assert "uint cgl_imageAtomicAnd_original;" in generated_code
     assert (
-        "uint maxValue = cgl_imageAtomicMax_uimage2D(image, pixel, value);"
+        "InterlockedAnd(image[pixel], value, cgl_imageAtomicAnd_original);"
         in generated_code
     )
+    assert "uint andValue = cgl_imageAtomicAnd_original;" in generated_code
+    assert "uint cgl_imageAtomicOr_original;" in generated_code
     assert (
-        "uint andValue = cgl_imageAtomicAnd_uimage2D(image, pixel, value);"
+        "InterlockedOr(image[pixel], value, cgl_imageAtomicOr_original);"
         in generated_code
     )
+    assert "uint orValue = cgl_imageAtomicOr_original;" in generated_code
+    assert "uint cgl_imageAtomicXor_original;" in generated_code
     assert (
-        "uint orValue = cgl_imageAtomicOr_uimage2D(image, pixel, value);"
+        "InterlockedXor(image[pixel], value, cgl_imageAtomicXor_original);"
         in generated_code
     )
+    assert "uint xorValue = cgl_imageAtomicXor_original;" in generated_code
+    assert "uint cgl_imageAtomicExchange_original;" in generated_code
     assert (
-        "uint xorValue = cgl_imageAtomicXor_uimage2D(image, pixel, value);"
+        "InterlockedExchange(image[pixel], value, cgl_imageAtomicExchange_original);"
         in generated_code
     )
+    assert "uint exchanged = cgl_imageAtomicExchange_original;" in generated_code
+    assert "int cgl_imageAtomicMin_original;" in generated_code
     assert (
-        "uint exchanged = cgl_imageAtomicExchange_uimage2D(image, pixel, value);"
+        "InterlockedMin(image[pixel], value, cgl_imageAtomicMin_original);"
         in generated_code
     )
+    assert "int minValue = cgl_imageAtomicMin_original;" in generated_code
+    assert "int cgl_imageAtomicExchange_original;" in generated_code
     assert (
-        "int minValue = cgl_imageAtomicMin_iimage2D(image, pixel, value);"
+        "InterlockedExchange(image[pixel], value, cgl_imageAtomicExchange_original);"
         in generated_code
     )
+    assert "int exchanged = cgl_imageAtomicExchange_original;" in generated_code
+    assert "uint cgl_imageAtomicCompSwap_original;" in generated_code
     assert (
-        "int exchanged = cgl_imageAtomicExchange_iimage2D(image, pixel, value);"
-        in generated_code
+        "InterlockedCompareExchange(image[voxel], expected, value, "
+        "cgl_imageAtomicCompSwap_original);" in generated_code
     )
+    assert "return cgl_imageAtomicCompSwap_original;" in generated_code
+    assert "int cgl_imageAtomicExchange_original;" in generated_code
     assert (
-        "return cgl_imageAtomicCompSwap_uimage3D(image, voxel, expected, value);"
-        in generated_code
+        "InterlockedExchange(image[pixelLayer], value, "
+        "cgl_imageAtomicExchange_original);" in generated_code
     )
-    assert (
-        "return cgl_imageAtomicExchange_iimage2DArray(image, pixelLayer, value);"
-        in generated_code
-    )
+    assert "return cgl_imageAtomicExchange_original;" in generated_code
+    assert "uint cgl_imageAtomicAdd_uimage2D(" not in generated_code
+    assert "int cgl_imageAtomicMin_iimage2D(" not in generated_code
+    assert "uint cgl_imageAtomicCompSwap_uimage3D(" not in generated_code
+    assert "int cgl_imageAtomicExchange_iimage2DArray(" not in generated_code
     for operation in [
         "imageAtomicAdd",
         "imageAtomicMin",
@@ -9257,18 +9252,109 @@ def test_integer_image_array_atomics_preserve_expression_indices():
         "int compareLayer(RWTexture2DArray<int> images[((2 + 1) * 2)], "
         "int3 pixelLayer, int expected, int value)" in generated_code
     )
+    assert "uint cgl_imageAtomicAdd_original;" in generated_code
     assert (
-        "return cgl_imageAtomicAdd_uimage2D(images[(1 + 2)], pixel, value);"
-        in generated_code
+        "InterlockedAdd(images[(1 + 2)][pixel], value, "
+        "cgl_imageAtomicAdd_original);" in generated_code
     )
+    assert "return cgl_imageAtomicAdd_original;" in generated_code
+    assert "int cgl_imageAtomicCompSwap_original;" in generated_code
     assert (
-        "return cgl_imageAtomicCompSwap_iimage2DArray("
-        "images[(1 + 2)], pixelLayer, expected, value);" in generated_code
+        "InterlockedCompareExchange(images[(1 + 2)][pixelLayer], "
+        "expected, value, cgl_imageAtomicCompSwap_original);" in generated_code
     )
+    assert "return cgl_imageAtomicCompSwap_original;" in generated_code
     assert "1 + 2]," not in generated_code
     assert "2 + 1 * 2" not in generated_code
     assert "imageAtomicAdd(images" not in generated_code
     assert "imageAtomicCompSwap(images" not in generated_code
+    assert "cgl_imageAtomicAdd_uimage2D(" not in generated_code
+    assert "cgl_imageAtomicCompSwap_iimage2DArray(" not in generated_code
+
+
+def test_image_expression_atomics_in_loop_contexts_emit_diagnostics():
+    code = """
+    shader AtomicImageLoopContexts {
+        uimage2D counters @r32ui;
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                uint oldValue = 0u;
+                if (imageAtomicAdd(counters, pixel, 1u) != 0u) {
+                    oldValue = 2u;
+                }
+                for (
+                    uint initOld = imageAtomicAdd(counters, pixel, 1u);
+                    initOld < 2u;
+                    initOld = initOld + 1u
+                ) {
+                    imageAtomicAdd(counters, pixel, 1u);
+                }
+                for (
+                    uint i = 0u;
+                    imageAtomicAdd(counters, pixel, 1u) < 4u;
+                    i = imageAtomicExchange(counters, pixel, i)
+                ) {
+                    break;
+                }
+                while (imageAtomicOr(counters, pixel, 1u) != 0u) {
+                    break;
+                }
+                do {
+                    break;
+                } while (imageAtomicAnd(counters, pixel, 1u) != 0u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "imageAtomicAdd expression-valued atomic cannot be used in "
+        "for-loop initializer context; assign the atomic result before the loop"
+        in generated_code
+    )
+    assert (
+        "imageAtomicAdd expression-valued atomic cannot be used in "
+        "for-loop condition context; assign the atomic result before the loop"
+        in generated_code
+    )
+    assert (
+        "imageAtomicExchange expression-valued atomic cannot be used in "
+        "for-loop update context; assign the atomic result before the loop"
+        in generated_code
+    )
+    assert (
+        "imageAtomicOr expression-valued atomic cannot be used in "
+        "while-loop condition context; assign the atomic result before the loop"
+        in generated_code
+    )
+    assert (
+        "imageAtomicAnd expression-valued atomic cannot be used in "
+        "do-while-loop condition context; assign the atomic result before the loop"
+        in generated_code
+    )
+    assert "uint cgl_imageAtomicAdd_original;" in generated_code
+    assert (
+        "InterlockedAdd(counters[pixel], 1u, cgl_imageAtomicAdd_original);"
+        in generated_code
+    )
+    assert "if (cgl_imageAtomicAdd_original != 0u)" in generated_code
+    assert "uint cgl_imageAtomicAdd_original_1;" in generated_code
+    assert (
+        "InterlockedAdd(counters[pixel], 1u, cgl_imageAtomicAdd_original_1);"
+        in generated_code
+    )
+    assert "cgl_imageAtomicAdd_original_1;" not in [
+        line.strip() for line in generated_code.splitlines()
+    ]
+    assert "imageAtomicAdd(counters" not in generated_code
+    assert "imageAtomicExchange(counters" not in generated_code
+    assert "imageAtomicOr(counters" not in generated_code
+    assert "imageAtomicAnd(counters" not in generated_code
+    assert "cgl_imageAtomicAdd_uimage2D(" not in generated_code
 
 
 def test_unsupported_image_atomics_emit_slang_diagnostic_stubs():

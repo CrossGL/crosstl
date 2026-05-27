@@ -3755,6 +3755,9 @@ class Parser:
         if self.current_token[0] == "PRECISION":
             return self.parse_precision_statement()
 
+        if self.current_token[0] in ["IMPORT", "USE"]:
+            return self.parse_import()
+
         if self.current_token[0] == "SHADER":
             return self.parse_shader_declaration()
 

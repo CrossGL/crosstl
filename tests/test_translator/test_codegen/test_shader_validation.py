@@ -1799,6 +1799,65 @@ shader MetalAtomicCompareExchangeValidation {
 """
 
 
+METAL_BUFFER_BLOCK_ATOMIC_COMPARE_SHADER = """
+shader MetalBufferBlockAtomicCompareValidation {
+    struct AtomicBlock {
+        uint counter;
+        uint bins[];
+    };
+
+    struct SignedAtomicBlock {
+        int counter;
+        int bins[];
+    };
+
+    AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(17);
+    SignedAtomicBlock signedAtomicBlock @glsl_buffer_block(std430) @binding(18);
+
+    uint swapUnsigned(
+        AtomicBlock block @glsl_buffer_block(std430),
+        uint index,
+        uint compareValue,
+        uint value
+    ) {
+        return atomicCompSwap(block.bins[index], compareValue, value);
+    }
+
+    int swapSigned(
+        SignedAtomicBlock block @glsl_buffer_block(std430),
+        uint index,
+        int compareValue,
+        int value
+    ) {
+        return atomicCompSwap(block.bins[index], compareValue, value);
+    }
+
+    compute {
+        void main() {
+            uint resultU = swapUnsigned(
+                atomicBlock,
+                1u,
+                atomicBlock.counter,
+                9u
+            );
+            int resultS = swapSigned(
+                signedAtomicBlock,
+                1u,
+                signedAtomicBlock.counter,
+                -3
+            );
+            uint oldCounter = atomicCompSwap(atomicBlock.counter, 0u, resultU);
+            int oldSignedCounter = atomicCompSwap(
+                signedAtomicBlock.counter,
+                0,
+                resultS
+            );
+        }
+    }
+}
+"""
+
+
 METAL_ADDRESS_SPACE_PARAMETER_SHADER = """
 shader MetalAddressSpaceParameterValidation {
     struct Payload {
@@ -4979,6 +5038,32 @@ def test_generated_metal_atomic_compare_exchange_compile_with_metal(tmp_path):
         "&expected, 2u, memory_order_relaxed, memory_order_relaxed);"
     ) in code
     assert "atomic_compare_exchange_weak_explicit(&counter, &expected," not in code
+    assert "atomic_compare_exchange_strong_explicit" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_buffer_block_atomic_compare_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "buffer_block_atomic_compare.metal"
+    output = tmp_path / "buffer_block_atomic_compare.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_BUFFER_BLOCK_ATOMIC_COMPARE_SHADER),
+        "compute",
+    )
+    assert "__crossgl_buffer_atomic_compare_exchange_uint" in code
+    assert "__crossgl_buffer_atomic_compare_exchange_int" in code
+    assert (
+        "atomic_compare_exchange_weak_explicit(target, &original, value, "
+        "memory_order_relaxed, memory_order_relaxed)"
+    ) in code
+    assert "atomicCompSwap(" not in code
     assert "atomic_compare_exchange_strong_explicit" not in code
     source.write_text(code, encoding="utf-8")
 

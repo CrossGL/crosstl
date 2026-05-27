@@ -131,7 +131,7 @@ class SlangCodeGen:
         self.expression_prelude_stack = []
         self.expression_prelude_result_stack = []
         self.expression_temp_names = set()
-        self.structured_buffer_atomic_value_context_stack = []
+        self.atomic_value_context_stack = []
         self.current_hull_output_rewrite = None
         self._generating = False
         self.semantic_map = {
@@ -209,7 +209,7 @@ class SlangCodeGen:
             self.expression_prelude_stack = []
             self.expression_prelude_result_stack = []
             self.expression_temp_names = set()
-            self.structured_buffer_atomic_value_context_stack = []
+            self.atomic_value_context_stack = []
             self.reserve_explicit_slang_resource_declarations(ast)
 
         if isinstance(ast, list):
@@ -3763,13 +3763,11 @@ class SlangCodeGen:
 
     def generate_for_header_statement(self, node, atomic_value_context=None):
         if atomic_value_context is not None:
-            self.structured_buffer_atomic_value_context_stack.append(
-                atomic_value_context
-            )
+            self.atomic_value_context_stack.append(atomic_value_context)
             try:
                 return self.generate_for_header_statement(node)
             finally:
-                self.structured_buffer_atomic_value_context_stack.pop()
+                self.atomic_value_context_stack.pop()
 
         if isinstance(node, AssignmentNode):
             return self.generate_assignment(node)
@@ -3789,11 +3787,11 @@ class SlangCodeGen:
         return self.generate_expression(node)
 
     def generate_loop_condition_expression(self, node, atomic_value_context):
-        self.structured_buffer_atomic_value_context_stack.append(atomic_value_context)
+        self.atomic_value_context_stack.append(atomic_value_context)
         try:
             return self.generate_expression(node)
         finally:
-            self.structured_buffer_atomic_value_context_stack.pop()
+            self.atomic_value_context_stack.pop()
 
     def slang_assignment_target_alias(self, target):
         hull_output_alias = self.slang_hull_output_array_alias(target)
@@ -5283,8 +5281,8 @@ class SlangCodeGen:
         self, func_name, intrinsic, target, value_args, element_type
     ):
         if not self.expression_prelude_active():
-            if self.structured_buffer_atomic_value_context_stack:
-                context = self.structured_buffer_atomic_value_context_stack[-1]
+            if self.atomic_value_context_stack:
+                context = self.atomic_value_context_stack[-1]
                 return self.unsupported_structured_buffer_call(
                     func_name,
                     "expression-valued atomic cannot be used in "
@@ -5841,6 +5839,44 @@ class SlangCodeGen:
             return "requires image, coordinate, compare, and value arguments"
         return "requires image, coordinate, and value arguments"
 
+    def image_atomic_value_expression(
+        self, operation, args, image_type, intrinsic, return_type
+    ):
+        if not self.expression_prelude_active():
+            if self.atomic_value_context_stack:
+                context = self.atomic_value_context_stack[-1]
+                return self.unsupported_image_atomic_call(
+                    operation,
+                    "expression-valued atomic cannot be used in "
+                    f"{context}; assign the atomic result before the loop",
+                    image_type,
+                )
+            return None
+
+        original_name = self.unique_expression_temp_name(f"cgl_{operation}_original")
+        image_name = self.generate_expression(args[0])
+        coord = self.generate_expression(args[1])
+        target_expr = f"{image_name}[{coord}]"
+        if operation == "imageAtomicCompSwap":
+            compare = self.generate_expression_with_expected(args[2], return_type)
+            value = self.generate_expression_with_expected(args[3], return_type)
+            atomic_statement = (
+                f"InterlockedCompareExchange({target_expr}, "
+                f"{compare}, {value}, {original_name});"
+            )
+        else:
+            value = self.generate_expression_with_expected(args[2], return_type)
+            atomic_statement = f"{intrinsic}({target_expr}, {value}, {original_name});"
+
+        self.add_expression_prelude(
+            [
+                f"{return_type} {original_name};",
+                atomic_statement,
+            ],
+            result_name=original_name,
+        )
+        return original_name
+
     def image_atomic_expression(self, operation, args):
         if not self.image_atomic_intrinsic(operation):
             return None
@@ -5870,15 +5906,26 @@ class SlangCodeGen:
                 reason,
                 image_type,
             )
-        helper_name = self.helper_function_name(base_helper_name)
 
+        return_type = self.image_atomic_return_type(image_type)
+        intrinsic = self.image_atomic_intrinsic(operation)
+        value_expr = self.image_atomic_value_expression(
+            operation,
+            args,
+            image_type,
+            intrinsic,
+            return_type,
+        )
+        if value_expr is not None:
+            return value_expr
+
+        image_name = self.generate_expression(args[0])
+        coord = self.generate_expression(args[1])
+        helper_name = self.helper_function_name(base_helper_name)
         self.register_helper_function(
             helper_name,
             self.build_image_atomic_helper(helper_name, operation, image_type),
         )
-
-        image_name = self.generate_expression(args[0])
-        coord = self.generate_expression(args[1])
         if operation == "imageAtomicCompSwap":
             compare = self.generate_expression(args[2])
             value = self.generate_expression(args[3])
