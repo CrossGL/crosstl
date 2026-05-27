@@ -899,7 +899,9 @@ def _run_validator(command):
     assert result.returncode == 0, diagnostics
 
 
-def _run_validator_or_skip_unsupported_extension(command, extension):
+def _run_validator_or_skip_unsupported_extension(
+    command, extension, unsupported_diagnostics=()
+):
     result = subprocess.run(
         command,
         capture_output=True,
@@ -921,6 +923,14 @@ def _run_validator_or_skip_unsupported_extension(command, extension):
         and any(marker in diagnostics.lower() for marker in unsupported_markers)
     ):
         pytest.skip(f"{extension} is not supported by this validator build")
+    if (
+        result.returncode != 0
+        and unsupported_diagnostics
+        and all(marker in diagnostics for marker in unsupported_diagnostics)
+    ):
+        pytest.skip(
+            f"{extension} qualifier path is not supported by this validator build"
+        )
     assert result.returncode == 0, diagnostics
 
 
@@ -1367,6 +1377,7 @@ def test_mixed_glsl_fragment_blend_support_validate_with_glslangvalidator(
     _run_validator_or_skip_unsupported_extension(
         [glslang, "-S", "frag", str(shader_path)],
         "GL_KHR_blend_equation_advanced",
+        unsupported_diagnostics=("invalid layout qualifier", "blend_support_"),
     )
 
 
