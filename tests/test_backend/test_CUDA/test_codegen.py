@@ -708,6 +708,93 @@ class TestCudaCodeGen:
         assert "wait_prior<1>" not in result
         assert "None" not in result
 
+    def test_cuda_barrier_pipeline_async_copy_emit_diagnostics(self):
+        """Test CUDA barrier/pipeline async copy helpers stay explicit."""
+        code = """
+        __global__ void async_copy(int* shared, const int* global, int* out) {
+            __shared__ cuda::pipeline_shared_state<cuda::thread_scope_block, 2> state;
+            cuda::barrier<cuda::thread_scope_block> blockBarrier;
+            init(&blockBarrier, blockDim.x);
+            cuda::memcpy_async(
+                shared,
+                global,
+                sizeof(int) * blockDim.x,
+                blockBarrier
+            );
+            auto token = blockBarrier.arrive();
+            bool ready = blockBarrier.try_wait(token);
+            blockBarrier.wait(token);
+            blockBarrier.arrive_and_wait();
+            auto pipe = cuda::make_pipeline();
+            pipe.producer_acquire();
+            cuda::memcpy_async(shared, global, 16, pipe);
+            pipe.producer_commit();
+            pipe.consumer_wait();
+            pipe.consumer_release();
+            if (ready) {
+                out[0] = 1;
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// cuda pipeline_shared_state state not directly supported in CrossGL"
+            in result
+        )
+        assert (
+            "// cuda barrier blockBarrier not directly supported in CrossGL" in result
+        )
+        assert "// cuda barrier.init not directly supported in CrossGL" in result
+        assert (
+            "// cuda barrier.memcpy_async not directly supported in CrossGL" in result
+        )
+        assert (
+            "var token: auto = "
+            "(/* cuda barrier.arrive not directly supported in CrossGL */ 0);" in result
+        )
+        assert (
+            "var ready: bool = "
+            "(/* cuda barrier.try_wait not directly supported in CrossGL */ false);"
+            in result
+        )
+        assert "// cuda barrier.wait not directly supported in CrossGL" in result
+        assert (
+            "// cuda barrier.arrive_and_wait not directly supported in CrossGL"
+            in result
+        )
+        assert "// cuda pipeline pipe not directly supported in CrossGL" in result
+        assert (
+            "// cuda pipeline.producer_acquire not directly supported in CrossGL"
+            in result
+        )
+        assert (
+            "// cuda pipeline.memcpy_async not directly supported in CrossGL" in result
+        )
+        assert (
+            "// cuda pipeline.producer_commit not directly supported in CrossGL"
+            in result
+        )
+        assert (
+            "// cuda pipeline.consumer_wait not directly supported in CrossGL" in result
+        )
+        assert (
+            "// cuda pipeline.consumer_release not directly supported in CrossGL"
+            in result
+        )
+        assert "cuda::memcpy_async" not in result
+        assert "cuda::make_pipeline" not in result
+        assert "blockBarrier.arrive" not in result
+        assert "pipe.producer" not in result
+        assert "pipe.consumer" not in result
+        assert "None" not in result
+
     def test_inverse_trig_builtins_convert_to_crossgl(self):
         """Test CUDA inverse trig functions convert back to CrossGL names."""
         code = """

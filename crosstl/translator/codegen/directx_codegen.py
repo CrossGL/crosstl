@@ -3407,6 +3407,15 @@ class HLSLCodeGen:
             return resource_type
         return None
 
+    def hlsl_byte_address_vector_helper_width(self, func_name):
+        for prefix in ("buffer_load", "buffer_store"):
+            if not func_name.startswith(prefix):
+                continue
+            suffix = func_name[len(prefix) :]
+            if suffix in {"2", "3", "4"}:
+                return int(suffix)
+        return None
+
     def validate_buffer_call_access(self, func_name, args):
         if not args:
             return
@@ -3467,6 +3476,30 @@ class HLSLCodeGen:
                     f"DirectX buffer helper '{func_name}' requires a resource with "
                     f"indexed write support, got {resource_type}"
                 )
+        vector_helper_width = self.hlsl_byte_address_vector_helper_width(func_name)
+        if vector_helper_width is not None:
+            byte_address_resources = {
+                "ByteAddressBuffer",
+                "RWByteAddressBuffer",
+                "RasterizerOrderedByteAddressBuffer",
+            }
+            if resource_name not in byte_address_resources:
+                raise ValueError(
+                    f"DirectX buffer helper '{func_name}' requires "
+                    "ByteAddressBuffer, RWByteAddressBuffer, or "
+                    "RasterizerOrderedByteAddressBuffer resource, got "
+                    f"{resource_type}"
+                )
+            if func_name.startswith("buffer_store") and len(args) >= 3:
+                expected_value_type = f"uint{vector_helper_width}"
+                value_type = self.type_name_string(self.expression_result_type(args[2]))
+                mapped_value_type = self.map_type(value_type) if value_type else None
+                if mapped_value_type != expected_value_type:
+                    actual_value_type = mapped_value_type or value_type or "unknown"
+                    raise ValueError(
+                        f"DirectX buffer helper '{func_name}' requires "
+                        f"{expected_value_type} value, got {actual_value_type}"
+                    )
         if func_name == "buffer_append" and resource_name != "AppendStructuredBuffer":
             raise ValueError(
                 "DirectX buffer helper 'buffer_append' requires "

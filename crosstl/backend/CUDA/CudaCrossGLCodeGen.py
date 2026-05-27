@@ -134,6 +134,7 @@ class CudaToCrossGLConverter:
         self.struct_resource_member_hints = {}
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
+        self.cuda_async_sync_scopes = [{}]
 
     def generate(self, ast_node):
         """Generate complete CrossGL source from a parsed CUDA AST."""
@@ -151,6 +152,7 @@ class CudaToCrossGLConverter:
         )
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
+        self.cuda_async_sync_scopes = [{}]
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -802,12 +804,15 @@ class CudaToCrossGLConverter:
             self.push_type_alias_scope()
             self.push_unique_ptr_scope()
             self.push_cooperative_group_scope()
+            self.push_cuda_async_sync_scope()
             for param in node.params:
                 self.register_unique_ptr_name(param.name, param.vtype)
+                self.register_cuda_async_sync_parameter(param)
             try:
                 for stmt in node.body:
                     self.emit_statement(stmt)
             finally:
+                self.pop_cuda_async_sync_scope()
                 self.pop_cooperative_group_scope()
                 self.pop_unique_ptr_scope()
                 self.pop_type_alias_scope()
@@ -864,12 +869,15 @@ class CudaToCrossGLConverter:
             self.push_type_alias_scope()
             self.push_unique_ptr_scope()
             self.push_cooperative_group_scope()
+            self.push_cuda_async_sync_scope()
             for param in kernel.params:
                 self.register_unique_ptr_name(param.name, param.vtype)
+                self.register_cuda_async_sync_parameter(param)
             try:
                 for stmt in kernel.body:
                     self.emit_statement(stmt)
             finally:
+                self.pop_cuda_async_sync_scope()
                 self.pop_cooperative_group_scope()
                 self.pop_unique_ptr_scope()
                 self.pop_type_alias_scope()
@@ -895,6 +903,14 @@ class CudaToCrossGLConverter:
             self.emit(f"// Arguments: {args_str}")
 
     def visit_VariableNode(self, node):
+        cuda_async_sync = self.cuda_async_sync_declaration_metadata(node)
+        if cuda_async_sync is not None:
+            self.register_cuda_async_sync_name(node.name, cuda_async_sync)
+            self.emit(
+                self.format_cuda_async_sync_declaration(node.name, cuda_async_sync)
+            )
+            return
+
         cooperative_group = self.cooperative_group_declaration_metadata(node)
         if cooperative_group is not None:
             group_kind = cooperative_group["kind"]
@@ -956,6 +972,28 @@ class CudaToCrossGLConverter:
     def pop_cooperative_group_scope(self):
         if len(self.cooperative_group_scopes) > 1:
             self.cooperative_group_scopes.pop()
+
+    def push_cuda_async_sync_scope(self):
+        self.cuda_async_sync_scopes.append({})
+
+    def pop_cuda_async_sync_scope(self):
+        if len(self.cuda_async_sync_scopes) > 1:
+            self.cuda_async_sync_scopes.pop()
+
+    def register_cuda_async_sync_parameter(self, param):
+        metadata = self.cuda_async_sync_metadata_from_type(param.vtype)
+        if metadata is not None:
+            self.register_cuda_async_sync_name(param.name, metadata)
+
+    def register_cuda_async_sync_name(self, name, metadata):
+        if name:
+            self.cuda_async_sync_scopes[-1][name] = metadata
+
+    def lookup_cuda_async_sync_metadata(self, name):
+        for scope in reversed(self.cuda_async_sync_scopes):
+            if name in scope:
+                return scope[name]
+        return None
 
     def register_cooperative_group_name(self, name, group_metadata):
         if name:
@@ -1065,6 +1103,14 @@ class CudaToCrossGLConverter:
         return self.visit(arg)
 
     def visit_SharedMemoryNode(self, node):
+        cuda_async_sync = self.cuda_async_sync_metadata_from_type(node.vtype)
+        if cuda_async_sync is not None:
+            self.register_cuda_async_sync_name(node.name, cuda_async_sync)
+            self.emit(
+                self.format_cuda_async_sync_declaration(node.name, cuda_async_sync)
+            )
+            return
+
         # Convert to workgroup memory in CrossGL
         var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
         if node.size:
@@ -1117,6 +1163,10 @@ class CudaToCrossGLConverter:
     def visit_FunctionCallNode(self, node):
         if self.is_get_method_call(node):
             return self.visit(node.name.object)
+
+        cuda_async_sync_call = self.format_cuda_async_sync_call(node)
+        if cuda_async_sync_call is not None:
+            return cuda_async_sync_call
 
         cooperative_call = self.format_cooperative_group_call(node)
         if cooperative_call is not None:
@@ -1238,6 +1288,137 @@ class CudaToCrossGLConverter:
             f"(/* cooperative_groups {group_kind}.{member} "
             f"not directly supported in CrossGL */ {fallback})"
         )
+
+    def format_cuda_async_sync_call(self, node):
+        if isinstance(node.name, MemberAccessNode):
+            metadata = self.resolve_cuda_async_sync_metadata(node.name.object)
+            if metadata is None:
+                return None
+            return self.format_cuda_async_sync_member_call(
+                metadata, node.name.member, node.args
+            )
+
+        raw_name = node.name if isinstance(node.name, str) else self.visit(node.name)
+        base_call_name, _ = self.parse_cpp_template(raw_name)
+        base_name = self.cooperative_group_base_name(base_call_name)
+        if self.is_user_defined_function(base_name) or self.is_user_defined_function(
+            raw_name
+        ):
+            return None
+
+        if base_name == "memcpy_async":
+            metadata = self.resolve_cuda_async_sync_metadata_from_args(node.args)
+            if metadata is not None:
+                return self.format_unsupported_cuda_async_statement(
+                    metadata["kind"], base_name, node.args
+                )
+
+        if base_name == "init" and node.args:
+            metadata = self.resolve_cuda_async_sync_metadata(
+                self.unwrap_cuda_async_sync_target(node.args[0])
+            )
+            if metadata is not None and metadata["kind"] == "barrier":
+                return self.format_unsupported_cuda_async_statement(
+                    metadata["kind"], base_name, node.args
+                )
+
+        if base_name == "make_pipeline":
+            return self.format_unsupported_cuda_async_expression("pipeline", base_name)
+
+        return None
+
+    def format_cuda_async_sync_member_call(self, metadata, member, args):
+        kind = metadata["kind"]
+        member_base_name, _ = self.parse_cpp_template(member)
+        member_name = self.cooperative_group_base_name(member_base_name) or member
+
+        if kind == "barrier":
+            if member_name in {"arrive", "arrival_token"}:
+                return self.format_unsupported_cuda_async_expression(kind, member_name)
+            if member_name in {"try_wait", "try_wait_parity"}:
+                return self.format_unsupported_cuda_async_expression(
+                    kind, member_name, "false"
+                )
+            return self.format_unsupported_cuda_async_statement(kind, member_name, args)
+
+        if kind == "pipeline":
+            return self.format_unsupported_cuda_async_statement(kind, member_name, args)
+
+        return self.format_unsupported_cuda_async_statement(kind, member_name, args)
+
+    def format_unsupported_cuda_async_statement(self, kind, member, args=None):
+        args = args or []
+        formatted_args = ", ".join(self.visit(arg) for arg in args)
+        arg_suffix = f": {formatted_args}" if formatted_args else ""
+        return f"// cuda {kind}.{member} not directly supported in CrossGL{arg_suffix}"
+
+    def format_unsupported_cuda_async_expression(self, kind, member, fallback="0"):
+        return (
+            f"(/* cuda {kind}.{member} not directly supported in CrossGL */ {fallback})"
+        )
+
+    def format_cuda_async_sync_declaration(self, name, metadata):
+        return f"// cuda {metadata['kind']} {name} not directly supported in CrossGL"
+
+    def cuda_async_sync_declaration_metadata(self, node):
+        declared_metadata = self.cuda_async_sync_metadata_from_type(node.vtype)
+        factory_metadata = self.cuda_async_sync_factory_metadata(node.value)
+        return factory_metadata or declared_metadata
+
+    def cuda_async_sync_metadata_from_type(self, type_name):
+        type_name = self.strip_cuda_async_sync_declarator(type_name)
+        base_type, template_args = self.parse_cpp_template(type_name)
+        base_name = self.cooperative_group_base_name(base_type)
+        if base_name in {"barrier", "pipeline", "pipeline_shared_state"}:
+            metadata = {"kind": base_name}
+            if template_args:
+                metadata["scope"] = template_args[0]
+            return metadata
+        return None
+
+    def cuda_async_sync_factory_metadata(self, value):
+        if not isinstance(value, FunctionCallNode):
+            return None
+        raw_name = value.name if isinstance(value.name, str) else self.visit(value.name)
+        base_call_name, _ = self.parse_cpp_template(raw_name)
+        base_name = self.cooperative_group_base_name(base_call_name)
+        if base_name == "make_pipeline":
+            return {"kind": "pipeline"}
+        return None
+
+    def resolve_cuda_async_sync_metadata_from_args(self, args):
+        for arg in reversed(args):
+            metadata = self.resolve_cuda_async_sync_metadata(arg)
+            if metadata is not None and metadata["kind"] in {"barrier", "pipeline"}:
+                return metadata
+        return None
+
+    def resolve_cuda_async_sync_metadata(self, expression):
+        name = self.simple_identifier(expression)
+        if name is None:
+            return None
+        return self.lookup_cuda_async_sync_metadata(name)
+
+    def unwrap_cuda_async_sync_target(self, expression):
+        if isinstance(expression, UnaryOpNode) and expression.op == "&":
+            return expression.operand
+        if isinstance(expression, CastNode):
+            return self.unwrap_cuda_async_sync_target(expression.expression)
+        return expression
+
+    def strip_cuda_async_sync_declarator(self, type_name):
+        type_name = self.strip_type_qualifiers(type_name).strip()
+        if "[" in type_name:
+            type_name = type_name.split("[", 1)[0].strip()
+
+        while True:
+            stripped = type_name.strip()
+            for suffix in ("&&", "&", "*"):
+                if stripped.endswith(suffix):
+                    type_name = stripped[: -len(suffix)].strip()
+                    break
+            else:
+                return stripped
 
     def cooperative_group_declaration_metadata(self, node):
         declared_metadata = self.cooperative_group_metadata_from_type(node.vtype)

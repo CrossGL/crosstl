@@ -2627,7 +2627,11 @@ class RustCodeGen:
                 if increment_init is not None:
                     return increment_init
                 if isinstance(initial_value, MatchNode):
-                    init_expr = self.generate_match_expression(initial_value, indent)
+                    init_expr = self.generate_match_expression(
+                        initial_value,
+                        indent,
+                        target_type=vtype,
+                    )
                 else:
                     init_expr = self.generate_expression_with_type(initial_value, vtype)
                     init_expr = self.normalize_assignment_rhs(
@@ -3470,7 +3474,8 @@ class RustCodeGen:
         return_context=False,
     ):
         statements = self.statement_list(body)
-        if not return_context or not statements:
+        expression_context = return_context or expression_target_type is not None
+        if not expression_context or not statements:
             return "".join(self.generate_statement(stmt, indent) for stmt in statements)
 
         code = "".join(
@@ -3505,10 +3510,16 @@ class RustCodeGen:
         if tail_expression is None:
             return code + self.generate_statement(tail, indent)
 
-        tail_value = self.generate_return_branch_expression_with_type(
-            tail_expression,
-            expression_target_type,
-        )
+        if return_context:
+            tail_value = self.generate_return_branch_expression_with_type(
+                tail_expression,
+                expression_target_type,
+            )
+        else:
+            tail_value = self.generate_expression_with_type(
+                tail_expression,
+                expression_target_type,
+            )
         tail_value = self.normalize_assignment_rhs(
             expression_target_type,
             tail_expression,
@@ -3601,11 +3612,13 @@ class RustCodeGen:
 
     def generate_expression_with_type(self, expr, target_type, static_context=False):
         if isinstance(expr, MatchNode):
-            return self.generate_match_expression(expr)
+            return self.generate_match_expression(expr, target_type=target_type)
         if isinstance(expr, ArrayLiteralNode):
             return self.generate_array_literal_expression(
                 expr, target_type, static_context=static_context
             )
+        if isinstance(expr, ConstructorNode):
+            return self.generate_constructor_expression(expr, target_type)
         if isinstance(expr, BinaryOpNode):
             return self.generate_binary_expression(expr, target_type)
         if isinstance(expr, TernaryOpNode):
@@ -4402,7 +4415,7 @@ class RustCodeGen:
 
         return f"[{', '.join(elements)}]"
 
-    def generate_constructor_expression(self, expr):
+    def generate_constructor_expression(self, expr, target_type=None):
         type_name = self.normalize_turbofish_type_name(
             self.convert_type_node_to_string(expr.constructor_type)
         )
@@ -4410,7 +4423,10 @@ class RustCodeGen:
 
         named_arguments = getattr(expr, "named_arguments", {}) or {}
         if named_arguments:
-            variant_info = self.enum_variant_struct_constructor_info(type_name)
+            variant_info = self.enum_variant_struct_constructor_info(
+                type_name,
+                target_type,
+            )
             if variant_info is not None:
                 enum_type, variant_name, field_types = variant_info
                 constructor_path = self.enum_variant_call_path(enum_type, variant_name)

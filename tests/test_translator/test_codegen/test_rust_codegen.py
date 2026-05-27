@@ -5065,6 +5065,154 @@ def test_non_copy_generic_struct_like_enum_variants_and_guards_compile(tmp_path)
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_generic_struct_like_enum_variant_locals_infer_target_type_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    generic_type = GenericType("T")
+    choice_payload_type = NamedType("Choice", [payload_type])
+    omitted_variant_type = NamedType("Choice::Named")
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode(
+                "Named",
+                fields=[
+                    ("primary", generic_type),
+                    ("backup", generic_type),
+                ],
+            ),
+        ],
+    )
+    choice_enum.generic_params = [GenericParameterNode("T")]
+
+    ast = ShaderNode(
+        "GenericStructLikeEnumLocalTargets",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "choose_ternary_local",
+                choice_payload_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        choice_payload_type,
+                        TernaryOpNode(
+                            IdentifierNode("flag"),
+                            ConstructorNode(
+                                omitted_variant_type,
+                                [],
+                                named_arguments={
+                                    "primary": IdentifierNode("left"),
+                                    "backup": IdentifierNode("left"),
+                                },
+                            ),
+                            ConstructorNode(
+                                omitted_variant_type,
+                                [],
+                                named_arguments={
+                                    "primary": IdentifierNode("right"),
+                                    "backup": IdentifierNode("right"),
+                                },
+                            ),
+                        ),
+                    ),
+                    ReturnNode(IdentifierNode("selected")),
+                ],
+            ),
+            FunctionNode(
+                "choose_match_local",
+                choice_payload_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        choice_payload_type,
+                        MatchNode(
+                            IdentifierNode("flag"),
+                            [
+                                MatchArmNode(
+                                    LiteralPatternNode(
+                                        LiteralNode(True, PrimitiveType("bool"))
+                                    ),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            ConstructorNode(
+                                                omitted_variant_type,
+                                                [],
+                                                named_arguments={
+                                                    "primary": IdentifierNode("left"),
+                                                    "backup": IdentifierNode("left"),
+                                                },
+                                            ),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                                MatchArmNode(
+                                    LiteralPatternNode(
+                                        LiteralNode(False, PrimitiveType("bool"))
+                                    ),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            ConstructorNode(
+                                                omitted_variant_type,
+                                                [],
+                                                named_arguments={
+                                                    "primary": IdentifierNode("right"),
+                                                    "backup": IdentifierNode("right"),
+                                                },
+                                            ),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(IdentifierNode("selected")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "let selected: Choice<Payload> = (if flag { "
+        "Choice::<Payload>::Named { primary: left.clone(), backup: left.clone() }"
+    ) in generated_code
+    assert (
+        "else { Choice::<Payload>::Named { "
+        "primary: right.clone(), backup: right.clone() } });"
+    ) in generated_code
+    assert "true => {\n            Choice::<Payload>::Named" in generated_code
+    assert "false => {\n            Choice::<Payload>::Named" in generated_code
+    assert "Choice::Named { primary: left.clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_struct_constructor_args_normalize_field_types_and_clone_non_copy_compile(
     tmp_path,
 ):

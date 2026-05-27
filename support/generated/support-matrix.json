@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 546
+        "test_count": 547
       },
       "translator_codegen": {
         "exists": true,
@@ -461,7 +461,7 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 41,
+        "unsupported_marker_count": 51,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -551,7 +551,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 284
+        "test_count": 286
       },
       "translator_codegen": {
         "exists": true,
@@ -629,7 +629,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 300
+        "test_count": 301
       },
       "translator_codegen": {
         "exists": true,
@@ -743,7 +743,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 305
+        "test_count": 309
       },
       "translator_codegen": {
         "exists": true,
@@ -857,7 +857,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 497
+        "test_count": 498
       },
       "translator_codegen": {
         "exists": true,
@@ -1661,7 +1661,7 @@
       "category": "resources",
       "feature": "Structured/storage buffers",
       "feature_id": "resources.structured_buffers",
-      "notes": "StructuredBuffer, RWStructuredBuffer, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers and deterministic invalid member/free-helper diagnostics; real GPU memory binding semantics remain incomplete.",
+      "notes": "StructuredBuffer, RWStructuredBuffer, typed Buffer/RWBuffer aliases, rasterizer-ordered structured/typed/byte-address buffer aliases, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers and deterministic invalid member/free-helper diagnostics; real GPU memory binding semantics remain incomplete.",
       "status": "partial"
     },
     {
@@ -3938,6 +3938,7 @@
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_structured_buffer_dimensions_lower_to_get_dimensions",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_structured_buffer_append_consume_lower_to_native_methods",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_byte_address_vector_buffer_helpers_lower_to_load_store_methods",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_byte_address_vector_helpers_validate_resource_and_value_shape",
             "tests/test_backend/test_directx/test_codegen.py::def test_codegen_byte_address_vector_method_mapping",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_buffer_store_helpers_reject_readonly_resources",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_append_consume_buffers_reject_wrong_helpers",
@@ -3945,7 +3946,7 @@
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_hlsl_rasterizer_ordered_resources_compile_with_dxc",
             "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract"
           ],
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed and inferred resource arrays, load/store/dimensions helpers, ByteAddressBuffer scalar/vector load/store helpers, native HLSL ByteAddressBuffer/RWByteAddressBuffer vector method import, register-space allocation, type aliases, append/consume buffers, access-mode diagnostics for readonly/append/consume misuse, rasterizer-ordered typed/structured buffers, and GLSL SSBO single-array round-trips.",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed and inferred resource arrays, load/store/dimensions helpers, ByteAddressBuffer scalar/vector load/store helpers, byte-address vector helper resource/value shape diagnostics, native HLSL ByteAddressBuffer/RWByteAddressBuffer vector method import, register-space allocation, type aliases, append/consume buffers, access-mode diagnostics for readonly/append/consume misuse, rasterizer-ordered typed/structured buffers, and GLSL SSBO single-array round-trips.",
           "status": "supported"
         },
         "hip": {
@@ -3972,9 +3973,13 @@
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_typed_buffer_vector_alias_placeholders_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_buffer_placeholders_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_vector_methods_and_reinterpret_compile_with_mojo",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rasterizer_ordered_buffer_aliases_emit_mojo_buffer_helpers",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rasterizer_ordered_buffer_aliases_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_typed_buffer_aliases_emit_mojo_buffer_helpers",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_typed_buffer_aliases_compile_with_mojo"
           ],
-          "notes": "StructuredBuffer, RWStructuredBuffer, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers and deterministic invalid member/free-helper diagnostics; real GPU memory binding semantics remain incomplete.",
+          "notes": "StructuredBuffer, RWStructuredBuffer, typed Buffer/RWBuffer aliases, rasterizer-ordered structured/typed/byte-address buffer aliases, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers and deterministic invalid member/free-helper diagnostics; real GPU memory binding semantics remain incomplete.",
           "status": "partial"
         },
         "opengl": {
@@ -5508,9 +5513,10 @@
           "evidence": [
             "tests/test_backend/test_CUDA/test_codegen.py::def test_cooperative_groups_sync_factory_and_member_aliases_convert",
             "tests/test_backend/test_CUDA/test_codegen.py::def test_cooperative_groups_async_copy_wait_emit_diagnostics",
+            "tests/test_backend/test_CUDA/test_codegen.py::def test_cuda_barrier_pipeline_async_copy_emit_diagnostics",
             "tests/test_backend/test_CUDA/test_codegen.py::def test_unsupported_cooperative_group_rank_is_expression_safe"
           ],
-          "notes": "Native CUDA barrier and cooperative-groups thread-block sync forms round-trip to CrossGL workgroup barriers, with unsupported non-workgroup cooperative scopes and cooperative-groups async copy/wait calls emitted as expression-safe diagnostics.",
+          "notes": "Native CUDA barrier and cooperative-groups thread-block sync forms round-trip to CrossGL workgroup barriers, with unsupported non-workgroup cooperative scopes, cooperative-groups async copy/wait calls, and CUDA barrier/pipeline async-copy helper calls emitted as expression-safe diagnostics.",
           "status": "supported"
         },
         "directx": {
@@ -5710,9 +5716,10 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_rust_codegen.py::def test_generated_rust_rich_match_patterns_smoke_compile_with_rustc",
             "tests/test_translator/test_codegen/test_rust_codegen.py::def test_non_copy_generic_enum_variant_returns_and_match_arms_compile",
-            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_non_copy_generic_struct_like_enum_variants_and_guards_compile"
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_non_copy_generic_struct_like_enum_variants_and_guards_compile",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_generic_struct_like_enum_variant_locals_infer_target_type_compile"
           ],
-          "notes": "Rust lowering covers literal/wildcard arms, guarded arms, identifier bindings, struct fields, enum path and payload patterns, generic enum matches, struct-like enum variants, match expressions, scoped case bodies, and non-Copy generic enum payload move/clone planning.",
+          "notes": "Rust lowering covers literal/wildcard arms, guarded arms, identifier bindings, struct fields, enum path and payload patterns, generic enum matches, struct-like enum variants, target-typed struct-like generic enum constructor inference, match expressions, scoped case bodies, and non-Copy generic enum payload move/clone planning.",
           "status": "supported"
         },
         "slang": {

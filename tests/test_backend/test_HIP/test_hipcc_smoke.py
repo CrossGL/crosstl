@@ -544,6 +544,96 @@ def test_native_hip_external_interop_parses_and_compiles_if_available(tmp_path):
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_opengl_graphics_interop_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP OpenGL graphics interop lifecycle APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void graphics_interop_lifecycle(
+        unsigned int gl_buffer,
+        unsigned int gl_image,
+        unsigned int gl_target,
+        hipStream_t stream
+    ) {
+        hipGraphicsResource_t buffer_resource;
+        hipGraphicsResource_t image_resource;
+        hipGraphicsResource_t resources[2];
+        hipArray_t mapped_array;
+        void* mapped_ptr = NULL;
+        size_t mapped_bytes = 0;
+
+        hipGraphicsGLRegisterBuffer(
+            &buffer_resource, gl_buffer, hipGraphicsRegisterFlagsWriteDiscard
+        );
+        hipGraphicsGLRegisterImage(
+            &image_resource,
+            gl_image,
+            gl_target,
+            hipGraphicsRegisterFlagsSurfaceLoadStore
+        );
+        resources[0] = buffer_resource;
+        resources[1] = image_resource;
+        hipGraphicsMapResources(2, resources, stream);
+        hipGraphicsResourceGetMappedPointer(
+            &mapped_ptr, &mapped_bytes, buffer_resource
+        );
+        hipGraphicsSubResourceGetMappedArray(
+            &mapped_array, image_resource, 0, 0
+        );
+        hipGraphicsUnmapResources(2, resources, stream);
+        hipGraphicsUnregisterResource(image_resource);
+        hipGraphicsUnregisterResource(buffer_resource);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Function: graphics_interop_lifecycle" in crossgl
+    assert (
+        "void graphics_interop_lifecycle(u32 gl_buffer, u32 gl_image, "
+        "u32 gl_target, hipStream_t stream)"
+    ) in crossgl
+    assert "var buffer_resource: hipGraphicsResource_t;" in crossgl
+    assert "var image_resource: hipGraphicsResource_t;" in crossgl
+    assert "var resources: array<hipGraphicsResource_t, 2>;" in crossgl
+    assert "var mapped_array: ptr<void>;" in crossgl
+    assert "var mapped_ptr: ptr<void> = NULL;" in crossgl
+    assert "var mapped_bytes: u32 = 0;" in crossgl
+    assert (
+        "// HIP OpenGL register buffer: output: buffer_resource, "
+        "buffer: gl_buffer, flags: hipGraphicsRegisterFlagsWriteDiscard"
+    ) in crossgl
+    assert (
+        "// HIP OpenGL register image: output: image_resource, "
+        "image: gl_image, target: gl_target, "
+        "flags: hipGraphicsRegisterFlagsSurfaceLoadStore"
+    ) in crossgl
+    assert "resources[0] = buffer_resource;" in crossgl
+    assert "resources[1] = image_resource;" in crossgl
+    assert (
+        "// HIP graphics map resources: count: 2, "
+        "resources: resources, stream: stream"
+    ) in crossgl
+    assert (
+        "// HIP graphics mapped pointer: pointer output: mapped_ptr, "
+        "size output: mapped_bytes, resource: buffer_resource"
+    ) in crossgl
+    assert (
+        "// HIP graphics mapped subresource array: output: mapped_array, "
+        "resource: image_resource, array index: 0, mip level: 0"
+    ) in crossgl
+    assert (
+        "// HIP graphics unmap resources: count: 2, "
+        "resources: resources, stream: stream"
+    ) in crossgl
+    assert "// HIP graphics unregister resource: image_resource" in crossgl
+    assert "// HIP graphics unregister resource: buffer_resource" in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_stream_event_lifecycle_parses_and_compiles_if_available(
     tmp_path,
 ):

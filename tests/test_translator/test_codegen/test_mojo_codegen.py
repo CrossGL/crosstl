@@ -1709,6 +1709,245 @@ def test_hlsl_rasterizer_ordered_texture_aliases_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_hlsl_rasterizer_ordered_buffer_aliases_emit_mojo_buffer_helpers():
+    code = """
+    RasterizerOrderedBuffer<uint> bins : register(u2, space1);
+    RasterizerOrderedStructuredBuffer<int> values;
+    RasterizerOrderedByteAddressBuffer rawBytes;
+    RasterizerOrderedByteAddressBuffer rawArray[2];
+
+    uint readBin(uint index) {
+        return bins.Load(index);
+    }
+    void writeBin(uint index, uint value) {
+        bins.Store(index, value);
+    }
+    int readValue(uint index) {
+        return values.Load(index);
+    }
+    void writeValue(uint index, int value) {
+        values.Store(index, value);
+    }
+    uint readRaw(uint offset) {
+        return rawBytes.Load(offset);
+    }
+    void writeRaw(uint offset, uint value) {
+        rawBytes.Store(offset, value);
+    }
+    uint3 readRaw3(uint offset) {
+        return rawBytes.Load3(offset);
+    }
+    void writeRaw4(uint offset, uint4 value) {
+        rawBytes.Store4(offset, value);
+    }
+    void queryBins(uint count) {
+        bins.GetDimensions(count);
+    }
+    uint updateRawArray(int slot, uint offset) {
+        uint previous = rawArray[slot].Load(offset);
+        rawArray[slot].Store(offset, previous + uint(1));
+        return previous;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct RWBuffer[T: AnyType]:" in generated_code
+    assert "struct RWStructuredBuffer[T: AnyType]:" in generated_code
+    assert "struct RWByteAddressBuffer:" in generated_code
+    assert "var bins: RWBuffer[UInt32] = RWBuffer[UInt32]()" in generated_code
+    assert (
+        "var values: RWStructuredBuffer[Int32] = RWStructuredBuffer[Int32]()"
+        in generated_code
+    )
+    assert "var rawBytes: RWByteAddressBuffer = RWByteAddressBuffer()" in (
+        generated_code
+    )
+    assert "InlineArray[RWByteAddressBuffer, 2]" in generated_code
+    assert (
+        "# CrossGL resource metadata: name=bins kind=buffer set=1 "
+        "binding=2 binding_source=explicit register=u2" in generated_code
+    )
+    assert (
+        "fn buffer_load(buffer: RWBuffer[UInt32], index: UInt32) -> UInt32:"
+        in generated_code
+    )
+    assert (
+        "fn buffer_store(buffer: RWBuffer[UInt32], index: UInt32, value: UInt32):"
+        in generated_code
+    )
+    assert (
+        "fn buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "fn buffer_store(buffer: RWStructuredBuffer[Int32], "
+        "index: UInt32, value: Int32):"
+    ) in generated_code
+    assert (
+        "fn buffer_load(buffer: RWByteAddressBuffer, index: UInt32) -> UInt32:"
+        in generated_code
+    )
+    assert (
+        "fn buffer_store(buffer: RWByteAddressBuffer, index: UInt32, value: UInt32):"
+        in generated_code
+    )
+    assert (
+        "fn buffer_load3(buffer: RWByteAddressBuffer, "
+        "index: UInt32) -> SIMD[DType.uint32, 4]:"
+    ) in generated_code
+    assert (
+        "fn buffer_store4(buffer: RWByteAddressBuffer, "
+        "index: UInt32, value: SIMD[DType.uint32, 4]):"
+    ) in generated_code
+    assert (
+        "fn buffer_dimensions(buffer: RWBuffer[UInt32], dimensions: UInt32):"
+        in generated_code
+    )
+    assert "return buffer_load(bins, index)" in generated_code
+    assert "buffer_store(bins, index, value)" in generated_code
+    assert "return buffer_load(values, index)" in generated_code
+    assert "buffer_store(values, index, value)" in generated_code
+    assert "return buffer_load(rawBytes, offset)" in generated_code
+    assert "buffer_store(rawBytes, offset, value)" in generated_code
+    assert "return buffer_load3(rawBytes, offset)" in generated_code
+    assert "buffer_store4(rawBytes, offset, value)" in generated_code
+    assert "buffer_dimensions(bins, count)" in generated_code
+    assert "var previous: UInt32 = buffer_load(rawArray[int(slot)], offset)" in (
+        generated_code
+    )
+    assert "buffer_store(rawArray[int(slot)], offset, (previous + UInt32(1)))" in (
+        generated_code
+    )
+    assert "RasterizerOrdered" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+    assert ".GetDimensions(" not in generated_code
+
+
+def test_hlsl_rasterizer_ordered_buffer_aliases_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    RasterizerOrderedBuffer<uint> bins : register(u2, space1);
+    RasterizerOrderedStructuredBuffer<int> values;
+    RasterizerOrderedByteAddressBuffer rawBytes;
+    RasterizerOrderedByteAddressBuffer rawArray[2];
+
+    uint readBin(uint index) {
+        return bins.Load(index);
+    }
+    void writeBin(uint index, uint value) {
+        bins.Store(index, value);
+    }
+    int readValue(uint index) {
+        return values.Load(index);
+    }
+    void writeValue(uint index, int value) {
+        values.Store(index, value);
+    }
+    uint readRaw(uint offset) {
+        return rawBytes.Load(offset);
+    }
+    void writeRaw(uint offset, uint value) {
+        rawBytes.Store(offset, value);
+    }
+    uint3 readRaw3(uint offset) {
+        return rawBytes.Load3(offset);
+    }
+    void writeRaw4(uint offset, uint4 value) {
+        rawBytes.Store4(offset, value);
+    }
+    void queryBins(uint count) {
+        bins.GetDimensions(count);
+    }
+    uint updateRawArray(int slot, uint offset) {
+        uint previous = rawArray[slot].Load(offset);
+        rawArray[slot].Store(offset, previous + uint(1));
+        return previous;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "hlsl_rasterizer_ordered_buffer_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_hlsl_typed_buffer_aliases_emit_mojo_buffer_helpers():
+    code = """
+    Buffer<float> inputValues;
+    RWBuffer<float> outputValues : register(u1, space2);
+
+    float readTyped(uint index) {
+        return inputValues.Load(index);
+    }
+    void writeTyped(uint index, float value) {
+        outputValues.Store(index, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Buffer[T: AnyType]:" in generated_code
+    assert "struct RWBuffer[T: AnyType]:" in generated_code
+    assert "var inputValues: Buffer[Float32] = Buffer[Float32]()" in generated_code
+    assert "var outputValues: RWBuffer[Float32] = RWBuffer[Float32]()" in generated_code
+    assert (
+        "# CrossGL resource metadata: name=outputValues kind=buffer set=2 "
+        "binding=1 binding_source=explicit register=u1" in generated_code
+    )
+    assert (
+        "fn buffer_load(buffer: Buffer[Float32], index: UInt32) -> Float32:"
+        in generated_code
+    )
+    assert (
+        "fn buffer_store(buffer: RWBuffer[Float32], index: UInt32, value: Float32):"
+        in generated_code
+    )
+    assert "return buffer_load(inputValues, index)" in generated_code
+    assert "buffer_store(outputValues, index, value)" in generated_code
+    assert "Buffer<" not in generated_code
+    assert "RWBuffer<" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+
+
+def test_hlsl_typed_buffer_aliases_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    Buffer<float> inputValues;
+    RWBuffer<float> outputValues : register(u1, space2);
+
+    float readTyped(uint index) {
+        return inputValues.Load(index);
+    }
+    void writeTyped(uint index, float value) {
+        outputValues.Store(index, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "hlsl_typed_buffer_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     code = """
     sampler2D colorMap;

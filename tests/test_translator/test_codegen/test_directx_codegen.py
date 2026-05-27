@@ -1837,6 +1837,56 @@ def test_directx_append_consume_buffers_reject_wrong_helpers(declaration, call, 
         generate_code(parse_code(tokenize_code(shader)))
 
 
+@pytest.mark.parametrize(
+    ("declaration", "call", "match"),
+    [
+        (
+            "RWBuffer<uint> values @register(u1);",
+            "uvec2 value = buffer_load2(values, tid.x);",
+            "DirectX buffer helper 'buffer_load2' requires "
+            "ByteAddressBuffer, RWByteAddressBuffer, or "
+            "RasterizerOrderedByteAddressBuffer resource, got RWBuffer<uint>",
+        ),
+        (
+            "RWStructuredBuffer<uint> values @register(u2);",
+            "buffer_store3(values, tid.x, uvec3(1u, 2u, 3u));",
+            "DirectX buffer helper 'buffer_store3' requires "
+            "ByteAddressBuffer, RWByteAddressBuffer, or "
+            "RasterizerOrderedByteAddressBuffer resource, got "
+            "RWStructuredBuffer<uint>",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "buffer_store2(rawBytes, tid.x * 8u, 7u);",
+            "DirectX buffer helper 'buffer_store2' requires uint2 value, got uint",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "buffer_store4(rawBytes, tid.x * 16u, uvec3(1u, 2u, 3u));",
+            "DirectX buffer helper 'buffer_store4' requires uint4 value, got uint3",
+        ),
+    ],
+)
+def test_directx_byte_address_vector_helpers_validate_resource_and_value_shape(
+    declaration, call, match
+):
+    shader = f"""
+    shader BadByteAddressVectorHelperHLSL {{
+        {declaration}
+
+        compute {{
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {{
+                {call}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 def test_structured_buffer_dimensions_lower_to_get_dimensions():
     code = """
     shader StructuredBufferDimensionsHLSL {

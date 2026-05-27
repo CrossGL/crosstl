@@ -516,6 +516,8 @@ MOJO_ATOMIC_OP_ALIASES = {
 }
 
 MOJO_TYPED_BUFFER_RESOURCE_TYPES = {
+    "Buffer",
+    "RWBuffer",
     "StructuredBuffer",
     "RWStructuredBuffer",
     "AppendStructuredBuffer",
@@ -527,16 +529,25 @@ MOJO_BYTE_ADDRESS_BUFFER_TYPES = {
     "RWByteAddressBuffer",
 }
 
+MOJO_HLSL_BUFFER_TYPE_ALIASES = {
+    "RasterizerOrderedBuffer": "RWBuffer",
+    "RasterizerOrderedStructuredBuffer": "RWStructuredBuffer",
+    "RasterizerOrderedByteAddressBuffer": "RWByteAddressBuffer",
+}
+
 MOJO_BUFFER_RESOURCE_TYPES = (
     MOJO_TYPED_BUFFER_RESOURCE_TYPES | MOJO_BYTE_ADDRESS_BUFFER_TYPES
 )
 
 MOJO_BUFFER_STORE_RESOURCE_TYPES = {
+    "RWBuffer",
     "RWStructuredBuffer",
     "RWByteAddressBuffer",
 }
 
 MOJO_BUFFER_LOAD_RESOURCE_TYPES = {
+    "Buffer",
+    "RWBuffer",
     "StructuredBuffer",
     "RWStructuredBuffer",
     "ByteAddressBuffer",
@@ -544,6 +555,8 @@ MOJO_BUFFER_LOAD_RESOURCE_TYPES = {
 }
 
 MOJO_TYPED_BUFFER_LOAD_RESOURCE_TYPES = {
+    "Buffer",
+    "RWBuffer",
     "StructuredBuffer",
     "RWStructuredBuffer",
 }
@@ -1195,15 +1208,20 @@ class MojoCodeGen:
     def buffer_resource_info(self, type_name):
         generic = self.parse_generic_type_name(self.type_name(type_name))
         if generic is None:
-            type_name = self.type_name(type_name)
+            type_name = self.canonical_buffer_resource_type(type_name)
             if type_name in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
                 return type_name, None
             return None
 
         base_type, generic_args = generic
+        base_type = self.canonical_buffer_resource_type(base_type)
         if base_type not in MOJO_TYPED_BUFFER_RESOURCE_TYPES or not generic_args:
             return None
         return base_type, generic_args[0]
+
+    def canonical_buffer_resource_type(self, base_type):
+        base_name = self.type_name(base_type)
+        return MOJO_HLSL_BUFFER_TYPE_ALIASES.get(base_name, base_name)
 
     def resource_type_alias(self, type_name):
         type_name = self.type_name(type_name)
@@ -1260,11 +1278,13 @@ class MojoCodeGen:
         return MOJO_SCALAR_DTYPES.get(type_name)
 
     def mapped_buffer_type(self, buffer_type, element_type=None):
+        buffer_type = self.canonical_buffer_resource_type(buffer_type)
         if buffer_type in MOJO_TYPED_BUFFER_RESOURCE_TYPES and element_type is not None:
             return f"{buffer_type}[{self.map_type(element_type)}]"
         return buffer_type
 
     def register_buffer_resource_type(self, buffer_type):
+        buffer_type = self.canonical_buffer_resource_type(buffer_type)
         if buffer_type in MOJO_BUFFER_RESOURCE_TYPES:
             self.required_buffer_resource_types.add(buffer_type)
 

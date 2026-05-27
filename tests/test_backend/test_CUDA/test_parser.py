@@ -22,6 +22,7 @@ from crosstl.backend.CUDA.CudaAst import (
     RangeForNode,
     ReturnNode,
     ShaderNode,
+    SharedMemoryNode,
     SyncNode,
     SwitchNode,
     TernaryOpNode,
@@ -1582,6 +1583,80 @@ class TestCudaParser:
         assert isinstance(wait_prior, FunctionCallNode)
         assert wait_prior.name == "cooperative_groups::wait_prior<1>"
         assert wait_prior.args == ["block"]
+
+    def test_cuda_barrier_pipeline_async_copy_parsing(self):
+        """Test parsing CUDA barrier/pipeline async copy helpers."""
+        code = """
+        __global__ void kernel(int* shared, const int* global) {
+            __shared__ cuda::pipeline_shared_state<cuda::thread_scope_block, 2> state;
+            cuda::barrier<cuda::thread_scope_block> blockBarrier;
+            init(&blockBarrier, blockDim.x);
+            cuda::memcpy_async(
+                shared,
+                global,
+                sizeof(int) * blockDim.x,
+                blockBarrier
+            );
+            auto pipe = cuda::make_pipeline();
+            pipe.producer_acquire();
+            cuda::memcpy_async(shared, global, 16, pipe);
+            pipe.consumer_wait();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.kernels[0].body
+        assert isinstance(body[0], SharedMemoryNode)
+        assert (
+            body[0].vtype == "cuda::pipeline_shared_state<cuda::thread_scope_block, 2>"
+        )
+        assert body[0].name == "state"
+
+        barrier = body[1]
+        assert isinstance(barrier, VariableNode)
+        assert barrier.vtype == "cuda::barrier<cuda::thread_scope_block>"
+        assert barrier.name == "blockBarrier"
+
+        init_call = body[2]
+        assert isinstance(init_call, FunctionCallNode)
+        assert init_call.name == "init"
+        assert isinstance(init_call.args[0], UnaryOpNode)
+        assert init_call.args[0].op == "&"
+        assert init_call.args[0].operand == "blockBarrier"
+        assert isinstance(init_call.args[1], CudaBuiltinNode)
+
+        barrier_copy = body[3]
+        assert isinstance(barrier_copy, FunctionCallNode)
+        assert barrier_copy.name == "cuda::memcpy_async"
+        assert barrier_copy.args[0:2] == ["shared", "global"]
+        assert isinstance(barrier_copy.args[2], BinaryOpNode)
+        assert barrier_copy.args[3] == "blockBarrier"
+
+        pipe = body[4]
+        assert isinstance(pipe, VariableNode)
+        assert pipe.vtype == "auto"
+        assert isinstance(pipe.value, FunctionCallNode)
+        assert pipe.value.name == "cuda::make_pipeline"
+
+        acquire = body[5]
+        assert isinstance(acquire, FunctionCallNode)
+        assert isinstance(acquire.name, MemberAccessNode)
+        assert acquire.name.object == "pipe"
+        assert acquire.name.member == "producer_acquire"
+
+        pipeline_copy = body[6]
+        assert isinstance(pipeline_copy, FunctionCallNode)
+        assert pipeline_copy.name == "cuda::memcpy_async"
+        assert pipeline_copy.args == ["shared", "global", "16", "pipe"]
+
+        wait = body[7]
+        assert isinstance(wait, FunctionCallNode)
+        assert isinstance(wait.name, MemberAccessNode)
+        assert wait.name.object == "pipe"
+        assert wait.name.member == "consumer_wait"
 
     def test_fixed_arrays_and_initializer_lists_parsing(self):
         """Test fixed arrays and brace initializer lists"""
