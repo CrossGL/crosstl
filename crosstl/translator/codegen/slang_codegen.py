@@ -6268,12 +6268,23 @@ class SlangCodeGen:
             )
 
         texture_name, coord, extra_args = sample_args
+        coord_node = args[self.sampled_texture_coord_index(args)]
+        coord_reason = self.sampled_texture_coordinate_rank_unsupported_reason(
+            args[0], coord_node
+        )
+        if coord_reason:
+            return self.unsupported_texture_offset_call(func_name, coord_reason)
 
         if func_name == "textureOffset":
             if len(extra_args) != 1:
                 return self.unsupported_texture_offset_call(
                     func_name, "requires one offset argument"
                 )
+            offset_reason = self.texture_offset_rank_unsupported_reason(
+                args[0], extra_args[0]
+            )
+            if offset_reason:
+                return self.unsupported_texture_offset_call(func_name, offset_reason)
             offset = self.generate_expression(extra_args[0])
             return f"{texture_name}.Sample({coord}, {offset})"
 
@@ -6282,6 +6293,11 @@ class SlangCodeGen:
                 return self.unsupported_texture_offset_call(
                     func_name, "requires lod and offset arguments"
                 )
+            offset_reason = self.texture_offset_rank_unsupported_reason(
+                args[0], extra_args[1]
+            )
+            if offset_reason:
+                return self.unsupported_texture_offset_call(func_name, offset_reason)
             lod = self.generate_expression(extra_args[0])
             offset = self.generate_expression(extra_args[1])
             return f"{texture_name}.SampleLevel({coord}, {lod}, {offset})"
@@ -6290,6 +6306,16 @@ class SlangCodeGen:
             return self.unsupported_texture_offset_call(
                 func_name, "requires gradient x, gradient y, and offset arguments"
             )
+        grad_reason = self.texture_gradient_rank_unsupported_reason(
+            args[0], extra_args[0]
+        ) or self.texture_gradient_rank_unsupported_reason(args[0], extra_args[1])
+        if grad_reason:
+            return self.unsupported_texture_offset_call(func_name, grad_reason)
+        offset_reason = self.texture_offset_rank_unsupported_reason(
+            args[0], extra_args[2]
+        )
+        if offset_reason:
+            return self.unsupported_texture_offset_call(func_name, offset_reason)
         ddx = self.generate_expression(extra_args[0])
         ddy = self.generate_expression(extra_args[1])
         offset = self.generate_expression(extra_args[2])
@@ -6332,9 +6358,23 @@ class SlangCodeGen:
 
         if func_name == "textureProjOffset":
             if len(extra_args) == 1:
+                offset_reason = self.texture_offset_rank_unsupported_reason(
+                    args[0], extra_args[0]
+                )
+                if offset_reason:
+                    return self.unsupported_texture_projected_call(
+                        func_name, offset_reason
+                    )
                 offset = self.generate_expression(extra_args[0])
                 return f"{texture_name}.Sample({projected_coord}, {offset})"
             if len(extra_args) == 2:
+                offset_reason = self.texture_offset_rank_unsupported_reason(
+                    args[0], extra_args[0]
+                )
+                if offset_reason:
+                    return self.unsupported_texture_projected_call(
+                        func_name, offset_reason
+                    )
                 offset = self.generate_expression(extra_args[0])
                 bias = self.generate_expression(extra_args[1])
                 return f"{texture_name}.SampleBias({projected_coord}, {bias}, {offset})"
@@ -6355,6 +6395,11 @@ class SlangCodeGen:
                 return self.unsupported_texture_projected_call(
                     func_name, "requires lod and offset arguments"
                 )
+            offset_reason = self.texture_offset_rank_unsupported_reason(
+                args[0], extra_args[1]
+            )
+            if offset_reason:
+                return self.unsupported_texture_projected_call(func_name, offset_reason)
             lod = self.generate_expression(extra_args[0])
             offset = self.generate_expression(extra_args[1])
             return f"{texture_name}.SampleLevel({projected_coord}, {lod}, {offset})"
@@ -6364,6 +6409,11 @@ class SlangCodeGen:
                 return self.unsupported_texture_projected_call(
                     func_name, "requires gradient x and gradient y arguments"
                 )
+            grad_reason = self.texture_gradient_rank_unsupported_reason(
+                args[0], extra_args[0]
+            ) or self.texture_gradient_rank_unsupported_reason(args[0], extra_args[1])
+            if grad_reason:
+                return self.unsupported_texture_projected_call(func_name, grad_reason)
             ddx = self.generate_expression(extra_args[0])
             ddy = self.generate_expression(extra_args[1])
             return f"{texture_name}.SampleGrad({projected_coord}, {ddx}, {ddy})"
@@ -6372,6 +6422,16 @@ class SlangCodeGen:
             return self.unsupported_texture_projected_call(
                 func_name, "requires gradient x, gradient y, and offset arguments"
             )
+        grad_reason = self.texture_gradient_rank_unsupported_reason(
+            args[0], extra_args[0]
+        ) or self.texture_gradient_rank_unsupported_reason(args[0], extra_args[1])
+        if grad_reason:
+            return self.unsupported_texture_projected_call(func_name, grad_reason)
+        offset_reason = self.texture_offset_rank_unsupported_reason(
+            args[0], extra_args[2]
+        )
+        if offset_reason:
+            return self.unsupported_texture_projected_call(func_name, offset_reason)
         ddx = self.generate_expression(extra_args[0])
         ddy = self.generate_expression(extra_args[1])
         offset = self.generate_expression(extra_args[2])
@@ -6433,6 +6493,12 @@ class SlangCodeGen:
             )
 
         texture_name, coord, extra_args = gather_args
+        coord_node = args[self.sampled_texture_coord_index(args)]
+        coord_reason = self.sampled_texture_coordinate_rank_unsupported_reason(
+            args[0], coord_node
+        )
+        if coord_reason:
+            return self.unsupported_texture_gather_call(func_name, coord_reason)
         offset_args = []
         component_arg = None
 
@@ -6448,10 +6514,20 @@ class SlangCodeGen:
                 return self.unsupported_texture_gather_call(
                     func_name, "requires offset and optional component arguments"
                 )
+            offset_reason = self.gather_offset_rank_unsupported_reason(
+                args[0], extra_args[0]
+            )
+            if offset_reason:
+                return self.unsupported_texture_gather_call(func_name, offset_reason)
             offset_args = [extra_args[0]]
             if len(extra_args) == 2:
                 component_arg = extra_args[1]
         else:
+            offsets_reason = self.gather_offsets_rank_unsupported_reason(
+                args[0], extra_args
+            )
+            if offsets_reason:
+                return self.unsupported_texture_gather_call(func_name, offsets_reason)
             offset_args, component_arg = self.texture_gather_offsets_args(extra_args)
             if offset_args is None:
                 return self.unsupported_texture_gather_call(
@@ -6535,6 +6611,17 @@ class SlangCodeGen:
             return self.unsupported_texture_compare_call(
                 func_name, "requires a shadow sampler resource"
             )
+        coord_index = self.sampled_texture_coord_index(args)
+        coord_reason = self.shadow_compare_coordinate_rank_unsupported_reason(
+            args[0], args[coord_index]
+        )
+        if coord_reason:
+            return self.unsupported_texture_compare_call(func_name, coord_reason)
+        compare_reason = self.compare_reference_rank_unsupported_reason(
+            args[coord_index + 1]
+        )
+        if compare_reason:
+            return self.unsupported_texture_compare_call(func_name, compare_reason)
 
         if func_name == "textureCompare":
             if extra_args:
@@ -6548,6 +6635,11 @@ class SlangCodeGen:
                 return self.unsupported_texture_compare_call(
                     func_name, "requires one offset argument"
                 )
+            offset_reason = self.shadow_compare_offset_rank_unsupported_reason(
+                args[0], extra_args[0]
+            )
+            if offset_reason:
+                return self.unsupported_texture_compare_call(func_name, offset_reason)
             offset = self.generate_expression(extra_args[0])
             return f"{texture_name}.SampleCmp({coord}, {compare}, {offset})"
 
@@ -6563,6 +6655,13 @@ class SlangCodeGen:
             return self.unsupported_texture_compare_call(
                 func_name, "requires gradient x and gradient y arguments"
             )
+        grad_reason = self.shadow_compare_gradient_rank_unsupported_reason(
+            args[0], extra_args[0]
+        ) or self.shadow_compare_gradient_rank_unsupported_reason(
+            args[0], extra_args[1]
+        )
+        if grad_reason:
+            return self.unsupported_texture_compare_call(func_name, grad_reason)
         ddx = self.generate_expression(extra_args[0])
         ddy = self.generate_expression(extra_args[1])
         return f"{texture_name}.SampleCmpGrad({coord}, {compare}, {ddx}, {ddy})"
@@ -6579,6 +6678,19 @@ class SlangCodeGen:
             return self.unsupported_texture_gather_compare_call(
                 func_name, "requires a shadow sampler resource"
             )
+        coord_index = self.sampled_texture_coord_index(args)
+        coord_reason = self.shadow_compare_coordinate_rank_unsupported_reason(
+            args[0], args[coord_index]
+        )
+        if coord_reason:
+            return self.unsupported_texture_gather_compare_call(func_name, coord_reason)
+        compare_reason = self.compare_reference_rank_unsupported_reason(
+            args[coord_index + 1]
+        )
+        if compare_reason:
+            return self.unsupported_texture_gather_compare_call(
+                func_name, compare_reason
+            )
 
         if func_name == "textureGatherCompare":
             if extra_args:
@@ -6590,6 +6702,13 @@ class SlangCodeGen:
         if len(extra_args) != 1:
             return self.unsupported_texture_gather_compare_call(
                 func_name, "requires one offset argument"
+            )
+        offset_reason = self.shadow_compare_offset_rank_unsupported_reason(
+            args[0], extra_args[0]
+        )
+        if offset_reason:
+            return self.unsupported_texture_gather_compare_call(
+                func_name, offset_reason
             )
         offset = self.generate_expression(extra_args[0])
         return f"{texture_name}.GatherCmp({coord}, {compare}, {offset})"
@@ -6603,6 +6722,188 @@ class SlangCodeGen:
         coord = self.generate_expression(args[coord_index])
         compare = self.generate_expression(args[coord_index + 1])
         return texture_name, coord, compare, args[coord_index + 2 :]
+
+    def sampled_texture_coordinate_rank_unsupported_reason(self, texture_node, coord):
+        resource_type = self.resource_base_type(self.get_expression_type(texture_node))
+        expected_rank = self.sampled_texture_coordinate_rank(resource_type)
+        return self.texture_rank_unsupported_reason(
+            coord, expected_rank, resource_type, "coordinate"
+        )
+
+    def texture_offset_rank_unsupported_reason(self, texture_node, offset):
+        resource_type = self.resource_base_type(self.get_expression_type(texture_node))
+        if resource_type is None:
+            return None
+        expected_rank = self.texture_offset_rank(resource_type)
+        if expected_rank is None:
+            return "requires an offset-capable sampler1D/2D/3D texture resource"
+        return self.texture_rank_unsupported_reason(
+            offset, expected_rank, resource_type, "offset"
+        )
+
+    def texture_gradient_rank_unsupported_reason(self, texture_node, gradient):
+        resource_type = self.resource_base_type(self.get_expression_type(texture_node))
+        expected_rank = self.texture_gradient_rank(resource_type)
+        return self.texture_rank_unsupported_reason(
+            gradient, expected_rank, resource_type, "gradient"
+        )
+
+    def gather_offset_rank_unsupported_reason(self, texture_node, offset):
+        resource_type = self.resource_base_type(self.get_expression_type(texture_node))
+        if resource_type is None:
+            return None
+        expected_rank = self.gather_offset_rank(resource_type)
+        if expected_rank is None:
+            return "requires a gather-offset-capable sampler2D/2DArray texture resource"
+        return self.texture_rank_unsupported_reason(
+            offset, expected_rank, resource_type, "offset"
+        )
+
+    def gather_offsets_rank_unsupported_reason(self, texture_node, extra_args):
+        resource_type = self.resource_base_type(self.get_expression_type(texture_node))
+        if resource_type is None:
+            return None
+        expected_rank = self.gather_offset_rank(resource_type)
+        if expected_rank is None:
+            return "requires a gather-offset-capable sampler2D/2DArray texture resource"
+
+        if len(extra_args) in {1, 2} and self.is_array_expression(extra_args[0]):
+            return self.texture_rank_unsupported_reason(
+                extra_args[0],
+                expected_rank,
+                resource_type,
+                "offset",
+                array_element=True,
+            )
+        if len(extra_args) in {4, 5}:
+            for offset in extra_args[:4]:
+                reason = self.texture_rank_unsupported_reason(
+                    offset, expected_rank, resource_type, "offset"
+                )
+                if reason:
+                    return reason
+        return None
+
+    def shadow_compare_coordinate_rank_unsupported_reason(self, texture_node, coord):
+        resource_type = self.resource_base_type(self.get_expression_type(texture_node))
+        expected_rank = self.shadow_compare_coordinate_rank(resource_type)
+        return self.texture_rank_unsupported_reason(
+            coord, expected_rank, resource_type, "coordinate"
+        )
+
+    def shadow_compare_offset_rank_unsupported_reason(self, texture_node, offset):
+        resource_type = self.resource_base_type(self.get_expression_type(texture_node))
+        if resource_type is None:
+            return None
+        expected_rank = self.shadow_compare_offset_rank(resource_type)
+        if expected_rank is None:
+            return "requires an offset-capable sampler2DShadow/2DArrayShadow resource"
+        return self.texture_rank_unsupported_reason(
+            offset, expected_rank, resource_type, "offset"
+        )
+
+    def shadow_compare_gradient_rank_unsupported_reason(self, texture_node, gradient):
+        resource_type = self.resource_base_type(self.get_expression_type(texture_node))
+        expected_rank = self.shadow_compare_gradient_rank(resource_type)
+        return self.texture_rank_unsupported_reason(
+            gradient, expected_rank, resource_type, "gradient"
+        )
+
+    def compare_reference_rank_unsupported_reason(self, compare):
+        compare_rank = self.expression_value_rank(compare)
+        if compare_rank is None or compare_rank == 1:
+            return None
+        return "requires a scalar compare reference"
+
+    def texture_rank_unsupported_reason(
+        self, node, expected_rank, resource_type, role, array_element=False
+    ):
+        if expected_rank is None or resource_type is None:
+            return None
+        actual_rank = self.expression_value_rank(node, array_element=array_element)
+        if actual_rank is None or actual_rank == expected_rank:
+            return None
+        return (
+            f"requires {self.texture_rank_phrase(expected_rank, role)} "
+            f"for {resource_type}"
+        )
+
+    def texture_rank_phrase(self, rank, role):
+        if rank == 1:
+            return f"a scalar {role}"
+        return f"a {rank}-component {role}"
+
+    def expression_value_rank(self, node, array_element=False):
+        type_name = self.type_name_string(self.expression_result_type(node))
+        if not type_name:
+            return None
+        if array_element and "[" in type_name and "]" in type_name:
+            type_name, _suffix = split_array_type_suffix(type_name)
+        if self.is_scalar_value_type(type_name):
+            return 1
+        info = self.vector_value_info(type_name)
+        if info is None:
+            return None
+        return info["size"]
+
+    def sampled_texture_coordinate_rank(self, resource_type):
+        return {
+            "sampler1D": 1,
+            "sampler1DArray": 2,
+            "sampler2D": 2,
+            "sampler2DArray": 3,
+            "sampler3D": 3,
+            "samplerCube": 3,
+            "samplerCubeArray": 4,
+        }.get(resource_type)
+
+    def texture_offset_rank(self, resource_type):
+        return {
+            "sampler1D": 1,
+            "sampler1DArray": 1,
+            "sampler2D": 2,
+            "sampler2DArray": 2,
+            "sampler3D": 3,
+        }.get(resource_type)
+
+    def texture_gradient_rank(self, resource_type):
+        return {
+            "sampler1D": 1,
+            "sampler1DArray": 1,
+            "sampler2D": 2,
+            "sampler2DArray": 2,
+            "sampler3D": 3,
+            "samplerCube": 3,
+            "samplerCubeArray": 3,
+        }.get(resource_type)
+
+    def gather_offset_rank(self, resource_type):
+        return {
+            "sampler2D": 2,
+            "sampler2DArray": 2,
+        }.get(resource_type)
+
+    def shadow_compare_coordinate_rank(self, resource_type):
+        return {
+            "sampler2DShadow": 2,
+            "sampler2DArrayShadow": 3,
+            "samplerCubeShadow": 3,
+            "samplerCubeArrayShadow": 4,
+        }.get(resource_type)
+
+    def shadow_compare_offset_rank(self, resource_type):
+        return {
+            "sampler2DShadow": 2,
+            "sampler2DArrayShadow": 2,
+        }.get(resource_type)
+
+    def shadow_compare_gradient_rank(self, resource_type):
+        return {
+            "sampler2DShadow": 2,
+            "sampler2DArrayShadow": 2,
+            "samplerCubeShadow": 3,
+            "samplerCubeArrayShadow": 3,
+        }.get(resource_type)
 
     def is_shadow_compare_resource(self, node):
         resource_type = self.resource_base_type(self.get_expression_type(node))

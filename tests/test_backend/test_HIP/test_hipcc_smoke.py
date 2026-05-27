@@ -131,6 +131,62 @@ def test_native_hip_texture_surface_smoke_parses_and_compiles_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_texture_fetch_modes_parse_and_compile_if_available(
+    tmp_path,
+):
+    """Smoke native HIP texture fetch intrinsics across 1D, 2D, and 3D modes."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    __global__ void texture_fetch_modes(
+        hipTextureObject_t ramp,
+        hipTextureObject_t tex,
+        hipTextureObject_t volume,
+        float4* out
+    ) {
+        float2 uv = make_float2(0.25f, 0.75f);
+        float3 uvw = make_float3(0.25f, 0.5f, 0.75f);
+        float sample1D = tex1Dfetch<float>(ramp, threadIdx.x);
+        float4 sample2D = tex2D<float4>(tex, uv.x, uv.y);
+        float4 sample3D = tex3D<float4>(volume, uvw.x, uvw.y, uvw.z);
+        out[threadIdx.x] = make_float4(
+            sample1D,
+            sample2D.x,
+            sample3D.y,
+            sample2D.w
+        );
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    assert "// Kernel: texture_fetch_modes" in crossgl
+    assert "sampler1D ramp" in crossgl
+    assert "sampler2D tex" in crossgl
+    assert "sampler3D volume" in crossgl
+    assert (
+        "@group(0) @binding(3) var<storage, read_write> out: array<vec4<f32>>"
+        in crossgl
+    )
+    assert "var uv: vec2<f32> = vec2<f32>(0.25f, 0.75f);" in crossgl
+    assert "var uvw: vec3<f32> = vec3<f32>(0.25f, 0.5f, 0.75f);" in crossgl
+    assert "var sample1D: f32 = texelFetch(ramp, gl_LocalInvocationID.x, 0);" in crossgl
+    assert "var sample2D: vec4<f32> = texture(tex, vec2<f32>(uv.x, uv.y));" in crossgl
+    assert (
+        "var sample3D: vec4<f32> = texture("
+        "volume, vec3<f32>(uvw.x, uvw.y, uvw.z));" in crossgl
+    )
+    assert (
+        "out[gl_LocalInvocationID.x] = vec4<f32>("
+        "sample1D, sample2D.x, sample3D.y, sample2D.w);" in crossgl
+    )
+    assert "tex1Dfetch<" not in crossgl
+    assert "tex2D<" not in crossgl
+    assert "tex3D<" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_texture_surface_lifecycle_parses_and_compiles_if_available(
     tmp_path,
 ):

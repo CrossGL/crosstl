@@ -1148,13 +1148,11 @@ class HLSLParser:
                 self.eat("RPAREN")
 
                 if isinstance(expr, MemberAccessNode) and isinstance(expr.member, str):
-                    if expr.member in ["Sample", "SampleLevel"] and len(args) >= 2:
-                        lod = (
-                            args[2]
-                            if expr.member == "SampleLevel" and len(args) > 2
-                            else None
-                        )
-                        expr = TextureSampleNode(expr.object, args[0], args[1], lod)
+                    if expr.member == "Sample" and len(args) == 2:
+                        expr = TextureSampleNode(expr.object, args[0], args[1])
+                        continue
+                    if expr.member == "SampleLevel" and len(args) == 3:
+                        expr = TextureSampleNode(expr.object, args[0], args[1], args[2])
                         continue
                 expr = FunctionCallNode(expr, args)
             elif self.current_token[0] in ["INCREMENT", "DECREMENT"]:

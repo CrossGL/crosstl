@@ -5675,9 +5675,12 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
 
         compute {
             void main() {
+                float scalarCoord = 0.25;
                 vec2 uv = vec2(0.25, 0.75);
+                vec3 badUv = vec3(0.25, 0.75, 0.5);
                 vec2 ddx = vec2(0.1, 0.0);
                 ivec2 offset = ivec2(1, 0);
+                ivec3 badOffset = ivec3(1, 0, 0);
                 vec4 missingOffset = textureOffset(colorMap, uv);
                 vec4 missingLodOffset = textureLodOffset(colorMap, uv, offset);
                 vec4 missingGradOffset = textureGradOffset(colorMap, uv, ddx, offset);
@@ -5691,6 +5694,15 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
                     offset
                 );
                 vec4 multisampleOffset = textureOffset(msTex, uv, offset);
+                vec4 badCoordRank = textureOffset(colorMap, scalarCoord, offset);
+                vec4 badOffsetRank = textureLodOffset(colorMap, uv, 1.0, badOffset);
+                vec4 badGradRank = textureGradOffset(
+                    colorMap,
+                    uv,
+                    badUv,
+                    ddx,
+                    offset
+                );
             }
         }
     }
@@ -5733,6 +5745,21 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
         "float4 multisampleOffset = /* unsupported Slang texture offset: "
         "textureOffset requires a non-shadow non-multisampled sampled texture "
         "resource */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badCoordRank = /* unsupported Slang texture offset: "
+        "textureOffset requires a 2-component coordinate for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badOffsetRank = /* unsupported Slang texture offset: "
+        "textureLodOffset requires a 2-component offset for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badGradRank = /* unsupported Slang texture offset: "
+        "textureGradOffset requires a 2-component gradient for sampler2D */ "
+        "float4(0.0);" in generated_code
     )
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code
@@ -5868,7 +5895,9 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
                 vec2 uv = vec2(0.25, 0.75);
                 vec3 uvq = vec3(0.25, 0.75, 1.0);
                 vec2 ddx = vec2(0.1, 0.0);
+                vec3 badDdx = vec3(0.1, 0.0, 0.0);
                 ivec2 offset = ivec2(1, 0);
+                ivec3 badOffset = ivec3(1, 0, 0);
                 vec4 badCoord = textureProj(colorMap, uv);
                 vec4 samplerProjected = textureProj(querySampler, uvq);
                 vec4 imageProjected = textureProj(colorImage, uvq);
@@ -5880,6 +5909,13 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
                     colorMap,
                     uvq,
                     ddx,
+                    ddx
+                );
+                vec4 badProjectedOffset = textureProjOffset(colorMap, uvq, badOffset);
+                vec4 badProjectedGrad = textureProjGrad(
+                    colorMap,
+                    uvq,
+                    badDdx,
                     ddx
                 );
             }
@@ -5930,7 +5966,18 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
         "textureProjGradOffset requires gradient x, gradient y, and offset arguments */ "
         "float4(0.0);" in generated_code
     )
+    assert (
+        "float4 badProjectedOffset = /* unsupported Slang projected texture: "
+        "textureProjOffset requires a 2-component offset for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badProjectedGrad = /* unsupported Slang projected texture: "
+        "textureProjGrad requires a 2-component gradient for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
     assert "textureProj(" not in generated_code
+    assert "textureProjOffset(" not in generated_code
     assert "textureProjLod(" not in generated_code
     assert "textureProjGrad(" not in generated_code
     assert "textureProjGradOffset(" not in generated_code
@@ -6139,8 +6186,11 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
             vec4 gatherDiagnostics(
                 sampler2d tex,
                 vec2 uv,
-                ivec2 offset
+                ivec2 offset,
+                ivec3 badOffset,
+                ivec3 badOffsetArray[4]
             ) {
+                float scalarCoord = 0.25;
                 vec4 badComponent = textureGather(tex, uv, 4);
                 vec4 missingOffset = textureGatherOffset(tex, uv);
                 vec4 badOffsets = textureGatherOffsets(tex, uv, offset);
@@ -6148,6 +6198,9 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
                 vec4 imageGather = textureGather(colorImage, uv);
                 vec4 shadowGather = textureGather(shadowMap, uv);
                 vec4 multisampleGather = textureGather(msTex, uv);
+                vec4 badCoordRank = textureGather(tex, scalarCoord);
+                vec4 badOffsetRank = textureGatherOffset(tex, uv, badOffset);
+                vec4 badOffsetsRank = textureGatherOffsets(tex, uv, badOffsetArray);
                 return badComponent + missingOffset + badOffsets;
             }
 
@@ -6194,6 +6247,21 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
         "float4 multisampleGather = /* unsupported Slang texture gather: "
         "textureGather requires a non-shadow non-multisampled sampled texture "
         "resource */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badCoordRank = /* unsupported Slang texture gather: "
+        "textureGather requires a 2-component coordinate for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badOffsetRank = /* unsupported Slang texture gather: "
+        "textureGatherOffset requires a 2-component offset for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badOffsetsRank = /* unsupported Slang texture gather: "
+        "textureGatherOffsets requires a 2-component offset for sampler2D */ "
+        "float4(0.0);" in generated_code
     )
     assert "textureGather(" not in generated_code
     assert "textureGatherOffset(" not in generated_code
@@ -6307,8 +6375,13 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
 
         compute {
             void main() {
+                float scalarCoord = 0.25;
                 vec2 uv = vec2(0.25, 0.75);
+                vec3 badUv = vec3(0.25, 0.75, 0.5);
                 vec2 ddx = vec2(0.1, 0.0);
+                vec3 badDdx = vec3(0.1, 0.0, 0.0);
+                vec2 badDepth = vec2(0.5, 0.25);
+                ivec3 badOffset = ivec3(1, 0, 0);
                 float badResource = textureCompare(colorMap, uv, 0.5);
                 float samplerCompare = textureCompare(querySampler, uv, 0.5);
                 float imageCompare = textureCompare(colorImage, uv, 0.5);
@@ -6321,6 +6394,31 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
                     shadowMap,
                     uv,
                     0.5
+                );
+                float badCoordRank = textureCompare(shadowMap, scalarCoord, 0.5);
+                float badCompareRank = textureCompare(shadowMap, uv, badDepth);
+                float badOffsetRank = textureCompareOffset(
+                    shadowMap,
+                    uv,
+                    0.5,
+                    badOffset
+                );
+                float badGradRank = textureCompareGrad(
+                    shadowMap,
+                    uv,
+                    0.5,
+                    badDdx,
+                    ddx
+                );
+                vec4 badGatherCoordRank = textureGatherCompare(
+                    shadowMap,
+                    badUv,
+                    0.5
+                );
+                vec4 badGatherCompareRank = textureGatherCompare(
+                    shadowMap,
+                    uv,
+                    badDepth
                 );
             }
         }
@@ -6371,7 +6469,37 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
         "textureGatherCompareOffset requires one offset argument */ float4(0.0);"
         in generated_code
     )
+    assert (
+        "float badCoordRank = /* unsupported Slang shadow compare: "
+        "textureCompare requires a 2-component coordinate for sampler2DShadow */ 0.0;"
+        in generated_code
+    )
+    assert (
+        "float badCompareRank = /* unsupported Slang shadow compare: "
+        "textureCompare requires a scalar compare reference */ 0.0;" in generated_code
+    )
+    assert (
+        "float badOffsetRank = /* unsupported Slang shadow compare: "
+        "textureCompareOffset requires a 2-component offset for sampler2DShadow */ "
+        "0.0;" in generated_code
+    )
+    assert (
+        "float badGradRank = /* unsupported Slang shadow compare: "
+        "textureCompareGrad requires a 2-component gradient for sampler2DShadow */ "
+        "0.0;" in generated_code
+    )
+    assert (
+        "float4 badGatherCoordRank = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompare requires a 2-component coordinate for sampler2DShadow */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badGatherCompareRank = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompare requires a scalar compare reference */ float4(0.0);"
+        in generated_code
+    )
     assert "textureCompare(" not in generated_code
+    assert "textureCompareOffset(" not in generated_code
     assert "textureCompareLod(" not in generated_code
     assert "textureCompareGrad(" not in generated_code
     assert "textureGatherCompare(" not in generated_code

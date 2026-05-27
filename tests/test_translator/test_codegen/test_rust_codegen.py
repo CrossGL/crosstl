@@ -40,6 +40,7 @@ from crosstl.translator.ast import (
     EnumVariantNode,
     TernaryOpNode,
     VariableNode,
+    WhileNode,
 )
 from crosstl.translator.codegen.rust_codegen import RustCodeGen
 from typing import List
@@ -6129,6 +6130,181 @@ def test_array_branch_target_types_and_non_copy_clones_compile(tmp_path):
     assert "left.clone() } else { right.clone() });" in generated_code
     assert "return (if flag { left.clone()" not in generated_code
     assert "[[1, 2]" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_block_tail_and_loop_carried_contexts_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+
+    def identity_call(name):
+        return FunctionCallNode(
+            IdentifierNode("identity_payload_matrix"),
+            [IdentifierNode(name)],
+        )
+
+    def bool_match_with_block_tails(true_tail, false_tail):
+        return MatchNode(
+            IdentifierNode("flag"),
+            [
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(True, PrimitiveType("bool"))),
+                    None,
+                    [
+                        VariableNode(
+                            "marker",
+                            PrimitiveType("int"),
+                            LiteralNode(1, PrimitiveType("int")),
+                        ),
+                        ExpressionStatementNode(
+                            true_tail,
+                            is_tail_expression=True,
+                        ),
+                    ],
+                ),
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(False, PrimitiveType("bool"))),
+                    None,
+                    [
+                        VariableNode(
+                            "marker",
+                            PrimitiveType("int"),
+                            LiteralNode(2, PrimitiveType("int")),
+                        ),
+                        ExpressionStatementNode(
+                            false_tail,
+                            is_tail_expression=True,
+                        ),
+                    ],
+                ),
+            ],
+        )
+
+    ast = ShaderNode(
+        "ArrayBlockTailAndLoopContexts",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "identity_payload_matrix",
+                payload_matrix_type,
+                [ParameterNode("matrix", payload_matrix_type)],
+                [ReturnNode(IdentifierNode("matrix"))],
+            ),
+            FunctionNode(
+                "local_match_block_tail",
+                payload_matrix_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("left", payload_matrix_type),
+                    ParameterNode("right", payload_matrix_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        payload_matrix_type,
+                        bool_match_with_block_tails(
+                            identity_call("left"),
+                            identity_call("right"),
+                        ),
+                    ),
+                    ReturnNode(IdentifierNode("selected")),
+                ],
+            ),
+            FunctionNode(
+                "return_match_block_tail",
+                payload_matrix_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("left", payload_matrix_type),
+                    ParameterNode("right", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        bool_match_with_block_tails(
+                            identity_call("left"),
+                            identity_call("right"),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "loop_carried_payload_matrix",
+                payload_matrix_type,
+                [
+                    ParameterNode("left", payload_matrix_type),
+                    ParameterNode("right", payload_matrix_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        payload_matrix_type,
+                        identity_call("left"),
+                    ),
+                    VariableNode(
+                        "i",
+                        PrimitiveType("int"),
+                        LiteralNode(0, PrimitiveType("int")),
+                    ),
+                    WhileNode(
+                        BinaryOpNode(
+                            IdentifierNode("i"),
+                            "<",
+                            LiteralNode(2, PrimitiveType("int")),
+                        ),
+                        [
+                            AssignmentNode(
+                                IdentifierNode("selected"),
+                                identity_call("right"),
+                            ),
+                            AssignmentNode(
+                                IdentifierNode("i"),
+                                BinaryOpNode(
+                                    IdentifierNode("i"),
+                                    "+",
+                                    LiteralNode(1, PrimitiveType("int")),
+                                ),
+                            ),
+                        ],
+                    ),
+                    ReturnNode(IdentifierNode("selected")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "let selected: [[Payload; 2]; 2] = match flag {" in generated_code
+    assert "let marker: i32 = 1;" in generated_code
+    assert "let marker: i32 = 2;" in generated_code
+    assert "identity_payload_matrix(left.clone())" in generated_code
+    assert "identity_payload_matrix(right.clone())" in generated_code
+    assert "return match flag {" in generated_code
+    assert "identity_payload_matrix(left)\n    }" in generated_code
+    assert "identity_payload_matrix(right)\n    }" in generated_code
+    assert "return match flag {\n    true => {\n        let marker: i32 = 1;" in (
+        generated_code
+    )
+    assert (
+        "return match flag {\n    true => {\n        let marker: i32 = 1;\n        identity_payload_matrix(left.clone())"
+        not in (generated_code)
+    )
+    assert (
+        "let mut selected: [[Payload; 2]; 2] = "
+        "identity_payload_matrix(left.clone());"
+    ) in generated_code
+    assert "while (i < 2) {" in generated_code
+    assert "selected = identity_payload_matrix(right.clone());" in generated_code
+    assert "return selected;" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

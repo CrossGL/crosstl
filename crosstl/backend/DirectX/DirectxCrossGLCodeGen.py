@@ -361,6 +361,12 @@ class HLSLToCrossGLConverter:
             }
         if member in self.texture_method_map:
             texture_function = self.texture_method_map[member]
+            if member == "Sample" and arg_count == 3:
+                texture_function = "textureOffset"
+            elif member == "SampleLevel" and arg_count == 4:
+                texture_function = "textureLodOffset"
+            elif member == "SampleGrad" and arg_count == 5:
+                texture_function = "textureGradOffset"
             if member == "SampleBias" and arg_count is not None and arg_count >= 4:
                 texture_function = "textureOffset"
             usage = (

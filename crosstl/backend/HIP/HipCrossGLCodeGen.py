@@ -120,6 +120,7 @@ class HipToCrossGLConverter:
     }
     HIP_TEXTURE_CALL_TYPE_HINTS = {
         "tex1D": "sampler1D",
+        "tex1Dfetch": "sampler1D",
         "tex1DLod": "sampler1D",
         "tex1DGrad": "sampler1D",
         "tex2D": "sampler2D",
@@ -3261,6 +3262,8 @@ class HipToCrossGLConverter:
             return None
 
         value_type = template_args[0] if template_args else None
+        if base_name == "tex1Dfetch":
+            return self.format_hip_texture_fetch_call(args)
         if base_name in {"tex1D", "tex1DLod", "tex1DGrad"}:
             return self.format_hip_texture_call(base_name, args, "vec1", 1)
         if base_name in {"tex2D", "tex2DLod", "tex2DGrad"}:
@@ -3357,6 +3360,12 @@ class HipToCrossGLConverter:
                 return None
             return f"textureLod({texture_name}, {coordinate}, {remaining[0]})"
         return f"texture({texture_name}, {coordinate})"
+
+    def format_hip_texture_fetch_call(self, args):
+        if len(args) != 2:
+            return None
+        texture_name, coordinate = args
+        return f"texelFetch({texture_name}, {coordinate}, 0)"
 
     def format_hip_surface_read(self, args, dimensions, value_type):
         if len(args) >= dimensions + 2 and self.is_surface_output_target(args[0]):

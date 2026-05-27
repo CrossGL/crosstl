@@ -1599,7 +1599,7 @@ class CudaToCrossGLConverter:
         if len(args) < 2:
             return None
 
-        if self.is_sparse_cuda_2d_texture_call(function_name, args):
+        if self.is_sparse_cuda_texture_call(function_name, args):
             return self.format_unsupported_cuda_texture_sparse_residency_call(
                 function_name
             )
@@ -1633,11 +1633,14 @@ class CudaToCrossGLConverter:
             return f"textureLod({texture_name}, {coordinate}, {remaining[0]})"
         return f"texture({texture_name}, {coordinate})"
 
-    def is_sparse_cuda_2d_texture_call(self, function_name, args):
+    def is_sparse_cuda_texture_call(self, function_name, args):
         sparse_arg_counts = {
             "tex2D": 4,
             "tex2DLod": 5,
             "tex2DGrad": 6,
+            "tex2DLayered": 5,
+            "tex2DLayeredLod": 6,
+            "tex2DLayeredGrad": 7,
         }
         return len(args) == sparse_arg_counts.get(function_name)
 

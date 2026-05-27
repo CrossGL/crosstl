@@ -412,6 +412,35 @@ MOJO_RESOURCE_TEXEL_COORDS = {
     "UImage3D": "SIMD[DType.int32, 4]",
 }
 
+MOJO_RESOURCE_OFFSET_COORDS = {
+    "Texture1D": "Int32",
+    "Texture1DArray": "Int32",
+    "Texture1DArrayShadow": "Int32",
+    "Texture1DShadow": "Int32",
+    "Texture2D": "SIMD[DType.int32, 2]",
+    "Texture2DArray": "SIMD[DType.int32, 2]",
+    "Texture2DArrayShadow": "SIMD[DType.int32, 2]",
+    "Texture2DShadow": "SIMD[DType.int32, 2]",
+    "Texture3D": "SIMD[DType.int32, 4]",
+}
+
+MOJO_RESOURCE_COMPARE_COORDS = {
+    "Texture1DArrayShadow": "SIMD[DType.float32, 2]",
+    "Texture1DShadow": "Float32",
+    "Texture2DArrayShadow": "SIMD[DType.float32, 4]",
+    "Texture2DShadow": "SIMD[DType.float32, 2]",
+    "TextureCubeArrayShadow": "SIMD[DType.float32, 4]",
+    "TextureCubeShadow": "SIMD[DType.float32, 4]",
+}
+
+MOJO_RESOURCE_PROJECTED_COORDS = {
+    "Texture1D": "SIMD[DType.float32, 2]",
+    "Texture1DShadow": "SIMD[DType.float32, 2]",
+    "Texture2D": "SIMD[DType.float32, 4]",
+    "Texture2DShadow": "SIMD[DType.float32, 4]",
+    "Texture3D": "SIMD[DType.float32, 4]",
+}
+
 MOJO_RESOURCE_SIZE_RETURNS = {
     "Texture1D": "Int32",
     "Texture1DArray": "SIMD[DType.int32, 2]",
@@ -4040,6 +4069,7 @@ class MojoCodeGen:
         if args:
             self.validate_resource_read_access(args[0], "imageLoad")
             resource_type = self.map_type(self.expression_result_type(args[0]))
+            self.validate_image_load_args(args, resource_type)
             if resource_type in MOJO_RESOURCE_TEXEL_COORDS:
                 self.required_image_load_types.add(resource_type)
 
@@ -4050,11 +4080,90 @@ class MojoCodeGen:
         if args:
             self.validate_resource_write_access(args[0], "imageStore")
             resource_type = self.map_type(self.expression_result_type(args[0]))
+            self.validate_image_store_args(args, resource_type)
             if resource_type in MOJO_RESOURCE_TEXEL_COORDS:
                 self.required_image_store_types.add(resource_type)
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"image_store({generated_args})"
+
+    def validate_image_load_args(self, args, resource_type):
+        if not self.is_image_resource_type(resource_type):
+            raise ValueError(
+                "Unsupported image_load for Mojo codegen; "
+                f"image resource required: {resource_type}"
+            )
+        if resource_type not in MOJO_RESOURCE_TEXEL_COORDS:
+            raise ValueError(
+                "Unsupported image_load for Mojo codegen; "
+                f"loadable image resource required: {resource_type}"
+            )
+
+        expected_count = 3 if self.is_multisample_resource_type(resource_type) else 2
+        if len(args) != expected_count:
+            raise ValueError(
+                "Unsupported image_load for Mojo codegen; expected "
+                f"{expected_count - 1} argument(s) after image resource, got "
+                f"{len(args) - 1}"
+            )
+
+        self.validate_resource_argument_type(
+            args[1],
+            MOJO_RESOURCE_TEXEL_COORDS[resource_type],
+            "image_load",
+            resource_type,
+            "coordinate",
+        )
+        if self.is_multisample_resource_type(resource_type):
+            self.validate_resource_argument_type(
+                args[2], "Int32", "image_load", resource_type, "sample"
+            )
+
+    def validate_image_store_args(self, args, resource_type):
+        if not self.is_image_resource_type(resource_type):
+            raise ValueError(
+                "Unsupported image_store for Mojo codegen; "
+                f"image resource required: {resource_type}"
+            )
+        if resource_type not in MOJO_RESOURCE_TEXEL_COORDS:
+            raise ValueError(
+                "Unsupported image_store for Mojo codegen; "
+                f"storable image resource required: {resource_type}"
+            )
+
+        expected_count = 4 if self.is_multisample_resource_type(resource_type) else 3
+        if len(args) != expected_count:
+            raise ValueError(
+                "Unsupported image_store for Mojo codegen; expected "
+                f"{expected_count - 1} argument(s) after image resource, got "
+                f"{len(args) - 1}"
+            )
+
+        self.validate_resource_argument_type(
+            args[1],
+            MOJO_RESOURCE_TEXEL_COORDS[resource_type],
+            "image_store",
+            resource_type,
+            "coordinate",
+        )
+        value_index = 2
+        if self.is_multisample_resource_type(resource_type):
+            self.validate_resource_argument_type(
+                args[2], "Int32", "image_store", resource_type, "sample"
+            )
+            value_index = 3
+        self.validate_image_store_value_type(args[value_index], resource_type)
+
+    def validate_image_store_value_type(self, value_arg, resource_type):
+        expected_type = self.image_value_type(resource_type)
+        actual_type = self.resource_builtin_arg_type(value_arg)
+        if expected_type == "SIMD[DType.float32, 4]" and actual_type == "Float32":
+            return
+        if actual_type != expected_type:
+            raise ValueError(
+                "Unsupported image_store for Mojo codegen; value for "
+                f"{resource_type} must be {expected_type}, got {actual_type}"
+            )
 
     def generate_buffer_load_call(self, args):
         if args:
@@ -4415,6 +4524,266 @@ class MojoCodeGen:
                 f"Unsupported {helper_base} for Mojo codegen; "
                 f"non-shadow texture required: {resource_type}"
             )
+        self.validate_texture_builtin_args(args, helper_base, resource_type)
+
+    def validate_texture_builtin_args(self, args, helper_base, resource_type):
+        argument_specs = self.texture_builtin_argument_specs(helper_base, resource_type)
+        if argument_specs is None:
+            return
+
+        allowed_counts = {
+            len(specs)
+            for specs in argument_specs
+            if self.texture_arg_specs_known(specs)
+        }
+        if allowed_counts and len(args) - 1 not in allowed_counts:
+            expected = " or ".join(str(count) for count in sorted(allowed_counts))
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; expected {expected} "
+                f"argument(s) after texture resource, got {len(args) - 1}"
+            )
+
+        for specs in argument_specs:
+            if len(args) - 1 != len(specs):
+                continue
+            if not self.texture_arg_specs_known(specs):
+                return
+            for index, (label, expected_type) in enumerate(specs, start=1):
+                self.validate_resource_argument_type(
+                    args[index], expected_type, helper_base, resource_type, label
+                )
+            return
+
+    def texture_builtin_argument_specs(self, helper_base, resource_type):
+        sample_coord = MOJO_RESOURCE_SAMPLE_COORDS.get(resource_type)
+        compare_coord = MOJO_RESOURCE_COMPARE_COORDS.get(resource_type)
+        offset_coord = MOJO_RESOURCE_OFFSET_COORDS.get(resource_type)
+        projected_coord = MOJO_RESOURCE_PROJECTED_COORDS.get(resource_type)
+
+        if helper_base in {
+            "sample_offset",
+            "sample_lod_offset",
+            "sample_grad_offset",
+        } and None in {sample_coord, offset_coord}:
+            return None
+        if helper_base in {"sample_proj", "sample_proj_offset"} and (
+            projected_coord is None
+        ):
+            return None
+        if (
+            helper_base
+            in {
+                "sample_proj_lod",
+                "sample_proj_lod_offset",
+                "sample_proj_grad",
+                "sample_proj_grad_offset",
+            }
+            and projected_coord is None
+        ):
+            return None
+        if (
+            helper_base
+            in {
+                "texture_compare",
+                "texture_compare_offset",
+                "texture_compare_lod",
+                "texture_compare_lod_offset",
+                "texture_compare_grad",
+                "texture_compare_grad_offset",
+                "texture_compare_proj",
+                "texture_compare_proj_offset",
+                "texture_compare_proj_lod",
+                "texture_compare_proj_lod_offset",
+                "texture_compare_proj_grad",
+                "texture_compare_proj_grad_offset",
+                "texture_gather_compare",
+                "texture_gather_compare_offset",
+            }
+            and compare_coord is None
+        ):
+            return None
+
+        specs = {
+            "sample_offset": [[("coordinate", sample_coord), ("offset", offset_coord)]],
+            "sample_lod_offset": [
+                [
+                    ("coordinate", sample_coord),
+                    ("lod", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "sample_grad_offset": [
+                [
+                    ("coordinate", sample_coord),
+                    ("ddx", sample_coord),
+                    ("ddy", sample_coord),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "sample_bias": [[("coordinate", sample_coord), ("bias", "Float32")]],
+            "sample_bias_offset": [
+                [
+                    ("coordinate", sample_coord),
+                    ("bias", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "sample_proj": [[("coordinate", projected_coord)]],
+            "sample_proj_offset": [
+                [("coordinate", projected_coord), ("offset", offset_coord)]
+            ],
+            "sample_proj_lod": [[("coordinate", projected_coord), ("lod", "Float32")]],
+            "sample_proj_lod_offset": [
+                [
+                    ("coordinate", projected_coord),
+                    ("lod", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "sample_proj_grad": [
+                [
+                    ("coordinate", projected_coord),
+                    ("ddx", sample_coord),
+                    ("ddy", sample_coord),
+                ]
+            ],
+            "sample_proj_grad_offset": [
+                [
+                    ("coordinate", projected_coord),
+                    ("ddx", sample_coord),
+                    ("ddy", sample_coord),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_query_lod": [[("coordinate", sample_coord)]],
+            "calculate_level_of_detail": [[("coordinate", sample_coord)]],
+            "calculate_level_of_detail_unclamped": [[("coordinate", sample_coord)]],
+            "texture_gather": [
+                [("coordinate", sample_coord)],
+                [("coordinate", sample_coord), ("component", "Int32")],
+            ],
+            "texture_gather_offset": [
+                [("coordinate", sample_coord), ("offset", offset_coord)],
+                [
+                    ("coordinate", sample_coord),
+                    ("offset", offset_coord),
+                    ("component", "Int32"),
+                ],
+            ],
+            "texture_gather_offsets": [
+                [
+                    ("coordinate", sample_coord),
+                    ("offset0", offset_coord),
+                    ("offset1", offset_coord),
+                    ("offset2", offset_coord),
+                    ("offset3", offset_coord),
+                ],
+                [
+                    ("coordinate", sample_coord),
+                    ("offset0", offset_coord),
+                    ("offset1", offset_coord),
+                    ("offset2", offset_coord),
+                    ("offset3", offset_coord),
+                    ("component", "Int32"),
+                ],
+            ],
+            "texture_compare": [[("coordinate", compare_coord), ("depth", "Float32")]],
+            "texture_compare_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_lod": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("lod", "Float32"),
+                ]
+            ],
+            "texture_compare_lod_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("lod", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_grad": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("ddx", compare_coord),
+                    ("ddy", compare_coord),
+                ]
+            ],
+            "texture_compare_grad_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("ddx", compare_coord),
+                    ("ddy", compare_coord),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_proj": [
+                [("coordinate", compare_coord), ("depth", "Float32")]
+            ],
+            "texture_compare_proj_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_proj_lod": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("lod", "Float32"),
+                ]
+            ],
+            "texture_compare_proj_lod_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("lod", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_proj_grad": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("ddx", compare_coord),
+                    ("ddy", compare_coord),
+                ]
+            ],
+            "texture_compare_proj_grad_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("ddx", compare_coord),
+                    ("ddy", compare_coord),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_gather_compare": [
+                [("coordinate", compare_coord), ("depth", "Float32")]
+            ],
+            "texture_gather_compare_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+        }
+        return specs.get(helper_base)
+
+    def texture_arg_specs_known(self, specs):
+        return all(expected_type is not None for _, expected_type in specs)
 
     def generate_image_atomic_call(self, args, helper_base):
         if not args:

@@ -971,6 +971,46 @@ def test_codegen_sample_bias_offset_roundtrip_through_translator_codegen():
     assert "tex.SampleBias(samp, uv, bias, int2(1, 0))" in hlsl
 
 
+def test_codegen_texture_sample_offsets_roundtrip_through_translator_codegen():
+    code = textwrap.dedent("""
+        Texture2D tex : register(t0);
+        SamplerState samp : register(s0);
+
+        float4 main(
+            float2 uv : TEXCOORD0,
+            float lod : TEXCOORD1,
+            float2 ddx : TEXCOORD2,
+            float2 ddy : TEXCOORD3,
+            int2 offset : TEXCOORD4
+        ) : SV_Target {
+            float4 plain = tex.Sample(samp, uv, offset);
+            float4 mip = tex.SampleLevel(samp, uv, lod, offset);
+            float4 grad = tex.SampleGrad(samp, uv, ddx, ddy, offset);
+            return plain + mip + grad;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "textureOffset(tex, samp, uv, offset)" in crossgl
+    assert "textureLodOffset(tex, samp, uv, lod, offset)" in crossgl
+    assert "textureGradOffset(tex, samp, uv, ddx, ddy, offset)" in crossgl
+    assert "texture(tex, samp, uv, offset)" not in crossgl
+    assert "textureLod(tex, samp, uv, lod, offset)" not in crossgl
+    assert "textureGrad(tex, samp, uv, ddx, ddy, offset)" not in crossgl
+    assert ".Sample(" not in crossgl
+    assert ".SampleLevel(" not in crossgl
+    assert ".SampleGrad(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "tex.Sample(samp, uv, offset)" in hlsl
+    assert "tex.SampleLevel(samp, uv, lod, offset)" in hlsl
+    assert "tex.SampleGrad(samp, uv, ddx, ddy, offset)" in hlsl
+    assert "textureOffset(" not in hlsl
+    assert "textureLodOffset(" not in hlsl
+    assert "textureGradOffset(" not in hlsl
+
+
 def test_codegen_resource_array_receivers_use_canonical_calls():
     code = textwrap.dedent("""
         Texture2D textures[2] : register(t0);

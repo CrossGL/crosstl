@@ -2406,6 +2406,64 @@ class TestCudaCodeGen:
         assert "tex2DLod<float4>(" not in result
         assert "tex2DGrad<float4>(" not in result
 
+    def test_cuda_sparse_layered_texture_helpers_emit_diagnostics(self):
+        """Test sparse CUDA 2D layered texture fetches import as diagnostics."""
+        code = """
+        void sparseLayeredFetchOps(
+            cudaTextureObject_t objectLayers,
+            bool* resident,
+            float2 uv,
+            int layer,
+            float lod
+        ) {
+            float4 sparseLayer = tex2DLayered<float4>(
+                objectLayers,
+                uv.x,
+                uv.y,
+                layer,
+                resident
+            );
+            float4 sparseLayerLod = tex2DLayeredLod<float4>(
+                objectLayers,
+                uv.x,
+                uv.y,
+                layer,
+                lod,
+                resident
+            );
+            float4 sparseLayerGrad = tex2DLayeredGrad<float4>(
+                objectLayers,
+                uv.x,
+                uv.y,
+                layer,
+                uv,
+                uv,
+                resident
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "sampler2DArray objectLayers" in result
+        for name, helper in (
+            ("sparseLayer", "tex2DLayered"),
+            ("sparseLayerLod", "tex2DLayeredLod"),
+            ("sparseLayerGrad", "tex2DLayeredGrad"),
+        ):
+            assert (
+                f"var {name}: vec4<f32> = "
+                f"(/* cuda texture.{helper} sparse residency not directly "
+                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
+            ) in result
+        assert "tex2DLayered<float4>(" not in result
+        assert "tex2DLayeredLod<float4>(" not in result
+        assert "tex2DLayeredGrad<float4>(" not in result
+
     def test_qualified_resource_object_pointer_array_conversion(self):
         """Test qualified CUDA resource object arrays retain inferred shapes."""
         code = """

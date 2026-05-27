@@ -3573,6 +3573,128 @@ def test_texture_coordinate_and_argument_diagnostics_for_mojo_codegen():
         generate_code(parse_code(tokenize_code(image_texel_fetch)))
 
 
+def test_advanced_texture_placeholder_argument_diagnostics_for_mojo_codegen():
+    missing_proj_coord = """
+    sampler2D colorMap;
+
+    vec4 invalidProj(sampler2D tex) {
+        return textureProj(tex);
+    }
+    """
+    with pytest.raises(ValueError, match="sample_proj.*expected 1 argument"):
+        generate_code(parse_code(tokenize_code(missing_proj_coord)))
+
+    scalar_proj_coord = """
+    sampler2D colorMap;
+
+    vec4 invalidProj(sampler2D tex, vec2 uv) {
+        return textureProj(tex, uv);
+    }
+    """
+    with pytest.raises(ValueError, match="sample_proj.*coordinate.*Texture2D"):
+        generate_code(parse_code(tokenize_code(scalar_proj_coord)))
+
+    missing_gather_offset = """
+    sampler2D colorMap;
+
+    vec4 invalidGatherOffsets(sampler2D tex, vec2 uv, ivec2 offset) {
+        return textureGatherOffsets(tex, uv, offset, offset, offset);
+    }
+    """
+    with pytest.raises(
+        ValueError, match="texture_gather_offsets.*expected 5 or 6 argument"
+    ):
+        generate_code(parse_code(tokenize_code(missing_gather_offset)))
+
+    scalar_gather_offset = """
+    sampler2D colorMap;
+
+    vec4 invalidGatherOffset(sampler2D tex, vec2 uv, int offset) {
+        return textureGatherOffset(tex, uv, offset, 0);
+    }
+    """
+    with pytest.raises(ValueError, match="texture_gather_offset.*offset.*Texture2D"):
+        generate_code(parse_code(tokenize_code(scalar_gather_offset)))
+
+    missing_compare_offset = """
+    sampler2DShadow shadowMap;
+
+    float invalidCompareOffset(sampler2DShadow shadow, vec2 uv, float depth) {
+        return textureCompareOffset(shadow, uv, depth);
+    }
+    """
+    with pytest.raises(ValueError, match="texture_compare_offset.*expected 3 argument"):
+        generate_code(parse_code(tokenize_code(missing_compare_offset)))
+
+    bad_compare_grad = """
+    sampler2DShadow shadowMap;
+
+    float invalidCompareGrad(
+        sampler2DShadow shadow,
+        vec2 uv,
+        float depth,
+        vec3 ddx,
+        vec2 ddy
+    ) {
+        return textureCompareGrad(shadow, uv, depth, ddx, ddy);
+    }
+    """
+    with pytest.raises(ValueError, match="texture_compare_grad.*ddx.*Texture2DShadow"):
+        generate_code(parse_code(tokenize_code(bad_compare_grad)))
+
+
+def test_image_load_store_argument_diagnostics_for_mojo_codegen():
+    missing_multisample_load_index = """
+    uimage2DMS counters;
+
+    uint invalidLoad(uimage2DMS image, ivec2 pixel) {
+        return imageLoad(image, pixel);
+    }
+    """
+    with pytest.raises(ValueError, match="image_load.*expected 2 argument"):
+        generate_code(parse_code(tokenize_code(missing_multisample_load_index)))
+
+    scalar_multisample_load_coord = """
+    uimage2DMS counters;
+
+    uint invalidLoad(uimage2DMS image, int pixel, int sampleIndex) {
+        return imageLoad(image, pixel, sampleIndex);
+    }
+    """
+    with pytest.raises(ValueError, match="image_load.*coordinate.*UImage2DMS"):
+        generate_code(parse_code(tokenize_code(scalar_multisample_load_coord)))
+
+    missing_multisample_store_index = """
+    uimage2DMS counters;
+
+    void invalidStore(uimage2DMS image, ivec2 pixel, uint value) {
+        imageStore(image, pixel, value);
+    }
+    """
+    with pytest.raises(ValueError, match="image_store.*expected 3 argument"):
+        generate_code(parse_code(tokenize_code(missing_multisample_store_index)))
+
+    wrong_store_value_type = """
+    uimage2D counters;
+
+    void invalidStore(uimage2D image, ivec2 pixel, float value) {
+        imageStore(image, pixel, value);
+    }
+    """
+    with pytest.raises(ValueError, match="image_store.*value.*UImage2D"):
+        generate_code(parse_code(tokenize_code(wrong_store_value_type)))
+
+    texture_image_load = """
+    sampler2D colorMap;
+
+    vec4 invalidLoad(sampler2D tex, ivec2 pixel) {
+        return imageLoad(tex, pixel);
+    }
+    """
+    with pytest.raises(ValueError, match="image_load.*image resource required"):
+        generate_code(parse_code(tokenize_code(texture_image_load)))
+
+
 def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 

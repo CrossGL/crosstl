@@ -519,6 +519,38 @@ def test_parse_texture_methods():
     assert_parses(code)
 
 
+def test_parse_texture_sample_offset_methods_keep_member_calls():
+    code = """
+    Texture2D tex : register(t0);
+    SamplerState samp : register(s0);
+
+    float4 main(
+        float2 uv : TEXCOORD0,
+        float lod : TEXCOORD1,
+        float2 ddx : TEXCOORD2,
+        float2 ddy : TEXCOORD3,
+        int2 offset : TEXCOORD4
+    ) : SV_Target0 {
+        float4 plain = tex.Sample(samp, uv, offset);
+        float4 mip = tex.SampleLevel(samp, uv, lod, offset);
+        float4 grad = tex.SampleGrad(samp, uv, ddx, ddy, offset);
+        return plain + mip + grad;
+    }
+    """
+
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    assert not [node for node in nodes if isinstance(node, TextureSampleNode)]
+    members = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    assert {"Sample", "SampleLevel", "SampleGrad"}.issubset(set(members))
+
+
 def test_parse_resource_method_ast_shapes():
     code = """
     Texture2D tex : register(t0);

@@ -4044,16 +4044,16 @@ class MetalCodeGen:
             )
             if readonly_raw_buffer_call is not None:
                 return readonly_raw_buffer_call
-            address_space_call = self.address_space_call_diagnostic(
-                argument_func_name, expr.args
-            )
-            if address_space_call is not None:
-                return address_space_call
             mesh_context_call = self.metal_mesh_dispatch_context_call_diagnostic(
                 func_name
             )
             if mesh_context_call is not None:
                 return mesh_context_call
+            address_space_call = self.address_space_call_diagnostic(
+                argument_func_name, expr.args
+            )
+            if address_space_call is not None:
+                return address_space_call
             self.validate_function_image_access_arguments(func_name, expr.args)
             args = self.generate_function_call_arguments(argument_func_name, expr.args)
             if func_name in self.user_function_names:
