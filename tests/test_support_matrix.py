@@ -3,6 +3,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import crosstl.translator.codegen as codegen
+from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -43,6 +46,41 @@ def test_support_matrix_covers_all_cataloged_backends():
         counts = matrix["summary"]["status_counts"][backend_id]
         assert set(counts) == statuses
         assert sum(counts.values()) == matrix["summary"]["feature_count"]
+
+    for backend in matrix["backends"]:
+        for sample in backend["signals"]["unsupported_marker_samples"]:
+            assert set(sample) == {"path", "text"}
+            assert sample["path"].endswith(".py")
+            assert not sample["path"].startswith("tests/")
+            assert sample["text"]
+
+
+def test_support_backend_catalog_matches_codegen_registry():
+    backends_path = ROOT / "support" / "backends.json"
+    catalog = json.loads(backends_path.read_text(encoding="utf-8"))
+    register_default_sources()
+
+    backend_ids = {backend["id"] for backend in catalog["backends"]}
+    assert backend_ids == set(codegen.backend_names())
+    assert backend_ids.issubset(set(SOURCE_REGISTRY.names()))
+
+    for backend in catalog["backends"]:
+        backend_id = backend["id"]
+        spec = codegen.get_backend(backend_id)
+        assert spec is not None, f"{backend_id} is not registered"
+        assert codegen.get_backend_extension(backend_id) == backend["target_extension"]
+        assert (
+            SOURCE_REGISTRY.get_by_extension(backend["target_extension"]).name
+            == backend_id
+        )
+
+        for alias in backend.get("aliases", []):
+            assert (
+                codegen.normalize_backend_name(alias) == backend_id
+            ), f"{backend_id} support alias is not accepted by codegen: {alias}"
+            assert (
+                SOURCE_REGISTRY.get(alias).name == backend_id
+            ), f"{backend_id} support alias is not accepted by source registry: {alias}"
 
 
 def test_graphics_backend_roadmap_is_focused_on_primary_graphics_targets():
@@ -92,6 +130,22 @@ def test_graphics_texel_fetch_row_is_supported_with_evidence():
     assert all(
         item["feature_id"] != "texture.texel_fetch" for item in roadmap["backlog"]
     )
+
+
+def test_graphics_match_row_is_supported_with_evidence():
+    roadmap_path = ROOT / "support" / "generated" / "graphics-backend-roadmap.json"
+    roadmap = json.loads(roadmap_path.read_text(encoding="utf-8"))
+
+    match_lowering = next(
+        feature for feature in roadmap["features"] if feature["id"] == "language.match"
+    )
+
+    for backend_id in ("directx", "opengl", "metal"):
+        support = match_lowering["support"][backend_id]
+        assert support["status"] == "supported"
+        assert support["evidence"]
+
+    assert all(item["feature_id"] != "language.match" for item in roadmap["backlog"])
 
 
 def test_support_matrix_audit_writes_filtered_json(tmp_path):

@@ -3,16 +3,22 @@
 import re
 
 from ..ast import (
+    AtomicOpNode,
     ArrayNode,
     ArrayAccessNode,
     ArrayLiteralNode,
     AssignmentNode,
     BinaryOpNode,
     BreakNode,
+    BufferOpNode,
+    BuiltinVariableNode,
     CaseNode,
+    CastNode,
     CbufferNode,
     ContinueNode,
+    ConstructorNode,
     DoWhileNode,
+    EnumNode,
     ForInNode,
     ForNode,
     FunctionCallNode,
@@ -22,35 +28,150 @@ from ..ast import (
     LoopNode,
     MatchNode,
     MemberAccessNode,
+    MeshOpNode,
     ReturnNode,
     RangeNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
     ShaderNode,
     StructNode,
+    SwizzleNode,
     SwitchNode,
+    SyncNode,
     TernaryOpNode,
+    TextureNode,
+    TextureOpNode,
     UnaryOpNode,
     VariableNode,
+    WaveOpNode,
     WhileNode,
     WildcardPatternNode,
 )
 from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
 
+
+def _matrix_aliases(prefix, dtype, *, rows_first):
+    aliases = {}
+    for first in (2, 3, 4):
+        for second in (2, 3, 4):
+            columns, rows = (second, first) if rows_first else (first, second)
+            aliases[f"{prefix}{first}x{second}"] = (dtype, columns, rows)
+    return aliases
+
+
+def _square_matrix_aliases(prefix, dtype):
+    return {f"{prefix}{size}": (dtype, size, size) for size in (2, 3, 4)}
+
+
 MOJO_VECTOR_TYPES = {
     "vec2": ("DType.float32", 2, 2, None),
     "vec3": ("DType.float32", 3, 4, "0.0"),
     "vec4": ("DType.float32", 4, 4, None),
+    "float2": ("DType.float32", 2, 2, None),
+    "float3": ("DType.float32", 3, 4, "0.0"),
+    "float4": ("DType.float32", 4, 4, None),
+    "packed_float2": ("DType.float32", 2, 2, None),
+    "packed_float3": ("DType.float32", 3, 4, "0.0"),
+    "packed_float4": ("DType.float32", 4, 4, None),
+    "simd_float2": ("DType.float32", 2, 2, None),
+    "simd_float3": ("DType.float32", 3, 4, "0.0"),
+    "simd_float4": ("DType.float32", 4, 4, None),
     "vec2<f32>": ("DType.float32", 2, 2, None),
     "vec3<f32>": ("DType.float32", 3, 4, "0.0"),
     "vec4<f32>": ("DType.float32", 4, 4, None),
+    "vec2<f16>": ("DType.float16", 2, 2, None),
+    "vec3<f16>": ("DType.float16", 3, 4, "0.0"),
+    "vec4<f16>": ("DType.float16", 4, 4, None),
+    "half2": ("DType.float16", 2, 2, None),
+    "half3": ("DType.float16", 3, 4, "0.0"),
+    "half4": ("DType.float16", 4, 4, None),
+    "packed_half2": ("DType.float16", 2, 2, None),
+    "packed_half3": ("DType.float16", 3, 4, "0.0"),
+    "packed_half4": ("DType.float16", 4, 4, None),
+    "simd_half2": ("DType.float16", 2, 2, None),
+    "simd_half3": ("DType.float16", 3, 4, "0.0"),
+    "simd_half4": ("DType.float16", 4, 4, None),
+    "f16vec2": ("DType.float16", 2, 2, None),
+    "f16vec3": ("DType.float16", 3, 4, "0.0"),
+    "f16vec4": ("DType.float16", 4, 4, None),
+    "min16float2": ("DType.float16", 2, 2, None),
+    "min16float3": ("DType.float16", 3, 4, "0.0"),
+    "min16float4": ("DType.float16", 4, 4, None),
+    "min10float2": ("DType.float16", 2, 2, None),
+    "min10float3": ("DType.float16", 3, 4, "0.0"),
+    "min10float4": ("DType.float16", 4, 4, None),
     "vec2<f64>": ("DType.float64", 2, 2, None),
     "vec3<f64>": ("DType.float64", 3, 4, "0.0"),
     "vec4<f64>": ("DType.float64", 4, 4, None),
+    "double2": ("DType.float64", 2, 2, None),
+    "double3": ("DType.float64", 3, 4, "0.0"),
+    "double4": ("DType.float64", 4, 4, None),
+    "simd_double2": ("DType.float64", 2, 2, None),
+    "simd_double3": ("DType.float64", 3, 4, "0.0"),
+    "simd_double4": ("DType.float64", 4, 4, None),
     "vec2<i32>": ("DType.int32", 2, 2, None),
     "vec3<i32>": ("DType.int32", 3, 4, "0"),
     "vec4<i32>": ("DType.int32", 4, 4, None),
+    "vec2<i16>": ("DType.int16", 2, 2, None),
+    "vec3<i16>": ("DType.int16", 3, 4, "0"),
+    "vec4<i16>": ("DType.int16", 4, 4, None),
+    "int2": ("DType.int32", 2, 2, None),
+    "int3": ("DType.int32", 3, 4, "0"),
+    "int4": ("DType.int32", 4, 4, None),
+    "packed_int2": ("DType.int32", 2, 2, None),
+    "packed_int3": ("DType.int32", 3, 4, "0"),
+    "packed_int4": ("DType.int32", 4, 4, None),
+    "simd_int2": ("DType.int32", 2, 2, None),
+    "simd_int3": ("DType.int32", 3, 4, "0"),
+    "simd_int4": ("DType.int32", 4, 4, None),
+    "short2": ("DType.int16", 2, 2, None),
+    "short3": ("DType.int16", 3, 4, "0"),
+    "short4": ("DType.int16", 4, 4, None),
+    "packed_short2": ("DType.int16", 2, 2, None),
+    "packed_short3": ("DType.int16", 3, 4, "0"),
+    "packed_short4": ("DType.int16", 4, 4, None),
+    "simd_short2": ("DType.int16", 2, 2, None),
+    "simd_short3": ("DType.int16", 3, 4, "0"),
+    "simd_short4": ("DType.int16", 4, 4, None),
+    "i16vec2": ("DType.int16", 2, 2, None),
+    "i16vec3": ("DType.int16", 3, 4, "0"),
+    "i16vec4": ("DType.int16", 4, 4, None),
+    "min16int2": ("DType.int16", 2, 2, None),
+    "min16int3": ("DType.int16", 3, 4, "0"),
+    "min16int4": ("DType.int16", 4, 4, None),
+    "min12int2": ("DType.int16", 2, 2, None),
+    "min12int3": ("DType.int16", 3, 4, "0"),
+    "min12int4": ("DType.int16", 4, 4, None),
     "vec2<u32>": ("DType.uint32", 2, 2, None),
     "vec3<u32>": ("DType.uint32", 3, 4, "0"),
     "vec4<u32>": ("DType.uint32", 4, 4, None),
+    "vec2<u16>": ("DType.uint16", 2, 2, None),
+    "vec3<u16>": ("DType.uint16", 3, 4, "0"),
+    "vec4<u16>": ("DType.uint16", 4, 4, None),
+    "uint2": ("DType.uint32", 2, 2, None),
+    "uint3": ("DType.uint32", 3, 4, "0"),
+    "uint4": ("DType.uint32", 4, 4, None),
+    "packed_uint2": ("DType.uint32", 2, 2, None),
+    "packed_uint3": ("DType.uint32", 3, 4, "0"),
+    "packed_uint4": ("DType.uint32", 4, 4, None),
+    "simd_uint2": ("DType.uint32", 2, 2, None),
+    "simd_uint3": ("DType.uint32", 3, 4, "0"),
+    "simd_uint4": ("DType.uint32", 4, 4, None),
+    "ushort2": ("DType.uint16", 2, 2, None),
+    "ushort3": ("DType.uint16", 3, 4, "0"),
+    "ushort4": ("DType.uint16", 4, 4, None),
+    "packed_ushort2": ("DType.uint16", 2, 2, None),
+    "packed_ushort3": ("DType.uint16", 3, 4, "0"),
+    "packed_ushort4": ("DType.uint16", 4, 4, None),
+    "simd_ushort2": ("DType.uint16", 2, 2, None),
+    "simd_ushort3": ("DType.uint16", 3, 4, "0"),
+    "simd_ushort4": ("DType.uint16", 4, 4, None),
+    "u16vec2": ("DType.uint16", 2, 2, None),
+    "u16vec3": ("DType.uint16", 3, 4, "0"),
+    "u16vec4": ("DType.uint16", 4, 4, None),
+    "min16uint2": ("DType.uint16", 2, 2, None),
+    "min16uint3": ("DType.uint16", 3, 4, "0"),
+    "min16uint4": ("DType.uint16", 4, 4, None),
     "vec2<bool>": ("DType.bool", 2, 2, None),
     "vec3<bool>": ("DType.bool", 3, 4, "False"),
     "vec4<bool>": ("DType.bool", 4, 4, None),
@@ -96,6 +217,27 @@ MOJO_MATRIX_TYPES = {
     "dmat4x2": ("DType.float64", 4, 2),
     "dmat4x3": ("DType.float64", 4, 3),
     "dmat4x4": ("DType.float64", 4, 4),
+    **_matrix_aliases("float", "DType.float32", rows_first=True),
+    **_matrix_aliases("simd_float", "DType.float32", rows_first=True),
+    **_matrix_aliases("double", "DType.float64", rows_first=True),
+    **_matrix_aliases("simd_double", "DType.float64", rows_first=True),
+    **_matrix_aliases("half", "DType.float16", rows_first=True),
+    **_matrix_aliases("simd_half", "DType.float16", rows_first=True),
+    **_matrix_aliases("min16float", "DType.float16", rows_first=True),
+    **_matrix_aliases("min10float", "DType.float16", rows_first=True),
+    **_matrix_aliases("int", "DType.int32", rows_first=True),
+    **_matrix_aliases("simd_int", "DType.int32", rows_first=True),
+    **_matrix_aliases("uint", "DType.uint32", rows_first=True),
+    **_matrix_aliases("simd_uint", "DType.uint32", rows_first=True),
+    **_matrix_aliases("short", "DType.int16", rows_first=True),
+    **_matrix_aliases("simd_short", "DType.int16", rows_first=True),
+    **_matrix_aliases("min16int", "DType.int16", rows_first=True),
+    **_matrix_aliases("min12int", "DType.int16", rows_first=True),
+    **_matrix_aliases("ushort", "DType.uint16", rows_first=True),
+    **_matrix_aliases("simd_ushort", "DType.uint16", rows_first=True),
+    **_matrix_aliases("min16uint", "DType.uint16", rows_first=True),
+    **_square_matrix_aliases("f16mat", "DType.float16"),
+    **_matrix_aliases("f16mat", "DType.float16", rows_first=False),
 }
 
 SWIZZLE_SETS = {
@@ -104,30 +246,576 @@ SWIZZLE_SETS = {
 }
 
 MOJO_DTYPE_INFO = {
+    "DType.float16": ("half", "half", "0.0"),
     "DType.float32": ("float", "vec", "0.0"),
     "DType.float64": ("double", "dvec", "0.0"),
+    "DType.int16": ("short", "i16vec", "0"),
     "DType.int32": ("int", "ivec", "0"),
+    "DType.uint16": ("ushort", "u16vec", "0"),
     "DType.uint32": ("uint", "uvec", "0"),
     "DType.bool": ("bool", "bvec", "False"),
 }
 
 MOJO_DTYPE_SUFFIX = {
+    "DType.float16": "f16",
     "DType.float32": "f32",
     "DType.float64": "f64",
+    "DType.int16": "i16",
     "DType.int32": "i32",
+    "DType.uint16": "u16",
     "DType.uint32": "u32",
     "DType.bool": "bool",
 }
 
 MOJO_SCALAR_DTYPES = {
+    "f16": "DType.float16",
+    "half": "DType.float16",
+    "min10float": "DType.float16",
+    "min16float": "DType.float16",
     "float": "DType.float32",
     "double": "DType.float64",
+    "i16": "DType.int16",
+    "i32": "DType.int32",
+    "int16": "DType.int16",
+    "int16_t": "DType.int16",
     "int": "DType.int32",
+    "min12int": "DType.int16",
+    "min16int": "DType.int16",
+    "short": "DType.int16",
+    "u16": "DType.uint16",
+    "u32": "DType.uint32",
     "uint": "DType.uint32",
+    "uint16": "DType.uint16",
+    "uint16_t": "DType.uint16",
+    "min16uint": "DType.uint16",
+    "ushort": "DType.uint16",
     "bool": "DType.bool",
 }
 
-MOJO_INTEGER_INDEX_TYPES = {"int", "uint", "short", "ushort", "long", "ulong"}
+MOJO_RESOURCE_TYPE_MAPPING = {
+    "sampler1D": "Texture1D",
+    "sampler1DArray": "Texture1DArray",
+    "sampler1DArrayShadow": "Texture1DArrayShadow",
+    "sampler1DShadow": "Texture1DShadow",
+    "sampler2D": "Texture2D",
+    "sampler2DArray": "Texture2DArray",
+    "sampler2DArrayShadow": "Texture2DArrayShadow",
+    "sampler2DShadow": "Texture2DShadow",
+    "sampler2DMS": "Texture2DMS",
+    "sampler2DMSArray": "Texture2DMSArray",
+    "sampler3D": "Texture3D",
+    "samplerCube": "TextureCube",
+    "samplerCubeArray": "TextureCubeArray",
+    "samplerCubeArrayShadow": "TextureCubeArrayShadow",
+    "samplerCubeShadow": "TextureCubeShadow",
+    "sampler": "Sampler",
+    "SamplerState": "Sampler",
+    "SamplerComparisonState": "Sampler",
+    "image1D": "Image1D",
+    "image1DArray": "Image1DArray",
+    "image2D": "Image2D",
+    "image2DArray": "Image2DArray",
+    "image2DMS": "Image2DMS",
+    "image2DMSArray": "Image2DMSArray",
+    "image3D": "Image3D",
+    "imageCube": "ImageCube",
+    "iimage1D": "IImage1D",
+    "iimage1DArray": "IImage1DArray",
+    "iimage2D": "IImage2D",
+    "iimage2DArray": "IImage2DArray",
+    "iimage2DMS": "IImage2DMS",
+    "iimage2DMSArray": "IImage2DMSArray",
+    "iimage3D": "IImage3D",
+    "uimage1D": "UImage1D",
+    "uimage1DArray": "UImage1DArray",
+    "uimage2D": "UImage2D",
+    "uimage2DArray": "UImage2DArray",
+    "uimage2DMS": "UImage2DMS",
+    "uimage2DMSArray": "UImage2DMSArray",
+    "uimage3D": "UImage3D",
+}
+
+MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING = {
+    "RWTexture1D": ("Image1D", "IImage1D", "UImage1D"),
+    "RWTexture1DArray": ("Image1DArray", "IImage1DArray", "UImage1DArray"),
+    "RWTexture2D": ("Image2D", "IImage2D", "UImage2D"),
+    "RWTexture2DArray": ("Image2DArray", "IImage2DArray", "UImage2DArray"),
+    "RWTexture3D": ("Image3D", "IImage3D", "UImage3D"),
+    "RasterizerOrderedTexture1D": ("Image1D", "IImage1D", "UImage1D"),
+    "RasterizerOrderedTexture1DArray": (
+        "Image1DArray",
+        "IImage1DArray",
+        "UImage1DArray",
+    ),
+    "RasterizerOrderedTexture2D": ("Image2D", "IImage2D", "UImage2D"),
+    "RasterizerOrderedTexture2DArray": (
+        "Image2DArray",
+        "IImage2DArray",
+        "UImage2DArray",
+    ),
+    "RasterizerOrderedTexture3D": ("Image3D", "IImage3D", "UImage3D"),
+}
+
+MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES = {
+    "RWTexture2DMS",
+    "RWTexture2DMSArray",
+    "RasterizerOrderedTexture2DMS",
+    "RasterizerOrderedTexture2DMSArray",
+}
+
+MOJO_TYPED_IMAGE_DTYPE_SUFFIX = {
+    "DType.float16": "Half",
+    "DType.float32": "Float",
+    "DType.float64": "Double",
+    "DType.int16": "Int16",
+    "DType.int32": "Int",
+    "DType.uint16": "UInt16",
+    "DType.uint32": "UInt",
+}
+
+MOJO_TYPED_IMAGE_SUFFIX_INFO = {
+    suffix if width == 1 else f"{suffix}{width}": (dtype, width)
+    for dtype, suffix in MOJO_TYPED_IMAGE_DTYPE_SUFFIX.items()
+    for width in (1, 2, 3, 4)
+}
+
+MOJO_IMAGE_RESOURCE_BASE_TYPES = tuple(
+    sorted(
+        {
+            resource_type
+            for resource_type in MOJO_RESOURCE_TYPE_MAPPING.values()
+            if resource_type.startswith(("Image", "IImage", "UImage"))
+        },
+        key=len,
+        reverse=True,
+    )
+)
+
+MOJO_RESOURCE_SAMPLE_COORDS = {
+    "Texture1D": "Float32",
+    "Texture1DArray": "SIMD[DType.float32, 2]",
+    "Texture1DArrayShadow": "SIMD[DType.float32, 4]",
+    "Texture1DShadow": "SIMD[DType.float32, 2]",
+    "Texture2D": "SIMD[DType.float32, 2]",
+    "Texture2DArray": "SIMD[DType.float32, 4]",
+    "Texture2DArrayShadow": "SIMD[DType.float32, 4]",
+    "Texture2DShadow": "SIMD[DType.float32, 4]",
+    "Texture3D": "SIMD[DType.float32, 4]",
+    "TextureCube": "SIMD[DType.float32, 4]",
+    "TextureCubeArray": "SIMD[DType.float32, 4]",
+    "TextureCubeArrayShadow": "SIMD[DType.float32, 4]",
+    "TextureCubeShadow": "SIMD[DType.float32, 4]",
+}
+
+MOJO_RESOURCE_TEXEL_COORDS = {
+    "Texture1D": "Int32",
+    "Texture1DArray": "SIMD[DType.int32, 2]",
+    "Texture1DArrayShadow": "SIMD[DType.int32, 2]",
+    "Texture1DShadow": "Int32",
+    "Texture2D": "SIMD[DType.int32, 2]",
+    "Texture2DArray": "SIMD[DType.int32, 4]",
+    "Texture2DArrayShadow": "SIMD[DType.int32, 4]",
+    "Texture2DShadow": "SIMD[DType.int32, 2]",
+    "Texture2DMS": "SIMD[DType.int32, 2]",
+    "Texture2DMSArray": "SIMD[DType.int32, 4]",
+    "Texture3D": "SIMD[DType.int32, 4]",
+    "TextureCube": "SIMD[DType.int32, 4]",
+    "TextureCubeArray": "SIMD[DType.int32, 4]",
+    "TextureCubeArrayShadow": "SIMD[DType.int32, 4]",
+    "TextureCubeShadow": "SIMD[DType.int32, 4]",
+    "Image1D": "Int32",
+    "Image1DArray": "SIMD[DType.int32, 2]",
+    "Image2D": "SIMD[DType.int32, 2]",
+    "Image2DArray": "SIMD[DType.int32, 4]",
+    "Image2DMS": "SIMD[DType.int32, 2]",
+    "Image2DMSArray": "SIMD[DType.int32, 4]",
+    "Image3D": "SIMD[DType.int32, 4]",
+    "ImageCube": "SIMD[DType.int32, 4]",
+    "IImage1D": "Int32",
+    "IImage1DArray": "SIMD[DType.int32, 2]",
+    "IImage2D": "SIMD[DType.int32, 2]",
+    "IImage2DArray": "SIMD[DType.int32, 4]",
+    "IImage2DMS": "SIMD[DType.int32, 2]",
+    "IImage2DMSArray": "SIMD[DType.int32, 4]",
+    "IImage3D": "SIMD[DType.int32, 4]",
+    "UImage1D": "Int32",
+    "UImage1DArray": "SIMD[DType.int32, 2]",
+    "UImage2D": "SIMD[DType.int32, 2]",
+    "UImage2DArray": "SIMD[DType.int32, 4]",
+    "UImage2DMS": "SIMD[DType.int32, 2]",
+    "UImage2DMSArray": "SIMD[DType.int32, 4]",
+    "UImage3D": "SIMD[DType.int32, 4]",
+}
+
+MOJO_RESOURCE_OFFSET_COORDS = {
+    "Texture1D": "Int32",
+    "Texture1DArray": "Int32",
+    "Texture1DArrayShadow": "Int32",
+    "Texture1DShadow": "Int32",
+    "Texture2D": "SIMD[DType.int32, 2]",
+    "Texture2DArray": "SIMD[DType.int32, 2]",
+    "Texture2DArrayShadow": "SIMD[DType.int32, 2]",
+    "Texture2DShadow": "SIMD[DType.int32, 2]",
+    "Texture3D": "SIMD[DType.int32, 4]",
+}
+
+MOJO_RESOURCE_COMPARE_COORDS = {
+    "Texture1DArrayShadow": "SIMD[DType.float32, 2]",
+    "Texture1DShadow": "Float32",
+    "Texture2DArrayShadow": "SIMD[DType.float32, 4]",
+    "Texture2DShadow": "SIMD[DType.float32, 2]",
+    "TextureCubeArrayShadow": "SIMD[DType.float32, 4]",
+    "TextureCubeShadow": "SIMD[DType.float32, 4]",
+}
+
+MOJO_RESOURCE_PROJECTED_COORDS = {
+    "Texture1D": "SIMD[DType.float32, 2]",
+    "Texture1DShadow": "SIMD[DType.float32, 2]",
+    "Texture2D": "SIMD[DType.float32, 4]",
+    "Texture2DShadow": "SIMD[DType.float32, 4]",
+    "Texture3D": "SIMD[DType.float32, 4]",
+}
+
+MOJO_RESOURCE_SIZE_RETURNS = {
+    "Texture1D": "Int32",
+    "Texture1DArray": "SIMD[DType.int32, 2]",
+    "Texture1DArrayShadow": "SIMD[DType.int32, 2]",
+    "Texture1DShadow": "Int32",
+    "Texture2D": "SIMD[DType.int32, 2]",
+    "Texture2DArray": "SIMD[DType.int32, 4]",
+    "Texture2DArrayShadow": "SIMD[DType.int32, 4]",
+    "Texture2DShadow": "SIMD[DType.int32, 2]",
+    "Texture2DMS": "SIMD[DType.int32, 2]",
+    "Texture2DMSArray": "SIMD[DType.int32, 4]",
+    "Texture3D": "SIMD[DType.int32, 4]",
+    "TextureCube": "SIMD[DType.int32, 2]",
+    "TextureCubeArray": "SIMD[DType.int32, 4]",
+    "TextureCubeArrayShadow": "SIMD[DType.int32, 4]",
+    "TextureCubeShadow": "SIMD[DType.int32, 2]",
+    "Image1D": "Int32",
+    "Image1DArray": "SIMD[DType.int32, 2]",
+    "Image2D": "SIMD[DType.int32, 2]",
+    "Image2DArray": "SIMD[DType.int32, 4]",
+    "Image2DMS": "SIMD[DType.int32, 2]",
+    "Image2DMSArray": "SIMD[DType.int32, 4]",
+    "Image3D": "SIMD[DType.int32, 4]",
+    "ImageCube": "SIMD[DType.int32, 2]",
+    "IImage1D": "Int32",
+    "IImage1DArray": "SIMD[DType.int32, 2]",
+    "IImage2D": "SIMD[DType.int32, 2]",
+    "IImage2DArray": "SIMD[DType.int32, 4]",
+    "IImage2DMS": "SIMD[DType.int32, 2]",
+    "IImage2DMSArray": "SIMD[DType.int32, 4]",
+    "IImage3D": "SIMD[DType.int32, 4]",
+    "UImage1D": "Int32",
+    "UImage1DArray": "SIMD[DType.int32, 2]",
+    "UImage2D": "SIMD[DType.int32, 2]",
+    "UImage2DArray": "SIMD[DType.int32, 4]",
+    "UImage2DMS": "SIMD[DType.int32, 2]",
+    "UImage2DMSArray": "SIMD[DType.int32, 4]",
+    "UImage3D": "SIMD[DType.int32, 4]",
+}
+
+MOJO_GENERIC_TEXTURE_BUILTINS = {
+    "textureOffset": ("sample_offset", "vec4"),
+    "textureLodOffset": ("sample_lod_offset", "vec4"),
+    "textureGradOffset": ("sample_grad_offset", "vec4"),
+    "textureGather": ("texture_gather", "vec4"),
+    "textureGatherOffset": ("texture_gather_offset", "vec4"),
+    "textureGatherOffsets": ("texture_gather_offsets", "vec4"),
+    "textureProj": ("sample_proj", "vec4"),
+    "textureProjOffset": ("sample_proj_offset", "vec4"),
+    "textureProjLod": ("sample_proj_lod", "vec4"),
+    "textureProjLodOffset": ("sample_proj_lod_offset", "vec4"),
+    "textureProjGrad": ("sample_proj_grad", "vec4"),
+    "textureProjGradOffset": ("sample_proj_grad_offset", "vec4"),
+    "textureQueryLod": ("texture_query_lod", "vec2"),
+    "textureCompare": ("texture_compare", "float"),
+    "textureCompareOffset": ("texture_compare_offset", "float"),
+    "textureCompareLod": ("texture_compare_lod", "float"),
+    "textureCompareLodOffset": ("texture_compare_lod_offset", "float"),
+    "textureCompareGrad": ("texture_compare_grad", "float"),
+    "textureCompareGradOffset": ("texture_compare_grad_offset", "float"),
+    "textureCompareProj": ("texture_compare_proj", "float"),
+    "textureCompareProjOffset": ("texture_compare_proj_offset", "float"),
+    "textureCompareProjLod": ("texture_compare_proj_lod", "float"),
+    "textureCompareProjLodOffset": ("texture_compare_proj_lod_offset", "float"),
+    "textureCompareProjGrad": ("texture_compare_proj_grad", "float"),
+    "textureCompareProjGradOffset": ("texture_compare_proj_grad_offset", "float"),
+    "textureGatherCompare": ("texture_gather_compare", "vec4"),
+    "textureGatherCompareOffset": ("texture_gather_compare_offset", "vec4"),
+    "CalculateLevelOfDetail": ("calculate_level_of_detail", "float"),
+    "CalculateLevelOfDetailUnclamped": (
+        "calculate_level_of_detail_unclamped",
+        "float",
+    ),
+}
+
+MOJO_IMAGE_ATOMIC_BUILTINS = {
+    "imageAtomicAdd": "image_atomic_add",
+    "imageAtomicMin": "image_atomic_min",
+    "imageAtomicMax": "image_atomic_max",
+    "imageAtomicAnd": "image_atomic_and",
+    "imageAtomicOr": "image_atomic_or",
+    "imageAtomicXor": "image_atomic_xor",
+    "imageAtomicExchange": "image_atomic_exchange",
+    "imageAtomicCompSwap": "image_atomic_comp_swap",
+}
+
+MOJO_ATOMIC_OP_ALIASES = {
+    **MOJO_IMAGE_ATOMIC_BUILTINS,
+    "imageAtomicCompareExchange": "image_atomic_comp_swap",
+    "atomicAdd": "image_atomic_add",
+    "atomicMin": "image_atomic_min",
+    "atomicMax": "image_atomic_max",
+    "atomicAnd": "image_atomic_and",
+    "atomicOr": "image_atomic_or",
+    "atomicXor": "image_atomic_xor",
+    "atomicExchange": "image_atomic_exchange",
+    "atomicCompSwap": "image_atomic_comp_swap",
+    "atomicCompareExchange": "image_atomic_comp_swap",
+    "Add": "image_atomic_add",
+    "Min": "image_atomic_min",
+    "Max": "image_atomic_max",
+    "And": "image_atomic_and",
+    "Or": "image_atomic_or",
+    "Xor": "image_atomic_xor",
+    "Exchange": "image_atomic_exchange",
+    "CompareExchange": "image_atomic_comp_swap",
+    "CompSwap": "image_atomic_comp_swap",
+    "InterlockedAdd": "image_atomic_add",
+    "InterlockedMin": "image_atomic_min",
+    "InterlockedMax": "image_atomic_max",
+    "InterlockedAnd": "image_atomic_and",
+    "InterlockedOr": "image_atomic_or",
+    "InterlockedXor": "image_atomic_xor",
+    "InterlockedExchange": "image_atomic_exchange",
+    "InterlockedCompareExchange": "image_atomic_comp_swap",
+}
+
+MOJO_TYPED_BUFFER_RESOURCE_TYPES = {
+    "Buffer",
+    "RWBuffer",
+    "StructuredBuffer",
+    "RWStructuredBuffer",
+    "AppendStructuredBuffer",
+    "ConsumeStructuredBuffer",
+}
+
+MOJO_BYTE_ADDRESS_BUFFER_TYPES = {
+    "ByteAddressBuffer",
+    "RWByteAddressBuffer",
+}
+
+MOJO_HLSL_BUFFER_TYPE_ALIASES = {
+    "RasterizerOrderedBuffer": "RWBuffer",
+    "RasterizerOrderedStructuredBuffer": "RWStructuredBuffer",
+    "RasterizerOrderedByteAddressBuffer": "RWByteAddressBuffer",
+}
+
+MOJO_BUFFER_RESOURCE_TYPES = (
+    MOJO_TYPED_BUFFER_RESOURCE_TYPES | MOJO_BYTE_ADDRESS_BUFFER_TYPES
+)
+
+MOJO_BUFFER_STORE_RESOURCE_TYPES = {
+    "RWBuffer",
+    "RWStructuredBuffer",
+    "RWByteAddressBuffer",
+}
+
+MOJO_BUFFER_LOAD_RESOURCE_TYPES = {
+    "Buffer",
+    "RWBuffer",
+    "StructuredBuffer",
+    "RWStructuredBuffer",
+    "ByteAddressBuffer",
+    "RWByteAddressBuffer",
+}
+
+MOJO_TYPED_BUFFER_LOAD_RESOURCE_TYPES = {
+    "Buffer",
+    "RWBuffer",
+    "StructuredBuffer",
+    "RWStructuredBuffer",
+}
+
+MOJO_REINTERPRET_BUILTINS = {
+    "asfloat": "Float32",
+    "asint": "Int32",
+    "asuint": "UInt32",
+}
+
+MOJO_REINTERPRET_TARGET_TYPES = {
+    "asfloat": ("float", "vec"),
+    "asint": ("int", "ivec"),
+    "asuint": ("uint", "uvec"),
+}
+
+MOJO_BYTE_ADDRESS_LOAD_METHODS = {
+    "Load": 1,
+    "Load2": 2,
+    "Load3": 3,
+    "Load4": 4,
+}
+
+MOJO_BYTE_ADDRESS_STORE_METHODS = {
+    "Store": 1,
+    "Store2": 2,
+    "Store3": 3,
+    "Store4": 4,
+}
+
+MOJO_BYTE_ADDRESS_ATOMIC_METHODS = {
+    "InterlockedAdd",
+    "InterlockedAnd",
+    "InterlockedCompareExchange",
+    "InterlockedCompareStore",
+    "InterlockedExchange",
+    "InterlockedMax",
+    "InterlockedMin",
+    "InterlockedOr",
+    "InterlockedXor",
+}
+
+MOJO_BUFFER_COUNTER_METHODS = {
+    "DecrementCounter",
+    "IncrementCounter",
+}
+
+MOJO_BUFFER_OP_ALIASES = {
+    "Append": "Append",
+    "append": "Append",
+    "buffer_append": "Append",
+    "Consume": "Consume",
+    "consume": "Consume",
+    "buffer_consume": "Consume",
+    "GetDimensions": "GetDimensions",
+    "getDimensions": "GetDimensions",
+    "dimensions": "GetDimensions",
+    "buffer_dimensions": "GetDimensions",
+    "Load": "Load",
+    "load": "Load",
+    "buffer_load": "Load",
+    "Store": "Store",
+    "store": "Store",
+    "buffer_store": "Store",
+    **{name: name for name in MOJO_BYTE_ADDRESS_LOAD_METHODS},
+    **{name: name for name in MOJO_BYTE_ADDRESS_STORE_METHODS},
+}
+
+MOJO_INTEGER_DTYPES = {
+    "DType.int16",
+    "DType.int32",
+    "DType.uint16",
+    "DType.uint32",
+}
+
+MOJO_INTEGER_INDEX_TYPES = {
+    "Int",
+    "Int16",
+    "Int32",
+    "Int64",
+    "UInt",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+    "i16",
+    "i32",
+    "int",
+    "int16",
+    "int16_t",
+    "long",
+    "min12int",
+    "min16int",
+    "min16uint",
+    "short",
+    "u16",
+    "u32",
+    "uint",
+    "uint16",
+    "uint16_t",
+    "ulong",
+    "ushort",
+}
+
+MOJO_MAPPED_INTEGER_TYPES = {
+    "Int",
+    "Int16",
+    "Int32",
+    "Int64",
+    "UInt",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+}
+
+MOJO_SUPPORTED_STAGE_TYPES = {"vertex", "fragment", "compute"}
+
+MOJO_SYNC_BUILTINS = {
+    "barrier": "_crossgl_workgroup_barrier",
+    "workgroupBarrier": "_crossgl_workgroup_barrier",
+    "memoryBarrier": "_crossgl_memory_barrier",
+}
+
+MOJO_RESOURCE_ACCESS_QUALIFIERS = {
+    "access::read": "readonly",
+    "access::read_write": "readwrite",
+    "access::write": "writeonly",
+    "read": "readonly",
+    "read_write": "readwrite",
+    "readonly": "readonly",
+    "readwrite": "readwrite",
+    "write": "writeonly",
+    "writeonly": "writeonly",
+}
+
+MOJO_RESOURCE_MEMORY_QUALIFIERS = {
+    "coherent",
+    "globallycoherent",
+    "restrict",
+    "volatile",
+}
+
+MOJO_NON_SEMANTIC_ATTRIBUTES = {
+    "access",
+    "binding",
+    "buffer",
+    "builtin",
+    "compute",
+    "fragment",
+    "glsl_buffer_block",
+    "group",
+    "layout",
+    "numthreads",
+    "register",
+    "sampler",
+    "set",
+    "space",
+    "std140",
+    "std430",
+    "texture",
+    "threadgroup_size",
+    "uav",
+    "vertex",
+}
+
+MOJO_INPUT_ONLY_RETURN_SEMANTICS = {
+    "gl_fragcoord",
+    "gl_frontfacing",
+    "gl_globalinvocationid",
+    "gl_instanceid",
+    "gl_localinvocationid",
+    "gl_pointcoord",
+    "gl_vertexid",
+    "gl_workgroupid",
+    "sv_dispatchthreadid",
+    "sv_groupid",
+    "sv_groupindex",
+    "sv_groupthreadid",
+    "sv_instanceid",
+    "sv_isfrontface",
+    "sv_vertexid",
+}
 
 MOJO_VECTOR_ARITHMETIC_OPS = {
     "+": "add",
@@ -146,6 +834,36 @@ class MojoCodeGen:
         self.struct_types = {}
         self.function_return_types = {}
         self.variable_types = {}
+        self.enum_types = {}
+        self.enum_variant_aliases = {}
+        self.enum_variant_values = {}
+        self.struct_member_semantics = {}
+        self.current_enum_value_aliases = {}
+        self.resource_access_qualifiers = {}
+        self.struct_resource_access_qualifiers = {}
+        self.mojo_resource_binding_cursors = {}
+        self.mojo_used_resource_bindings = {}
+        self.required_resource_types = set()
+        self.required_resource_sample_types = set()
+        self.required_resource_lod_types = set()
+        self.required_resource_grad_types = set()
+        self.required_resource_size_types = set()
+        self.required_resource_query_level_types = set()
+        self.required_resource_sample_count_helpers = set()
+        self.required_resource_texel_fetch_types = set()
+        self.required_image_load_types = set()
+        self.required_image_store_types = set()
+        self.required_resource_builtin_helpers = {}
+        self.required_buffer_resource_types = set()
+        self.required_buffer_load_helpers = set()
+        self.required_buffer_store_helpers = set()
+        self.required_buffer_append_helpers = set()
+        self.required_buffer_consume_helpers = set()
+        self.required_buffer_dimensions_helpers = set()
+        self.required_byte_address_vector_load_helpers = set()
+        self.required_byte_address_vector_store_helpers = set()
+        self.required_reinterpret_helpers = set()
+        self.required_sync_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -167,14 +885,28 @@ class MojoCodeGen:
             # Scalar Types
             "void": "None",
             "int": "Int32",
+            "i16": "Int16",
+            "i32": "Int32",
+            "int16": "Int16",
+            "int16_t": "Int16",
+            "min12int": "Int16",
+            "min16int": "Int16",
             "short": "Int16",
             "long": "Int64",
             "uint": "UInt32",
+            "u16": "UInt16",
+            "u32": "UInt32",
+            "uint16": "UInt16",
+            "uint16_t": "UInt16",
+            "min16uint": "UInt16",
             "ushort": "UInt16",
             "ulong": "UInt64",
+            "f16": "Float16",
             "float": "Float32",
             "double": "Float64",
             "half": "Float16",
+            "min10float": "Float16",
+            "min16float": "Float16",
             "bool": "Bool",
             "string": "String",
             "char": "String",
@@ -186,11 +918,26 @@ class MojoCodeGen:
                 name: self.matrix_type_name(dtype, columns, rows)
                 for name, (dtype, columns, rows) in MOJO_MATRIX_TYPES.items()
             },
-            # Texture Types (Mojo equivalents)
-            "sampler2D": "Texture2D",
-            "sampler3D": "Texture3D",
-            "samplerCube": "TextureCube",
-            "sampler": "Sampler",
+            # Texture/resource placeholders for Mojo compile-smoke support.
+            **MOJO_RESOURCE_TYPE_MAPPING,
+        }
+        self.scalar_constructor_map = {
+            name: mapped
+            for name, mapped in self.type_mapping.items()
+            if mapped
+            in {
+                "Bool",
+                "Float16",
+                "Float32",
+                "Float64",
+                "Int16",
+                "Int32",
+                "Int64",
+                "String",
+                "UInt16",
+                "UInt32",
+                "UInt64",
+            }
         }
 
         self.semantic_map = {
@@ -200,6 +947,9 @@ class MojoCodeGen:
             "gl_Position": "position",
             "gl_PointSize": "point_size",
             "gl_ClipDistance": "clip_distance",
+            "gl_GlobalInvocationID": "global_invocation_id",
+            "gl_LocalInvocationID": "local_invocation_id",
+            "gl_WorkGroupID": "workgroup_id",
             # Fragment attributes
             "gl_FragColor": "color(0)",
             "gl_FragColor0": "color(0)",
@@ -223,6 +973,20 @@ class MojoCodeGen:
             "COLOR": "color",
             "COLOR0": "color0",
             "COLOR1": "color1",
+            "SV_Position": "position",
+            "SV_Depth": "depth(any)",
+            "SV_DispatchThreadID": "global_invocation_id",
+            "SV_GroupID": "workgroup_id",
+            "SV_GroupIndex": "group_index",
+            "SV_GroupThreadID": "local_invocation_id",
+            "SV_InstanceID": "instance_id",
+            "SV_IsFrontFace": "front_facing",
+            "SV_Target": "color(0)",
+            "SV_Target0": "color(0)",
+            "SV_Target1": "color(1)",
+            "SV_Target2": "color(2)",
+            "SV_Target3": "color(3)",
+            "SV_VertexID": "vertex_id",
         }
 
         # Function mapping for common shader functions
@@ -254,6 +1018,36 @@ class MojoCodeGen:
         self.struct_types = {}
         self.function_return_types = {}
         self.variable_types = {}
+        self.enum_types = {}
+        self.enum_variant_aliases = {}
+        self.enum_variant_values = {}
+        self.struct_member_semantics = {}
+        self.current_enum_value_aliases = {}
+        self.resource_access_qualifiers = {}
+        self.struct_resource_access_qualifiers = {}
+        self.mojo_resource_binding_cursors = {}
+        self.mojo_used_resource_bindings = {}
+        self.required_resource_types = set()
+        self.required_resource_sample_types = set()
+        self.required_resource_lod_types = set()
+        self.required_resource_grad_types = set()
+        self.required_resource_size_types = set()
+        self.required_resource_query_level_types = set()
+        self.required_resource_sample_count_helpers = set()
+        self.required_resource_texel_fetch_types = set()
+        self.required_image_load_types = set()
+        self.required_image_store_types = set()
+        self.required_resource_builtin_helpers = {}
+        self.required_buffer_resource_types = set()
+        self.required_buffer_load_helpers = set()
+        self.required_buffer_store_helpers = set()
+        self.required_buffer_append_helpers = set()
+        self.required_buffer_consume_helpers = set()
+        self.required_buffer_dimensions_helpers = set()
+        self.required_byte_address_vector_load_helpers = set()
+        self.required_byte_address_vector_store_helpers = set()
+        self.required_reinterpret_helpers = set()
+        self.required_sync_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -280,6 +1074,9 @@ class MojoCodeGen:
 
         structs = getattr(ast, "structs", [])
         for node in structs:
+            if isinstance(node, EnumNode):
+                code += self.generate_enum(node)
+                continue
             if isinstance(node, StructNode):
                 code += self.generate_struct(node)
 
@@ -313,13 +1110,23 @@ class MojoCodeGen:
                 # Handle both old and new AST variable structures
                 vtype = self.variable_declared_type(node) or "float"
                 self.register_variable_type(node.name, vtype)
+                resource_comment = self.generate_resource_metadata_comment(node, vtype)
                 if self.is_array_type_name(vtype):
+                    code += resource_comment
                     code += (
                         f"var {node.name} = "
                         f"{self.array_initial_value_for_type(vtype)}\n"
                     )
                 elif self.is_struct_type_name(vtype):
+                    code += resource_comment
                     code += f"var {node.name} = {self.zero_value_for_type(vtype)}\n"
+                elif self.is_resource_type_name(vtype):
+                    code += resource_comment
+                    mapped_type = self.map_type(vtype)
+                    code += (
+                        f"var {node.name}: {mapped_type} = "
+                        f"{self.zero_value_for_type(vtype)}\n"
+                    )
                 else:
                     code += f"var {node.name}: {self.map_type(vtype)}\n"
 
@@ -353,9 +1160,8 @@ class MojoCodeGen:
             emitted_local_functions = set()
             for stage_type, stage in ast.stages.items():
                 if hasattr(stage, "entry_point"):
-                    stage_name = (
-                        str(stage_type).split(".")[-1].lower()
-                    )  # Extract stage name from enum
+                    stage_name = self.stage_type_name(stage_type)
+                    self.validate_stage_type(stage_name)
                     code += f"# {stage_name.title()} Shader\n"
                     for func in getattr(stage, "local_functions", []):
                         if id(func) in emitted_local_functions:
@@ -367,6 +1173,20 @@ class MojoCodeGen:
                     )
 
         return header + self.generate_required_helpers() + code
+
+    def stage_type_name(self, stage_type):
+        value = getattr(stage_type, "value", None)
+        if isinstance(value, str):
+            return value
+        return str(stage_type).split(".")[-1].lower()
+
+    def validate_stage_type(self, stage_name):
+        if stage_name not in MOJO_SUPPORTED_STAGE_TYPES:
+            supported = ", ".join(sorted(MOJO_SUPPORTED_STAGE_TYPES))
+            raise ValueError(
+                f"Unsupported {stage_name} shader stage for Mojo codegen; "
+                f"supported compile-smoke stages are {supported}"
+            )
 
     def collect_function_return_types(self, ast):
         functions = list(getattr(ast, "functions", []))
@@ -423,6 +1243,9 @@ class MojoCodeGen:
                 return f"dvec{size}"
             elif element_type == "bool":
                 return f"bvec{size}"
+            dtype = MOJO_SCALAR_DTYPES.get(element_type)
+            if dtype in MOJO_DTYPE_INFO:
+                return self.vector_type_name_for_dtype_width(dtype, size)
             else:
                 return f"{element_type}{size}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
@@ -440,6 +1263,10 @@ class MojoCodeGen:
         if var_type is not None:
             return self.convert_type_node_to_string(var_type)
 
+        member_type = getattr(node, "member_type", None)
+        if member_type is not None:
+            return self.convert_type_node_to_string(member_type)
+
         vtype = getattr(node, "vtype", None)
         if vtype is None or vtype == "":
             return None
@@ -454,35 +1281,985 @@ class MojoCodeGen:
             return size.value
         return size
 
-    def extract_semantic_from_attributes(self, attributes):
-        """Extract semantic information from new AST attributes."""
-        semantic_attrs = [
-            "position",
-            "color",
-            "texcoord",
-            "normal",
-            "tangent",
-            "binormal",
-            "POSITION",
-            "COLOR",
-            "TEXCOORD",
-            "NORMAL",
-            "TANGENT",
-            "BINORMAL",
-            "TEXCOORD0",
-            "TEXCOORD1",
-            "TEXCOORD2",
-            "TEXCOORD3",
-        ]
+    def parse_generic_type_name(self, type_name):
+        if not isinstance(type_name, str) or "<" not in type_name:
+            return None
+        match = re.fullmatch(r"\s*([A-Za-z_]\w*)\s*<(.+)>\s*", type_name)
+        if match is None:
+            return None
+        return match.group(1), self.split_generic_arguments(match.group(2))
 
-        for attr in attributes:
-            if hasattr(attr, "name") and attr.name in semantic_attrs:
-                return attr.name
+    def split_generic_arguments(self, args_text):
+        args = []
+        depth = 0
+        start = 0
+        for index, char in enumerate(args_text):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif char == "," and depth == 0:
+                args.append(args_text[start:index].strip())
+                start = index + 1
+        args.append(args_text[start:].strip())
+        return [arg for arg in args if arg]
+
+    def buffer_resource_info(self, type_name):
+        generic = self.parse_generic_type_name(self.type_name(type_name))
+        if generic is None:
+            type_name = self.canonical_buffer_resource_type(type_name)
+            if type_name in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+                return type_name, None
+            return None
+
+        base_type, generic_args = generic
+        base_type = self.canonical_buffer_resource_type(base_type)
+        if base_type not in MOJO_TYPED_BUFFER_RESOURCE_TYPES or not generic_args:
+            return None
+        return base_type, generic_args[0]
+
+    def canonical_buffer_resource_type(self, base_type):
+        base_name = self.type_name(base_type)
+        return MOJO_HLSL_BUFFER_TYPE_ALIASES.get(base_name, base_name)
+
+    def resource_type_alias(self, type_name):
+        type_name = self.type_name(type_name)
+        rw_alias = self.writable_texture_resource_alias(type_name)
+        if rw_alias is not None:
+            return rw_alias
+
+        mapped_type = MOJO_RESOURCE_TYPE_MAPPING.get(type_name)
+        if mapped_type is not None:
+            return mapped_type
+
+        generic = self.parse_generic_type_name(type_name)
+        if generic is None:
+            return None
+
+        base_type, generic_args = generic
+        rw_alias = self.writable_texture_resource_alias(
+            base_type, generic_args[0] if generic_args else None
+        )
+        if rw_alias is not None:
+            return rw_alias
+
+        mapped_base_type = MOJO_RESOURCE_TYPE_MAPPING.get(base_type, base_type)
+        if self.is_mojo_resource_type(
+            mapped_base_type
+        ) and self.is_texture_resource_type(mapped_base_type):
+            return mapped_base_type
         return None
+
+    def writable_texture_resource_alias(self, base_type, element_type=None):
+        base_name = self.type_name(base_type)
+        if base_name in MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES:
+            raise ValueError(
+                "Unsupported writable texture resource for Mojo codegen; "
+                f"multisample writable texture alias is not supported: {base_name}"
+            )
+
+        image_aliases = MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING.get(base_name)
+        if image_aliases is None:
+            return None
+
+        element_info = self.resource_element_value_info(element_type)
+        dtype = element_info[0] if element_info is not None else None
+        if dtype in {"DType.uint16", "DType.uint32"}:
+            image_alias = image_aliases[2]
+        elif dtype in {"DType.int16", "DType.int32"}:
+            image_alias = image_aliases[1]
+        else:
+            image_alias = image_aliases[0]
+
+        if element_info is None:
+            return image_alias
+
+        _, source_width, _ = element_info
+        if source_width == 1 and dtype in {"DType.int32", "DType.uint32"}:
+            return image_alias
+        return self.typed_image_resource_type(image_alias, dtype, source_width)
+
+    def resource_element_dtype(self, element_type):
+        element_info = self.resource_element_value_info(element_type)
+        if element_info is not None:
+            return element_info[0]
+        return None
+
+    def resource_element_value_info(self, element_type):
+        if element_type is None:
+            return None
+
+        type_name = self.normalize_generic_vector_type_name(
+            self.type_name(element_type)
+        )
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            dtype, source_width, _, _ = vector_info
+            return dtype, source_width, self.map_type(type_name)
+
+        dtype = MOJO_SCALAR_DTYPES.get(type_name)
+        if dtype is None:
+            return None
+        return dtype, 1, self.map_type(type_name)
+
+    def typed_image_resource_type(self, base_image_type, dtype, source_width):
+        suffix = MOJO_TYPED_IMAGE_DTYPE_SUFFIX.get(dtype)
+        if suffix is None:
+            return base_image_type
+        if source_width != 1:
+            suffix = f"{suffix}{source_width}"
+        return f"{base_image_type}{suffix}"
+
+    def typed_image_resource_info(self, resource_type):
+        if not isinstance(resource_type, str):
+            return None
+        for base_image_type in MOJO_IMAGE_RESOURCE_BASE_TYPES:
+            if not resource_type.startswith(base_image_type):
+                continue
+            suffix = resource_type[len(base_image_type) :]
+            if not suffix:
+                return None
+            suffix_info = MOJO_TYPED_IMAGE_SUFFIX_INFO.get(suffix)
+            if suffix_info is not None:
+                dtype, source_width = suffix_info
+                return base_image_type, dtype, source_width
+        return None
+
+    def image_resource_base_type(self, resource_type):
+        typed_info = self.typed_image_resource_info(resource_type)
+        if typed_info is not None:
+            return typed_info[0]
+        return resource_type
+
+    def resource_texel_coord_type(self, resource_type):
+        return MOJO_RESOURCE_TEXEL_COORDS.get(
+            self.image_resource_base_type(resource_type)
+        )
+
+    def resource_size_return_type(self, resource_type):
+        return MOJO_RESOURCE_SIZE_RETURNS.get(
+            self.image_resource_base_type(resource_type)
+        )
+
+    def mapped_buffer_type(self, buffer_type, element_type=None):
+        buffer_type = self.canonical_buffer_resource_type(buffer_type)
+        if buffer_type in MOJO_TYPED_BUFFER_RESOURCE_TYPES and element_type is not None:
+            return f"{buffer_type}[{self.map_type(element_type)}]"
+        return buffer_type
+
+    def register_buffer_resource_type(self, buffer_type):
+        buffer_type = self.canonical_buffer_resource_type(buffer_type)
+        if buffer_type in MOJO_BUFFER_RESOURCE_TYPES:
+            self.required_buffer_resource_types.add(buffer_type)
+
+    def attribute_value_to_string(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if hasattr(value, "value") and value.value is not None:
+            return str(value.value).strip('"')
+        if hasattr(value, "name") and value.name is not None:
+            return str(value.name)
+        return str(value)
+
+    def binding_index_value(self, value, prefixes=()):
+        raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        for prefix in prefixes:
+            if raw_value.startswith(prefix) and raw_value[len(prefix) :].isdigit():
+                return int(raw_value[len(prefix) :])
+        return None
+
+    def register_space_index_value(self, value):
+        raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        if raw_value.startswith("space") and raw_value[5:].isdigit():
+            return int(raw_value[5:])
+        return None
+
+    def explicit_resource_binding_index(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = getattr(attr, "arguments", []) or []
+            if not arguments:
+                continue
+            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
+                binding = self.binding_index_value(arguments[0], ("b", "s", "t", "u"))
+            elif attr_name == "register":
+                binding = self.binding_index_value(arguments[0], ("b", "s", "t", "u"))
+            else:
+                binding = None
+            if binding is not None:
+                return binding
+        return None
+
+    def explicit_resource_set_index(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = getattr(attr, "arguments", []) or []
+            if attr_name in {"set", "group"} and arguments:
+                set_index = self.binding_index_value(arguments[0])
+                if set_index is not None:
+                    return set_index
+            if attr_name == "space" and arguments:
+                set_index = self.register_space_index_value(arguments[0])
+                if set_index is not None:
+                    return set_index
+            if attr_name == "register":
+                for argument in arguments[1:]:
+                    set_index = self.register_space_index_value(argument)
+                    if set_index is not None:
+                        return set_index
+        return 0
+
+    def resource_register_metadata(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "register":
+                continue
+            values = [
+                self.attribute_value_to_string(argument)
+                for argument in getattr(attr, "arguments", []) or []
+            ]
+            values = [value for value in values if value]
+            if values:
+                return ",".join(values)
+        return None
+
+    def normalized_resource_access_metadata(self, node):
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            access = MOJO_RESOURCE_ACCESS_QUALIFIERS.get(str(qualifier).lower())
+            if access is not None:
+                return access
+
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name == "access":
+                arguments = getattr(attr, "arguments", []) or []
+                if arguments:
+                    access = MOJO_RESOURCE_ACCESS_QUALIFIERS.get(
+                        str(self.attribute_value_to_string(arguments[0])).lower()
+                    )
+                    if access is not None:
+                        return access
+            access = MOJO_RESOURCE_ACCESS_QUALIFIERS.get(attr_name)
+            if access is not None:
+                return access
+        return None
+
+    def resource_memory_qualifiers(self, node):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+            if str(qualifier).lower() in MOJO_RESOURCE_MEMORY_QUALIFIERS
+        }
+        qualifiers.update(
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+            if str(getattr(attr, "name", "")).lower() in MOJO_RESOURCE_MEMORY_QUALIFIERS
+        )
+        return sorted(qualifiers)
+
+    def resource_base_type_and_count(self, type_name):
+        type_name = self.type_name(type_name)
+        if self.is_array_type_name(type_name):
+            base_type, size = parse_array_type(type_name)
+            return base_type, size or 1
+        return type_name, 1
+
+    def is_glsl_buffer_block_node(self, node):
+        attributes = {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+        }
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if "glsl_buffer_block" in attributes:
+            return True
+        return "buffer" in qualifiers and bool(
+            attributes & {"std140", "std430", "scalar"}
+        )
+
+    def glsl_buffer_block_layout(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name == "glsl_buffer_block":
+                arguments = getattr(attr, "arguments", []) or []
+                if arguments:
+                    return self.attribute_value_to_string(arguments[0])
+            if attr_name in {"std140", "std430", "scalar"}:
+                return attr_name
+        return None
+
+    def mojo_resource_kind(self, type_name, forced_kind=None, node=None):
+        if forced_kind is not None:
+            return forced_kind
+        if node is not None and self.is_glsl_buffer_block_node(node):
+            return "glsl_buffer_block"
+        base_type, _ = self.resource_base_type_and_count(type_name)
+        if self.buffer_resource_info(base_type) is not None:
+            return "buffer"
+        mapped_type = self.resource_type_alias(base_type) or self.type_mapping.get(
+            str(base_type), str(base_type)
+        )
+        if mapped_type == "Sampler":
+            return "sampler"
+        if mapped_type.startswith(("Image", "IImage", "UImage")):
+            return "image"
+        if mapped_type.startswith("Texture"):
+            return "texture"
+        return None
+
+    def mojo_resource_binding_namespace(self, kind):
+        if kind in {"cbuffer", "glsl_buffer_block"}:
+            return "buffer"
+        return kind
+
+    def next_available_resource_binding(self, namespace, set_index, count):
+        key = (namespace, set_index)
+        binding = self.mojo_resource_binding_cursors.get(key, 0)
+        while self.resource_binding_range_conflicts(key, binding, count):
+            binding += 1
+        self.mojo_resource_binding_cursors[key] = binding + count
+        return binding
+
+    def resource_binding_range_conflicts(self, key, binding, count):
+        end = binding + count - 1
+        for used_start, used_end, _ in self.mojo_used_resource_bindings.get(key, []):
+            if binding <= used_end and used_start <= end:
+                return True
+        return False
+
+    def reserve_resource_binding(self, namespace, set_index, binding, count, name):
+        key = (namespace, set_index)
+        end = binding + count - 1
+        for used_start, used_end, used_name in self.mojo_used_resource_bindings.get(
+            key, []
+        ):
+            if binding <= used_end and used_start <= end:
+                raise ValueError(
+                    "Conflicting Mojo resource binding for "
+                    f"'{name}': {namespace} set {set_index} binding "
+                    f"{binding}-{end} overlaps '{used_name}' binding "
+                    f"{used_start}-{used_end}"
+                )
+        self.mojo_used_resource_bindings.setdefault(key, []).append(
+            (binding, end, name)
+        )
+        self.mojo_resource_binding_cursors[key] = max(
+            self.mojo_resource_binding_cursors.get(key, 0), end + 1
+        )
+
+    def generate_resource_metadata_comment(self, node, type_name, kind=None):
+        name = getattr(node, "name", None)
+        resource_kind = self.mojo_resource_kind(type_name, kind, node)
+        if not name or resource_kind is None:
+            return ""
+
+        self.register_resource_access_metadata(node, type_name)
+        _, count = self.resource_base_type_and_count(type_name)
+        namespace = self.mojo_resource_binding_namespace(resource_kind)
+        set_index = self.explicit_resource_set_index(node)
+        binding = self.explicit_resource_binding_index(node)
+        if binding is None:
+            binding = self.next_available_resource_binding(namespace, set_index, count)
+            binding_source = "automatic"
+            self.reserve_resource_binding(namespace, set_index, binding, count, name)
+        else:
+            binding_source = "explicit"
+            self.reserve_resource_binding(namespace, set_index, binding, count, name)
+
+        parts = [
+            "# CrossGL resource metadata:",
+            f"name={name}",
+            f"kind={resource_kind}",
+            f"set={set_index}",
+            f"binding={binding}",
+            f"binding_source={binding_source}",
+        ]
+        if count != 1:
+            parts.append(f"count={count}")
+        register_metadata = self.resource_register_metadata(node)
+        if register_metadata:
+            parts.append(f"register={register_metadata}")
+        layout = self.glsl_buffer_block_layout(node)
+        if layout:
+            parts.append(f"layout={layout}")
+        access = self.normalized_resource_access_metadata(node)
+        if access:
+            parts.append(f"access={access}")
+        memory_qualifiers = self.resource_memory_qualifiers(node)
+        if memory_qualifiers:
+            parts.append(f"memory={','.join(memory_qualifiers)}")
+        return " ".join(parts) + "\n"
+
+    def register_resource_access_metadata(self, node, type_name):
+        name = getattr(node, "name", None)
+        if not name or self.mojo_resource_kind(type_name, node=node) is None:
+            return
+        access = self.normalized_resource_access_metadata(node)
+        if access:
+            self.resource_access_qualifiers[name] = access
+
+    def register_struct_resource_access_metadata(
+        self, struct_name, member_name, member, member_type
+    ):
+        access = self.normalized_resource_access_metadata(member)
+        if access is None:
+            return
+
+        base_type, _ = self.resource_base_type_and_count(member_type)
+        if self.mojo_resource_kind(base_type, node=member) is None:
+            return
+
+        self.struct_resource_access_qualifiers.setdefault(struct_name, {})[
+            member_name
+        ] = access
+
+    def resource_access_root_name(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.resource_access_root_name(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            return self.resource_access_root_name(expr.object)
+        name = getattr(expr, "name", None)
+        if name is not None:
+            return name
+        return None
+
+    def resource_access_path_name(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.resource_access_path_name(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            obj_path = self.resource_access_path_name(expr.object)
+            if obj_path:
+                return f"{obj_path}.{expr.member}"
+            return expr.member
+        name = getattr(expr, "name", None)
+        if name is not None:
+            return name
+        return None
+
+    def struct_field_resource_access(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.struct_field_resource_access(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            obj_type = self.expression_result_type(expr.object)
+            access = self.struct_resource_access_qualifiers.get(obj_type, {}).get(
+                expr.member
+            )
+            if access is not None:
+                return access, self.resource_access_path_name(expr)
+            return self.struct_field_resource_access(expr.object)
+        return None
+
+    def resource_access_qualifier(self, expr):
+        root_name = self.resource_access_root_name(expr)
+        if root_name is not None:
+            access = self.resource_access_qualifiers.get(root_name)
+            if access is not None:
+                return access, root_name
+
+        field_access = self.struct_field_resource_access(expr)
+        if field_access is not None:
+            return field_access
+        return None, root_name
+
+    def validate_resource_read_access(self, expr, operation):
+        access, resource_name = self.resource_access_qualifier(expr)
+        if resource_name is None:
+            return
+        if access == "writeonly":
+            raise ValueError(
+                f"Unsupported {operation} for Mojo codegen; "
+                f"resource '{resource_name}' is writeonly"
+            )
+
+    def validate_resource_write_access(self, expr, operation):
+        access, resource_name = self.resource_access_qualifier(expr)
+        if resource_name is None:
+            return
+        if access == "readonly":
+            raise ValueError(
+                f"Unsupported {operation} for Mojo codegen; "
+                f"resource '{resource_name}' is readonly"
+            )
+
+    def validate_resource_read_write_access(self, expr, operation):
+        self.validate_resource_read_access(expr, operation)
+        self.validate_resource_write_access(expr, operation)
+
+    def byte_address_buffer_value_type(self, buffer_type):
+        if buffer_type in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+            return "uint"
+        return None
+
+    def buffer_helper_element_type(self, buffer_type, element_type):
+        return element_type or self.byte_address_buffer_value_type(buffer_type)
+
+    def validate_buffer_operation(self, operation, info, allowed_buffer_types):
+        if info is None:
+            return
+        buffer_type, _ = info
+        if buffer_type not in allowed_buffer_types:
+            raise ValueError(
+                f"Unsupported {operation} for Mojo codegen; "
+                f"{buffer_type} is not valid for this operation"
+            )
+
+    def byte_address_load_result_type(self, width):
+        if width == 1:
+            return "uint"
+        return f"uvec{width}"
+
+    def byte_address_vector_mojo_type(self, width, dtype="DType.uint32"):
+        source_width = int(width)
+        storage_width = 4 if source_width == 3 else source_width
+        return f"SIMD[{dtype}, {storage_width}]"
+
+    def byte_address_vector_zero_value(self, width, dtype="DType.uint32"):
+        mojo_type = self.byte_address_vector_mojo_type(width, dtype)
+        zero = MOJO_DTYPE_INFO[dtype][2]
+        storage_width = 4 if int(width) == 3 else int(width)
+        return f"{mojo_type}({', '.join([zero] * storage_width)})"
+
+    def extract_semantic_from_attributes(self, attributes):
+        """Extract shader semantic information from AST attributes."""
+        for attr in attributes:
+            name = getattr(attr, "name", None)
+            if self.is_semantic_attribute_name(name):
+                return str(name)
+        return None
+
+    def node_semantic(self, node):
+        semantic = getattr(node, "semantic", None)
+        if semantic:
+            return semantic
+        return self.extract_semantic_from_attributes(
+            getattr(node, "attributes", []) or []
+        )
+
+    def function_return_semantic(self, func):
+        return self.extract_semantic_from_attributes(
+            getattr(func, "attributes", []) or []
+        )
+
+    def is_semantic_attribute_name(self, name):
+        if name is None:
+            return False
+
+        semantic = str(name)
+        lower = semantic.lower()
+        upper = semantic.upper()
+        if lower in MOJO_NON_SEMANTIC_ATTRIBUTES:
+            return False
+        if semantic in self.semantic_map:
+            return True
+        if upper in self.semantic_map:
+            return True
+        if re.fullmatch(r"(COLOR|TEXCOORD|NORMAL|TANGENT|BINORMAL)\d*", upper):
+            return True
+        if re.fullmatch(r"SV_TARGET\d*", upper):
+            return True
+        if upper in {
+            "SV_DEPTH",
+            "SV_DISPATCHTHREADID",
+            "SV_GROUPID",
+            "SV_GROUPINDEX",
+            "SV_GROUPTHREADID",
+            "SV_INSTANCEID",
+            "SV_ISFRONTFACE",
+            "SV_POSITION",
+            "SV_VERTEXID",
+        }:
+            return True
+        return lower.startswith("gl_")
+
+    def semantic_output_kind(self, semantic):
+        lower = str(semantic).lower()
+        upper = str(semantic).upper()
+        if lower == "gl_position" or upper == "SV_POSITION":
+            return "position"
+        if re.fullmatch(r"gl_fragcolor\d*", lower) or re.fullmatch(
+            r"SV_TARGET\d*", upper
+        ):
+            return "color"
+        if lower == "gl_fragdepth" or upper == "SV_DEPTH":
+            return "depth"
+        if lower in MOJO_INPUT_ONLY_RETURN_SEMANTICS:
+            return "input_only"
+        return None
+
+    def validate_builtin_semantic_type(self, semantic, type_name, context):
+        kind = self.semantic_output_kind(semantic)
+        if kind is None or kind == "input_only":
+            return
+
+        if kind in {"position", "color"}:
+            if self.is_float_vector_width(type_name, 4):
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Mojo codegen; "
+                "expected vec4-compatible return type"
+            )
+
+        if kind == "depth" and not self.is_float_scalar_type(type_name):
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Mojo codegen; "
+                "expected float return type"
+            )
+
+    def validate_return_semantic(self, shader_type, return_type, semantic):
+        if self.type_name(return_type) == "void":
+            raise ValueError(
+                f"Unsupported {shader_type or 'function'} {semantic} "
+                "return semantic for Mojo codegen; void return type"
+            )
+
+        kind = self.semantic_output_kind(semantic)
+        if kind == "input_only":
+            raise ValueError(
+                f"Unsupported {semantic} return semantic for Mojo codegen; "
+                "input-only builtin semantics cannot be used as return semantics"
+            )
+
+        self.validate_output_semantic_stage(shader_type, semantic, "return semantic")
+        self.validate_builtin_semantic_type(semantic, return_type, "return semantic")
+
+    def validate_struct_return_semantics(self, shader_type, return_type):
+        if shader_type is None:
+            return
+
+        for member_name, semantic in self.struct_member_semantics.get(
+            self.type_name(return_type), {}
+        ).items():
+            self.validate_output_semantic_stage(
+                shader_type,
+                semantic,
+                f"struct return semantic '{return_type}.{member_name}'",
+            )
+
+    def validate_output_semantic_stage(self, shader_type, semantic, context):
+        kind = self.semantic_output_kind(semantic)
+        if kind is None or kind == "input_only" or shader_type is None:
+            return
+
+        allowed_stages = {
+            "position": {"vertex"},
+            "color": {"fragment"},
+            "depth": {"fragment"},
+        }[kind]
+        if shader_type not in allowed_stages:
+            allowed = ", ".join(sorted(allowed_stages))
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Mojo {shader_type} stage; "
+                f"valid stage is {allowed}"
+            )
+
+    def is_float_vector_width(self, type_name, width):
+        vector_info = self.vector_type_info(type_name)
+        return (
+            vector_info is not None
+            and vector_info[0] == "DType.float32"
+            and vector_info[1] == width
+        )
+
+    def is_float_scalar_type(self, type_name):
+        return MOJO_SCALAR_DTYPES.get(self.type_name(type_name)) == "DType.float32"
+
+    def generate_return_semantic_comment(self, shader_type, semantic):
+        mapped_semantic = self.map_semantic(semantic)
+        return (
+            "# CrossGL return semantic: "
+            f"stage={shader_type or 'function'} "
+            f"semantic={mapped_semantic} source={semantic}\n"
+        )
+
+    def semantic_parameter_kind(self, semantic):
+        lower = str(semantic).lower()
+        upper = str(semantic).upper()
+
+        if (
+            lower == "gl_position"
+            or lower == "gl_fragdepth"
+            or re.fullmatch(r"gl_fragcolor\d*", lower)
+            or upper == "SV_DEPTH"
+            or re.fullmatch(r"SV_TARGET\d*", upper)
+        ):
+            return "output_only"
+
+        if lower == "gl_fragcoord" or upper == "SV_POSITION":
+            return ("fragment", "float_vec4")
+        if lower == "gl_frontfacing" or upper == "SV_ISFRONTFACE":
+            return ("fragment", "bool_scalar")
+        if lower == "gl_pointcoord":
+            return ("fragment", "float_vec2")
+
+        if lower in {"gl_vertexid"} or upper == "SV_VERTEXID":
+            return ("vertex", "integer_scalar")
+        if lower in {"gl_instanceid"} or upper == "SV_INSTANCEID":
+            return ("vertex", "integer_scalar")
+
+        if lower in {"gl_globalinvocationid"} or upper == "SV_DISPATCHTHREADID":
+            return ("compute", "integer_vec3")
+        if lower in {"gl_localinvocationid"} or upper == "SV_GROUPTHREADID":
+            return ("compute", "integer_vec3")
+        if lower in {"gl_workgroupid"} or upper == "SV_GROUPID":
+            return ("compute", "integer_vec3")
+        if upper == "SV_GROUPINDEX":
+            return ("compute", "integer_scalar")
+
+        if re.fullmatch(r"(COLOR|TEXCOORD|NORMAL|TANGENT|BINORMAL)\d*", upper):
+            return ("vertex_fragment", None)
+        if upper == "POSITION":
+            return ("vertex_fragment", None)
+        return None
+
+    def validate_parameter_semantic(
+        self, shader_type, param_name, param_type, semantic, used_semantics
+    ):
+        if semantic is None:
+            return
+
+        semantic_key = self.normalized_semantic_key(semantic)
+        previous_param = used_semantics.get(semantic_key)
+        if previous_param is not None:
+            raise ValueError(
+                f"Conflicting Mojo {shader_type or 'function'} parameter semantic "
+                f"for '{param_name}': {self.map_semantic(semantic)} overlaps "
+                f"'{previous_param}'"
+            )
+        used_semantics[semantic_key] = param_name
+
+        kind = self.semantic_parameter_kind(semantic)
+        if kind == "output_only" and shader_type == "fragment":
+            semantic_name = str(semantic).lower()
+            if semantic_name == "gl_position":
+                kind = ("fragment", "float_vec4")
+        if kind is None:
+            return
+        if kind == "output_only":
+            raise ValueError(
+                f"Unsupported {semantic} parameter semantic for Mojo codegen; "
+                "output-only builtin semantics cannot be used as parameters"
+            )
+
+        stage_kind, expected_type = kind
+        allowed_stages = (
+            {"vertex", "fragment"} if stage_kind == "vertex_fragment" else {stage_kind}
+        )
+        if shader_type is not None and shader_type not in allowed_stages:
+            allowed = ", ".join(sorted(allowed_stages))
+            raise ValueError(
+                f"Unsupported {semantic} parameter semantic for Mojo {shader_type} "
+                f"stage; valid stage is {allowed}"
+            )
+
+        if not self.parameter_semantic_type_matches(expected_type, param_type):
+            expected = self.parameter_semantic_expected_type(expected_type)
+            raise ValueError(
+                f"Unsupported {semantic} parameter semantic for Mojo codegen; "
+                f"expected {expected}"
+            )
+
+    def normalized_semantic_key(self, semantic):
+        return self.map_semantic(semantic).lower()
+
+    def parameter_semantic_type_matches(self, expected_type, param_type):
+        if expected_type is None:
+            return True
+        if expected_type == "bool_scalar":
+            return self.is_bool_scalar_type(param_type)
+        if expected_type == "float_vec2":
+            return self.is_float_vector_width(param_type, 2)
+        if expected_type == "float_vec4":
+            return self.is_float_vector_width(param_type, 4)
+        if expected_type == "integer_scalar":
+            return self.is_scalar_integer_type(param_type)
+        if expected_type == "integer_vec3":
+            return self.is_integer_vector_width(param_type, 3)
+        return True
+
+    def parameter_semantic_expected_type(self, expected_type):
+        return {
+            "bool_scalar": "bool",
+            "float_vec2": "vec2-compatible type",
+            "float_vec4": "vec4-compatible type",
+            "integer_scalar": "integer scalar type",
+            "integer_vec3": "integer vec3-compatible type",
+        }.get(expected_type, "compatible type")
+
+    def is_bool_scalar_type(self, type_name):
+        return MOJO_SCALAR_DTYPES.get(self.type_name(type_name)) == "DType.bool"
+
+    def is_integer_vector_width(self, type_name, width):
+        vector_info = self.vector_type_info(type_name)
+        return (
+            vector_info is not None
+            and vector_info[0] in MOJO_INTEGER_DTYPES
+            and vector_info[1] == width
+        )
+
+    def generate_enum(self, node):
+        """Lower a unit/numeric CrossGL enum to Mojo type and value aliases."""
+        enum_type = self.map_enum_underlying_type(
+            getattr(node, "underlying_type", None)
+        )
+        self.enum_types[node.name] = enum_type
+
+        code = f"alias {node.name} = {enum_type}\n"
+        next_value = 0
+        local_aliases = {}
+        local_values = {}
+        for variant in getattr(node, "variants", []) or []:
+            payload = getattr(variant, "data", None) or getattr(variant, "fields", None)
+            if payload:
+                raise ValueError(
+                    "Unsupported enum payload for Mojo codegen; only unit/numeric "
+                    f"enum variants are supported: {node.name}.{variant.name}"
+                )
+
+            alias_name = self.enum_variant_alias_name(node.name, variant.name)
+            value = getattr(variant, "value", None)
+            if value is None:
+                value_text = str(next_value)
+                resolved_value = next_value
+            else:
+                value_text = self.generate_enum_value_expression(value, local_aliases)
+                resolved_value = self.evaluate_enum_integer_value(value, local_values)
+
+            self.enum_variant_aliases[f"{node.name}::{variant.name}"] = alias_name
+            self.enum_variant_aliases[f"{node.name}.{variant.name}"] = alias_name
+            self.enum_variant_values[f"{node.name}::{variant.name}"] = resolved_value
+            self.enum_variant_values[f"{node.name}.{variant.name}"] = resolved_value
+            local_aliases[variant.name] = alias_name
+            local_values[variant.name] = resolved_value
+            code += f"alias {alias_name} = {value_text}\n"
+
+            literal_value = resolved_value
+            if literal_value is None:
+                literal_value = self.literal_int_value(value_text)
+            next_value = (
+                literal_value + 1 if literal_value is not None else next_value + 1
+            )
+
+        return code + "\n"
+
+    def generate_enum_value_expression(self, value, local_aliases):
+        previous_aliases = self.current_enum_value_aliases
+        self.current_enum_value_aliases = local_aliases
+        try:
+            return self.generate_expression(value)
+        finally:
+            self.current_enum_value_aliases = previous_aliases
+
+    def evaluate_enum_integer_value(self, expr, local_values):
+        if expr is None:
+            return None
+        if isinstance(expr, bool):
+            return int(expr)
+        if isinstance(expr, int):
+            return expr
+        if hasattr(expr, "value"):
+            try:
+                return int(expr.value)
+            except (TypeError, ValueError):
+                return None
+        expr_name = getattr(expr, "name", None)
+        if expr_name is not None and not isinstance(expr, VariableNode):
+            return local_values.get(expr_name)
+        if isinstance(expr, MemberAccessNode):
+            reference = self.enum_member_reference_name(expr)
+            if reference is None:
+                return None
+            return self.enum_variant_values.get(reference)
+        if isinstance(expr, UnaryOpNode):
+            operand = self.evaluate_enum_integer_value(expr.operand, local_values)
+            if operand is None:
+                return None
+            op = self.map_operator(expr.op)
+            if op == "+":
+                return operand
+            if op == "-":
+                return -operand
+            if op == "~":
+                return ~operand
+            return None
+        if isinstance(expr, BinaryOpNode):
+            left = self.evaluate_enum_integer_value(expr.left, local_values)
+            right = self.evaluate_enum_integer_value(expr.right, local_values)
+            if left is None or right is None:
+                return None
+            op = self.map_operator(expr.op)
+            try:
+                return self.evaluate_enum_binary_op(left, op, right)
+            except ZeroDivisionError:
+                return None
+        return None
+
+    def evaluate_enum_binary_op(self, left, op, right):
+        if op == "+":
+            return left + right
+        if op == "-":
+            return left - right
+        if op == "*":
+            return left * right
+        if op == "/":
+            return left // right
+        if op == "%":
+            return left % right
+        if op == "<<":
+            return left << right
+        if op == ">>":
+            return left >> right
+        if op == "|":
+            return left | right
+        if op == "&":
+            return left & right
+        if op == "^":
+            return left ^ right
+        return None
+
+    def enum_member_reference_name(self, expr):
+        if not isinstance(expr, MemberAccessNode):
+            return None
+        obj = getattr(expr, "object", None)
+        obj_name = getattr(obj, "name", obj if isinstance(obj, str) else None)
+        if obj_name is None:
+            return None
+        return f"{obj_name}.{expr.member}"
+
+    def map_enum_underlying_type(self, underlying_type):
+        if underlying_type is None:
+            return "Int32"
+        mapped = self.map_type(self.convert_type_node_to_string(underlying_type))
+        if mapped in {"Int", "Int16", "Int32", "Int64", "UInt16", "UInt32", "UInt64"}:
+            return mapped
+        return "Int32"
+
+    def enum_variant_alias_name(self, enum_name, variant_name):
+        return f"{enum_name}_{variant_name}"
+
+    def map_enum_variant_reference(self, name):
+        if not isinstance(name, str):
+            return name
+        if name in self.current_enum_value_aliases:
+            return self.current_enum_value_aliases[name]
+        return self.enum_variant_aliases.get(name, name)
 
     def generate_struct(self, node):
         code = f"@value\nstruct {node.name}:\n"
         self.struct_types[node.name] = {}
+        self.struct_member_semantics[node.name] = {}
 
         members = getattr(node, "members", [])
         for member in members:
@@ -491,12 +2268,23 @@ class MojoCodeGen:
                     member, "element_type", getattr(member, "vtype", "float")
                 )
                 size = get_array_size_from_node(member)
-                self.struct_types[node.name][member.name] = self.array_type_name(
-                    element_type, size
+                member_type = self.array_type_name(element_type, size)
+                self.struct_types[node.name][member.name] = member_type
+                self.register_struct_resource_access_metadata(
+                    node.name, member.name, member, member_type
                 )
+                semantic = self.node_semantic(member)
+                semantic_comment = ""
+                if semantic:
+                    self.struct_member_semantics[node.name][member.name] = semantic
+                    self.validate_builtin_semantic_type(
+                        semantic, member_type, "struct member semantic"
+                    )
+                    semantic_comment = f"  # {self.map_semantic(semantic)}"
                 code += (
                     f"    var {member.name}: "
-                    f"{self.array_storage_type(element_type, size)}\n"
+                    f"{self.array_storage_type(element_type, size)}"
+                    f"{semantic_comment}\n"
                 )
             else:
                 if hasattr(member, "member_type"):
@@ -507,16 +2295,18 @@ class MojoCodeGen:
                     member_type = "float"
 
                 self.struct_types[node.name][member.name] = member_type
-
-                semantic = None
-                if hasattr(member, "semantic"):
-                    semantic = member.semantic
-                elif hasattr(member, "attributes"):
-                    semantic = self.extract_semantic_from_attributes(member.attributes)
-
-                semantic_comment = (
-                    f"  # {self.map_semantic(semantic)}" if semantic else ""
+                self.register_struct_resource_access_metadata(
+                    node.name, member.name, member, member_type
                 )
+
+                semantic = self.node_semantic(member)
+                semantic_comment = ""
+                if semantic:
+                    self.struct_member_semantics[node.name][member.name] = semantic
+                    self.validate_builtin_semantic_type(
+                        semantic, member_type, "struct member semantic"
+                    )
+                    semantic_comment = f"  # {self.map_semantic(semantic)}"
                 code += f"    var {member.name}: {self.map_type(member_type)}{semantic_comment}\n"
 
         code += "\n"
@@ -526,51 +2316,11 @@ class MojoCodeGen:
         code = ""
         cbuffers = getattr(ast, "cbuffers", [])
         for node in cbuffers:
+            code += self.generate_resource_metadata_comment(
+                node, getattr(node, "name", None), kind="cbuffer"
+            )
             if isinstance(node, StructNode):
-                code += f"@value\nstruct {node.name}:\n"
-                members = getattr(node, "members", [])
-                for member in members:
-                    if isinstance(member, ArrayNode):
-                        element_type = getattr(
-                            member, "element_type", getattr(member, "vtype", "float")
-                        )
-                        size = get_array_size_from_node(member)
-                        code += (
-                            f"    var {member.name}: "
-                            f"{self.array_storage_type(element_type, size)}\n"
-                        )
-                    else:
-                        # Handle both old and new AST member structures
-                        if hasattr(member, "member_type"):
-                            member_type = self.map_type(str(member.member_type))
-                        else:
-                            member_type = self.map_type(
-                                getattr(member, "vtype", "float")
-                            )
-                        code += f"    var {member.name}: {member_type}\n"
-                code += "\n"
-            elif hasattr(node, "name") and hasattr(node, "members"):  # CbufferNode
-                code += f"@value\nstruct {node.name}:\n"
-                for member in node.members:
-                    if isinstance(member, ArrayNode):
-                        element_type = getattr(
-                            member, "element_type", getattr(member, "vtype", "float")
-                        )
-                        size = get_array_size_from_node(member)
-                        code += (
-                            f"    var {member.name}: "
-                            f"{self.array_storage_type(element_type, size)}\n"
-                        )
-                    else:
-                        # Handle both old and new AST member structures
-                        if hasattr(member, "member_type"):
-                            member_type = self.map_type(str(member.member_type))
-                        else:
-                            member_type = self.map_type(
-                                getattr(member, "vtype", "float")
-                            )
-                        code += f"    var {member.name}: {member_type}\n"
-                code += "\n"
+                code += self.generate_struct(node)
         return code
 
     def generate_function(self, func, indent=0, shader_type=None):
@@ -578,6 +2328,7 @@ class MojoCodeGen:
         code = ""
         "    " * indent
         previous_variable_types = self.variable_types.copy()
+        previous_resource_access_qualifiers = self.resource_access_qualifiers.copy()
         previous_return_type = self.current_return_type
 
         param_list = getattr(func, "parameters", getattr(func, "params", []))
@@ -586,6 +2337,7 @@ class MojoCodeGen:
             getattr(func, "body", []), param_names
         )
         params = []
+        used_parameter_semantics = {}
         for p in param_list:
             if hasattr(p, "param_type"):
                 param_type = self.convert_type_node_to_string(p.param_type)
@@ -594,13 +2346,17 @@ class MojoCodeGen:
             else:
                 param_type = "float"
 
-            semantic = None
-            if hasattr(p, "semantic"):
-                semantic = p.semantic
-            elif hasattr(p, "attributes"):
-                semantic = self.extract_semantic_from_attributes(p.attributes)
+            semantic = self.node_semantic(p)
+            self.validate_parameter_semantic(
+                shader_type,
+                p.name,
+                param_type,
+                semantic,
+                used_parameter_semantics,
+            )
 
             self.register_variable_type(p.name, param_type)
+            self.register_resource_access_metadata(p, param_type)
             param_semantic = f"  # {self.map_semantic(semantic)}" if semantic else ""
             ownership = "owned " if p.name in mutated_params else ""
             params.append(
@@ -615,6 +2371,10 @@ class MojoCodeGen:
             return_type = "void"
         self.function_return_types[func.name] = return_type
         self.current_return_type = return_type
+        return_semantic = self.function_return_semantic(func)
+        if return_semantic:
+            self.validate_return_semantic(shader_type, return_type, return_semantic)
+        self.validate_struct_return_semantics(shader_type, return_type)
 
         if shader_type == "vertex":
             code += f"@vertex_shader\n"
@@ -622,21 +2382,30 @@ class MojoCodeGen:
             code += f"@fragment_shader\n"
         elif shader_type == "compute":
             code += f"@compute_shader\n"
+        if return_semantic:
+            code += self.generate_return_semantic_comment(shader_type, return_semantic)
 
         code += f"fn {func.name}({params_str}) -> {self.map_type(return_type)}:\n"
 
         body = getattr(func, "body", [])
+        statements = None
         if hasattr(body, "statements"):
+            statements = body.statements
             for stmt in body.statements:
                 code += self.generate_statement(stmt, indent + 1)
         elif isinstance(body, list):
+            statements = body
             for stmt in body:
                 code += self.generate_statement(stmt, indent + 1)
         else:
             code += "    pass\n"
 
+        if statements is not None and not statements:
+            code += "    pass\n"
+
         code += "\n"
         self.variable_types = previous_variable_types
+        self.resource_access_qualifiers = previous_resource_access_qualifiers
         self.current_return_type = previous_return_type
         return code
 
@@ -736,6 +2505,7 @@ class MojoCodeGen:
 
     def generate_assignment_statement(self, node, indent):
         indent_str = "    " * indent
+        self.validate_resource_write_access(node.left, "assignment")
         left = self.generate_expression(node.left)
         left_type = self.expression_result_type(node.left)
         if isinstance(node.right, ArrayLiteralNode) and self.is_array_type_name(
@@ -779,6 +2549,7 @@ class MojoCodeGen:
                     stmt.name,
                     var_type or self.expression_result_type(stmt.initial_value),
                 )
+                self.register_resource_access_metadata(stmt, var_type)
                 if (
                     isinstance(stmt.initial_value, ArrayLiteralNode)
                     and var_type is not None
@@ -810,6 +2581,7 @@ class MojoCodeGen:
 
             var_type = var_type or "float"
             self.register_variable_type(stmt.name, var_type)
+            self.register_resource_access_metadata(stmt, var_type)
             if self.is_array_type_name(var_type):
                 return (
                     f"{indent_str}var {stmt.name} = "
@@ -874,6 +2646,8 @@ class MojoCodeGen:
                 update = context["update"]
                 return f"{indent_str}{update}\n{indent_str}continue\n"
             return f"{indent_str}continue\n"
+        elif isinstance(stmt, SyncNode):
+            return self.generate_sync_node(stmt, indent)
         elif isinstance(stmt, ArrayAccessNode):
             # ArrayAccessNode should not appear as a statement by itself - it's likely a misclassified array declaration
             # Try to handle it gracefully
@@ -1051,6 +2825,7 @@ class MojoCodeGen:
         )
 
     def generate_assignment(self, node):
+        self.validate_resource_write_access(node.left, "assignment")
         left = self.generate_expression(node.left)
         left_type = self.expression_result_type(node.left)
         if isinstance(node.right, ArrayLiteralNode) and self.is_array_type_name(
@@ -1456,7 +3231,7 @@ class MojoCodeGen:
     def generate_expression(self, expr):
         """Render a CrossGL expression as Mojo expression syntax."""
         if isinstance(expr, str):
-            return expr
+            return self.map_enum_variant_reference(expr)
         elif isinstance(expr, (int, float, bool)):
             return self.format_literal(expr)
         elif isinstance(expr, VariableNode):
@@ -1478,6 +3253,22 @@ class MojoCodeGen:
             return self.generate_assignment(expr)
         elif isinstance(expr, ArrayLiteralNode):
             return self.generate_array_literal_expression(expr)
+        elif isinstance(expr, ConstructorNode):
+            return self.generate_constructor_node(expr)
+        elif isinstance(expr, CastNode):
+            return self.generate_cast_node(expr)
+        elif isinstance(expr, SwizzleNode):
+            return self.generate_swizzle_node(expr)
+        elif isinstance(expr, BuiltinVariableNode):
+            return self.generate_builtin_variable_node(expr)
+        elif isinstance(expr, TextureNode):
+            return self.generate_texture_node(expr)
+        elif isinstance(expr, TextureOpNode):
+            return self.generate_texture_op_node(expr)
+        elif isinstance(expr, AtomicOpNode):
+            return self.generate_atomic_op_node(expr)
+        elif isinstance(expr, BufferOpNode):
+            return self.generate_buffer_op_node(expr)
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand)
             op = self.map_operator(expr.op)
@@ -1494,13 +3285,26 @@ class MojoCodeGen:
             else:
                 # Fallback for malformed ArrayAccessNode
                 return str(expr)
+        elif isinstance(expr, WaveOpNode):
+            return self.generate_wave_op(expr)
+        elif isinstance(expr, RayTracingOpNode):
+            return self.generate_ray_tracing_op(expr)
+        elif isinstance(expr, RayQueryOpNode):
+            return self.generate_ray_query_op(expr)
+        elif isinstance(expr, MeshOpNode):
+            return self.generate_mesh_op(expr)
         elif isinstance(expr, FunctionCallNode):
             # Extract function name properly (might be IdentifierNode)
             func_expr = getattr(expr, "function", None)
             if func_expr is None:
                 func_expr = expr.name
             func_name = None
-            if hasattr(func_expr, "name"):
+            if isinstance(func_expr, MemberAccessNode):
+                member_call = self.generate_member_function_call(func_expr, expr.args)
+                if member_call is not None:
+                    return member_call
+                callee = self.generate_expression(func_expr)
+            elif hasattr(func_expr, "name") and getattr(func_expr, "name", None):
                 # It's an IdentifierNode, extract the name
                 func_name = func_expr.name
                 callee = func_name
@@ -1531,13 +3335,73 @@ class MojoCodeGen:
                 bool_mix_call = self.generate_bool_mix_call(expr.args)
                 if bool_mix_call is not None:
                     return bool_mix_call
+            if func_name == "texture":
+                return self.generate_texture_call(expr.args, "sample")
+            if func_name == "textureLod":
+                return self.generate_texture_call(expr.args, "sample_lod")
+            if func_name == "textureGrad":
+                return self.generate_texture_call(expr.args, "sample_grad")
+            if func_name == "textureSize":
+                return self.generate_resource_size_call(expr.args, "texture_size")
+            if func_name == "textureQueryLevels":
+                return self.generate_resource_query_levels_call(expr.args)
+            if func_name == "textureSamples":
+                return self.generate_resource_sample_count_call(
+                    expr.args, "texture_samples"
+                )
+            if func_name == "imageSamples":
+                return self.generate_resource_sample_count_call(
+                    expr.args, "image_samples"
+                )
+            if func_name == "texelFetch":
+                return self.generate_texel_fetch_call(expr.args)
+            if func_name == "imageSize":
+                return self.generate_resource_size_call(expr.args, "image_size")
+            if func_name == "imageLoad":
+                return self.generate_image_load_call(expr.args)
+            if func_name == "imageStore":
+                return self.generate_image_store_call(expr.args)
+            if func_name == "buffer_load":
+                return self.generate_buffer_load_call(expr.args)
+            if func_name == "buffer_store":
+                return self.generate_buffer_store_call(expr.args)
+            if func_name == "buffer_append":
+                return self.generate_buffer_append_call(expr.args)
+            if func_name == "buffer_consume":
+                return self.generate_buffer_consume_call(expr.args)
+            if func_name == "buffer_dimensions":
+                return self.generate_buffer_dimensions_call(expr.args)
+            if func_name in MOJO_REINTERPRET_BUILTINS:
+                return self.generate_reinterpret_call(func_name, expr.args)
+            if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
+                helper_base, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
+                return self.generate_resource_builtin_call(
+                    expr.args, helper_base, return_kind
+                )
+            if func_name in MOJO_IMAGE_ATOMIC_BUILTINS:
+                return self.generate_image_atomic_call(
+                    expr.args, MOJO_IMAGE_ATOMIC_BUILTINS[func_name]
+                )
+            if (
+                func_name in MOJO_SYNC_BUILTINS
+                and not expr.args
+                and not self.is_user_defined_function(func_name)
+            ):
+                helper_name = MOJO_SYNC_BUILTINS[func_name]
+                self.required_sync_helpers.add(helper_name)
+                return f"{helper_name}()"
 
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
+            if func_name in self.scalar_constructor_map:
+                func_name = self.scalar_constructor_map[func_name]
 
             # Handle vector constructors
-            if func_name in self.vector_constructor_info:
-                return self.generate_vector_constructor(func_name, expr.args)
+            vector_constructor_name = self.normalize_generic_vector_type_name(func_name)
+            if vector_constructor_name in self.vector_constructor_info:
+                return self.generate_vector_constructor(
+                    vector_constructor_name, expr.args
+                )
 
             if func_name in MOJO_MATRIX_TYPES:
                 return self.generate_matrix_constructor(func_name, expr.args)
@@ -1548,9 +3412,17 @@ class MojoCodeGen:
             return f"{call_name}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
+            enum_variant = self.map_enum_variant_reference(f"{obj}.{expr.member}")
+            if enum_variant != f"{obj}.{expr.member}":
+                return enum_variant
+            obj_type = self.expression_result_type(expr.object)
+            if (
+                obj_type in self.struct_types
+                and expr.member in self.struct_types[obj_type]
+            ):
+                return f"{obj}.{expr.member}"
             swizzle_indices = self.get_swizzle_indices(expr.member)
             if swizzle_indices is not None:
-                obj_type = self.expression_result_type(expr.object)
                 return self.generate_swizzle(
                     expr.object, obj, obj_type, expr.member, swizzle_indices
                 )
@@ -1575,7 +3447,7 @@ class MojoCodeGen:
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             # Handle IdentifierNode
-            return getattr(expr, "name", str(expr))
+            return self.map_enum_variant_reference(getattr(expr, "name", str(expr)))
         elif hasattr(expr, "__class__") and "ExpressionStatement" in str(
             expr.__class__
         ):
@@ -1602,6 +3474,341 @@ class MojoCodeGen:
                     array_match.group(2)
                     return f"{array_name}"  # Just return the array name for now
             return expr_str
+
+    def generate_constructor_node(self, expr):
+        type_name = self.convert_type_node_to_string(expr.constructor_type)
+        mapped_type = self.map_type(type_name)
+        positional_args = [
+            self.generate_expression(argument) for argument in expr.arguments
+        ]
+        named_args = [
+            f"{name}={self.generate_expression(value)}"
+            for name, value in expr.named_arguments.items()
+        ]
+        return f"{mapped_type}({', '.join([*positional_args, *named_args])})"
+
+    def generate_cast_node(self, expr):
+        target_type = self.convert_type_node_to_string(expr.target_type)
+        target_vector = self.vector_type_info(target_type)
+        value = self.generate_expression(expr.expression)
+        if target_vector is not None:
+            source_vector = self.vector_type_info(
+                self.expression_result_type(expr.expression)
+            )
+            target_dtype, target_width, target_storage_width, _ = target_vector
+            if source_vector is not None:
+                _, source_width, source_storage_width, _ = source_vector
+                if (
+                    source_width == target_width
+                    and source_storage_width == target_storage_width
+                ):
+                    return f"{value}.cast[{target_dtype}]()"
+            target_name = self.normalize_generic_vector_type_name(target_type)
+            if target_name in self.vector_constructor_info:
+                return self.generate_vector_constructor(target_name, [expr.expression])
+
+        return f"{self.map_type(target_type)}({value})"
+
+    def generate_swizzle_node(self, expr):
+        member = expr.components
+        swizzle_indices = self.get_swizzle_indices(member)
+        if swizzle_indices is None:
+            raise ValueError(f"Unsupported Mojo swizzle '{member}'")
+        obj = self.generate_expression(expr.vector_expr)
+        obj_type = self.expression_result_type(expr.vector_expr)
+        return self.generate_swizzle(
+            expr.vector_expr, obj, obj_type, member, swizzle_indices
+        )
+
+    def generate_builtin_variable_node(self, expr):
+        name = self.map_semantic(expr.builtin_name)
+        component = getattr(expr, "component", None)
+        if not component:
+            return name
+
+        swizzle_indices = self.get_swizzle_indices(component)
+        if swizzle_indices is None:
+            return f"{name}.{component}"
+        obj_type = self.variable_types.get(name, "vec4")
+        return self.generate_swizzle(expr, name, obj_type, component, swizzle_indices)
+
+    def generate_texture_node(self, expr):
+        args = [expr.texture_expr]
+        if expr.sampler_expr is not None:
+            args.append(expr.sampler_expr)
+        args.append(expr.coordinates)
+
+        if expr.level is not None and expr.offset is not None:
+            return self.generate_resource_builtin_call(
+                [*args, expr.level, expr.offset], "sample_lod_offset", "vec4"
+            )
+        if expr.level is not None:
+            return self.generate_texture_call([*args, expr.level], "sample_lod")
+        if expr.offset is not None:
+            return self.generate_resource_builtin_call(
+                [*args, expr.offset], "sample_offset", "vec4"
+            )
+        return self.generate_texture_call(args, "sample")
+
+    def texture_op_args(self, expr, include_sampler=True):
+        args = [expr.texture_expr]
+        if include_sampler and expr.sampler_expr is not None:
+            args.append(expr.sampler_expr)
+        args.extend(expr.arguments)
+        return args
+
+    def generate_texture_operation_call(
+        self, operation, args, argument_count, fetch_args=None
+    ):
+        resource_args = list(fetch_args if fetch_args is not None else args)
+
+        if operation in {"Sample", "sample", "texture"}:
+            if argument_count >= 2:
+                return self.generate_resource_builtin_call(
+                    args, "sample_offset", "vec4"
+                )
+            return self.generate_texture_call(args, "sample")
+        if operation in {"SampleLevel", "SampleLOD", "sample_lod", "textureLod"}:
+            if argument_count >= 3:
+                return self.generate_resource_builtin_call(
+                    args, "sample_lod_offset", "vec4"
+                )
+            return self.generate_texture_call(args, "sample_lod")
+        if operation in {"SampleGrad", "sample_grad", "textureGrad"}:
+            if argument_count >= 4:
+                return self.generate_resource_builtin_call(
+                    args, "sample_grad_offset", "vec4"
+                )
+            return self.generate_texture_call(args, "sample_grad")
+        if operation in {"SampleBias", "sample_bias"}:
+            if argument_count >= 3:
+                return self.generate_resource_builtin_call(
+                    args, "sample_bias_offset", "vec4"
+                )
+            return self.generate_resource_builtin_call(args, "sample_bias", "vec4")
+
+        resource_builtin = {
+            "SampleCmp": (
+                (
+                    "texture_compare_offset"
+                    if argument_count >= 3
+                    else "texture_compare"
+                ),
+                "float",
+            ),
+            "SampleCmpLevel": (
+                (
+                    "texture_compare_lod_offset"
+                    if argument_count >= 4
+                    else "texture_compare_lod"
+                ),
+                "float",
+            ),
+            "SampleCmpLevelZero": (
+                (
+                    "texture_compare_offset"
+                    if argument_count >= 3
+                    else "texture_compare"
+                ),
+                "float",
+            ),
+            "SampleCmpGrad": (
+                (
+                    "texture_compare_grad_offset"
+                    if argument_count >= 5
+                    else "texture_compare_grad"
+                ),
+                "float",
+            ),
+            "Gather": (
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
+                "vec4",
+            ),
+            "GatherRed": (
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
+                "vec4",
+            ),
+            "GatherGreen": (
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
+                "vec4",
+            ),
+            "GatherBlue": (
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
+                "vec4",
+            ),
+            "GatherAlpha": (
+                ("texture_gather_offset" if argument_count >= 2 else "texture_gather"),
+                "vec4",
+            ),
+            "GatherCmp": (
+                (
+                    "texture_gather_compare_offset"
+                    if argument_count >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
+            "GatherCmpRed": (
+                (
+                    "texture_gather_compare_offset"
+                    if argument_count >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
+            "GatherCmpGreen": (
+                (
+                    "texture_gather_compare_offset"
+                    if argument_count >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
+            "GatherCmpBlue": (
+                (
+                    "texture_gather_compare_offset"
+                    if argument_count >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
+            "GatherCmpAlpha": (
+                (
+                    "texture_gather_compare_offset"
+                    if argument_count >= 3
+                    else "texture_gather_compare"
+                ),
+                "vec4",
+            ),
+        }.get(operation)
+        if resource_builtin is not None:
+            helper_base, return_kind = resource_builtin
+            return self.generate_resource_builtin_call(args, helper_base, return_kind)
+
+        if operation in MOJO_GENERIC_TEXTURE_BUILTINS:
+            helper_base, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[operation]
+            return self.generate_resource_builtin_call(args, helper_base, return_kind)
+        atomic_helper = MOJO_ATOMIC_OP_ALIASES.get(operation)
+        if atomic_helper is not None and resource_args:
+            resource_type = self.map_type(self.expression_result_type(resource_args[0]))
+            if self.is_image_resource_type(resource_type):
+                return self.generate_image_atomic_call(resource_args, atomic_helper)
+        if operation in {"Load", "texelFetch"}:
+            fetch_args = list(resource_args)
+            if fetch_args:
+                resource_type = self.map_type(
+                    self.expression_result_type(fetch_args[0])
+                )
+                if self.is_image_resource_type(resource_type):
+                    return self.generate_image_load_call(fetch_args)
+            if len(fetch_args) == 2:
+                fetch_args.append(0)
+            return self.generate_texel_fetch_call(fetch_args)
+        if operation in {"Store", "imageStore"}:
+            return self.generate_image_store_call(resource_args)
+        if operation in {"GetDimensions", "textureSize"}:
+            helper_name = "texture_size"
+            if resource_args:
+                resource_type = self.map_type(
+                    self.expression_result_type(resource_args[0])
+                )
+                if self.is_image_resource_type(resource_type):
+                    helper_name = "image_size"
+            return self.generate_resource_size_call(resource_args, helper_name)
+        if operation == "textureQueryLevels":
+            return self.generate_resource_query_levels_call(resource_args)
+        if operation == "textureSamples":
+            return self.generate_resource_sample_count_call(
+                resource_args, "texture_samples"
+            )
+        if operation == "imageSamples":
+            return self.generate_resource_sample_count_call(
+                resource_args, "image_samples"
+            )
+
+        raise ValueError(f"Unsupported Mojo texture operation {operation}")
+
+    def generate_texture_op_node(self, expr):
+        operation = getattr(expr, "operation", "")
+        args = self.texture_op_args(expr)
+        return self.generate_texture_operation_call(
+            operation,
+            args,
+            len(expr.arguments),
+            fetch_args=self.texture_op_args(expr, include_sampler=False),
+        )
+
+    def generate_sync_node(self, stmt, indent):
+        sync_type = getattr(stmt, "sync_type", "")
+        if getattr(stmt, "arguments", None):
+            raise ValueError(
+                "Unsupported Mojo synchronization operation "
+                f"{sync_type}; arguments are not supported"
+            )
+
+        helper_name = MOJO_SYNC_BUILTINS.get(sync_type)
+        if helper_name is None:
+            raise ValueError(f"Unsupported Mojo synchronization operation {sync_type}")
+        self.required_sync_helpers.add(helper_name)
+        indent_str = "    " * indent
+        return f"{indent_str}{helper_name}()\n"
+
+    def generate_atomic_op_node(self, expr):
+        operation = getattr(expr, "operation", "")
+        helper_base = MOJO_ATOMIC_OP_ALIASES.get(operation)
+        if helper_base is None:
+            raise ValueError(f"Unsupported Mojo atomic operation {operation}")
+        return self.generate_image_atomic_call(
+            [expr.target, *getattr(expr, "arguments", [])], helper_base
+        )
+
+    def builtin_variable_result_type(self, name):
+        if name in {
+            "SV_DispatchThreadID",
+            "SV_GroupID",
+            "SV_GroupThreadID",
+            "gl_GlobalInvocationID",
+            "gl_LocalInvocationID",
+            "gl_WorkGroupID",
+        }:
+            return "uvec3"
+        if name in {"SV_GroupIndex", "SV_InstanceID", "SV_VertexID"}:
+            return "uint"
+        if name in {"gl_InstanceID", "gl_VertexID"}:
+            return "int"
+        if name in {"SV_IsFrontFace", "gl_FrontFacing"}:
+            return "bool"
+        if name in {"SV_Depth", "gl_FragDepth"}:
+            return "float"
+        return self.variable_types.get(self.map_semantic(name), "vec4")
+
+    def generate_wave_op(self, expr):
+        operation = getattr(expr, "operation", "wave intrinsic")
+        raise ValueError(
+            "Unsupported Mojo wave intrinsic "
+            f"{operation}; Mojo backend does not model subgroup execution"
+        )
+
+    def generate_ray_tracing_op(self, expr):
+        operation = getattr(expr, "operation", "ray tracing intrinsic")
+        raise ValueError(
+            "Unsupported Mojo ray tracing intrinsic "
+            f"{operation}; Mojo backend does not model ray tracing pipelines"
+        )
+
+    def generate_ray_query_op(self, expr):
+        operation = getattr(expr, "operation", "ray query method")
+        raise ValueError(
+            "Unsupported Mojo ray query method "
+            f"{operation}; Mojo backend does not model ray queries"
+        )
+
+    def generate_mesh_op(self, expr):
+        operation = getattr(expr, "operation", "mesh intrinsic")
+        raise ValueError(
+            "Unsupported Mojo mesh intrinsic "
+            f"{operation}; Mojo backend does not model mesh/task pipelines"
+        )
 
     def generate_vector_constructor(self, func_name, args):
         helper_call = self.generate_constructor_helper_call(func_name, args)
@@ -1783,6 +3990,971 @@ class MojoCodeGen:
         false_value = self.generate_expression(args[0])
         return f"({true_value} if {condition} else {false_value})"
 
+    def generate_texture_call(self, args, helper_name):
+        if not args:
+            return f"{helper_name}()"
+
+        args = self.strip_split_sampler_arg(args)
+        texture_type = self.expression_result_type(args[0])
+        mapped_type = self.map_type(texture_type)
+        self.validate_texture_sample_args(args, helper_name, mapped_type)
+        if mapped_type in MOJO_RESOURCE_SAMPLE_COORDS:
+            if helper_name == "sample":
+                self.required_resource_sample_types.add(mapped_type)
+            elif helper_name == "sample_lod":
+                self.required_resource_lod_types.add(mapped_type)
+            elif helper_name == "sample_grad":
+                self.required_resource_grad_types.add(mapped_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def validate_texture_sample_args(self, args, helper_name, resource_type):
+        if not self.is_texture_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"texture resource required: {resource_type}"
+            )
+        if resource_type not in MOJO_RESOURCE_SAMPLE_COORDS:
+            required = (
+                "non-multisample texture required"
+                if self.is_multisample_resource_type(resource_type)
+                else "sampleable texture required"
+            )
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"{required}: {resource_type}"
+            )
+
+        expected_counts = {"sample": 2, "sample_lod": 3, "sample_grad": 4}
+        expected_count = expected_counts.get(helper_name)
+        if expected_count is not None and len(args) != expected_count:
+            argument_count = expected_count - 1
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; expected "
+                f"{argument_count} argument(s) after texture resource, got "
+                f"{len(args) - 1}"
+            )
+
+        expected_coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        if len(args) >= 2:
+            self.validate_resource_argument_type(
+                args[1], expected_coord_type, helper_name, resource_type, "coordinate"
+            )
+        if helper_name == "sample_lod" and len(args) >= 3:
+            self.validate_resource_argument_type(
+                args[2], "Float32", helper_name, resource_type, "lod"
+            )
+        if helper_name == "sample_grad":
+            if len(args) >= 3:
+                self.validate_resource_argument_type(
+                    args[2],
+                    expected_coord_type,
+                    helper_name,
+                    resource_type,
+                    "ddx",
+                )
+            if len(args) >= 4:
+                self.validate_resource_argument_type(
+                    args[3],
+                    expected_coord_type,
+                    helper_name,
+                    resource_type,
+                    "ddy",
+                )
+
+    def strip_split_sampler_arg(self, args):
+        if len(args) < 3:
+            return args
+        sampler_type = self.map_type(self.expression_result_type(args[1]))
+        if sampler_type == "Sampler":
+            return [args[0], *args[2:]]
+        return args
+
+    def generate_resource_size_call(self, args, helper_name):
+        if not args:
+            return f"{helper_name}()"
+
+        resource_type = self.map_type(self.expression_result_type(args[0]))
+        if self.resource_size_return_type(resource_type) is not None:
+            self.required_resource_size_types.add(resource_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def generate_resource_query_levels_call(self, args):
+        if args:
+            resource_type = self.map_type(self.expression_result_type(args[0]))
+            if not self.is_texture_resource_type(resource_type):
+                raise ValueError(
+                    "Unsupported texture_query_levels for Mojo codegen; "
+                    f"texture resource required: {resource_type}"
+                )
+            if self.is_multisample_resource_type(resource_type):
+                raise ValueError(
+                    "Unsupported texture_query_levels for Mojo codegen; "
+                    f"non-multisample texture required: {resource_type}"
+                )
+            self.required_resource_query_level_types.add(resource_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"texture_query_levels({generated_args})"
+
+    def generate_resource_sample_count_call(self, args, helper_name):
+        if not args:
+            return f"{helper_name}()"
+
+        resource_type = self.map_type(self.expression_result_type(args[0]))
+        if helper_name == "texture_samples":
+            required_kind = "texture"
+            is_valid_kind = self.is_texture_resource_type(resource_type)
+        else:
+            required_kind = "image"
+            is_valid_kind = self.is_image_resource_type(resource_type)
+
+        if not is_valid_kind:
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"{required_kind} resource required: {resource_type}"
+            )
+        if not self.is_multisample_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"multisample {required_kind} required: {resource_type}"
+            )
+
+        self.required_resource_sample_count_helpers.add((helper_name, resource_type))
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def generate_texel_fetch_call(self, args):
+        if args:
+            resource_type = self.map_type(self.expression_result_type(args[0]))
+            self.validate_texel_fetch_args(args, resource_type)
+            if resource_type in MOJO_RESOURCE_TEXEL_COORDS:
+                self.required_resource_texel_fetch_types.add(resource_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"texel_fetch({generated_args})"
+
+    def validate_texel_fetch_args(self, args, resource_type):
+        if not self.is_texture_resource_type(resource_type):
+            raise ValueError(
+                "Unsupported texel_fetch for Mojo codegen; "
+                f"texture resource required: {resource_type}"
+            )
+        if resource_type not in MOJO_RESOURCE_TEXEL_COORDS:
+            raise ValueError(
+                "Unsupported texel_fetch for Mojo codegen; "
+                f"texel-fetch texture required: {resource_type}"
+            )
+        if len(args) != 3:
+            raise ValueError(
+                "Unsupported texel_fetch for Mojo codegen; expected 2 argument(s) "
+                f"after texture resource, got {len(args) - 1}"
+            )
+
+        self.validate_resource_argument_type(
+            args[1],
+            MOJO_RESOURCE_TEXEL_COORDS[resource_type],
+            "texel_fetch",
+            resource_type,
+            "coordinate",
+        )
+        self.validate_resource_argument_type(
+            args[2], "Int32", "texel_fetch", resource_type, "lod_or_sample"
+        )
+
+    def generate_image_load_call(self, args):
+        if args:
+            self.validate_resource_read_access(args[0], "imageLoad")
+            resource_type = self.map_type(self.expression_result_type(args[0]))
+            self.validate_image_load_args(args, resource_type)
+            if self.resource_texel_coord_type(resource_type) is not None:
+                self.required_image_load_types.add(resource_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"image_load({generated_args})"
+
+    def generate_image_store_call(self, args):
+        if args:
+            self.validate_resource_write_access(args[0], "imageStore")
+            resource_type = self.map_type(self.expression_result_type(args[0]))
+            self.validate_image_store_args(args, resource_type)
+            if self.resource_texel_coord_type(resource_type) is not None:
+                self.required_image_store_types.add(resource_type)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"image_store({generated_args})"
+
+    def validate_image_load_args(self, args, resource_type):
+        if not self.is_image_resource_type(resource_type):
+            raise ValueError(
+                "Unsupported image_load for Mojo codegen; "
+                f"image resource required: {resource_type}"
+            )
+        coord_type = self.resource_texel_coord_type(resource_type)
+        if coord_type is None:
+            raise ValueError(
+                "Unsupported image_load for Mojo codegen; "
+                f"loadable image resource required: {resource_type}"
+            )
+
+        expected_count = 3 if self.is_multisample_resource_type(resource_type) else 2
+        if len(args) != expected_count:
+            raise ValueError(
+                "Unsupported image_load for Mojo codegen; expected "
+                f"{expected_count - 1} argument(s) after image resource, got "
+                f"{len(args) - 1}"
+            )
+
+        self.validate_resource_argument_type(
+            args[1],
+            coord_type,
+            "image_load",
+            resource_type,
+            "coordinate",
+        )
+        if self.is_multisample_resource_type(resource_type):
+            self.validate_resource_argument_type(
+                args[2], "Int32", "image_load", resource_type, "sample"
+            )
+
+    def validate_image_store_args(self, args, resource_type):
+        if not self.is_image_resource_type(resource_type):
+            raise ValueError(
+                "Unsupported image_store for Mojo codegen; "
+                f"image resource required: {resource_type}"
+            )
+        coord_type = self.resource_texel_coord_type(resource_type)
+        if coord_type is None:
+            raise ValueError(
+                "Unsupported image_store for Mojo codegen; "
+                f"storable image resource required: {resource_type}"
+            )
+
+        expected_count = 4 if self.is_multisample_resource_type(resource_type) else 3
+        if len(args) != expected_count:
+            raise ValueError(
+                "Unsupported image_store for Mojo codegen; expected "
+                f"{expected_count - 1} argument(s) after image resource, got "
+                f"{len(args) - 1}"
+            )
+
+        self.validate_resource_argument_type(
+            args[1],
+            coord_type,
+            "image_store",
+            resource_type,
+            "coordinate",
+        )
+        value_index = 2
+        if self.is_multisample_resource_type(resource_type):
+            self.validate_resource_argument_type(
+                args[2], "Int32", "image_store", resource_type, "sample"
+            )
+            value_index = 3
+        self.validate_image_store_value_type(args[value_index], resource_type)
+
+    def validate_image_store_value_type(self, value_arg, resource_type):
+        expected_type = self.image_value_type(resource_type)
+        actual_type = self.resource_builtin_arg_type(value_arg)
+        if actual_type != expected_type:
+            raise ValueError(
+                "Unsupported image_store for Mojo codegen; value for "
+                f"{resource_type} must be {expected_type}, got {actual_type}"
+            )
+
+    def generate_buffer_load_call(self, args):
+        if args:
+            self.validate_resource_read_access(args[0], "buffer_load")
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            self.validate_buffer_operation(
+                "buffer_load", info, MOJO_BUFFER_LOAD_RESOURCE_TYPES
+            )
+            if info is not None and self.buffer_helper_element_type(*info) is not None:
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_load_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_load({generated_args})"
+
+    def generate_buffer_store_call(self, args):
+        if args:
+            self.validate_resource_write_access(args[0], "buffer_store")
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            self.validate_buffer_operation(
+                "buffer_store", info, MOJO_BUFFER_STORE_RESOURCE_TYPES
+            )
+            if info is not None and self.buffer_helper_element_type(*info) is not None:
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_store_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_store({generated_args})"
+
+    def generate_buffer_append_call(self, args):
+        if args:
+            self.validate_resource_write_access(args[0], "buffer_append")
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            if info is not None and info[0] != "AppendStructuredBuffer":
+                raise ValueError(
+                    "Unsupported buffer_append for Mojo codegen; "
+                    f"{info[0]} is not an append buffer"
+                )
+            if info is not None and info[1] is not None:
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_append_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_append({generated_args})"
+
+    def generate_buffer_consume_call(self, args):
+        if args:
+            self.validate_resource_read_access(args[0], "buffer_consume")
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            if info is not None and info[0] != "ConsumeStructuredBuffer":
+                raise ValueError(
+                    "Unsupported buffer_consume for Mojo codegen; "
+                    f"{info[0]} is not a consume buffer"
+                )
+            if info is not None and info[1] is not None:
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_consume_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_consume({generated_args})"
+
+    def generate_buffer_dimensions_call(self, args):
+        if args:
+            info = self.buffer_resource_info(self.expression_result_type(args[0]))
+            if info is not None:
+                self.register_buffer_resource_type(info[0])
+                self.required_buffer_dimensions_helpers.add(info)
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"buffer_dimensions({generated_args})"
+
+    def generate_buffer_op_node(self, expr):
+        raw_operation = getattr(expr, "operation", "")
+        operation = MOJO_BUFFER_OP_ALIASES.get(raw_operation)
+        if operation is None:
+            raise ValueError(f"Unsupported Mojo buffer operation {raw_operation}")
+
+        buffer_expr = getattr(expr, "buffer_expr", None)
+        if buffer_expr is None:
+            raise ValueError(
+                f"Invalid Mojo buffer operation {raw_operation}; "
+                "missing buffer expression"
+            )
+
+        arguments = getattr(expr, "arguments", [])
+        args = [buffer_expr, *arguments]
+        if operation == "Load":
+            return self.generate_buffer_load_call(args)
+        if operation == "Store":
+            return self.generate_buffer_store_call(args)
+        if operation == "Append":
+            return self.generate_buffer_append_call(args)
+        if operation == "Consume":
+            return self.generate_buffer_consume_call(args)
+        if operation == "GetDimensions":
+            return self.generate_buffer_dimensions_call(args)
+        if operation in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+            return self.generate_byte_address_vector_buffer_op(
+                buffer_expr, arguments, operation
+            )
+        if operation in MOJO_BYTE_ADDRESS_STORE_METHODS:
+            return self.generate_byte_address_vector_buffer_op(
+                buffer_expr, arguments, operation
+            )
+        raise ValueError(f"Invalid Mojo buffer operation {raw_operation}")
+
+    def generate_byte_address_vector_buffer_op(self, buffer_expr, args, operation):
+        info = self.buffer_resource_info(self.expression_result_type(buffer_expr))
+        if info is None or info[0] not in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+            raise ValueError(
+                f"Invalid {operation} for Mojo codegen; byte-address buffer required"
+            )
+
+        obj = self.generate_expression(buffer_expr)
+        buffer_type, _ = info
+        width = (
+            MOJO_BYTE_ADDRESS_LOAD_METHODS.get(operation)
+            or MOJO_BYTE_ADDRESS_STORE_METHODS[operation]
+        )
+        self.register_buffer_resource_type(buffer_type)
+        if operation in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+            self.validate_resource_read_access(buffer_expr, operation)
+            self.required_byte_address_vector_load_helpers.add((buffer_type, width))
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_load{width}({generated_args})"
+
+        self.validate_resource_write_access(buffer_expr, operation)
+        self.validate_buffer_operation(
+            operation, info, MOJO_BUFFER_STORE_RESOURCE_TYPES
+        )
+        self.required_byte_address_vector_store_helpers.add((buffer_type, width))
+        generated_args = ", ".join(
+            [obj, *[self.generate_expression(arg) for arg in args]]
+        )
+        return f"buffer_store{width}({generated_args})"
+
+    def generate_member_function_call(self, func_expr, args):
+        texture_call = self.generate_texture_member_function_call(func_expr, args)
+        if texture_call is not None:
+            return texture_call
+
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        obj_type = self.expression_result_type(obj_expr)
+        info = self.buffer_resource_info(obj_type)
+        if info is None:
+            return None
+
+        obj = self.generate_expression(obj_expr)
+        buffer_type, element_type = info
+
+        if buffer_type in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+            if member in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+                self.validate_resource_read_access(obj_expr, member)
+                width = MOJO_BYTE_ADDRESS_LOAD_METHODS[member]
+                self.register_buffer_resource_type(buffer_type)
+                if width == 1:
+                    self.required_buffer_load_helpers.add(info)
+                    generated_args = ", ".join(
+                        [obj, *[self.generate_expression(arg) for arg in args]]
+                    )
+                    return f"buffer_load({generated_args})"
+                self.required_byte_address_vector_load_helpers.add((buffer_type, width))
+                generated_args = ", ".join(
+                    [obj, *[self.generate_expression(arg) for arg in args]]
+                )
+                return f"buffer_load{width}({generated_args})"
+
+            if member in MOJO_BYTE_ADDRESS_STORE_METHODS:
+                self.validate_resource_write_access(obj_expr, member)
+                self.validate_buffer_operation(
+                    member, info, MOJO_BUFFER_STORE_RESOURCE_TYPES
+                )
+                width = MOJO_BYTE_ADDRESS_STORE_METHODS[member]
+                self.register_buffer_resource_type(buffer_type)
+                if width == 1:
+                    self.required_buffer_store_helpers.add(info)
+                    generated_args = ", ".join(
+                        [obj, *[self.generate_expression(arg) for arg in args]]
+                    )
+                    return f"buffer_store({generated_args})"
+                self.required_byte_address_vector_store_helpers.add(
+                    (buffer_type, width)
+                )
+                generated_args = ", ".join(
+                    [obj, *[self.generate_expression(arg) for arg in args]]
+                )
+                return f"buffer_store{width}({generated_args})"
+
+            if member in MOJO_BYTE_ADDRESS_ATOMIC_METHODS:
+                self.validate_resource_read_write_access(obj_expr, member)
+                raise ValueError(
+                    "Unsupported Mojo byte-address buffer atomic method "
+                    f"{member}; byte-address atomics are not available in "
+                    "the Mojo placeholder backend"
+                )
+
+        if member == "Load" and element_type is not None:
+            self.validate_resource_read_access(obj_expr, "Load")
+            self.validate_buffer_operation(
+                "Load", info, MOJO_TYPED_BUFFER_LOAD_RESOURCE_TYPES
+            )
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_load_helpers.add(info)
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_load({generated_args})"
+
+        if member == "Store" and element_type is not None:
+            self.validate_resource_write_access(obj_expr, "Store")
+            self.validate_buffer_operation(
+                "Store", info, MOJO_BUFFER_STORE_RESOURCE_TYPES
+            )
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_store_helpers.add(info)
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_store({generated_args})"
+
+        if member == "Append":
+            if buffer_type != "AppendStructuredBuffer":
+                raise ValueError(
+                    "Unsupported Append for Mojo codegen; "
+                    f"{buffer_type} is not an append buffer"
+                )
+            self.validate_resource_write_access(obj_expr, "Append")
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_append_helpers.add(info)
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_append({generated_args})"
+
+        if member == "Consume":
+            if buffer_type != "ConsumeStructuredBuffer":
+                raise ValueError(
+                    "Unsupported Consume for Mojo codegen; "
+                    f"{buffer_type} is not a consume buffer"
+                )
+            self.validate_resource_read_access(obj_expr, "Consume")
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_consume_helpers.add(info)
+            return f"buffer_consume({obj})"
+
+        if member == "GetDimensions":
+            self.register_buffer_resource_type(buffer_type)
+            self.required_buffer_dimensions_helpers.add(info)
+            generated_args = ", ".join(
+                [obj, *[self.generate_expression(arg) for arg in args]]
+            )
+            return f"buffer_dimensions({generated_args})"
+
+        if member in MOJO_BUFFER_COUNTER_METHODS:
+            self.validate_resource_read_write_access(obj_expr, member)
+            raise ValueError(
+                "Unsupported Mojo buffer counter method "
+                f"{member}; structured-buffer counters are not available "
+                "in the Mojo placeholder backend"
+            )
+
+        return None
+
+    def generate_texture_member_function_call(self, func_expr, args):
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        resource_type = self.map_type(self.expression_result_type(obj_expr))
+        if not (
+            self.is_texture_resource_type(resource_type)
+            or self.is_image_resource_type(resource_type)
+        ):
+            return None
+
+        call_args = [obj_expr, *args]
+        stripped_arg_count = max(len(self.strip_split_sampler_arg(call_args)) - 1, 0)
+        return self.generate_texture_operation_call(
+            member, call_args, stripped_arg_count, fetch_args=[obj_expr, *args]
+        )
+
+    def generate_reinterpret_call(self, func_name, args):
+        if not args:
+            return f"{func_name}()"
+
+        source_type = self.expression_result_type(args[0])
+        return_type_name = self.reinterpret_return_type_name(func_name, source_type)
+        return_type = self.map_type(return_type_name)
+        arg_type = self.reinterpret_argument_type(source_type)
+        self.required_reinterpret_helpers.add((func_name, arg_type, return_type))
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{func_name}({generated_args})"
+
+    def reinterpret_argument_type(self, source_type):
+        if source_type is None:
+            return "UInt32"
+        arg_type = self.map_type(source_type)
+        if arg_type in {"Float32", "Int32", "UInt32"}:
+            return arg_type
+        if self.vector_type_info(source_type) is not None:
+            return arg_type
+        return "UInt32"
+
+    def reinterpret_return_type_name(self, func_name, source_type):
+        scalar_type, vector_prefix = MOJO_REINTERPRET_TARGET_TYPES[func_name]
+        vector_info = self.vector_type_info(source_type)
+        if vector_info is not None:
+            return f"{vector_prefix}{vector_info[1]}"
+        return scalar_type
+
+    def generate_resource_builtin_call(self, args, helper_base, return_kind):
+        if not args:
+            return f"{helper_base}()"
+
+        args = self.strip_split_sampler_arg(args)
+        self.validate_texture_builtin_resource(args, helper_base)
+        arg_types = tuple(self.resource_builtin_arg_type(arg) for arg in args)
+        helper_name = self.resource_builtin_helper_name(helper_base, arg_types)
+        self.required_resource_builtin_helpers[(helper_name, arg_types)] = {
+            "name": helper_name,
+            "arg_types": arg_types,
+            "return_type": self.resource_builtin_return_type(return_kind),
+        }
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def validate_texture_builtin_resource(self, args, helper_base):
+        if not args:
+            return
+
+        resource_type = self.map_type(self.expression_result_type(args[0]))
+        if not self.is_texture_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"texture resource required: {resource_type}"
+            )
+        if self.is_multisample_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"non-multisample texture required: {resource_type}"
+            )
+        if (
+            helper_base.startswith("texture_compare")
+            or helper_base.startswith("texture_gather_compare")
+        ) and not self.is_shadow_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"shadow texture required: {resource_type}"
+            )
+        if helper_base in {
+            "texture_query_lod",
+            "calculate_level_of_detail",
+            "calculate_level_of_detail_unclamped",
+        } and self.is_shadow_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"non-shadow texture required: {resource_type}"
+            )
+        self.validate_texture_builtin_args(args, helper_base, resource_type)
+
+    def validate_texture_builtin_args(self, args, helper_base, resource_type):
+        argument_specs = self.texture_builtin_argument_specs(helper_base, resource_type)
+        if argument_specs is None:
+            return
+
+        allowed_counts = {
+            len(specs)
+            for specs in argument_specs
+            if self.texture_arg_specs_known(specs)
+        }
+        if allowed_counts and len(args) - 1 not in allowed_counts:
+            expected = " or ".join(str(count) for count in sorted(allowed_counts))
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; expected {expected} "
+                f"argument(s) after texture resource, got {len(args) - 1}"
+            )
+
+        for specs in argument_specs:
+            if len(args) - 1 != len(specs):
+                continue
+            if not self.texture_arg_specs_known(specs):
+                return
+            for index, (label, expected_type) in enumerate(specs, start=1):
+                self.validate_resource_argument_type(
+                    args[index], expected_type, helper_base, resource_type, label
+                )
+            return
+
+    def texture_builtin_argument_specs(self, helper_base, resource_type):
+        sample_coord = MOJO_RESOURCE_SAMPLE_COORDS.get(resource_type)
+        compare_coord = MOJO_RESOURCE_COMPARE_COORDS.get(resource_type)
+        offset_coord = MOJO_RESOURCE_OFFSET_COORDS.get(resource_type)
+        projected_coord = MOJO_RESOURCE_PROJECTED_COORDS.get(resource_type)
+
+        if helper_base in {
+            "sample_offset",
+            "sample_lod_offset",
+            "sample_grad_offset",
+        } and None in {sample_coord, offset_coord}:
+            return None
+        if helper_base in {"sample_proj", "sample_proj_offset"} and (
+            projected_coord is None
+        ):
+            return None
+        if (
+            helper_base
+            in {
+                "sample_proj_lod",
+                "sample_proj_lod_offset",
+                "sample_proj_grad",
+                "sample_proj_grad_offset",
+            }
+            and projected_coord is None
+        ):
+            return None
+        if (
+            helper_base
+            in {
+                "texture_compare",
+                "texture_compare_offset",
+                "texture_compare_lod",
+                "texture_compare_lod_offset",
+                "texture_compare_grad",
+                "texture_compare_grad_offset",
+                "texture_compare_proj",
+                "texture_compare_proj_offset",
+                "texture_compare_proj_lod",
+                "texture_compare_proj_lod_offset",
+                "texture_compare_proj_grad",
+                "texture_compare_proj_grad_offset",
+                "texture_gather_compare",
+                "texture_gather_compare_offset",
+            }
+            and compare_coord is None
+        ):
+            return None
+
+        specs = {
+            "sample_offset": [[("coordinate", sample_coord), ("offset", offset_coord)]],
+            "sample_lod_offset": [
+                [
+                    ("coordinate", sample_coord),
+                    ("lod", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "sample_grad_offset": [
+                [
+                    ("coordinate", sample_coord),
+                    ("ddx", sample_coord),
+                    ("ddy", sample_coord),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "sample_bias": [[("coordinate", sample_coord), ("bias", "Float32")]],
+            "sample_bias_offset": [
+                [
+                    ("coordinate", sample_coord),
+                    ("bias", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "sample_proj": [[("coordinate", projected_coord)]],
+            "sample_proj_offset": [
+                [("coordinate", projected_coord), ("offset", offset_coord)]
+            ],
+            "sample_proj_lod": [[("coordinate", projected_coord), ("lod", "Float32")]],
+            "sample_proj_lod_offset": [
+                [
+                    ("coordinate", projected_coord),
+                    ("lod", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "sample_proj_grad": [
+                [
+                    ("coordinate", projected_coord),
+                    ("ddx", sample_coord),
+                    ("ddy", sample_coord),
+                ]
+            ],
+            "sample_proj_grad_offset": [
+                [
+                    ("coordinate", projected_coord),
+                    ("ddx", sample_coord),
+                    ("ddy", sample_coord),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_query_lod": [[("coordinate", sample_coord)]],
+            "calculate_level_of_detail": [[("coordinate", sample_coord)]],
+            "calculate_level_of_detail_unclamped": [[("coordinate", sample_coord)]],
+            "texture_gather": [
+                [("coordinate", sample_coord)],
+                [("coordinate", sample_coord), ("component", "Int32")],
+            ],
+            "texture_gather_offset": [
+                [("coordinate", sample_coord), ("offset", offset_coord)],
+                [
+                    ("coordinate", sample_coord),
+                    ("offset", offset_coord),
+                    ("component", "Int32"),
+                ],
+            ],
+            "texture_gather_offsets": [
+                [
+                    ("coordinate", sample_coord),
+                    ("offset0", offset_coord),
+                    ("offset1", offset_coord),
+                    ("offset2", offset_coord),
+                    ("offset3", offset_coord),
+                ],
+                [
+                    ("coordinate", sample_coord),
+                    ("offset0", offset_coord),
+                    ("offset1", offset_coord),
+                    ("offset2", offset_coord),
+                    ("offset3", offset_coord),
+                    ("component", "Int32"),
+                ],
+            ],
+            "texture_compare": [[("coordinate", compare_coord), ("depth", "Float32")]],
+            "texture_compare_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_lod": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("lod", "Float32"),
+                ]
+            ],
+            "texture_compare_lod_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("lod", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_grad": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("ddx", compare_coord),
+                    ("ddy", compare_coord),
+                ]
+            ],
+            "texture_compare_grad_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("ddx", compare_coord),
+                    ("ddy", compare_coord),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_proj": [
+                [("coordinate", compare_coord), ("depth", "Float32")]
+            ],
+            "texture_compare_proj_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_proj_lod": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("lod", "Float32"),
+                ]
+            ],
+            "texture_compare_proj_lod_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("lod", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_compare_proj_grad": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("ddx", compare_coord),
+                    ("ddy", compare_coord),
+                ]
+            ],
+            "texture_compare_proj_grad_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("ddx", compare_coord),
+                    ("ddy", compare_coord),
+                    ("offset", offset_coord),
+                ]
+            ],
+            "texture_gather_compare": [
+                [("coordinate", compare_coord), ("depth", "Float32")]
+            ],
+            "texture_gather_compare_offset": [
+                [
+                    ("coordinate", compare_coord),
+                    ("depth", "Float32"),
+                    ("offset", offset_coord),
+                ]
+            ],
+        }
+        return specs.get(helper_base)
+
+    def texture_arg_specs_known(self, specs):
+        return all(expected_type is not None for _, expected_type in specs)
+
+    def generate_image_atomic_call(self, args, helper_base):
+        if not args:
+            return f"{helper_base}()"
+
+        self.validate_resource_read_write_access(args[0], helper_base)
+        resource_type = self.map_type(self.expression_result_type(args[0]))
+        return_type = self.image_value_type(resource_type)
+        if return_type not in {"Int32", "UInt32"}:
+            raise ValueError(
+                "Unsupported image atomic for Mojo codegen; "
+                f"scalar integer image required: {resource_type}"
+            )
+
+        arg_types = tuple(self.resource_builtin_arg_type(arg) for arg in args)
+        helper_name = self.resource_builtin_helper_name(helper_base, arg_types)
+        self.required_resource_builtin_helpers[(helper_name, arg_types)] = {
+            "name": helper_name,
+            "arg_types": arg_types,
+            "return_type": return_type,
+        }
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def resource_builtin_arg_type(self, arg):
+        if isinstance(arg, bool):
+            return "Bool"
+        if isinstance(arg, int):
+            return "Int32"
+        if isinstance(arg, float):
+            return "Float32"
+
+        type_name = self.expression_result_type(arg)
+        mapped_type = self.map_type(type_name)
+        if mapped_type not in {"Float32", None}:
+            return mapped_type
+
+        dtype = self.expression_mojo_dtype(arg)
+        if dtype is not None:
+            scalar_type = MOJO_DTYPE_INFO.get(dtype, MOJO_DTYPE_INFO["DType.float32"])[
+                0
+            ]
+            return self.map_type(scalar_type)
+
+        return "Float32"
+
+    def validate_resource_argument_type(
+        self, arg, expected_type, helper_name, resource_type, label
+    ):
+        actual_type = self.resource_builtin_arg_type(arg)
+        if actual_type != expected_type:
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; {label} for "
+                f"{resource_type} must be {expected_type}, got {actual_type}"
+            )
+
+    def resource_builtin_return_type(self, return_kind):
+        if return_kind == "float":
+            return "Float32"
+        if return_kind == "vec2":
+            return "SIMD[DType.float32, 2]"
+        return "SIMD[DType.float32, 4]"
+
+    def resource_builtin_helper_name(self, helper_base, arg_types):
+        parts = [helper_base]
+        for arg_type in arg_types:
+            safe_type = re.sub(r"[^0-9A-Za-z]+", "_", arg_type).strip("_")
+            parts.append(safe_type)
+        return "_crossgl_" + "_".join(parts)
+
     def generate_bool_vector_select_expression(
         self, condition_expr, true_expr, false_expr
     ):
@@ -1813,20 +4985,12 @@ class MojoCodeGen:
     def is_scalar_integer_type(self, type_name):
         if type_name is None or self.vector_type_info(type_name) is not None:
             return False
-        return str(type_name) in {
-            "int",
-            "uint",
-            "short",
-            "ushort",
-            "long",
-            "ulong",
-            "i32",
-            "u32",
-            "Int",
-            "UInt",
-            "Int32",
-            "UInt32",
-        }
+        type_name = self.type_name(type_name)
+        if type_name in MOJO_INTEGER_INDEX_TYPES:
+            return True
+        if MOJO_SCALAR_DTYPES.get(type_name) in MOJO_INTEGER_DTYPES:
+            return True
+        return self.type_mapping.get(type_name, type_name) in MOJO_MAPPED_INTEGER_TYPES
 
     def generate_matrix_constructor_helper_call(self, dtype, columns, rows, args):
         component_count = columns * rows
@@ -2023,10 +5187,119 @@ class MojoCodeGen:
             and not self.required_matrix_constructor_helpers
             and not self.required_fract_helpers
             and not self.required_saturate_helpers
+            and not self.required_resource_types
+            and not self.required_resource_sample_types
+            and not self.required_resource_lod_types
+            and not self.required_resource_grad_types
+            and not self.required_resource_size_types
+            and not self.required_resource_query_level_types
+            and not self.required_resource_sample_count_helpers
+            and not self.required_resource_texel_fetch_types
+            and not self.required_image_load_types
+            and not self.required_image_store_types
+            and not self.required_resource_builtin_helpers
+            and not self.required_buffer_resource_types
+            and not self.required_buffer_load_helpers
+            and not self.required_buffer_store_helpers
+            and not self.required_buffer_append_helpers
+            and not self.required_buffer_consume_helpers
+            and not self.required_buffer_dimensions_helpers
+            and not self.required_byte_address_vector_load_helpers
+            and not self.required_byte_address_vector_store_helpers
+            and not self.required_reinterpret_helpers
+            and not self.required_sync_helpers
         ):
             return ""
 
         code = ""
+        resource_sampled_types = (
+            self.required_resource_sample_types
+            | self.required_resource_lod_types
+            | self.required_resource_grad_types
+            | self.required_resource_size_types
+            | self.required_resource_query_level_types
+            | {
+                resource_type
+                for _, resource_type in self.required_resource_sample_count_helpers
+            }
+            | self.required_resource_texel_fetch_types
+            | self.required_image_load_types
+            | self.required_image_store_types
+        )
+        if (
+            self.required_resource_types
+            or resource_sampled_types
+            or self.required_resource_builtin_helpers
+            or self.required_buffer_resource_types
+            or self.required_buffer_load_helpers
+            or self.required_buffer_store_helpers
+            or self.required_buffer_append_helpers
+            or self.required_buffer_consume_helpers
+            or self.required_buffer_dimensions_helpers
+            or self.required_byte_address_vector_load_helpers
+            or self.required_byte_address_vector_store_helpers
+        ):
+            code += "# CrossGL resource placeholders\n"
+            for resource_type in sorted(
+                self.required_resource_types | resource_sampled_types
+            ):
+                code += self.generate_resource_type(resource_type)
+            for buffer_type in sorted(self.required_buffer_resource_types):
+                code += self.generate_buffer_resource_type(buffer_type)
+            for resource_type in sorted(self.required_resource_sample_types):
+                code += self.generate_resource_sample_helper(resource_type)
+            for resource_type in sorted(self.required_resource_lod_types):
+                code += self.generate_resource_lod_helper(resource_type)
+            for resource_type in sorted(self.required_resource_grad_types):
+                code += self.generate_resource_grad_helper(resource_type)
+            for resource_type in sorted(self.required_resource_size_types):
+                code += self.generate_resource_size_helper(resource_type)
+            for resource_type in sorted(self.required_resource_query_level_types):
+                code += self.generate_resource_query_levels_helper(resource_type)
+            for helper_name, resource_type in sorted(
+                self.required_resource_sample_count_helpers
+            ):
+                code += self.generate_resource_sample_count_helper(
+                    helper_name, resource_type
+                )
+            for resource_type in sorted(self.required_resource_texel_fetch_types):
+                code += self.generate_texel_fetch_helper(resource_type)
+            for resource_type in sorted(self.required_image_load_types):
+                code += self.generate_image_load_helper(resource_type)
+            for resource_type in sorted(self.required_image_store_types):
+                code += self.generate_image_store_helper(resource_type)
+            for key in sorted(self.required_resource_builtin_helpers):
+                code += self.generate_resource_builtin_helper(
+                    self.required_resource_builtin_helpers[key]
+                )
+            for key in sorted(self.required_buffer_load_helpers):
+                code += self.generate_buffer_load_helper(*key)
+            for key in sorted(self.required_buffer_store_helpers):
+                code += self.generate_buffer_store_helper(*key)
+            for key in sorted(self.required_buffer_append_helpers):
+                code += self.generate_buffer_append_helper(*key)
+            for key in sorted(self.required_buffer_consume_helpers):
+                code += self.generate_buffer_consume_helper(*key)
+            for key in sorted(self.required_buffer_dimensions_helpers):
+                code += self.generate_buffer_dimensions_helper(*key)
+            for key in sorted(self.required_byte_address_vector_load_helpers):
+                code += self.generate_byte_address_vector_load_helper(*key)
+            for key in sorted(self.required_byte_address_vector_store_helpers):
+                code += self.generate_byte_address_vector_store_helper(*key)
+            code += "\n"
+
+        if self.required_reinterpret_helpers:
+            code += "# CrossGL reinterpret helpers\n"
+            for key in sorted(self.required_reinterpret_helpers):
+                code += self.generate_reinterpret_helper(*key)
+            code += "\n"
+
+        if self.required_sync_helpers:
+            code += "# CrossGL synchronization placeholders\n"
+            for helper_name in sorted(self.required_sync_helpers):
+                code += self.generate_sync_helper(helper_name)
+            code += "\n"
+
         if self.required_fract_helpers or self.required_saturate_helpers:
             code += "# CrossGL math helpers\n"
             for key in sorted(self.required_fract_helpers):
@@ -2067,6 +5340,268 @@ class MojoCodeGen:
                 self.required_matrix_constructor_helpers[key]
             )
         return code + "\n"
+
+    def generate_sync_helper(self, helper_name):
+        return f"fn {helper_name}():\n    pass\n\n"
+
+    def generate_resource_type(self, resource_type):
+        code = f"@value\nstruct {resource_type}:\n"
+        code += "    pass\n\n"
+        return code
+
+    def generate_buffer_resource_type(self, buffer_type):
+        if buffer_type in MOJO_TYPED_BUFFER_RESOURCE_TYPES:
+            return f"@value\nstruct {buffer_type}[T: AnyType]:\n    pass\n\n"
+        return f"@value\nstruct {buffer_type}:\n    pass\n\n"
+
+    def generate_buffer_load_helper(self, buffer_type, element_type):
+        element_type = self.buffer_helper_element_type(buffer_type, element_type)
+        element_mojo_type = self.map_type(element_type)
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        zero_value = self.zero_value_for_type(element_type)
+        code = ""
+        for index_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_load(buffer: {buffer_mojo_type}, "
+                f"index: {index_type}) -> {element_mojo_type}:\n"
+            )
+            code += f"    return {zero_value}\n\n"
+        return code
+
+    def generate_buffer_store_helper(self, buffer_type, element_type):
+        element_type = self.buffer_helper_element_type(buffer_type, element_type)
+        element_mojo_type = self.map_type(element_type)
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        code = ""
+        for index_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_store(buffer: {buffer_mojo_type}, "
+                f"index: {index_type}, value: {element_mojo_type}):\n"
+            )
+            code += "    pass\n\n"
+        return code
+
+    def generate_buffer_append_helper(self, buffer_type, element_type):
+        element_mojo_type = self.map_type(element_type)
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        code = f"fn buffer_append(buffer: {buffer_mojo_type}, value: {element_mojo_type}):\n"
+        code += "    pass\n\n"
+        return code
+
+    def generate_buffer_consume_helper(self, buffer_type, element_type):
+        element_mojo_type = self.map_type(element_type)
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        code = (
+            f"fn buffer_consume(buffer: {buffer_mojo_type}) -> {element_mojo_type}:\n"
+        )
+        code += f"    return {self.zero_value_for_type(element_type)}\n\n"
+        return code
+
+    def generate_buffer_dimensions_helper(self, buffer_type, element_type):
+        buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
+        code = ""
+        for dimensions_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_dimensions(buffer: {buffer_mojo_type}, "
+                f"dimensions: {dimensions_type}):\n"
+            )
+            code += "    pass\n\n"
+        return code
+
+    def generate_byte_address_vector_load_helper(self, buffer_type, width):
+        vector_type = self.byte_address_vector_mojo_type(width)
+        zero_value = self.byte_address_vector_zero_value(width)
+        code = ""
+        for index_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_load{width}(buffer: {buffer_type}, "
+                f"index: {index_type}) -> {vector_type}:\n"
+            )
+            code += f"    return {zero_value}\n\n"
+        return code
+
+    def generate_byte_address_vector_store_helper(self, buffer_type, width):
+        vector_type = self.byte_address_vector_mojo_type(width)
+        code = ""
+        for index_type in ("Int32", "UInt32"):
+            code += (
+                f"fn buffer_store{width}(buffer: {buffer_type}, "
+                f"index: {index_type}, value: {vector_type}):\n"
+            )
+            code += "    pass\n\n"
+        return code
+
+    def generate_reinterpret_helper(self, func_name, arg_type, return_type):
+        code = f"fn {func_name}(value: {arg_type}) -> {return_type}:\n"
+        return_match = re.fullmatch(r"SIMD\[(DType\.\w+), \d+\]", return_type)
+        if arg_type.startswith("SIMD[") and return_match is not None:
+            code += f"    return value.cast[{return_match.group(1)}]()\n\n"
+            return code
+        code += f"    return {return_type}(value)\n\n"
+        return code
+
+    def generate_resource_sample_helper(self, resource_type):
+        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn sample(tex: {resource_type}, coord: {coord_type}) -> {return_type}:\n"
+        )
+        code += f"    return {self.zero_mojo_value(return_type)}\n\n"
+        return code
+
+    def generate_resource_lod_helper(self, resource_type):
+        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn sample_lod(tex: {resource_type}, coord: {coord_type}, "
+            f"lod: Float32) -> {return_type}:\n"
+        )
+        if return_type == "SIMD[DType.float32, 4]":
+            code += "    return SIMD[DType.float32, 4](0.0, 0.0, lod, 1.0)\n\n"
+        else:
+            code += f"    return {self.zero_mojo_value(return_type)}\n\n"
+        return code
+
+    def generate_resource_grad_helper(self, resource_type):
+        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn sample_grad(tex: {resource_type}, coord: {coord_type}, "
+            f"ddx: {coord_type}, ddy: {coord_type}) -> {return_type}:\n"
+        )
+        code += f"    return {self.zero_mojo_value(return_type)}\n\n"
+        return code
+
+    def generate_resource_size_helper(self, resource_type):
+        return_type = self.resource_size_return_type(resource_type)
+        zero_value = self.zero_mojo_value(return_type)
+        code = f"fn texture_size(tex: {resource_type}) -> {return_type}:\n"
+        code += f"    return {zero_value}\n\n"
+        code += f"fn texture_size(tex: {resource_type}, lod: Int32) -> {return_type}:\n"
+        code += f"    return {zero_value}\n\n"
+        code += f"fn image_size(image: {resource_type}) -> {return_type}:\n"
+        code += f"    return {zero_value}\n\n"
+        return code
+
+    def generate_resource_query_levels_helper(self, resource_type):
+        code = f"fn texture_query_levels(tex: {resource_type}) -> Int32:\n"
+        code += "    return 1\n\n"
+        return code
+
+    def generate_resource_sample_count_helper(self, helper_name, resource_type):
+        parameter_name = "image" if helper_name == "image_samples" else "tex"
+        code = f"fn {helper_name}({parameter_name}: {resource_type}) -> Int32:\n"
+        code += "    return 1\n\n"
+        return code
+
+    def generate_texel_fetch_helper(self, resource_type):
+        coord_type = MOJO_RESOURCE_TEXEL_COORDS[resource_type]
+        code = (
+            f"fn texel_fetch(tex: {resource_type}, coord: {coord_type}, "
+            "lod: Int32) -> SIMD[DType.float32, 4]:\n"
+        )
+        code += "    return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n\n"
+        return code
+
+    def generate_image_load_helper(self, resource_type):
+        coord_type = self.resource_texel_coord_type(resource_type)
+        value_type = self.image_value_type(resource_type)
+        if self.is_multisample_resource_type(resource_type):
+            code = (
+                f"fn image_load(image: {resource_type}, coord: {coord_type}, "
+                f"sample: Int32) -> {value_type}:\n"
+            )
+        else:
+            code = (
+                f"fn image_load(image: {resource_type}, coord: {coord_type}) -> "
+                f"{value_type}:\n"
+            )
+        code += f"    return {self.zero_mojo_value(value_type)}\n\n"
+        return code
+
+    def generate_image_store_helper(self, resource_type):
+        coord_type = self.resource_texel_coord_type(resource_type)
+        value_type = self.image_value_type(resource_type)
+        if self.is_multisample_resource_type(resource_type):
+            code = (
+                f"fn image_store(image: {resource_type}, coord: {coord_type}, "
+                f"sample: Int32, value: {value_type}):\n"
+            )
+        else:
+            code = (
+                f"fn image_store(image: {resource_type}, coord: {coord_type}, "
+                f"value: {value_type}):\n"
+            )
+        code += "    pass\n\n"
+        return code
+
+    def generate_resource_builtin_helper(self, helper):
+        params = [
+            f"arg{index}: {arg_type}"
+            for index, arg_type in enumerate(helper["arg_types"])
+        ]
+        code = f"fn {helper['name']}({', '.join(params)}) -> {helper['return_type']}:\n"
+        code += f"    return {self.zero_mojo_value(helper['return_type'])}\n\n"
+        return code
+
+    def is_multisample_resource_type(self, resource_type):
+        return "MS" in resource_type
+
+    def is_shadow_resource_type(self, resource_type):
+        return isinstance(resource_type, str) and resource_type.endswith("Shadow")
+
+    def is_texture_resource_type(self, resource_type):
+        return isinstance(resource_type, str) and resource_type.startswith("Texture")
+
+    def is_image_resource_type(self, resource_type):
+        return isinstance(resource_type, str) and resource_type.startswith(
+            ("Image", "IImage", "UImage")
+        )
+
+    def resource_sample_return_type(self, resource_type):
+        if self.is_shadow_resource_type(resource_type):
+            return "Float32"
+        return "SIMD[DType.float32, 4]"
+
+    def image_value_type(self, resource_type):
+        typed_info = self.typed_image_resource_info(resource_type)
+        if typed_info is not None:
+            _, dtype, source_width = typed_info
+            if source_width == 1:
+                return self.map_type(MOJO_DTYPE_INFO[dtype][0])
+            return self.map_type(
+                self.vector_type_name_for_dtype_width(dtype, source_width)
+            )
+        if resource_type.startswith("IImage"):
+            return "Int32"
+        if resource_type.startswith("UImage"):
+            return "UInt32"
+        return "SIMD[DType.float32, 4]"
+
+    def zero_mojo_value(self, mojo_type):
+        if mojo_type in {
+            "Int",
+            "Int16",
+            "Int32",
+            "Int64",
+            "UInt16",
+            "UInt32",
+            "UInt64",
+        }:
+            return "0"
+        if mojo_type in {"Float16", "Float32", "Float64"}:
+            return "0.0"
+        if mojo_type == "Bool":
+            return "False"
+
+        vector_match = re.fullmatch(r"SIMD\[(DType\.\w+), (\d+)\]", mojo_type)
+        if vector_match:
+            dtype = vector_match.group(1)
+            width = int(vector_match.group(2))
+            zero = MOJO_DTYPE_INFO.get(dtype, MOJO_DTYPE_INFO["DType.float32"])[2]
+            return f"{mojo_type}({', '.join([zero] * width)})"
+
+        return f"{mojo_type}()"
 
     def generate_fract_helper(self, key):
         kind, dtype, source_width, storage_width = key
@@ -2387,6 +5922,20 @@ class MojoCodeGen:
             return self.convert_type_node_to_string(type_value)
         return str(type_value)
 
+    def normalize_generic_vector_type_name(self, type_name):
+        if not isinstance(type_name, str):
+            return type_name
+        match = re.fullmatch(r"vec([234])<\s*([^>]+)\s*>", type_name)
+        if match is None:
+            return type_name
+        dtype = MOJO_SCALAR_DTYPES.get(match.group(2).strip())
+        if dtype is None:
+            return type_name
+        canonical = f"vec{match.group(1)}<{MOJO_DTYPE_SUFFIX[dtype]}>"
+        if canonical in self.vector_constructor_info:
+            return canonical
+        return type_name
+
     def is_array_type_name(self, type_name):
         return type_name is not None and "[" in str(type_name) and "]" in str(type_name)
 
@@ -2457,6 +6006,10 @@ class MojoCodeGen:
 
     def zero_value_for_type(self, type_name):
         type_name = self.type_name(type_name)
+        buffer_info = self.buffer_resource_info(type_name)
+        if buffer_info is not None:
+            return f"{self.mapped_buffer_type(*buffer_info)}()"
+
         if self.is_array_type_name(type_name):
             element_type, size = parse_array_type(type_name)
             return self.zero_array_value(element_type, size)
@@ -2525,8 +6078,12 @@ class MojoCodeGen:
         array = self.generate_expression(expr.array)
         index = self.generate_array_index_expression(
             expr.index,
-            cast_integer_index=vector_info is not None
+            cast_integer_index=matrix_info is not None
+            or vector_info is not None
             or array_element_type is not None,
+            preserve_integer_index_types=(
+                {"int", "i32", "Int32"} if matrix_info is not None else None
+            ),
         )
 
         if matrix_info is not None:
@@ -2536,12 +6093,19 @@ class MojoCodeGen:
 
         return f"{array}[{index}]"
 
-    def generate_array_index_expression(self, expr, cast_integer_index=False):
+    def generate_array_index_expression(
+        self,
+        expr,
+        cast_integer_index=False,
+        preserve_integer_index_types=None,
+    ):
         index = self.generate_expression(expr)
         if not cast_integer_index or self.literal_int_value(expr) is not None:
             return index
 
         index_type = self.expression_result_type(expr)
+        if preserve_integer_index_types and index_type in preserve_integer_index_types:
+            return index
         if index_type in MOJO_INTEGER_INDEX_TYPES:
             return f"int({index})"
         return index
@@ -2593,25 +6157,180 @@ class MojoCodeGen:
                 return right_type
             return left_type if left_type == right_type else left_type or right_type
         if isinstance(expr, FunctionCallNode):
+            member_result_type = self.member_function_result_type(expr)
+            if member_result_type is not None:
+                return member_result_type
+
             func_name = self.function_call_name(expr)
             if func_name in self.vector_constructor_info:
                 return func_name
+            vector_func_name = self.normalize_generic_vector_type_name(func_name)
+            if vector_func_name in self.vector_constructor_info:
+                return vector_func_name
             if func_name in MOJO_MATRIX_TYPES:
                 return func_name
             if func_name in {"fract", "frac"} and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name == "saturate" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"texture", "textureLod", "textureGrad"}:
+                args = self.strip_split_sampler_arg(expr.args)
+                if args:
+                    resource_type = self.map_type(self.expression_result_type(args[0]))
+                    if self.is_shadow_resource_type(resource_type):
+                        return "float"
+                return "vec4"
+            if func_name == "texelFetch":
+                return "vec4"
+            if func_name == "textureQueryLevels":
+                return "int"
+            if func_name in {"imageSamples", "textureSamples"}:
+                return "int"
+            if func_name in {"textureSize", "imageSize"} and expr.args:
+                resource_type = self.map_type(self.expression_result_type(expr.args[0]))
+                size_type = self.resource_size_return_type(resource_type)
+                if size_type == "Int32":
+                    return "int"
+                if size_type == "SIMD[DType.int32, 2]":
+                    return "ivec2"
+                if size_type == "SIMD[DType.int32, 4]":
+                    return "ivec3"
+            if func_name == "imageLoad" and expr.args:
+                resource_type = self.map_type(self.expression_result_type(expr.args[0]))
+                return self.image_result_type_name(resource_type)
+            if func_name == "imageStore":
+                return "void"
+            if func_name == "buffer_load" and expr.args:
+                info = self.buffer_resource_info(
+                    self.expression_result_type(expr.args[0])
+                )
+                if info is not None:
+                    return self.buffer_helper_element_type(*info)
+            if func_name == "buffer_consume" and expr.args:
+                info = self.buffer_resource_info(
+                    self.expression_result_type(expr.args[0])
+                )
+                if info is not None:
+                    return info[1]
+            if func_name in {"buffer_store", "buffer_append", "buffer_dimensions"}:
+                return "void"
+            if func_name in MOJO_REINTERPRET_BUILTINS:
+                source_type = (
+                    self.expression_result_type(expr.args[0]) if expr.args else None
+                )
+                return self.reinterpret_return_type_name(func_name, source_type)
+            if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
+                _, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
+                if return_kind == "float":
+                    return "float"
+                if return_kind == "vec2":
+                    return "vec2"
+                return "vec4"
+            if func_name in MOJO_IMAGE_ATOMIC_BUILTINS and expr.args:
+                resource_type = self.map_type(self.expression_result_type(expr.args[0]))
+                value_type = self.image_value_type(resource_type)
+                if value_type == "UInt32":
+                    return "uint"
+                return "int"
             return self.function_return_types.get(func_name)
+        if isinstance(expr, ConstructorNode):
+            return self.convert_type_node_to_string(expr.constructor_type)
+        if isinstance(expr, CastNode):
+            return self.convert_type_node_to_string(expr.target_type)
+        if isinstance(expr, SwizzleNode):
+            return self.swizzle_result_type(
+                self.expression_result_type(expr.vector_expr),
+                len(expr.components),
+            )
+        if isinstance(expr, BuiltinVariableNode):
+            if expr.component:
+                base_type = self.builtin_variable_result_type(expr.builtin_name)
+                vector_info = self.vector_type_info(base_type)
+                if vector_info is not None:
+                    return MOJO_DTYPE_INFO[vector_info[0]][0]
+                return base_type
+            return self.builtin_variable_result_type(expr.builtin_name)
+        if isinstance(expr, TextureNode):
+            resource_type = self.map_type(
+                self.expression_result_type(expr.texture_expr)
+            )
+            if self.is_shadow_resource_type(resource_type):
+                return "float"
+            return "vec4"
+        if isinstance(expr, TextureOpNode):
+            operation = getattr(expr, "operation", "")
+            if operation in {
+                "SampleCmp",
+                "SampleCmpLevel",
+                "SampleCmpLevelZero",
+                "SampleCmpGrad",
+                "textureCompare",
+                "textureCompareOffset",
+                "textureCompareLod",
+                "textureCompareLodOffset",
+                "textureCompareGrad",
+                "textureCompareGradOffset",
+                "textureCompareProj",
+                "textureCompareProjOffset",
+                "textureCompareProjLod",
+                "textureCompareProjLodOffset",
+                "textureCompareProjGrad",
+                "textureCompareProjGradOffset",
+            }:
+                return "float"
+            if operation == "textureQueryLod":
+                return "vec2"
+            if operation in MOJO_GENERIC_TEXTURE_BUILTINS:
+                _, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[operation]
+                if return_kind == "float":
+                    return "float"
+                if return_kind == "vec2":
+                    return "vec2"
+                return "vec4"
+            if operation == "textureQueryLevels":
+                return "int"
+            if operation in {"imageSamples", "textureSamples"}:
+                return "int"
+            if operation in {"GetDimensions", "textureSize"}:
+                resource_type = self.map_type(
+                    self.expression_result_type(expr.texture_expr)
+                )
+                size_type = self.resource_size_return_type(resource_type)
+                if size_type == "Int32":
+                    return "int"
+                if size_type == "SIMD[DType.int32, 2]":
+                    return "ivec2"
+                if size_type == "SIMD[DType.int32, 4]":
+                    return "ivec3"
+            if operation in MOJO_ATOMIC_OP_ALIASES:
+                resource_type = self.map_type(
+                    self.expression_result_type(expr.texture_expr)
+                )
+                value_type = self.image_value_type(resource_type)
+                if value_type == "UInt32":
+                    return "uint"
+                return "int"
+            return "vec4"
+        if isinstance(expr, AtomicOpNode):
+            resource_type = self.map_type(self.expression_result_type(expr.target))
+            value_type = self.image_value_type(resource_type)
+            if value_type == "UInt32":
+                return "uint"
+            return "int"
+        if isinstance(expr, BufferOpNode):
+            return self.buffer_op_result_type(expr)
         if isinstance(expr, MemberAccessNode):
+            obj_type = self.expression_result_type(expr.object)
+            if (
+                obj_type in self.struct_types
+                and expr.member in self.struct_types[obj_type]
+            ):
+                return self.struct_types[obj_type].get(expr.member)
+            if obj_type in self.struct_types:
+                return None
             swizzle_indices = self.get_swizzle_indices(expr.member)
             if swizzle_indices is not None:
-                obj_type = self.expression_result_type(expr.object)
                 return self.swizzle_result_type(obj_type, len(swizzle_indices))
-
-            obj_type = self.expression_result_type(expr.object)
-            if obj_type in self.struct_types:
-                return self.struct_types[obj_type].get(expr.member)
         if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             return self.variable_types.get(getattr(expr, "name", ""))
         if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
@@ -2624,15 +6343,152 @@ class MojoCodeGen:
         func_expr = getattr(expr, "function", None)
         if func_expr is None:
             func_expr = expr.name
+        if isinstance(func_expr, MemberAccessNode):
+            return None
         if hasattr(func_expr, "name"):
             return func_expr.name
         if isinstance(func_expr, str):
             return func_expr
         return None
 
+    def buffer_op_result_type(self, expr):
+        operation = MOJO_BUFFER_OP_ALIASES.get(getattr(expr, "operation", ""))
+        if operation is None:
+            return None
+
+        info = self.buffer_resource_info(
+            self.expression_result_type(getattr(expr, "buffer_expr", None))
+        )
+        if operation == "Load":
+            if info is None:
+                return None
+            return self.buffer_helper_element_type(*info)
+        if operation in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+            if info is None or info[0] not in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+                return None
+            return self.byte_address_load_result_type(
+                MOJO_BYTE_ADDRESS_LOAD_METHODS[operation]
+            )
+        if operation == "Consume":
+            if info is None or info[0] != "ConsumeStructuredBuffer":
+                return None
+            return info[1]
+        if operation in {
+            "Append",
+            "GetDimensions",
+            "Store",
+            *MOJO_BYTE_ADDRESS_STORE_METHODS,
+        }:
+            return "void"
+        return None
+
+    def member_function_result_type(self, expr):
+        func_expr = getattr(expr, "function", None)
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+
+        texture_result_type = self.texture_member_function_result_type(func_expr)
+        if texture_result_type is not None:
+            return texture_result_type
+
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        info = self.buffer_resource_info(self.expression_result_type(obj_expr))
+        if info is None:
+            return None
+
+        buffer_type, element_type = info
+        if buffer_type in MOJO_BYTE_ADDRESS_BUFFER_TYPES:
+            if member in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+                return self.byte_address_load_result_type(
+                    MOJO_BYTE_ADDRESS_LOAD_METHODS[member]
+                )
+            if member in MOJO_BYTE_ADDRESS_STORE_METHODS or member == "GetDimensions":
+                return "void"
+
+        if member == "Load" and buffer_type in MOJO_TYPED_BUFFER_LOAD_RESOURCE_TYPES:
+            return element_type
+        if member == "Consume" and buffer_type == "ConsumeStructuredBuffer":
+            return element_type
+        if member == "Store" and buffer_type in MOJO_BUFFER_STORE_RESOURCE_TYPES:
+            return "void"
+        if member == "Append" and buffer_type == "AppendStructuredBuffer":
+            return "void"
+        if member == "GetDimensions":
+            return "void"
+        return None
+
+    def texture_member_function_result_type(self, func_expr):
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        resource_type = self.map_type(self.expression_result_type(obj_expr))
+        if not self.is_texture_resource_type(resource_type):
+            if not self.is_image_resource_type(resource_type):
+                return None
+            if member == "Load":
+                return self.image_result_type_name(resource_type)
+            if member == "Store":
+                return "void"
+            if member in {"GetDimensions", "textureSize"}:
+                return self.resource_size_result_type_name(resource_type)
+            if member == "imageSamples":
+                return "int"
+            if member in MOJO_ATOMIC_OP_ALIASES:
+                return self.image_result_type_name(resource_type)
+            return None
+
+        if member in {
+            "SampleCmp",
+            "SampleCmpLevel",
+            "SampleCmpLevelZero",
+            "SampleCmpGrad",
+        }:
+            return "float"
+        if member in {"GetDimensions", "textureSize"}:
+            return self.resource_size_result_type_name(resource_type)
+        if member == "textureQueryLod":
+            return "vec2"
+        if member == "textureQueryLevels":
+            return "int"
+        if member == "textureSamples":
+            return "int"
+        if member in {"CalculateLevelOfDetail", "CalculateLevelOfDetailUnclamped"}:
+            return "float"
+        return "vec4"
+
+    def resource_size_result_type_name(self, resource_type):
+        size_type = self.resource_size_return_type(resource_type)
+        if size_type == "Int32":
+            return "int"
+        if size_type == "SIMD[DType.int32, 2]":
+            return "ivec2"
+        if size_type == "SIMD[DType.int32, 4]":
+            return "ivec3"
+        return None
+
+    def image_result_type_name(self, resource_type):
+        typed_info = self.typed_image_resource_info(resource_type)
+        if typed_info is not None:
+            _, dtype, source_width = typed_info
+            if source_width == 1:
+                return MOJO_DTYPE_INFO[dtype][0]
+            return self.vector_type_name_for_dtype_width(dtype, source_width)
+
+        value_type = self.image_value_type(resource_type)
+        if value_type == "Int32":
+            return "int"
+        if value_type == "UInt32":
+            return "uint"
+        return "vec4"
+
     def vector_type_info(self, type_name):
-        if type_name in self.vector_constructor_info:
-            return self.vector_constructor_info[type_name]
+        if type_name is None:
+            return None
+        normalized_type = self.normalize_generic_vector_type_name(
+            self.type_name(type_name)
+        )
+        if normalized_type in self.vector_constructor_info:
+            return self.vector_constructor_info[normalized_type]
         return None
 
     def matrix_type_info(self, type_name):
@@ -2804,12 +6660,48 @@ class MojoCodeGen:
             else:
                 return f"List[{base_mapped}]"
 
+        vtype_str = self.normalize_generic_vector_type_name(vtype_str)
+
+        resource_alias = self.resource_type_alias(vtype_str)
+        if resource_alias is not None:
+            self.required_resource_types.add(resource_alias)
+            return resource_alias
+
+        buffer_info = self.buffer_resource_info(vtype_str)
+        if buffer_info is not None:
+            self.register_buffer_resource_type(buffer_info[0])
+            return self.mapped_buffer_type(*buffer_info)
+
         if vtype_str in MOJO_MATRIX_TYPES:
             dtype, columns, rows = MOJO_MATRIX_TYPES[vtype_str]
             self.required_matrix_types.add((dtype, columns, rows))
             return self.matrix_type_name(dtype, columns, rows)
 
-        return self.type_mapping.get(vtype_str, vtype_str)
+        if vtype_str in self.enum_types:
+            return vtype_str
+
+        mapped_type = self.type_mapping.get(vtype_str, vtype_str)
+        if self.is_mojo_resource_type(mapped_type):
+            self.required_resource_types.add(mapped_type)
+        return mapped_type
+
+    def is_resource_type_name(self, type_name):
+        if self.is_array_type_name(type_name):
+            base_type, _ = parse_array_type(str(type_name))
+            return self.is_resource_type_name(base_type)
+        if self.buffer_resource_info(type_name) is not None:
+            return True
+        if self.resource_type_alias(type_name) is not None:
+            return True
+        return self.is_mojo_resource_type(
+            self.type_mapping.get(str(type_name), type_name)
+        )
+
+    def is_mojo_resource_type(self, type_name):
+        return (
+            type_name in set(MOJO_RESOURCE_TYPE_MAPPING.values())
+            or self.typed_image_resource_info(type_name) is not None
+        )
 
     def map_operator(self, op):
         op_map = {
@@ -2854,5 +6746,32 @@ class MojoCodeGen:
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to the Mojo backend attribute name."""
         if semantic:
-            return self.semantic_map.get(semantic, semantic)
+            semantic = str(semantic)
+            if semantic in self.semantic_map:
+                return self.semantic_map[semantic]
+            upper = semantic.upper()
+            lower = semantic.lower()
+            if upper in self.semantic_map:
+                return self.semantic_map[upper]
+            target_match = re.fullmatch(r"SV_TARGET(\d*)", upper)
+            if target_match is not None:
+                index = target_match.group(1) or "0"
+                return f"color({index})"
+            color_match = re.fullmatch(r"gl_fragcolor(\d*)", lower)
+            if color_match is not None:
+                index = color_match.group(1) or "0"
+                return f"color({index})"
+            texcoord_match = re.fullmatch(r"TEXCOORD(\d*)", upper)
+            if texcoord_match is not None:
+                index = texcoord_match.group(1)
+                return f"texcoord{index}" if index else "texcoord"
+            color_semantic_match = re.fullmatch(r"COLOR(\d*)", upper)
+            if color_semantic_match is not None:
+                index = color_semantic_match.group(1)
+                return f"color{index}" if index else "color"
+            if lower == "gl_fragdepth" or upper == "SV_DEPTH":
+                return "depth(any)"
+            if lower == "gl_position" or upper == "SV_POSITION":
+                return "position"
+            return semantic
         return ""

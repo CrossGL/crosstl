@@ -26,6 +26,7 @@ from .ast import (
     ConstantNode,
     GenericParameterNode,
     AttributeNode,
+    LayoutQualifierNode,
     StatementNode,
     BlockNode,
     ExpressionStatementNode,
@@ -84,6 +85,7 @@ from .ast import (
     create_legacy_shader_node,
 )
 from .lexer import Lexer
+from .stage_utils import shader_stage_from_name
 from .validation import validate_shader_cbuffers
 import logging
 
@@ -130,6 +132,83 @@ MESH_INTRINSICS = {
     "DispatchMesh",
 }
 
+VARIABLE_QUALIFIER_TOKEN_TYPES = frozenset(
+    {
+        "CONST",
+        "STATIC",
+        "MUT",
+        "SHARED",
+        "UNIFORM",
+        "BUFFER",
+        "IN",
+        "PRIVATE",
+        "GLOBAL",
+        "LOCAL",
+        "THREADGROUP",
+        "WORKGROUP",
+    }
+)
+
+PARAMETER_QUALIFIER_TOKEN_TYPES = VARIABLE_QUALIFIER_TOKEN_TYPES - {"MUT"}
+
+VARIABLE_QUALIFIER_NAMES = frozenset(
+    {
+        "out",
+        "inout",
+        "patch",
+        "flat",
+        "smooth",
+        "noperspective",
+        "centroid",
+        "sample",
+        "pervertex",
+        "perprimitive",
+        "perview",
+        "readonly",
+        "writeonly",
+        "readwrite",
+        "coherent",
+        "volatile",
+        "restrict",
+        "device",
+        "constant",
+        "thread",
+        "threadgroup",
+        "workgroup",
+        "storage",
+        "private",
+        "function",
+        "groupshared",
+        "row_major",
+        "column_major",
+        "precise",
+        "nointerpolation",
+        "linear",
+        "linear_centroid",
+        "linear_noperspective",
+        "linear_noperspective_centroid",
+        "linear_sample",
+    }
+)
+
+PARAMETER_PRIMITIVE_QUALIFIER_NAMES = frozenset(
+    {
+        "point",
+        "line",
+        "triangle",
+        "lineadj",
+        "triangleadj",
+    }
+)
+
+TEXTURE_TYPE_NAMES = {
+    "TEXTURE1D": "texture1D",
+    "TEXTURE2D": "texture2D",
+    "TEXTURE3D": "texture3D",
+    "TEXTURECUBE": "textureCube",
+    "TEXTURE2DARRAY": "texture2DArray",
+}
+
 RAYQUERY_METHODS = {
     "Proceed",
     "Abort",
@@ -147,7 +226,29 @@ RAYQUERY_METHODS = {
     "CommittedObjectRayDirection",
     "CommittedRayT",
     "CandidateRayT",
+    "TraceRayInline",
 }
+
+SHADER_STAGE_TOKEN_TYPES = frozenset(
+    {
+        "VERTEX",
+        "FRAGMENT",
+        "COMPUTE",
+        "GEOMETRY",
+        "TESSELLATION_CONTROL",
+        "TESSELLATION_EVALUATION",
+        "TASK",
+        "MESH",
+        "OBJECT",
+        "AMPLIFICATION",
+        "RAY_GENERATION",
+        "RAY_INTERSECTION",
+        "RAY_CLOSEST_HIT",
+        "RAY_MISS",
+        "RAY_ANY_HIT",
+        "RAY_CALLABLE",
+    }
+)
 
 
 class Parser:
@@ -210,7 +311,12 @@ class Parser:
             previous_pos = self.pos
 
             parsed_element = self.parse_global()
-            if parsed_element:
+            parsed_elements = (
+                parsed_element if isinstance(parsed_element, list) else [parsed_element]
+            )
+            for parsed_element in parsed_elements:
+                if not parsed_element:
+                    continue
                 if isinstance(parsed_element, ShaderNode):
                     shader_name = parsed_element.name or shader_name
                     structs.extend(parsed_element.structs)
@@ -279,14 +385,23 @@ class Parser:
         constants = []
         global_variables = []
         cbuffers = []
+        preprocessors = []
 
         shader_node = None
 
         while self.current_token[0] != "EOF":
-            if self.current_token[0] in ["IMPORT", "USE"]:
+            if self.current_token[0] in ["IMPORT", "USE", "FROM"]:
                 imports.append(self.parse_import())
+            elif self.current_token[0] == "PREPROCESSOR":
+                preprocessors.append(self.parse_preprocessor_directive())
+            elif self.current_token[0] == "PRECISION":
+                preprocessors.append(self.parse_precision_statement())
             elif self.current_token[0] == "SHADER":
                 shader_node = self.parse_shader_declaration()
+            elif self.current_token_starts_attributed_cbuffer_declaration():
+                cbuffers.append(self.parse_attributed_cbuffer())
+            elif self.current_token_starts_attributed_struct_declaration():
+                structs.append(self.parse_attributed_struct())
             elif self.current_token[0] == "STRUCT":
                 structs.append(self.parse_struct())
             elif self.current_token[0] == "ENUM":
@@ -295,28 +410,27 @@ class Parser:
                 cbuffers.append(self.parse_cbuffer_as_struct())
             elif self.current_token[0] == "CONST":
                 constants.append(self.parse_constant())
+            elif self.current_token[0] == "LAYOUT":
+                attributes = self.parse_layout_attributes()
+                if self.is_layout_buffer_block_declaration():
+                    struct_node, variable_node = self.parse_layout_buffer_block(
+                        attributes
+                    )
+                    structs.append(struct_node)
+                    global_variables.append(variable_node)
+                elif self.current_token_starts_attributed_cbuffer_declaration():
+                    cbuffers.append(self.parse_attributed_cbuffer(attributes))
+                elif self.is_cbuffer_declaration():
+                    cbuffers.append(self.parse_cbuffer_as_struct(attributes))
+                elif self.is_variable_declaration():
+                    global_variables.append(self.parse_variable_declaration(attributes))
+                else:
+                    self.skip_unknown_token()
             elif self.is_function_declaration():
                 functions.append(self.parse_function())
             elif self.is_variable_declaration():
                 global_variables.append(self.parse_variable_declaration())
-            elif self.current_token[0] in [
-                "VERTEX",
-                "FRAGMENT",
-                "COMPUTE",
-                "GEOMETRY",
-                "TESSELLATION_CONTROL",
-                "TESSELLATION_EVALUATION",
-                "TASK",
-                "MESH",
-                "OBJECT",
-                "AMPLIFICATION",
-                "RAY_GENERATION",
-                "RAY_INTERSECTION",
-                "RAY_CLOSEST_HIT",
-                "RAY_MISS",
-                "RAY_ANY_HIT",
-                "RAY_CALLABLE",
-            ]:
+            elif self.current_token[0] in SHADER_STAGE_TOKEN_TYPES:
                 stage_func = self.parse_shader_stage()
                 functions.append(stage_func)
             else:
@@ -330,6 +444,9 @@ class Parser:
             if cbuffers:
                 shader_node.cbuffers = getattr(shader_node, "cbuffers", []) + cbuffers
             shader_node.imports.extend(imports)
+            shader_node.preprocessors = preprocessors + getattr(
+                shader_node, "preprocessors", []
+            )
             return self.finalize_shader(shader_node)
         else:
             shader = ShaderNode(
@@ -341,6 +458,7 @@ class Parser:
                 global_variables=global_variables,
                 constants=constants,
                 imports=imports,
+                preprocessors=preprocessors,
             )
             if cbuffers:
                 shader.cbuffers = cbuffers
@@ -359,30 +477,22 @@ class Parser:
         global_variables = []
         constants = []
         cbuffers = []
+        preprocessors = []
 
         self.eat("LBRACE")
 
         while self.current_token[0] != "RBRACE":
-            if self.current_token[0] in [
-                "VERTEX",
-                "FRAGMENT",
-                "COMPUTE",
-                "GEOMETRY",
-                "TESSELLATION_CONTROL",
-                "TESSELLATION_EVALUATION",
-                "TASK",
-                "MESH",
-                "OBJECT",
-                "AMPLIFICATION",
-                "RAY_GENERATION",
-                "RAY_INTERSECTION",
-                "RAY_CLOSEST_HIT",
-                "RAY_MISS",
-                "RAY_ANY_HIT",
-                "RAY_CALLABLE",
-            ]:
+            if self.current_token[0] == "PREPROCESSOR":
+                preprocessors.append(self.parse_preprocessor_directive())
+            elif self.current_token[0] == "PRECISION":
+                preprocessors.append(self.parse_precision_statement())
+            elif self.current_token_starts_shader_stage_block():
                 stage_node = self.parse_shader_stage_block()
                 stages[stage_node.stage] = stage_node
+            elif self.current_token_starts_attributed_cbuffer_declaration():
+                cbuffers.append(self.parse_attributed_cbuffer())
+            elif self.current_token_starts_attributed_struct_declaration():
+                structs.append(self.parse_attributed_struct())
             elif self.current_token[0] == "STRUCT":
                 structs.append(self.parse_struct())
             elif self.is_generic_declaration():
@@ -413,6 +523,22 @@ class Parser:
                 cbuffers.append(self.parse_cbuffer_as_struct())
             elif self.current_token[0] == "CONST":
                 constants.append(self.parse_constant())
+            elif self.current_token[0] == "LAYOUT":
+                attributes = self.parse_layout_attributes()
+                if self.is_layout_buffer_block_declaration():
+                    struct_node, variable_node = self.parse_layout_buffer_block(
+                        attributes
+                    )
+                    structs.append(struct_node)
+                    global_variables.append(variable_node)
+                elif self.current_token_starts_attributed_cbuffer_declaration():
+                    cbuffers.append(self.parse_attributed_cbuffer(attributes))
+                elif self.is_cbuffer_declaration():
+                    cbuffers.append(self.parse_cbuffer_as_struct(attributes))
+                elif self.is_variable_declaration():
+                    global_variables.append(self.parse_variable_declaration(attributes))
+                else:
+                    self.skip_unknown_token()
             elif self.is_function_declaration():
                 func = self.parse_function()
                 functions.append(func)
@@ -431,6 +557,7 @@ class Parser:
             functions=functions,
             global_variables=global_variables,
             constants=constants,
+            preprocessors=preprocessors,
         )
         if cbuffers:
             shader.cbuffers = cbuffers
@@ -468,29 +595,7 @@ class Parser:
     def parse_shader_stage_block(self):
         """Parse a stage-qualified block into a ``StageNode``."""
         stage_type = self.current_token[1]
-        stage_enum = {
-            "vertex": ShaderStage.VERTEX,
-            "fragment": ShaderStage.FRAGMENT,
-            "compute": ShaderStage.COMPUTE,
-            "geometry": ShaderStage.GEOMETRY,
-            "tessellation_control": ShaderStage.TESSELLATION_CONTROL,
-            "tessellation_evaluation": ShaderStage.TESSELLATION_EVALUATION,
-            "task": ShaderStage.TASK,
-            "amplification": ShaderStage.AMPLIFICATION,
-            "object": ShaderStage.OBJECT,
-            "mesh": ShaderStage.MESH,
-            "ray_generation": ShaderStage.RAY_GENERATION,
-            "ray_intersection": ShaderStage.RAY_INTERSECTION,
-            "ray_closest_hit": ShaderStage.RAY_CLOSEST_HIT,
-            "ray_miss": ShaderStage.RAY_MISS,
-            "ray_any_hit": ShaderStage.RAY_ANY_HIT,
-            "ray_callable": ShaderStage.RAY_CALLABLE,
-            "intersection": ShaderStage.RAY_INTERSECTION,
-            "closesthit": ShaderStage.RAY_CLOSEST_HIT,
-            "anyhit": ShaderStage.RAY_ANY_HIT,
-            "miss": ShaderStage.RAY_MISS,
-            "callable": ShaderStage.RAY_CALLABLE,
-        }.get(stage_type, ShaderStage.VERTEX)
+        stage_enum = shader_stage_from_name(stage_type) or ShaderStage.VERTEX
 
         self.eat(self.current_token[0])
 
@@ -504,20 +609,48 @@ class Parser:
         local_variables = []
         local_functions = []
         local_structs = []
+        local_cbuffers = []
         main_function = None
         execution_config = {}
+        layout_qualifiers = []
 
         while self.current_token[0] != "RBRACE":
-            if (
-                stage_enum == ShaderStage.COMPUTE
-                and self.current_token[0] == "LAYOUT"
-                and self.is_compute_execution_layout()
-            ):
-                execution_config.update(self.parse_compute_layout())
+            if self.current_token[0] == "LAYOUT" and self.is_stage_layout_qualifier():
+                layout = self.parse_stage_layout_qualifier()
+                layout_qualifiers.append(layout)
+                execution_config.update(self.execution_config_from_layout(layout))
+            elif self.current_token[0] == "LAYOUT":
+                attributes = self.parse_layout_attributes()
+                if self.is_layout_buffer_block_declaration():
+                    struct_node, variable_node = self.parse_layout_buffer_block(
+                        attributes
+                    )
+                    local_structs.append(struct_node)
+                    local_variables.append(variable_node)
+                elif self.current_token_starts_attributed_cbuffer_declaration():
+                    local_cbuffers.append(self.parse_attributed_cbuffer(attributes))
+                elif self.is_cbuffer_declaration():
+                    local_cbuffers.append(self.parse_cbuffer_as_struct(attributes))
+                elif self.is_variable_declaration():
+                    local_variables.append(self.parse_variable_declaration(attributes))
+                else:
+                    self.skip_unknown_token()
+            elif self.current_token_starts_attributed_cbuffer_declaration():
+                cbuffer = self.parse_attributed_cbuffer()
+                if cbuffer:
+                    local_cbuffers.append(cbuffer)
+            elif self.current_token_starts_attributed_struct_declaration():
+                struct_node = self.parse_attributed_struct()
+                if struct_node:
+                    local_structs.append(struct_node)
             elif self.current_token[0] == "STRUCT":
                 struct_node = self.parse_struct()
                 if struct_node:
                     local_structs.append(struct_node)
+            elif self.is_cbuffer_declaration():
+                cbuffer = self.parse_cbuffer_as_struct()
+                if cbuffer:
+                    local_cbuffers.append(cbuffer)
             elif self.is_function_declaration():
                 func = self.parse_function()
                 if func.name == "main":
@@ -542,40 +675,210 @@ class Parser:
         if stage_name:
             main_function.name = stage_name
 
+        execution_config.update(
+            self.execution_config_from_function_attributes(main_function)
+        )
+
         return StageNode(
             stage=stage_enum,
             entry_point=main_function,
             local_variables=local_variables,
             local_functions=local_functions,
             local_structs=local_structs,
+            local_cbuffers=local_cbuffers,
             execution_config=execution_config,
+            layout_qualifiers=layout_qualifiers,
         )
 
     def parse_import(self):
-        """Parse an ``import`` or ``use`` declaration."""
+        """Parse an ``import``, ``use``, or ``from ... import`` declaration."""
+        if self.current_token[0] == "FROM":
+            self.eat("FROM")
+            path = self.parse_import_path()
+            self.eat("IMPORT")
+
+            items = []
+            while True:
+                items.append(self.parse_import_path(allow_string=False))
+                if self.current_token[0] != "COMMA":
+                    break
+                self.eat("COMMA")
+
+            self.eat("SEMICOLON")
+            return ImportNode(path=path, items=items)
+
         if self.current_token[0] == "IMPORT":
             self.eat("IMPORT")
         else:
             self.eat("USE")
 
-        path = self.current_token[1]
-        self.eat("IDENTIFIER")
+        path = self.parse_import_path()
 
         alias = None
         items = None
 
         if self.current_token[0] == "AS":
             self.eat("AS")
-            alias = self.current_token[1]
-            self.eat("IDENTIFIER")
+            alias = self.parse_binding_identifier()
 
         self.eat("SEMICOLON")
 
         return ImportNode(path=path, alias=alias, items=items)
 
+    def parse_import_path(self, allow_string=True):
+        """Parse a module or file path in import declarations."""
+        if allow_string and self.current_token[0] == "STRING_LITERAL":
+            value = self.current_token[1]
+            self.eat("STRING_LITERAL")
+            return value[1:-1]
+
+        path = str(self.parse_binding_identifier())
+        while self.current_token[0] in {"DOT", "DOUBLE_COLON"}:
+            separator = "." if self.current_token[0] == "DOT" else "::"
+            self.eat(self.current_token[0])
+            path += separator + str(self.parse_binding_identifier())
+
+        return path
+
+    def parse_square_attributes(self, allow_single_square=True):
+        """Parse HLSL-style ``[attr]`` or Metal-style ``[[attr]]`` metadata."""
+        attributes = []
+
+        while self.current_token_starts_square_attribute(allow_single_square):
+            double_bracket = self.peek()[0] == "LBRACKET"
+            self.eat("LBRACKET")
+            if double_bracket:
+                self.eat("LBRACKET")
+
+            while self.current_token[0] != "RBRACKET":
+                name = str(self.current_token[1])
+                self.eat(self.current_token[0])
+
+                arguments = []
+                if self.current_token[0] == "LPAREN":
+                    self.eat("LPAREN")
+                    while self.current_token[0] != "RPAREN":
+                        arguments.append(self.parse_expression())
+                        if self.current_token[0] == "COMMA":
+                            self.eat("COMMA")
+                            continue
+                        break
+                    self.eat("RPAREN")
+
+                attributes.append(AttributeNode(name=name, arguments=arguments))
+
+                if self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    continue
+                break
+
+            self.eat("RBRACKET")
+            if double_bracket:
+                self.eat("RBRACKET")
+
+        return attributes
+
+    def current_token_starts_square_attribute(self, allow_single_square=True):
+        """Return whether the current bracketed group is metadata."""
+        if self.current_token[0] != "LBRACKET":
+            return False
+
+        offset = 1
+        double_bracket = self.peek()[0] == "LBRACKET"
+        if double_bracket:
+            offset = 2
+        elif not allow_single_square:
+            return False
+
+        name_token_type, name_token_value = self.peek(offset)
+        if name_token_type in {"RBRACKET", "EOF"}:
+            return False
+        if not isinstance(name_token_value, str) or not name_token_value.isidentifier():
+            return False
+
+        return self.peek(offset + 1)[0] in {"LPAREN", "COMMA", "RBRACKET"}
+
+    def parse_attribute_annotations(self, allow_single_square=True):
+        """Parse consecutive ``@``, HLSL ``[]``, or Metal ``[[]]`` attributes."""
+        attributes = []
+        while self.current_token[0] in [
+            "AT",
+            "ATTRIBUTE",
+        ] or self.current_token_starts_square_attribute(allow_single_square):
+            if self.current_token[0] in ["AT", "ATTRIBUTE"]:
+                attributes.extend(self.parse_attributes())
+            else:
+                attributes.extend(self.parse_square_attributes(allow_single_square))
+        return attributes
+
+    def parse_post_declaration_attributes(self):
+        """Parse declaration metadata that appears after a name or parameter list."""
+        attributes = []
+        while (
+            self.current_token[0] == "COLON"
+            or self.current_token[0] in ["AT", "ATTRIBUTE"]
+            or self.current_token_starts_square_attribute(allow_single_square=False)
+        ):
+            if self.current_token[0] == "COLON":
+                attributes.extend(self.parse_colon_semantic_attributes())
+            else:
+                attributes.extend(
+                    self.parse_attribute_annotations(allow_single_square=False)
+                )
+        return attributes
+
+    def parse_colon_semantic_attributes(self):
+        """Parse HLSL-style ``: SEMANTIC`` metadata into attributes."""
+        if self.current_token[0] != "COLON":
+            return []
+
+        self.eat("COLON")
+        name = str(self.current_token[1])
+        self.eat(self.current_token[0])
+
+        arguments = []
+        if self.current_token[0] == "LPAREN":
+            self.eat("LPAREN")
+            while self.current_token[0] != "RPAREN":
+                arguments.append(self.parse_expression())
+                if self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    continue
+                break
+            self.eat("RPAREN")
+
+        return [AttributeNode(name=name, arguments=arguments)]
+
     def parse_compute_layout(self):
         """Parse compute local-size layout metadata inside a stage block."""
-        execution_config = {}
+        return self.execution_config_from_layout(self.parse_stage_layout_qualifier())
+
+    def parse_layout_attributes(self):
+        """Parse a ``layout(...)`` qualifier into attributes."""
+        attributes = []
+        self.eat("LAYOUT")
+        self.eat("LPAREN")
+
+        while self.current_token[0] != "RPAREN":
+            name = self.current_token[1]
+            self.eat(self.current_token[0])
+
+            arguments = []
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                arguments.append(self.parse_expression())
+
+            attributes.append(AttributeNode(name=name, arguments=arguments))
+
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+
+        self.eat("RPAREN")
+        return attributes
+
+    def parse_stage_layout_qualifier(self):
+        """Parse stage-level ``layout(...) in/out;`` metadata."""
+        entries = []
         self.eat("LAYOUT")
         self.eat("LPAREN")
 
@@ -583,50 +886,201 @@ class Parser:
             key = self.current_token[1]
             self.eat(self.current_token[0])
 
+            arguments = []
             if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")
-                value_parts = []
-                while self.current_token[0] not in ["COMMA", "RPAREN"]:
-                    value_parts.append(str(self.current_token[1]))
-                    self.eat(self.current_token[0])
-                if key in {"local_size_x", "local_size_y", "local_size_z"}:
-                    execution_config[key] = "".join(value_parts).strip()
+                arguments.append(self.parse_expression())
+
+            entries.append(AttributeNode(name=key, arguments=arguments))
 
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
 
         self.eat("RPAREN")
-        if self.current_token[0] in ["IN", "IDENTIFIER"]:
+
+        direction = None
+        if self.current_token[0] in {"IN", "IDENTIFIER"} and self.current_token[1] in {
+            "in",
+            "out",
+            "patch",
+        }:
+            direction = self.current_token[1]
             self.eat(self.current_token[0])
         self.eat("SEMICOLON")
+        return LayoutQualifierNode(entries=entries, direction=direction)
+
+    def execution_config_from_layout(self, layout):
+        """Return execution metadata implied by a stage layout qualifier."""
+        if getattr(layout, "direction", None) != "in":
+            return {}
+
+        execution_config = {}
+        for entry in getattr(layout, "entries", []) or []:
+            if entry.name not in {"local_size_x", "local_size_y", "local_size_z"}:
+                continue
+            if len(entry.arguments) != 1:
+                continue
+            execution_config[entry.name] = self.layout_argument_to_string(
+                entry.arguments[0]
+            )
         return execution_config
 
-    def is_compute_execution_layout(self):
-        """Return whether the current layout is ``layout(local_size_*) in``."""
+    def execution_config_from_function_attributes(self, function):
+        """Return execution metadata implied by stage function attributes."""
+        for attr in getattr(function, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name not in {"local_size", "numthreads", "workgroup_size"}:
+                continue
+
+            arguments = getattr(attr, "arguments", []) or []
+            if len(arguments) != 3:
+                continue
+
+            values = tuple(self.layout_argument_to_string(arg) for arg in arguments)
+            return {"numthreads": values}
+
+        return {}
+
+    def layout_argument_to_string(self, argument):
+        """Return the source-like value for simple layout argument expressions."""
+        if isinstance(argument, BinaryOpNode):
+            left = self.layout_argument_to_string(argument.left)
+            right = self.layout_argument_to_string(argument.right)
+            return f"{left} {argument.op} {right}"
+        if isinstance(argument, UnaryOpNode):
+            operand = self.layout_argument_to_string(argument.operand)
+            if argument.is_postfix:
+                return f"{operand}{argument.op}"
+            return f"{argument.op}{operand}"
+        if hasattr(argument, "value"):
+            return str(argument.value)
+        if hasattr(argument, "name"):
+            return str(argument.name)
+        return str(argument)
+
+    def is_stage_layout_qualifier(self):
+        """Return whether the current layout is a standalone stage qualifier."""
         if self.current_token[0] != "LAYOUT" or self.peek(1)[0] != "LPAREN":
             return False
 
-        local_size_keys = {"local_size_x", "local_size_y", "local_size_z"}
-        saw_local_size = False
         depth = 1
         offset = 2
-
         while depth > 0:
-            token_type, token_value = self.peek(offset)
+            token_type, _token_value = self.peek(offset)
             if token_type == "EOF":
                 return False
             if token_type == "LPAREN":
                 depth += 1
             elif token_type == "RPAREN":
                 depth -= 1
-            elif depth == 1 and token_value in local_size_keys:
-                saw_local_size = True
             offset += 1
 
-        next_type, next_value = self.peek(offset)
-        return saw_local_size and (
-            next_type == "IN" or (next_type == "IDENTIFIER" and next_value == "in")
+        direction_type, direction_value = self.peek(offset)
+        if direction_type == "IN":
+            direction_value = "in"
+        if direction_type != "IDENTIFIER" and direction_type != "IN":
+            return False
+        if direction_value not in {"in", "out", "patch"}:
+            return False
+        return self.peek(offset + 1)[0] == "SEMICOLON"
+
+    def is_layout_buffer_block_declaration(self):
+        """Return whether current tokens start a GLSL-style buffer block."""
+        offset = 0
+        while self.token_is_layout_buffer_block_qualifier(self.peek(offset)):
+            offset += 1
+        return (
+            self.peek(offset)[0] == "BUFFER"
+            and self.peek(offset + 1)[0] == "IDENTIFIER"
+            and self.peek(offset + 2)[0] == "LBRACE"
         )
+
+    def parse_layout_buffer_block(self, layout_attributes):
+        """Parse ``layout(...) [readonly] buffer Block { ... } instance;``."""
+        qualifiers = []
+        while self.token_is_layout_buffer_block_qualifier(self.current_token):
+            token_type, token_value = self.current_token
+            qualifiers.append(str(token_value).lower())
+            self.eat(token_type)
+
+        self.eat("BUFFER")
+        block_name = self.current_token[1]
+        self.eat("IDENTIFIER")
+
+        self.eat("LBRACE")
+        members = []
+        while self.current_token[0] != "RBRACE":
+            member = self.parse_struct_member()
+            if member:
+                members.append(member)
+        self.eat("RBRACE")
+
+        variable_name = self.default_layout_buffer_instance_name(block_name)
+        variable_type = NamedType(block_name)
+        if self.current_token[0] == "IDENTIFIER":
+            variable_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+
+        while self.current_token[
+            0
+        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
+            allow_single_square=False
+        ):
+            self.eat("LBRACKET")
+            size = None
+            if self.current_token[0] != "RBRACKET":
+                size = self.parse_expression()
+            self.eat("RBRACKET")
+            variable_type = ArrayType(variable_type, size)
+
+        self.eat("SEMICOLON")
+
+        struct_node = StructNode(name=block_name, members=members)
+        variable_node = VariableNode(
+            name=variable_name,
+            var_type=variable_type,
+            qualifiers=qualifiers + ["buffer"],
+            attributes=self.glsl_buffer_block_attributes(layout_attributes),
+        )
+        return struct_node, variable_node
+
+    def glsl_buffer_block_attributes(self, layout_attributes):
+        """Convert GLSL layout metadata into CrossGL buffer-block attributes."""
+        attributes = []
+        block_layout = self.glsl_buffer_block_layout_attribute(layout_attributes)
+        if block_layout is not None:
+            attributes.append(
+                AttributeNode(
+                    "glsl_buffer_block",
+                    [IdentifierNode(block_layout)],
+                )
+            )
+        for attr in layout_attributes:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name != block_layout:
+                attributes.append(attr)
+        return attributes
+
+    def glsl_buffer_block_layout_attribute(self, layout_attributes):
+        """Return the GLSL memory layout name from layout attributes."""
+        for attr in layout_attributes:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name in {"std140", "std430", "scalar"}:
+                return attr_name
+        return None
+
+    def token_is_layout_buffer_block_qualifier(self, token):
+        """Return whether token is a qualifier before a GLSL buffer block."""
+        token_type, token_value = token
+        if token_type == "BUFFER":
+            return False
+        return self.token_is_variable_qualifier(token_type, token_value)
+
+    def default_layout_buffer_instance_name(self, block_name):
+        """Return a stable fallback instance name for anonymous buffer blocks."""
+        if not block_name:
+            return "bufferBlock"
+        return block_name[0].lower() + block_name[1:]
 
     def parse_preprocessor_directive(self):
         """Parse a preprocessor token into a structured directive node."""
@@ -652,10 +1106,57 @@ class Parser:
         content = " ".join(parts).strip()
         return PreprocessorNode("precision", content)
 
-    def parse_struct(self):
+    def parse_attributed_cbuffer(self, leading_attributes=None):
+        """Parse attributes that appear before a cbuffer declaration."""
+        attributes = list(leading_attributes or [])
+        attributes.extend(self.parse_attribute_annotations())
+        return self.parse_cbuffer_as_struct(attributes)
+
+    def current_token_starts_attributed_cbuffer_declaration(self):
+        """Return whether leading attributes are followed by a cbuffer."""
+        if not (
+            self.current_token[0] in ["AT", "ATTRIBUTE"]
+            or self.current_token_starts_square_attribute()
+        ):
+            return False
+
+        saved_pos = self.pos
+        saved_token = self.current_token
+        try:
+            attributes = self.parse_attribute_annotations()
+            return bool(attributes and self.is_cbuffer_declaration())
+        finally:
+            self.pos = saved_pos
+            self.current_token = saved_token
+
+    def parse_attributed_struct(self):
+        """Parse attributes that appear before a struct declaration."""
+        attributes = self.parse_attribute_annotations()
+        return self.parse_struct(attributes)
+
+    def current_token_starts_attributed_struct_declaration(self):
+        """Return whether leading attributes are followed by ``struct``."""
+        if not (
+            self.current_token[0] in ["AT", "ATTRIBUTE"]
+            or self.current_token_starts_square_attribute()
+        ):
+            return False
+
+        saved_pos = self.pos
+        saved_token = self.current_token
+        try:
+            attributes = self.parse_attribute_annotations()
+            return bool(attributes and self.current_token[0] == "STRUCT")
+        finally:
+            self.pos = saved_pos
+            self.current_token = saved_token
+
+    def parse_struct(self, leading_attributes=None):
         """Parse a struct declaration and its member list."""
         if self.current_token[0] == "EOF":
             return None
+
+        attributes = list(leading_attributes or [])
 
         self.eat("STRUCT")
 
@@ -668,6 +1169,8 @@ class Parser:
         generic_params = []
         if self.current_token[0] == "LESS_THAN":
             generic_params = self.parse_generic_parameters()
+
+        attributes.extend(self.parse_attribute_annotations(allow_single_square=False))
 
         if self.current_token[0] != "LBRACE":
             # Skip malformed struct
@@ -693,7 +1196,12 @@ class Parser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
-        return StructNode(name=name, members=members, generic_params=generic_params)
+        return StructNode(
+            name=name,
+            members=members,
+            generic_params=generic_params,
+            attributes=attributes,
+        )
 
     def parse_struct_member(self):
         """Parse one struct member declaration."""
@@ -720,15 +1228,27 @@ class Parser:
                 self.skip_unknown_token()
             return None
 
+        leading_attributes = []
+        while True:
+            if self.current_token[0] == "LAYOUT":
+                leading_attributes.extend(self.parse_layout_attributes())
+                continue
+
+            attributes = self.parse_attribute_annotations()
+            if attributes:
+                leading_attributes.extend(attributes)
+                continue
+
+            break
+
         if self.current_token[0] == "IDENTIFIER" and self.peek()[0] == "COLON":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             self.eat("COLON")
             member_type = self.parse_type()
 
-            attributes = []
-            if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-                attributes = self.parse_attributes()
+            attributes = list(leading_attributes)
+            attributes.extend(self.parse_post_declaration_attributes())
 
             if self.current_token[0] not in ["SEMICOLON", "COMMA", "RBRACE"]:
                 while self.current_token[0] not in [
@@ -747,6 +1267,13 @@ class Parser:
             return StructMemberNode(
                 name=name, member_type=member_type, attributes=attributes
             )
+
+        qualifier_attributes = []
+        if self.current_token_is_variable_qualifier():
+            qualifier_attributes = [
+                AttributeNode(name=qualifier)
+                for qualifier in self.parse_variable_qualifiers()
+            ]
 
         member_type = self.parse_type()
 
@@ -769,7 +1296,11 @@ class Parser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        while self.current_token[0] == "LBRACKET":
+        while self.current_token[
+            0
+        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
+            allow_single_square=False
+        ):
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
@@ -777,9 +1308,9 @@ class Parser:
             self.eat("RBRACKET")
             member_type = ArrayType(member_type, size)
 
-        attributes = []
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes = self.parse_attributes()
+        attributes = list(leading_attributes)
+        attributes.extend(qualifier_attributes)
+        attributes.extend(self.parse_post_declaration_attributes())
 
         if self.current_token[0] != "SEMICOLON":
             # Skip malformed member
@@ -886,16 +1417,22 @@ class Parser:
         qualifiers = []
         attributes = []
 
-        while self.current_token[0] in [
-            "ASYNC",
-            "UNSAFE",
-            "GLOBAL",
-            "KERNEL",
-            "AT",
-            "ATTRIBUTE",
-        ]:
+        while (
+            self.current_token[0]
+            in {
+                "ASYNC",
+                "UNSAFE",
+                "GLOBAL",
+                "KERNEL",
+                "AT",
+                "ATTRIBUTE",
+            }
+            or self.current_token_starts_square_attribute()
+        ):
             if self.current_token[0] in ["AT", "ATTRIBUTE"]:
                 attributes.extend(self.parse_attributes())
+            elif self.current_token_starts_square_attribute():
+                attributes.extend(self.parse_square_attributes())
             else:
                 qualifiers.append(self.current_token[1])
                 self.eat(self.current_token[0])
@@ -927,9 +1464,7 @@ class Parser:
             self.eat_arrow()
             return_type = self.parse_type()
 
-        post_attributes = []
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            post_attributes = self.parse_attributes()
+        post_attributes = self.parse_post_declaration_attributes()
 
         body = None
         if self.current_token[0] == "LBRACE":
@@ -975,8 +1510,7 @@ class Parser:
     def parse_parameter(self):
         """Parse one function parameter declaration."""
         attributes = []
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes = self.parse_attributes()
+        attributes.extend(self.parse_attribute_annotations())
 
         if self.current_token[0] == "VAR":
             return self.parse_resource_parameter(attributes)
@@ -1006,7 +1540,11 @@ class Parser:
             name = self.current_token[1]
             self.eat("IDENTIFIER")
 
-        while self.current_token[0] == "LBRACKET":
+        while self.current_token[
+            0
+        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
+            allow_single_square=False
+        ):
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
@@ -1014,8 +1552,7 @@ class Parser:
             self.eat("RBRACKET")
             param_type = ArrayType(param_type, size)
 
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes.extend(self.parse_attributes())
+        attributes.extend(self.parse_post_declaration_attributes())
 
         default_value = None
         if self.current_token[0] == "EQUALS":
@@ -1032,31 +1569,21 @@ class Parser:
         )
 
     def parse_parameter_qualifiers(self):
-        """Parse HLSL-style parameter qualifiers when present."""
+        """Parse backend-neutral parameter qualifiers when present."""
         qualifiers = []
-        direction_qualifiers = {"const", "in", "out", "inout"}
-        primitive_qualifiers = {
-            "point",
-            "line",
-            "triangle",
-            "lineadj",
-            "triangleadj",
-        }
 
         while True:
             token_type, token_value = self.current_token
             normalized = str(token_value).lower() if token_value else ""
 
-            if token_type in {"CONST", "IN"} or (
-                token_type == "IDENTIFIER" and normalized in direction_qualifiers
-            ):
+            if self.current_token_is_parameter_qualifier():
                 qualifiers.append(normalized)
                 self.eat(token_type)
                 continue
 
             if (
                 token_type == "IDENTIFIER"
-                and normalized in primitive_qualifiers
+                and normalized in PARAMETER_PRIMITIVE_QUALIFIER_NAMES
                 and self.current_token_starts_qualified_parameter_type()
             ):
                 qualifiers.append(normalized)
@@ -1099,8 +1626,7 @@ class Parser:
         self.eat("COLON")
         param_type = self.parse_resource_parameter_type()
 
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes.extend(self.parse_attributes())
+        attributes.extend(self.parse_attribute_annotations())
 
         parameter = ParameterNode(
             name=name,
@@ -1125,30 +1651,22 @@ class Parser:
 
         return self.parse_type()
 
-    def parse_variable_declaration(self):
+    def parse_variable_declaration(self, leading_attributes=None):
         """Parse a variable declaration, including qualifiers and attributes."""
-        attributes = []
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes = self.parse_attributes()
+        attributes = list(leading_attributes or [])
+        attributes.extend(self.parse_attribute_annotations())
 
-        qualifiers = []
-
-        while self.current_token[0] in [
-            "CONST",
-            "STATIC",
-            "MUT",
-            "SHARED",
-            "UNIFORM",
-            "BUFFER",
-        ]:
-            qualifiers.append(self.current_token[1])
-            self.eat(self.current_token[0])
+        qualifiers = self.parse_variable_qualifiers()
 
         var_type = self.parse_type()
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        while self.current_token[0] == "LBRACKET":
+        while self.current_token[
+            0
+        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
+            allow_single_square=False
+        ):
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
@@ -1156,10 +1674,13 @@ class Parser:
             self.eat("RBRACKET")
             var_type = ArrayType(var_type, size)
 
-        if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-            attributes.extend(self.parse_attributes())
+        attributes.extend(self.parse_post_declaration_attributes())
 
-        while self.current_token[0] == "LBRACKET":
+        while self.current_token[
+            0
+        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
+            allow_single_square=False
+        ):
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
@@ -1183,6 +1704,37 @@ class Parser:
             is_mutable="const" not in qualifiers,
         )
 
+    def parse_variable_qualifiers(self):
+        """Parse declaration qualifiers that precede a variable type."""
+        qualifiers = []
+        while self.current_token_is_variable_qualifier():
+            token_type, token_value = self.current_token
+            qualifiers.append(str(token_value).lower())
+            self.eat(token_type)
+        return qualifiers
+
+    def current_token_is_variable_qualifier(self):
+        """Return whether the current token is a variable declaration qualifier."""
+        token_type, token_value = self.current_token
+        return self.token_is_variable_qualifier(token_type, token_value)
+
+    def token_is_variable_qualifier(self, token_type, token_value):
+        """Return whether a token is a variable declaration qualifier."""
+        if token_type in VARIABLE_QUALIFIER_TOKEN_TYPES:
+            return True
+        return (
+            token_type == "IDENTIFIER" and str(token_value) in VARIABLE_QUALIFIER_NAMES
+        )
+
+    def current_token_is_parameter_qualifier(self):
+        """Return whether the current token is a parameter qualifier."""
+        token_type, token_value = self.current_token
+        if token_type in PARAMETER_QUALIFIER_TOKEN_TYPES:
+            return True
+        return (
+            token_type == "IDENTIFIER" and str(token_value) in VARIABLE_QUALIFIER_NAMES
+        )
+
     def is_variable_declaration(self):
         """
         Lookahead check for variable declarations.
@@ -1192,23 +1744,22 @@ class Parser:
         saved_token = self.current_token
 
         try:
-            if self.current_token[0] in ["AT", "ATTRIBUTE"]:
-                self.parse_attributes()
+            self.parse_attribute_annotations()
 
-            while self.current_token[0] in [
-                "CONST",
-                "STATIC",
-                "MUT",
-                "SHARED",
-                "UNIFORM",
-                "BUFFER",
-            ]:
-                self.eat(self.current_token[0])
+            self.parse_variable_qualifiers()
 
             if not self.is_type_token():
                 return False
 
             self.advance_over_type()
+
+            if (
+                self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}
+                and not self.pointer_suffix_starts_declaration()
+            ):
+                return False
+
+            self.advance_over_pointer_suffix()
 
             if self.current_token[0] != "IDENTIFIER":
                 return False
@@ -1270,6 +1821,31 @@ class Parser:
         finally:
             self.pos = saved_pos
             self.current_token = saved_token
+
+    def pointer_suffix_starts_declaration(self):
+        """Return whether pointer/reference suffix lookahead forms a declaration."""
+        offset = 0
+        while self.peek(offset)[0] in {"MULTIPLY", "BITWISE_AND"}:
+            token_type = self.peek(offset)[0]
+            offset += 1
+            if token_type == "BITWISE_AND" and self.peek(offset)[0] == "MUT":
+                offset += 1
+
+        if self.peek(offset)[0] != "IDENTIFIER":
+            return False
+
+        next_token = self.peek(offset + 1)[0]
+        if next_token in {"LBRACKET", "EQUALS", "SEMICOLON", "COMMA"}:
+            return True
+        return next_token == "RPAREN" and self.in_parameter_context()
+
+    def advance_over_pointer_suffix(self):
+        """Advance over pointer/reference suffix tokens in type lookahead."""
+        while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
+            token_type = self.current_token[0]
+            self.eat(token_type)
+            if token_type == "BITWISE_AND" and self.current_token[0] == "MUT":
+                self.eat("MUT")
 
     def in_parameter_context(self):
         """Check if we're currently parsing function parameters."""
@@ -1411,6 +1987,23 @@ class Parser:
             base_type = MatrixType(PrimitiveType(element_type), rows, cols)
 
         elif self.current_token[0] in [
+            "TEXTURE1D",
+            "TEXTURE2D",
+            "TEXTURE3D",
+            "TEXTURECUBE",
+            "TEXTURE2DARRAY",
+        ]:
+            token_type = self.current_token[0]
+            type_name = TEXTURE_TYPE_NAMES[token_type]
+            self.eat(token_type)
+
+            generic_args = []
+            if self.current_token[0] == "LESS_THAN":
+                generic_args = self.parse_generic_arguments()
+
+            base_type = NamedType(type_name, generic_args)
+
+        elif self.current_token[0] in [
             "SAMPLER",
             "SAMPLER1D",
             "SAMPLER1DARRAY",
@@ -1522,9 +2115,18 @@ class Parser:
             self.eat("RBRACKET")
             base_type = ArrayType(base_type, size)
 
-        if self.current_token[0] == "MULTIPLY":
-            self.eat("MULTIPLY")
-            # pointer handling deferred: PointerType not yet used by generators
+        while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
+            if self.current_token[0] == "MULTIPLY":
+                self.eat("MULTIPLY")
+                base_type = PointerType(base_type)
+                continue
+
+            self.eat("BITWISE_AND")
+            is_mutable_reference = False
+            if self.current_token[0] == "MUT":
+                self.eat("MUT")
+                is_mutable_reference = True
+            base_type = ReferenceType(base_type, is_mutable=is_mutable_reference)
 
         if is_buffer:
             if hasattr(base_type, "qualifiers"):
@@ -1566,7 +2168,9 @@ class Parser:
         args = []
 
         while self.current_token[0] != "GREATER_THAN":
-            if self.current_token_starts_type():
+            if self.current_token_starts_qualified_identifier():
+                args.append(IdentifierNode(self.parse_qualified_identifier()))
+            elif self.current_token_starts_type():
                 args.append(self.parse_type())
             elif self.current_token[0] in {
                 "BOOLEAN_LITERAL",
@@ -1587,6 +2191,24 @@ class Parser:
 
         self.eat("GREATER_THAN")
         return args
+
+    def current_token_starts_qualified_identifier(self):
+        """Return whether current tokens form a ``namespace::name`` value."""
+        return (
+            self.current_token[0] == "IDENTIFIER" and self.peek()[0] == "DOUBLE_COLON"
+        )
+
+    def parse_qualified_identifier(self):
+        """Parse a double-colon-qualified identifier into a string."""
+        segments = [str(self.current_token[1])]
+        self.eat("IDENTIFIER")
+
+        while self.current_token[0] == "DOUBLE_COLON":
+            self.eat("DOUBLE_COLON")
+            segments.append(str(self.current_token[1]))
+            self.eat(self.current_token[0])
+
+        return "::".join(segments)
 
     def current_token_starts_type(self):
         """Return whether the current token can start a type expression."""
@@ -1616,6 +2238,11 @@ class Parser:
             "CHAR",
             "STRING",
             "VOID",
+            "TEXTURE1D",
+            "TEXTURE2D",
+            "TEXTURE3D",
+            "TEXTURECUBE",
+            "TEXTURE2DARRAY",
             "VEC2",
             "VEC3",
             "VEC4",
@@ -2365,6 +2992,7 @@ class Parser:
             "MINUS",
             "PLUS",
             "BITWISE_NOT",
+            "BITWISE_AND",
             "INCREMENT",
             "DECREMENT",
         ]:
@@ -2385,6 +3013,10 @@ class Parser:
                 member = self.current_token[1]
                 self.eat("IDENTIFIER")
                 left = MemberAccessNode(left, member)
+            elif self.is_arrow_token():
+                self.eat_arrow()
+                member = self.parse_binding_identifier()
+                left = PointerAccessNode(left, member)
             elif self.current_token[0] == "DOUBLE_COLON":
                 self.eat("DOUBLE_COLON")
                 member = str(self.current_token[1])
@@ -2792,8 +3424,10 @@ class Parser:
             qualifiers=[stage_type],
         )
 
-    def parse_cbuffer_as_struct(self):
+    def parse_cbuffer_as_struct(self, leading_attributes=None):
         """Parse a constant/uniform buffer declaration as a struct node."""
+        attributes = list(leading_attributes or [])
+
         if self.current_token[0] == "CBUFFER":
             self.eat("CBUFFER")
         else:
@@ -2802,27 +3436,15 @@ class Parser:
         name = self.current_token[1]
         self.eat("IDENTIFIER")
 
-        attributes = self.parse_attributes()
+        attributes.extend(self.parse_post_declaration_attributes())
 
         self.eat("LBRACE")
         members = []
 
         while self.current_token[0] != "RBRACE":
-            member_type = self.parse_type()
-            member_name = self.current_token[1]
-            self.eat("IDENTIFIER")
-
-            while self.current_token[0] == "LBRACKET":
-                self.eat("LBRACKET")
-                size = None
-                if self.current_token[0] != "RBRACKET":
-                    size = self.parse_expression()
-                self.eat("RBRACKET")
-                member_type = ArrayType(member_type, size)
-
-            self.eat("SEMICOLON")
-
-            members.append(StructMemberNode(name=member_name, member_type=member_type))
+            member = self.parse_struct_member()
+            if member:
+                members.append(member)
 
         self.eat("RBRACE")
 
@@ -2906,16 +3528,22 @@ class Parser:
         saved_token = self.current_token
 
         try:
-            while self.current_token[0] in [
-                "ASYNC",
-                "UNSAFE",
-                "GLOBAL",
-                "KERNEL",
-                "AT",
-                "ATTRIBUTE",
-            ]:
+            while (
+                self.current_token[0]
+                in {
+                    "ASYNC",
+                    "UNSAFE",
+                    "GLOBAL",
+                    "KERNEL",
+                    "AT",
+                    "ATTRIBUTE",
+                }
+                or self.current_token_starts_square_attribute()
+            ):
                 if self.current_token[0] in ["AT", "ATTRIBUTE"]:
                     self.parse_attributes()
+                elif self.current_token_starts_square_attribute():
+                    self.parse_square_attributes()
                 else:
                     self.eat(self.current_token[0])
 
@@ -2972,6 +3600,11 @@ class Parser:
             "CHAR",
             "STRING",
             "VOID",
+            "TEXTURE1D",
+            "TEXTURE2D",
+            "TEXTURE3D",
+            "TEXTURECUBE",
+            "TEXTURE2DARRAY",
             "VEC2",
             "VEC3",
             "VEC4",
@@ -3147,6 +3780,18 @@ class Parser:
             self.pos += 1
             self.current_token = self.tokens[self.pos]
 
+    def current_token_starts_shader_stage_block(self):
+        """Return whether the current token starts an explicit stage block."""
+        if self.current_token[0] in SHADER_STAGE_TOKEN_TYPES:
+            return True
+
+        if shader_stage_from_name(self.current_token[1]) is None:
+            return False
+
+        return self.peek()[0] == "LBRACE" or (
+            self.peek()[0] == "IDENTIFIER" and self.peek(2)[0] == "LBRACE"
+        )
+
     def parse_global(self):
         """Parse one top-level declaration or recover past unsupported input."""
         if self.current_token[0] == "EOF":
@@ -3157,6 +3802,9 @@ class Parser:
 
         if self.current_token[0] == "PRECISION":
             return self.parse_precision_statement()
+
+        if self.current_token[0] in ["IMPORT", "USE", "FROM"]:
+            return self.parse_import()
 
         if self.current_token[0] == "SHADER":
             return self.parse_shader_declaration()
@@ -3170,6 +3818,12 @@ class Parser:
         if self.current_token[0] == "ENUM":
             return self.parse_enum()
 
+        if self.current_token_starts_attributed_cbuffer_declaration():
+            return self.parse_attributed_cbuffer()
+
+        if self.current_token_starts_attributed_struct_declaration():
+            return self.parse_attributed_struct()
+
         if self.current_token[0] == "STRUCT":
             return self.parse_struct()
 
@@ -3179,24 +3833,20 @@ class Parser:
         if self.is_cbuffer_declaration():
             return self.parse_cbuffer_as_struct()
 
-        if self.current_token[0] in [
-            "VERTEX",
-            "FRAGMENT",
-            "COMPUTE",
-            "GEOMETRY",
-            "TESSELLATION_CONTROL",
-            "TESSELLATION_EVALUATION",
-            "TASK",
-            "MESH",
-            "OBJECT",
-            "AMPLIFICATION",
-            "RAY_GENERATION",
-            "RAY_INTERSECTION",
-            "RAY_CLOSEST_HIT",
-            "RAY_MISS",
-            "RAY_ANY_HIT",
-            "RAY_CALLABLE",
-        ]:
+        if self.current_token[0] == "LAYOUT":
+            attributes = self.parse_layout_attributes()
+            if self.is_layout_buffer_block_declaration():
+                return list(self.parse_layout_buffer_block(attributes))
+            if self.current_token_starts_attributed_cbuffer_declaration():
+                return self.parse_attributed_cbuffer(attributes)
+            if self.is_cbuffer_declaration():
+                return self.parse_cbuffer_as_struct(attributes)
+            if self.is_variable_declaration():
+                return self.parse_variable_declaration(attributes)
+            self.skip_unknown_token()
+            return None
+
+        if self.current_token_starts_shader_stage_block():
             return self.parse_shader_stage_block()
 
         # Functions take priority over variables to avoid misidentification.

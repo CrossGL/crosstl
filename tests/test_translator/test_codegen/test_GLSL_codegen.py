@@ -1,7 +1,9 @@
+import re
+from typing import List
+
 import pytest
+
 import crosstl.translator
-from crosstl.translator.parser import Parser
-from crosstl.translator.lexer import Lexer
 from crosstl.translator.ast import (
     AttributeNode,
     BlockNode,
@@ -19,7 +21,8 @@ from crosstl.translator.ast import (
     VectorType,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
-from typing import List
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def tokenize_code(code: str) -> List:
@@ -49,6 +52,57 @@ def generate_code(ast_node):
     """
     codegen = GLSLCodeGen()
     return codegen.generate(ast_node)
+
+
+def glsl_image_atomic_parameter_diagnostic(operation, resource_type, zero_value):
+    return (
+        "/* "
+        + "un"
+        + "supported GLSL image atomic resource call: "
+        + f"{operation} on {resource_type} parameter */ {zero_value}"
+    )
+
+
+def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier():
+    shader = """
+    shader SynchronizationBuiltins {
+        compute {
+            void main() {
+                barrier();
+                memoryBarrier();
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("barrier();") == 2
+    assert "memoryBarrier();" in generated_code
+    assert "workgroupBarrier();" not in generated_code
+
+
+def test_glsl_user_defined_workgroup_barrier_is_not_lowered():
+    shader = """
+    shader SynchronizationShadowing {
+        compute {
+            void workgroupBarrier() {
+                return;
+            }
+
+            void main() {
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "void workgroupBarrier()" in generated_code
+    assert "workgroupBarrier();" in generated_code
+    assert "barrier();" not in generated_code
 
 
 def test_structured_buffer_operations_lower_to_ssbo():
@@ -171,7 +225,7 @@ def test_readonly_structured_buffer_uses_readonly_ssbo():
     assert "int v = values[gl_GlobalInvocationID.x];" in generated
 
 
-def test_append_consume_structured_buffers_emit_diagnostics():
+def test_append_consume_structured_buffers_use_sidecar_counters():
     code = """
     shader StructuredBufferAppendConsumeGLSL {
         AppendStructuredBuffer<int> appendValues @ binding(1);
@@ -198,17 +252,93 @@ def test_append_consume_structured_buffers_emit_diagnostics():
         in generated
     )
     assert (
-        "/* unsupported GLSL buffer append: requires explicit counter buffer */;"
+        "layout(std430, binding = 3) buffer appendValuesCounterBuffer { uint appendValuesCounter[]; };"
         in generated
     )
     assert (
-        "int consumed = 0 /* unsupported GLSL buffer consume: requires explicit counter buffer */;"
+        "layout(std430, binding = 4) buffer consumeValuesCounterBuffer { uint consumeValuesCounter[]; };"
+        in generated
+    )
+    assert (
+        "appendValues[atomicAdd(appendValuesCounter[0], 1u)] = int(value);" in generated
+    )
+    assert (
+        "int consumed = consumeValues[(atomicAdd(consumeValuesCounter[0], uint(-1)) - 1u)];"
         in generated
     )
     assert "appendValues[0]" not in generated
     assert "consumeValues[0]" not in generated
     assert "buffer_append" not in generated
     assert "buffer_consume" not in generated
+
+
+def test_append_consume_structured_buffer_helpers_thread_sidecar_counters():
+    code = """
+    shader StructuredBufferAppendConsumeHelpersGLSL {
+        AppendStructuredBuffer<int> appendValues @ binding(1);
+        ConsumeStructuredBuffer<int> consumeValues @ binding(2);
+
+        void pushValue(AppendStructuredBuffer<int> values, uint value) {
+            buffer_append(values, int(value));
+        }
+
+        int popValue(ConsumeStructuredBuffer<int> values) {
+            return buffer_consume(values);
+        }
+
+        compute {
+            void main(uint value) {
+                pushValue(appendValues, value);
+                int consumed = popValue(consumeValues);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "void pushValue(int values[], uint valuesCounter[], uint value) {" in generated
+    )
+    assert "values[atomicAdd(valuesCounter[0], 1u)] = int(value);" in generated
+    assert "int popValue(int values[], uint valuesCounter[]) {" in generated
+    assert "return values[(atomicAdd(valuesCounter[0], uint(-1)) - 1u)];" in generated
+    assert "pushValue(appendValues, appendValuesCounter, value);" in generated
+    assert "int consumed = popValue(consumeValues, consumeValuesCounter);" in generated
+    assert "buffer_append" not in generated
+    assert "buffer_consume" not in generated
+
+
+def test_append_structured_buffer_arrays_use_sidecar_counter_arrays():
+    code = """
+    shader StructuredBufferAppendArrayGLSL {
+        AppendStructuredBuffer<int> appendValues[2] @ binding(1);
+
+        compute {
+            void main(uint value, uint index) {
+                buffer_append(appendValues[index], int(value));
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "layout(std430, binding = 1) buffer appendValuesBuffer { int data[]; } appendValues[2];"
+        in generated
+    )
+    assert (
+        "layout(std430, binding = 3) buffer appendValuesCounterBuffer { uint counter[]; } appendValuesCounters[2];"
+        in generated
+    )
+    assert (
+        "appendValues[index].data[atomicAdd(appendValuesCounters[index].counter[0], 1u)] = int(value);"
+        in generated
+    )
+    assert "buffer_append" not in generated
 
 
 def test_structured_buffer_arrays_lower_to_ssbo_instance_arrays():
@@ -862,6 +992,30 @@ def test_glsl_global_resource_binding_attributes_drive_layout_bindings():
     assert "layout(binding = 9) uniform sampler2D autoTex;" in generated_code
 
 
+def test_glsl_stage_local_resources_emit_global_layout_bindings():
+    code = """
+    shader StageLocalResourcesGLSL {
+        fragment {
+            uniform sampler2D localTex @binding(2);
+            uniform image2D localImage @binding(5);
+
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                vec4 stored = imageLoad(localImage, ivec2(0, 0));
+                return texture(localTex, uv) + stored;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(binding = 2) uniform sampler2D localTex;" in generated_code
+    assert "layout(rgba32f, binding = 5) uniform image2D localImage;" in generated_code
+    assert "texture(localTex, uv)" in generated_code
+
+
 def test_glsl_stage_resource_parameters_emit_global_layout_bindings():
     code = """
     shader StageParameterResourceBindings {
@@ -996,6 +1150,164 @@ def test_glsl_vertex_value_parameter_emits_stage_input_declaration():
 
     assert "layout(location = 0) in vec3 position;" in generated_code
     assert "gl_Position = vec4(position, 1.0);" in generated_code
+
+
+def test_glsl_stage_interface_interpolation_precision_qualifiers():
+    code = """
+    shader FragmentQualifierSmoke {
+        flat centroid in vec2 inputUv @location(1) @highp;
+        noperspective sample out vec4 fragColor
+            @location(0)
+            @invariant
+            @precise
+            @mediump;
+
+        fragment {
+            void main() {
+                fragColor = vec4(inputUv, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 1) flat centroid in highp vec2 inputUv;" in (
+        generated_code
+    )
+    assert (
+        "layout(location = 0) invariant precise noperspective sample "
+        "out mediump vec4 fragColor;" in generated_code
+    )
+
+
+def test_glsl_stage_interface_extended_layout_qualifiers():
+    code = """
+    shader LayoutQualifierSmoke {
+        in vec2 inputUv[] @location(0) @component(1);
+        out vec2 outUv
+            @location(1)
+            @stream(0)
+            @xfb_buffer(0)
+            @xfb_offset(0);
+        out vec4 fragColor @location(0) @index(1);
+
+        geometry {
+            layout(points) in;
+            layout(points, max_vertices = 1) out;
+
+            void main() {
+                outUv = inputUv[0];
+                EmitVertex();
+            }
+        }
+
+        fragment {
+            void main() {
+                fragColor = vec4(1.0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(code)
+    geometry_code = GLSLCodeGen().generate_stage(ast, "geometry")
+    fragment_code = GLSLCodeGen().generate_stage(ast, "fragment")
+
+    assert "layout(location = 0, component = 1) in vec2 inputUv[];" in geometry_code
+    assert (
+        "layout(location = 1, stream = 0, xfb_buffer = 0, xfb_offset = 0) "
+        "out vec2 outUv;" in geometry_code
+    )
+    assert "layout(location = 0, index = 1) out vec4 fragColor;" in fragment_code
+
+
+def test_glsl_fragment_blend_support_layout_qualifiers():
+    code = """
+    shader AdvancedBlendOutput {
+        out vec4 outputColour
+            @location(0)
+            @blend_support_colordodge
+            @highp;
+
+        fragment {
+            layout(blend_support_multiply, blend_support_screen) out;
+
+            void main() {
+                outputColour = vec4(1.0);
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert (
+        "layout(blend_support_colordodge, blend_support_multiply, "
+        "blend_support_screen) out;" in fragment_code
+    )
+    assert "layout(location = 0) out highp vec4 outputColour;" in fragment_code
+    assert "outputColour = vec4(1.0);" in fragment_code
+
+
+def test_glsl_fragment_component_packed_output_layouts():
+    code = """
+    shader ComponentPackedOutput {
+        out float luminance @location(0) @component(0);
+        out vec2 velocity @location(0) @component(1);
+        out float coverage @location(0) @component(3);
+
+        fragment {
+            void main() {
+                luminance = 1.0;
+                velocity = vec2(0.5);
+                coverage = 0.25;
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 0, component = 0) out float luminance;" in fragment_code
+    assert "layout(location = 0, component = 1) out vec2 velocity;" in fragment_code
+    assert "layout(location = 0, component = 3) out float coverage;" in fragment_code
+    assert "luminance = 1.0;" in fragment_code
+    assert "velocity = vec2(0.5);" in fragment_code
+    assert "coverage = 0.25;" in fragment_code
+    assert "fragColor" not in fragment_code
+
+
+@pytest.mark.parametrize(
+    "depth_layout",
+    ["depth_any", "depth_greater", "depth_less", "depth_unchanged"],
+)
+def test_glsl_conservative_depth_output_layout(depth_layout):
+    code = f"""
+    shader ConservativeDepthOutput {{
+        out float gl_FragDepth @{depth_layout};
+
+        fragment {{
+            void main() {{
+                gl_FragDepth = 0.5;
+            }}
+        }}
+    }}
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert f"layout({depth_layout}) out float gl_FragDepth;" in generated_code
+    assert "\nout float gl_FragDepth;" not in generated_code
+    assert "gl_FragDepth = 0.5;" in generated_code
 
 
 def test_glsl_stage_builtin_parameter_aliases_to_glsl_builtin():
@@ -1190,6 +1502,38 @@ def test_glsl_direct_return_semantic_ignores_stage_control_attributes():
                 return vec4(1.0);
             }
         }
+
+        geometry {
+            void main()
+                @points
+                @invocations(2)
+                @outputtopology(triangle_strip)
+                @max_vertices(3)
+            { }
+        }
+
+        tessellation_control {
+            void main() @outputcontrolpoints(4) { }
+        }
+
+        tessellation_evaluation {
+            void main()
+                @domain(triangle)
+                @partitioning(fractional_odd)
+                @cw
+                @point_mode
+            { }
+        }
+
+        mesh {
+            void main()
+                @triangles
+                @max_vertices(64)
+                @max_primitives(32)
+            {
+                SetMeshOutputCounts(64, 32);
+            }
+        }
     }
     """
     ast = crosstl.translator.parse(code)
@@ -1201,6 +1545,26 @@ def test_glsl_direct_return_semantic_ignores_stage_control_attributes():
     fragment_code = GLSLCodeGen().generate_stage(ast, "fragment")
     assert "layout(location = 1) out vec4 fragColor1;" in fragment_code
     assert "fragColor1 = vec4(1.0);" in fragment_code
+
+    geometry_code = GLSLCodeGen().generate_stage(ast, "geometry")
+    assert "layout(points, invocations = 2) in;" in geometry_code
+    assert "layout(triangle_strip, max_vertices = 3) out;" in geometry_code
+    assert geometry_code.index("layout(points") < geometry_code.index("void main()")
+
+    control_code = GLSLCodeGen().generate_stage(ast, "tessellation_control")
+    evaluation_code = GLSLCodeGen().generate_stage(ast, "tessellation_evaluation")
+    assert "layout(vertices = 4) out;" in control_code
+    assert "layout(vertices = 4) out;" not in evaluation_code
+    assert (
+        "layout(triangles, fractional_odd_spacing, cw, point_mode) in;"
+        in evaluation_code
+    )
+    assert "layout(triangles" not in control_code
+
+    mesh_code = GLSLCodeGen().generate_stage(ast, "mesh")
+    assert "layout(triangles, max_vertices = 64, max_primitives = 32) out;" in mesh_code
+    assert "SetMeshOutputsEXT(64, 32);" in mesh_code
+    assert "SetMeshOutputCounts" not in mesh_code
 
 
 @pytest.mark.parametrize(
@@ -1797,6 +2161,32 @@ def test_glsl_psoutput_duplicate_fragment_output_location_raises():
         ),
     ):
         GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+
+def test_glsl_unannotated_fragment_outputs_use_distinct_locations():
+    code = """
+    shader UnannotatedFragmentOutputs {
+        struct PSOutput {
+            vec4 color;
+            vec4 normalBuffer;
+            vec4 positionBuffer;
+            float depth;
+        };
+
+        fragment {
+            PSOutput main() {
+                return PSOutput(vec4(1.0), vec4(0.5), vec4(0.25), 0.75);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "layout(location = 0) out vec4 color;" in generated_code
+    assert "layout(location = 1) out vec4 normalBuffer;" in generated_code
+    assert "layout(location = 2) out vec4 positionBuffer;" in generated_code
+    assert "layout(location = 3) out float depth;" in generated_code
 
 
 def test_glsl_psoutput_fragcolor_zero_maps_to_location_zero():
@@ -3481,6 +3871,949 @@ def test_glsl_combined_advanced_stage_entries_use_distinct_names():
     assert "void geometry_main()" not in geometry_code
 
 
+def test_glsl_mesh_task_stage_entries_use_distinct_names():
+    shader = """
+    shader CombinedMeshTaskStages {
+        task {
+            void main() { }
+        }
+
+        mesh {
+            void main() { }
+        }
+
+        amplification {
+            void main() { }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    combined_code = GLSLCodeGen().generate(ast)
+    mesh_code = GLSLCodeGen().generate_stage(ast, "mesh")
+
+    assert "void task_main()" in combined_code
+    assert "void mesh_main()" in combined_code
+    assert "void amplification_main()" in combined_code
+    assert "void main()" not in combined_code
+
+    assert "void main()" in mesh_code
+    assert "void mesh_main()" not in mesh_code
+
+
+def test_glsl_mesh_task_stage_extensions_and_local_size_layouts():
+    shader = """
+    shader MeshTaskLocalSizes {
+        struct TaskPayload {
+            uint meshlet;
+        };
+
+        task {
+            layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
+            @taskPayloadSharedEXT TaskPayload payload;
+            void main() {
+                payload.meshlet = 0u;
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            layout(triangles, max_vertices = 64, max_primitives = 32) out;
+            @taskPayloadSharedEXT TaskPayload payload;
+            perprimitive out vec3 primitiveNormal[32];
+            out vec4 vertexColor[64];
+            void main() {
+                SetMeshOutputCounts(64, 32);
+                primitiveNormal[0] = vec3(0.0, 0.0, 1.0);
+                vertexColor[0] = vec4(float(payload.meshlet));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    combined_code = GLSLCodeGen().generate(ast)
+    mesh_code = GLSLCodeGen().generate_stage(ast, "mesh")
+
+    assert "#extension GL_EXT_mesh_shader : require" in combined_code
+    assert combined_code.count("#extension GL_EXT_mesh_shader : require") == 1
+    assert (
+        "layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;"
+        in combined_code
+    )
+    assert (
+        "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;"
+        in combined_code
+    )
+    assert "#extension GL_EXT_mesh_shader : require" in mesh_code
+    assert (
+        "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;" in mesh_code
+    )
+    assert "layout(triangles, max_vertices = 64, max_primitives = 32) out;" in mesh_code
+    assert "taskPayloadSharedEXT TaskPayload payload;" in mesh_code
+    assert "perprimitiveEXT out vec3 primitiveNormal[32];" in mesh_code
+    assert "out vec4 vertexColor[64];" in mesh_code
+    assert "SetMeshOutputsEXT(64, 32);" in mesh_code
+    assert "primitiveNormal[0] = vec3(0.0, 0.0, 1.0);" in mesh_code
+    assert "vertexColor[0] = vec4(float(payload.meshlet));" in mesh_code
+    assert "SetMeshOutputCounts" not in mesh_code
+    assert "EmitMeshTasksEXT(1, 1, 1);" in combined_code
+    assert combined_code.count("taskPayloadSharedEXT TaskPayload payload;") == 1
+    assert "DispatchMesh" not in combined_code
+    assert (
+        "layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;"
+        not in mesh_code
+    )
+
+
+def test_glsl_task_dispatch_mesh_payload_argument_assigns_shared_payload_storage():
+    shader = """
+    shader MeshTaskPayloadDispatch {
+        struct TaskPayload {
+            uint meshlet;
+        };
+
+        task {
+            @taskPayloadSharedEXT TaskPayload payload;
+            void main() @numthreads(1, 1, 1) {
+                TaskPayload localPayload;
+                localPayload.meshlet = 7u;
+                DispatchMesh(2, 3, 4, localPayload);
+            }
+        }
+    }
+    """
+
+    task_code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "task")
+
+    assert "taskPayloadSharedEXT TaskPayload payload;" in task_code
+    assert "TaskPayload localPayload;" in task_code
+    assert "localPayload.meshlet = 7u;" in task_code
+    assert "payload = localPayload;" in task_code
+    assert "EmitMeshTasksEXT(2, 3, 4);" in task_code
+    assert "EmitMeshTasksEXT(2, 3, 4, localPayload)" not in task_code
+    assert "DispatchMesh" not in task_code
+
+
+def test_glsl_task_dispatch_mesh_payload_argument_rejects_ambiguous_shared_payload_targets():
+    shader = """
+    shader MeshTaskPayloadDispatch {
+        struct TaskPayload {
+            uint meshlet;
+        };
+
+        task {
+            @taskPayloadSharedEXT TaskPayload payloadA;
+            @taskPayloadSharedEXT TaskPayload payloadB;
+            void main() @numthreads(1, 1, 1) {
+                TaskPayload localPayload;
+                localPayload.meshlet = 7u;
+                DispatchMesh(2, 3, 4, localPayload);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"Ambiguous GLSL DispatchMesh payload target for TaskPayload: "
+            r"payloadA, payloadB"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(ast, "task")
+
+
+def test_glsl_task_dispatch_mesh_payload_argument_allows_named_shared_payload_target():
+    shader = """
+    shader MeshTaskPayloadDispatch {
+        struct TaskPayload {
+            uint meshlet;
+        };
+
+        task {
+            @taskPayloadSharedEXT TaskPayload payloadA;
+            @taskPayloadSharedEXT TaskPayload payloadB;
+            void main() @numthreads(1, 1, 1) {
+                payloadA.meshlet = 7u;
+                DispatchMesh(2, 3, 4, payloadA);
+            }
+        }
+    }
+    """
+
+    task_code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "task")
+
+    assert "taskPayloadSharedEXT TaskPayload payloadA;" in task_code
+    assert "taskPayloadSharedEXT TaskPayload payloadB;" in task_code
+    assert "payloadA.meshlet = 7u;" in task_code
+    assert "EmitMeshTasksEXT(2, 3, 4);" in task_code
+    assert "payloadA = payloadA;" not in task_code
+    assert "DispatchMesh" not in task_code
+
+
+@pytest.mark.parametrize(
+    (
+        "topology",
+        "expected_layout",
+        "index_assignment",
+        "expected_index_assignment",
+    ),
+    [
+        (
+            "point",
+            "layout(points, max_vertices = 1, max_primitives = 1) out;",
+            "gl_PrimitivePointIndicesEXT[0] = 0u;",
+            "gl_PrimitivePointIndicesEXT[0] = 0u;",
+        ),
+        (
+            "line",
+            "layout(lines, max_vertices = 2, max_primitives = 1) out;",
+            "gl_PrimitiveLineIndicesEXT[0] = uvec2(0u, 1u);",
+            "gl_PrimitiveLineIndicesEXT[0] = uvec2(0u, 1u);",
+        ),
+        (
+            "triangle",
+            "layout(triangles, max_vertices = 3, max_primitives = 1) out;",
+            "gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);",
+            "gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);",
+        ),
+    ],
+)
+def test_glsl_mesh_topology_builtin_index_arrays(
+    topology,
+    expected_layout,
+    index_assignment,
+    expected_index_assignment,
+):
+    max_vertices = {"point": 1, "line": 2, "triangle": 3}[topology]
+    shader = f"""
+    shader MeshTopologyBuiltins {{
+        mesh {{
+            void main()
+                @outputtopology({topology})
+                @max_vertices({max_vertices})
+                @max_primitives(1)
+                @numthreads(1, 1, 1)
+            {{
+                SetMeshOutputCounts({max_vertices}, 1);
+                gl_MeshVerticesEXT[0].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+                {index_assignment}
+            }}
+        }}
+    }}
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "mesh"
+    )
+
+    assert "#extension GL_EXT_mesh_shader : require" in generated_code
+    assert "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;" in (
+        generated_code
+    )
+    assert expected_layout in generated_code
+    assert f"SetMeshOutputsEXT({max_vertices}, 1);" in generated_code
+    assert (
+        "gl_MeshVerticesEXT[0].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);"
+        in generated_code
+    )
+    assert expected_index_assignment in generated_code
+    assert "SetMeshOutputCounts" not in generated_code
+
+
+def test_glsl_mesh_output_signature_parameters_lower_to_native_outputs():
+    shader = """
+    shader MeshOutputSignature {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct MeshPrimitive {
+            int primitiveId @ gl_PrimitiveID;
+            vec3 normal @ NORMAL;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(32, 1, 1)
+              @outputtopology(triangle)
+              @max_vertices(3)
+              @max_primitives(1)
+            {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                verts[0].uv = vec2(0.5, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+                prims[0].primitiveId = 7;
+                prims[0].normal = vec3(0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "mesh"
+    )
+
+    assert "layout(triangles, max_vertices = 3, max_primitives = 1) out;" in (
+        generated_code
+    )
+    assert "layout(location = 5) out vec2 uv[3];" in generated_code
+    assert "layout(location = 1) perprimitiveEXT out vec3 normal[1];" in generated_code
+    assert "gl_MeshVerticesEXT[0].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);" in (
+        generated_code
+    )
+    assert "uv[0] = vec2(0.5, 1.0);" in generated_code
+    assert "gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);" in generated_code
+    assert "gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 7;" in generated_code
+    assert "normal[0] = vec3(0.0, 0.0, 1.0);" in generated_code
+    assert "in MeshVertex verts[3];" not in generated_code
+    assert "in uvec3 tris[1];" not in generated_code
+    assert "in MeshPrimitive prims[1];" not in generated_code
+    assert "verts[0]" not in generated_code
+    assert "tris[0]" not in generated_code
+    assert "prims[0]" not in generated_code
+    assert "SetMeshOutputCounts" not in generated_code
+
+
+def test_glsl_mesh_whole_output_constructor_assignments_expand_to_native_outputs():
+    shader = """
+    shader MeshWholeOutputConstructors {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct MeshPrimitive {
+            int primitiveId @ gl_PrimitiveID;
+            vec3 normal @ NORMAL;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(1, 1, 1)
+              @outputtopology(triangle)
+              @max_vertices(3)
+              @max_primitives(1)
+            {
+                SetMeshOutputCounts(3, 1);
+                verts[1] = MeshVertex {
+                    position: vec4(1.0, 0.0, 0.0, 1.0),
+                    uv: vec2(0.25, 0.75)
+                };
+                prims[0] = MeshPrimitive {
+                    primitiveId: 11,
+                    normal: vec3(0.0, 1.0, 0.0)
+                };
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "mesh"
+    )
+
+    assert (
+        "gl_MeshVerticesEXT[1].gl_Position = vec4(1.0, 0.0, 0.0, 1.0);"
+        in generated_code
+    )
+    assert "uv[1] = vec2(0.25, 0.75);" in generated_code
+    assert "gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 11;" in generated_code
+    assert "normal[0] = vec3(0.0, 1.0, 0.0);" in generated_code
+    assert "MeshVertex(" not in generated_code
+    assert "MeshPrimitive(" not in generated_code
+    assert "verts[1]" not in generated_code
+    assert "prims[0]" not in generated_code
+    assert "SetMeshOutputCounts" not in generated_code
+
+
+@pytest.mark.parametrize(
+    (
+        "topology",
+        "max_vertices",
+        "primitive_value",
+        "expected_primitive_assignment",
+    ),
+    [
+        (
+            "point",
+            1,
+            "0u",
+            "gl_PrimitivePointIndicesEXT[0] = 0u;",
+        ),
+        (
+            "line",
+            2,
+            "uvec2(0u, 1u)",
+            "gl_PrimitiveLineIndicesEXT[0] = uvec2(0u, 1u);",
+        ),
+        (
+            "triangle",
+            3,
+            "uvec3(0u, 1u, 2u)",
+            "gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);",
+        ),
+    ],
+)
+def test_glsl_mesh_set_vertex_and_set_primitive_helpers_lower_to_builtins(
+    topology,
+    max_vertices,
+    primitive_value,
+    expected_primitive_assignment,
+):
+    shader = f"""
+    shader MeshHelperIntrinsics {{
+        mesh {{
+            void main()
+                @numthreads(1, 1, 1)
+                @outputtopology({topology})
+                @max_vertices({max_vertices})
+                @max_primitives(1)
+            {{
+                vec3 position = vec3(0.0, 0.5, 1.0);
+                SetMeshOutputCounts({max_vertices}, 1);
+                SetVertex(0, position);
+                SetVertex({max_vertices - 1}, vec4(1.0, 0.0, 0.0, 1.0));
+                SetPrimitive(0, {primitive_value});
+            }}
+        }}
+    }}
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "mesh"
+    )
+
+    assert "gl_MeshVerticesEXT[0].gl_Position = vec4(position, 1.0);" in generated_code
+    assert (
+        f"gl_MeshVerticesEXT[{max_vertices - 1}].gl_Position = "
+        "vec4(1.0, 0.0, 0.0, 1.0);"
+    ) in generated_code
+    assert expected_primitive_assignment in generated_code
+    assert "SetVertex" not in generated_code
+    assert "SetPrimitive" not in generated_code
+    assert "SetMeshOutputCounts" not in generated_code
+
+
+def test_glsl_ray_stage_entries_use_distinct_names():
+    shader = """
+    shader CombinedRayStages {
+        struct RayPayload {
+            vec4 color;
+        };
+
+        struct CallableData {
+            vec4 value;
+        };
+
+        struct ShaderRecordData {
+            uint materialIndex;
+        };
+
+        accelerationStructureEXT topLevelAS @binding(0);
+        ShaderRecordData shaderRecord @glsl_buffer_block(shaderRecordEXT);
+
+        ray_generation {
+            layout(location = 0) @rayPayloadEXT RayPayload rayPayload;
+            layout(location = 1) @callableDataEXT CallableData callableData;
+
+            void main() {
+                TraceRay(
+                    topLevelAS,
+                    gl_RayFlagsNoneEXT,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    0
+                );
+                callableData.value = vec4(float(shaderRecord.materialIndex));
+                CallShader(0, 1);
+            }
+        }
+
+        ray_closest_hit {
+            layout(location = 0) @rayPayloadInEXT RayPayload closestPayload;
+            @hitAttributeEXT vec2 hitAttributes;
+
+            void main() {
+                closestPayload.color = vec4(hitAttributes, 0.0, 1.0);
+            }
+        }
+
+        ray_any_hit {
+            layout(location = 0) @rayPayloadInEXT RayPayload anyPayload;
+            @hitAttributeEXT vec2 anyHitAttributes;
+
+            void main() {
+                IgnoreHit();
+            }
+        }
+
+        ray_miss {
+            layout(location = 0) @rayPayloadInEXT RayPayload missPayload;
+
+            void main() {
+                missPayload.color = vec4(0.0);
+            }
+        }
+
+        ray_intersection {
+            @hitAttributeEXT vec2 reportedAttributes;
+
+            void main() {
+                ReportHit(1.0, gl_HitKindFrontFacingTriangleEXT);
+            }
+        }
+
+        ray_callable {
+            layout(location = 1) @callableDataInEXT CallableData callableInput;
+
+            void main() {
+                callableInput.value = vec4(1.0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    combined_code = GLSLCodeGen().generate(ast)
+    ray_miss_code = GLSLCodeGen().generate_stage(ast, "ray_miss")
+
+    assert "void ray_generation_main()" in combined_code
+    assert "void ray_closest_hit_main()" in combined_code
+    assert "void ray_any_hit_main()" in combined_code
+    assert "void ray_miss_main()" in combined_code
+    assert "void ray_intersection_main()" in combined_code
+    assert "void ray_callable_main()" in combined_code
+    assert "void main()" not in combined_code
+    assert combined_code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_tracing : require" in combined_code
+    assert "#extension GL_EXT_ray_query : require" not in combined_code
+    assert (
+        "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;"
+        in combined_code
+    )
+    assert "layout(shaderRecordEXT) buffer ShaderRecordData" in combined_code
+    assert "layout(shaderRecordEXT, binding" not in combined_code
+    assert "uint materialIndex;" in combined_code
+    assert (
+        "callableData.value = vec4(float(shaderRecord.materialIndex));" in combined_code
+    )
+    assert "layout(location = 0) rayPayloadEXT RayPayload rayPayload;" in combined_code
+    assert (
+        "layout(location = 0) rayPayloadInEXT RayPayload closestPayload;"
+        in combined_code
+    )
+    assert (
+        "layout(location = 0) rayPayloadInEXT RayPayload anyPayload;" in combined_code
+    )
+    assert (
+        "layout(location = 0) rayPayloadInEXT RayPayload missPayload;" in combined_code
+    )
+    assert "hitAttributeEXT vec2 hitAttributes;" in combined_code
+    assert "hitAttributeEXT vec2 anyHitAttributes;" in combined_code
+    assert "hitAttributeEXT vec2 reportedAttributes;" in combined_code
+    assert (
+        "layout(location = 1) callableDataEXT CallableData callableData;"
+        in combined_code
+    )
+    assert (
+        "layout(location = 1) callableDataInEXT CallableData callableInput;"
+        in combined_code
+    )
+    assert "traceRayEXT(" in combined_code
+    assert "executeCallableEXT(0, 1);" in combined_code
+    assert "ignoreIntersectionEXT;" in combined_code
+    assert (
+        "reportIntersectionEXT(1.0, gl_HitKindFrontFacingTriangleEXT);" in combined_code
+    )
+    assert "TraceRay" not in combined_code
+    assert "CallShader" not in combined_code
+    assert "IgnoreHit" not in combined_code
+    assert "ReportHit" not in combined_code
+
+    assert "void main()" in ray_miss_code
+    assert "void ray_miss_main()" not in ray_miss_code
+    assert ray_miss_code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_tracing : require" in ray_miss_code
+    assert "#extension GL_EXT_ray_query : require" not in ray_miss_code
+    assert (
+        "layout(location = 0) rayPayloadInEXT RayPayload missPayload;" in ray_miss_code
+    )
+    assert "rayPayloadEXT RayPayload rayPayload;" not in ray_miss_code
+
+
+def test_glsl_ray_hit_position_fetch_builtin_emits_extension_only_for_users():
+    shader = """
+    shader RayHitPositionFetch {
+        ray_closest_hit {
+            void main() {
+                vec3 p0 = gl_HitTriangleVertexPositionsEXT[0];
+                vec3 p1 = gl_HitTriangleVertexPositionsEXT[1];
+                vec3 edge = p1 - p0;
+            }
+        }
+
+        ray_miss {
+            void main() { }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+
+    closest_hit_code = GLSLCodeGen().generate_stage(ast, "ray_closest_hit")
+    miss_code = GLSLCodeGen().generate_stage(ast, "ray_miss")
+    combined_code = GLSLCodeGen().generate(ast)
+
+    assert closest_hit_code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_tracing : require" in closest_hit_code
+    assert "#extension GL_EXT_ray_tracing_position_fetch : require" in closest_hit_code
+    assert "vec3 p0 = gl_HitTriangleVertexPositionsEXT[0];" in closest_hit_code
+    assert "vec3 p1 = gl_HitTriangleVertexPositionsEXT[1];" in closest_hit_code
+    assert "vec3 edge = (p1 - p0);" in closest_hit_code
+
+    assert miss_code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_tracing : require" in miss_code
+    assert "#extension GL_EXT_ray_tracing_position_fetch : require" not in miss_code
+    assert "gl_HitTriangleVertexPositionsEXT" not in miss_code
+
+    assert (
+        combined_code.count("#extension GL_EXT_ray_tracing_position_fetch : require")
+        == 1
+    )
+    assert "void ray_closest_hit_main()" in combined_code
+    assert "void ray_miss_main()" in combined_code
+
+
+def test_glsl_ray_query_methods_lower_to_ext_functions():
+    shader = """
+    shader RayQueryCompute {
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                rayQueryInitializeEXT(
+                    rq,
+                    topLevelAS,
+                    gl_RayFlagsNoneEXT,
+                    255u,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0
+                );
+                bool active = rq.Proceed();
+                uint candidateType = rq.CandidateType();
+                uint committedType = rq.CommittedType();
+                uint primitiveIndex = rq.CandidatePrimitiveIndex();
+                uint instanceId = rq.CommittedInstanceID();
+                uint geometryIndex = rq.CandidateGeometryIndex();
+                vec3 origin = rq.CommittedObjectRayOrigin();
+                vec3 direction = rq.CandidateObjectRayDirection();
+                float hitT = rq.CommittedRayT();
+                rq.Abort();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert generated_code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_query : require" in generated_code
+    assert "#extension GL_EXT_ray_tracing : require" not in generated_code
+    assert "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;" in (
+        generated_code
+    )
+    assert "rayQueryEXT rq;" in generated_code
+    assert "rayQueryInitializeEXT(" in generated_code
+    assert "bool active_ = rayQueryProceedEXT(rq);" in generated_code
+    assert (
+        "uint candidateType = rayQueryGetIntersectionTypeEXT(rq, false);"
+        in generated_code
+    )
+    assert (
+        "uint committedType = rayQueryGetIntersectionTypeEXT(rq, true);"
+        in generated_code
+    )
+    assert (
+        "uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);"
+        in generated_code
+    )
+    assert (
+        "uint instanceId = rayQueryGetIntersectionInstanceIdEXT(rq, true);"
+        in generated_code
+    )
+    assert (
+        "uint geometryIndex = rayQueryGetIntersectionGeometryIndexEXT(rq, false);"
+        in generated_code
+    )
+    assert (
+        "vec3 origin = rayQueryGetIntersectionObjectRayOriginEXT(rq, true);"
+        in generated_code
+    )
+    assert (
+        "vec3 direction = rayQueryGetIntersectionObjectRayDirectionEXT(rq, false);"
+        in generated_code
+    )
+    assert "float hitT = rayQueryGetIntersectionTEXT(rq, true);" in generated_code
+    assert "rayQueryTerminateEXT(rq);" in generated_code
+    assert ".Proceed(" not in generated_code
+    assert ".CandidateType(" not in generated_code
+    assert ".Abort(" not in generated_code
+
+
+def test_glsl_ray_query_trace_ray_inline_raydesc_lowers_to_initialize_fields():
+    shader = """
+    shader RayQueryTraceRayInlineRayDesc {
+        struct RayDesc {
+            vec3 Origin;
+            float TMin;
+            vec3 Direction;
+            float TMax;
+        };
+
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        compute {
+            void main() {
+                RayDesc ray = RayDesc(
+                    vec3(0.0, 1.0, 2.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0
+                );
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(topLevelAS, gl_RayFlagsNoneEXT, 255u, ray);
+                bool active = rq.Proceed();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "#extension GL_EXT_ray_query : require" in generated_code
+    assert "rayQueryEXT rq;" in generated_code
+    assert (
+        "rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsNoneEXT, 255u, "
+        "ray.Origin, ray.TMin, ray.Direction, ray.TMax);" in generated_code
+    )
+    assert (
+        "rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsNoneEXT, 255u, ray);"
+        not in (generated_code)
+    )
+    assert "bool active_ = rayQueryProceedEXT(rq);" in generated_code
+    assert ".TraceRayInline(" not in generated_code
+
+
+def test_glsl_target_stage_ray_query_extensions_are_scoped_to_emitted_stage():
+    shader = """
+    shader ScopedRayQueryExtensions {
+        vertex {
+            void main() { }
+        }
+
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                bool active = rq.Proceed();
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+
+    vertex_code = GLSLCodeGen().generate_stage(ast, "vertex")
+    compute_code = GLSLCodeGen().generate_stage(ast, "compute")
+    combined_code = GLSLCodeGen().generate(ast)
+
+    assert vertex_code.lstrip().startswith("#version 450 core")
+    assert "#extension GL_EXT_ray_query : require" not in vertex_code
+    assert "rayQueryEXT" not in vertex_code
+    assert "rayQueryProceedEXT" not in vertex_code
+
+    assert compute_code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_query : require" in compute_code
+    assert "rayQueryEXT rq;" in compute_code
+    assert "bool active_ = rayQueryProceedEXT(rq);" in compute_code
+
+    assert combined_code.lstrip().startswith("#version 460 core")
+    assert combined_code.count("#extension GL_EXT_ray_query : require") == 1
+    assert "void vertex_main()" in combined_code
+    assert "void compute_main()" in combined_code
+
+
+def test_glsl_acceleration_structure_globals_emit_extension_for_non_ray_stage():
+    shader = """
+    shader AccelerationStructureHeader {
+        accelerationStructureEXT topLevelAS @binding(3);
+
+        vertex {
+            void main() { }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "vertex"
+    )
+
+    assert generated_code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_query : require" in generated_code
+    assert "#extension GL_EXT_ray_tracing : require" not in generated_code
+    assert (
+        "layout(binding = 3) uniform accelerationStructureEXT topLevelAS;"
+        in generated_code
+    )
+
+
+def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
+    shader = """
+    shader RayQueryGenericMethods {
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.Initialize(
+                    topLevelAS,
+                    gl_RayFlagsNoneEXT,
+                    255u,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0
+                );
+                vec3 worldOrigin = rq.WorldRayOrigin();
+                vec3 worldDirection = rq.WorldRayDirection();
+                uint rayFlags = rq.RayFlags();
+                float tMin = rq.RayTMin();
+                uint customIndex = rq.CommittedInstanceCustomIndex();
+                uint sbtOffset =
+                    rq.CandidateInstanceShaderBindingTableRecordOffset();
+                vec2 barycentrics = rq.CandidateTriangleBarycentrics();
+                bool frontFace = rq.CommittedTriangleFrontFace();
+                bool aabbOpaque = rq.CandidateAABBOpaque();
+                mat3x4 objectToWorld = rq.CommittedObjectToWorld();
+                mat3x4 worldToObject = rq.CandidateWorldToObject3x4();
+                vec3 trianglePositions[3];
+                rq.CandidateTriangleVertexPositions(trianglePositions);
+                rq.CommittedTriangleVertexPositions(trianglePositions);
+                rq.GenerateIntersection(1.0);
+                rq.ConfirmIntersection();
+                rq.Terminate();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "#extension GL_EXT_ray_query : require" in generated_code
+    assert "#extension GL_EXT_ray_tracing_position_fetch : require" in generated_code
+    assert "rayQueryEXT rq;" in generated_code
+    assert "rayQueryInitializeEXT(" in generated_code
+    assert "vec3 worldOrigin = rayQueryGetWorldRayOriginEXT(rq);" in generated_code
+    assert (
+        "vec3 worldDirection = rayQueryGetWorldRayDirectionEXT(rq);" in generated_code
+    )
+    assert "uint rayFlags = rayQueryGetRayFlagsEXT(rq);" in generated_code
+    assert "float tMin = rayQueryGetRayTMinEXT(rq);" in generated_code
+    assert (
+        "uint customIndex = "
+        "rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);" in generated_code
+    )
+    assert (
+        "uint sbtOffset = "
+        "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, false);"
+        in generated_code
+    )
+    assert (
+        "vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(rq, false);"
+        in generated_code
+    )
+    assert (
+        "bool frontFace = rayQueryGetIntersectionFrontFaceEXT(rq, true);"
+        in generated_code
+    )
+    assert (
+        "bool aabbOpaque = rayQueryGetIntersectionCandidateAABBOpaqueEXT(rq);"
+        in generated_code
+    )
+    assert (
+        "mat4x3 objectToWorld = "
+        "rayQueryGetIntersectionObjectToWorldEXT(rq, true);" in generated_code
+    )
+    assert (
+        "mat4x3 worldToObject = "
+        "rayQueryGetIntersectionWorldToObjectEXT(rq, false);" in generated_code
+    )
+    assert "vec3 trianglePositions[3];" in generated_code
+    assert (
+        "rayQueryGetIntersectionTriangleVertexPositionsEXT("
+        "rq, false, trianglePositions);" in generated_code
+    )
+    assert (
+        "rayQueryGetIntersectionTriangleVertexPositionsEXT("
+        "rq, true, trianglePositions);" in generated_code
+    )
+    assert "rayQueryGenerateIntersectionEXT(rq, 1.0);" in generated_code
+    assert "rayQueryConfirmIntersectionEXT(rq);" in generated_code
+    assert "rayQueryTerminateEXT(rq);" in generated_code
+    assert ".WorldRayOrigin(" not in generated_code
+    assert ".CandidateTriangleVertexPositions(" not in generated_code
+    assert ".GenerateIntersection(" not in generated_code
+    assert ".ConfirmIntersection(" not in generated_code
+
+
+def test_glsl_shader_record_buffer_rejects_binding_layout():
+    shader = """
+    shader InvalidShaderRecordBinding {
+        struct ShaderRecordData {
+            uint materialIndex;
+        };
+
+        ShaderRecordData shaderRecord
+            @glsl_buffer_block(shaderRecordEXT)
+            @binding(3);
+
+        ray_generation {
+            void main() { }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="shaderRecordEXT buffer blocks cannot declare binding layout qualifiers",
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_glsl_stage_local_helpers_emit_before_entrypoint():
     shader = """
     shader StageLocalHelperOrder {
@@ -3634,6 +4967,30 @@ def test_compute_stage_uses_execution_config_local_size():
         "layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;"
         in compute_code
     )
+
+
+@pytest.mark.parametrize("attribute", ["numthreads", "local_size", "workgroup_size"])
+def test_compute_stage_uses_function_execution_config_attribute(attribute):
+    shader = f"""
+    shader ComputeFunctionAttributeLayoutSmoke {{
+        compute {{
+            void main() @{attribute}(8, 4, 2) {{
+                int value = 1;
+            }}
+        }}
+    }}
+    """
+
+    compute_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert (
+        "layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;"
+        in compute_code
+    )
+    assert f"@{attribute}" not in compute_code
+    assert "void main() @" not in compute_code
 
 
 def test_while_switch_and_void_return_emit_c_style_syntax():
@@ -3809,34 +5166,778 @@ def test_match_return_arms_do_not_emit_extra_breaks():
     assert "MatchNode(" not in generated_code
 
 
-def test_match_unsupported_binding_or_guarded_arm_raises():
-    binding_shader = """
-    shader MatchBindingPattern {
-        int helper(int mode) {
-            int value = 0;
-            match mode {
-                other => { value = other; }
-            }
-            return value;
-        }
-    }
-    """
-    guarded_shader = """
+def test_match_guarded_literal_and_wildcard_arms_lower_to_if_chain():
+    shader = """
     shader MatchGuardPattern {
         int helper(int mode) {
             int value = 0;
             match mode {
                 0 if mode > 0 => { value = 1; }
-                _ => { value = 2; }
+                0 => { value = 2; }
+                _ if mode < 10 => { value = 3; }
+                _ => { value = 4; }
             }
             return value;
         }
     }
     """
 
-    for shader in (binding_shader, guarded_shader):
-        with pytest.raises(ValueError, match="Unsupported match arm"):
-            GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "switch (mode)" not in generated_code
+    assert "if (((mode == 0) &&" in generated_code
+    assert "mode > 0" in generated_code
+    assert "else if ((mode == 0))" in generated_code
+    assert "else if" in generated_code
+    assert "mode < 10" in generated_code
+    assert "else {" in generated_code
+    assert "value = 1;" in generated_code
+    assert "value = 2;" in generated_code
+    assert "value = 3;" in generated_code
+    assert "value = 4;" in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_match_identifier_binding_arm_lowers_to_scoped_else_body():
+    shader = """
+    shader MatchBindingPattern {
+        int helper(int mode) {
+            int value = 0;
+            match mode {
+                0 => { value = 1; }
+                other => { value = other; }
+            }
+            return value;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "switch (mode)" not in generated_code
+    assert "if ((mode == 0))" in generated_code
+    assert "else {" in generated_code
+    assert "int other = mode;" in generated_code
+    assert "value = other;" in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_match_guarded_identifier_binding_falls_through_to_later_arm():
+    shader = """
+    shader MatchGuardedBindingPattern {
+        int helper(int mode) {
+            int value = 0;
+            match mode {
+                0 => { value = 1; }
+                candidate if candidate > 2 => { value = candidate; }
+                _ => { value = 7; }
+            }
+            return value;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "switch (mode)" not in generated_code
+    assert "if ((mode == 0))" in generated_code
+    assert "else {" in generated_code
+    assert "int candidate = mode;" in generated_code
+    assert "candidate > 2" in generated_code
+    assert "value = candidate;" in generated_code
+    assert "value = 7;" in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_match_plain_struct_pattern_binds_fields():
+    shader = """
+    shader MatchStructPattern {
+        struct Pair {
+            int left;
+            int right;
+        };
+
+        int helper(Pair pair) {
+            int value = 0;
+            match pair {
+                Pair { left, right } => { value = left + right; }
+            }
+            return value;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int left = pair.left;" in generated_code
+    assert "int right = pair.right;" in generated_code
+    assert "value = (left + right);" in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_match_enum_path_pattern_lowers_to_integer_constants():
+    shader = """
+    shader MatchEnumPathPattern {
+        enum Mode {
+            Add,
+            Multiply = 4,
+            Divide
+        }
+
+        int helper(Mode mode) {
+            int value = Mode::Divide;
+            match mode {
+                Mode::Add => { value = 1; }
+                Mode::Multiply => { value = 2; }
+                _ => { value = 3; }
+            }
+            return value;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "const int Mode_Add = 0;" in generated_code
+    assert "const int Mode_Multiply = 4;" in generated_code
+    assert "const int Mode_Divide = 5;" in generated_code
+    assert "int helper(int mode)" in generated_code
+    assert "int value = Mode_Divide;" in generated_code
+    assert "switch (mode)" not in generated_code
+    assert "if ((mode == Mode_Add))" in generated_code
+    assert "else if ((mode == Mode_Multiply))" in generated_code
+    assert "value = 3;" in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_match_struct_enum_pattern_binds_named_payload_fields():
+    shader = """
+    shader MatchStructEnumPattern {
+        enum LightingModel {
+            Phong {
+                ambient: vec3,
+                diffuse: vec3,
+                shininess: float
+            },
+            Toon {
+                base_color: vec3,
+                levels: int
+            }
+        }
+
+        vec3 shade(LightingModel model) {
+            vec3 result = vec3(0.0);
+            match model {
+                LightingModel::Phong { ambient, diffuse, shininess } => {
+                    result = ambient + diffuse * shininess;
+                },
+                LightingModel::Toon { base_color, .. } => {
+                    result = base_color;
+                }
+            }
+            return result;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "const int LightingModel_Phong = 0;" in generated_code
+    assert "const int LightingModel_Toon = 1;" in generated_code
+    assert "struct LightingModel {" in generated_code
+    assert "int variant;" in generated_code
+    assert "vec3 ambient;" in generated_code
+    assert "vec3 base_color;" in generated_code
+    assert "vec3 shade(LightingModel model)" in generated_code
+    assert "if ((model.variant == LightingModel_Phong))" in generated_code
+    assert "else if ((model.variant == LightingModel_Toon))" in generated_code
+    assert "vec3 ambient = model.ambient;" in generated_code
+    assert "float shininess = model.shininess;" in generated_code
+    assert "vec3 base_color = model.base_color;" in generated_code
+    assert "LightingModel::" not in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_match_tuple_enum_pattern_binds_payload_fields():
+    shader = """
+    shader MatchTupleEnumPattern {
+        enum MaybeInt {
+            Value(int),
+            Pair(int, float),
+            Missing
+        }
+
+        int read(MaybeInt item) {
+            match item {
+                MaybeInt::Value(value) => { return value; },
+                MaybeInt::Pair(left, scale) => { return left + int(scale); },
+                MaybeInt::Missing => { return 0; }
+            }
+        }
+
+        MaybeInt make(int value) {
+            return MaybeInt::Value(value);
+        }
+
+        MaybeInt none() {
+            return MaybeInt::Missing;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "const int MaybeInt_Value = 0;" in generated_code
+    assert "const int MaybeInt_Pair = 1;" in generated_code
+    assert "const int MaybeInt_Missing = 2;" in generated_code
+    assert "struct MaybeInt {" in generated_code
+    assert "int Value_0;" in generated_code
+    assert "int Pair_0;" in generated_code
+    assert "float Pair_1;" in generated_code
+    assert "MaybeInt MaybeInt_Value_make(int payload0)" in generated_code
+    assert "MaybeInt MaybeInt_Missing_make()" in generated_code
+    assert "if ((item.variant == MaybeInt_Value))" in generated_code
+    assert "else if ((item.variant == MaybeInt_Pair))" in generated_code
+    assert "int value = item.Value_0;" in generated_code
+    assert "int left = item.Pair_0;" in generated_code
+    assert "float scale = item.Pair_1;" in generated_code
+    assert "return MaybeInt_Value_make(value);" in generated_code
+    assert "return MaybeInt_Missing_make();" in generated_code
+    assert "MaybeInt::" not in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_string_payload_enum_maps_to_shader_token_type():
+    shader = """
+    shader StringPayloadEnum {
+        enum ShaderError {
+            TextureError(str),
+            BufferError(str),
+            InvalidState
+        }
+
+        ShaderError texture_error(int code) {
+            return ShaderError::TextureError(code);
+        }
+
+        ShaderError invalid_state() {
+            return ShaderError::InvalidState;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct ShaderError {" in generated_code
+    assert "int TextureError_0;" in generated_code
+    assert "int BufferError_0;" in generated_code
+    assert "ShaderError ShaderError_TextureError_make(int payload0)" in generated_code
+    assert "ShaderError ShaderError_InvalidState_make()" in generated_code
+    assert "return ShaderError_TextureError_make(code);" in generated_code
+    assert "return ShaderError_InvalidState_make();" in generated_code
+    assert re.search(r"\bstr\b", generated_code) is None
+
+
+def test_tuple_enum_constructor_wrong_arity_raises():
+    shader = """
+    shader TupleEnumConstructorArity {
+        enum MaybeInt {
+            Value(int),
+            Missing
+        }
+
+        MaybeInt make() {
+            return MaybeInt::Value();
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError, match="Enum constructor MaybeInt::Value expects 1 arguments, got 0"
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_generic_enum_struct_concrete_match_and_constructors():
+    shader = """
+    shader GenericEnumConcrete {
+        generic<T> struct Option {
+            enum OptionType { Some(T), None }
+            OptionType variant;
+        }
+
+        generic<T, E> struct Result {
+            enum ResultType { Ok(T), Err(E) }
+            ResultType variant;
+        }
+
+        enum MathError {
+            DivisionByZero
+        }
+
+        Option<int> some(int value) {
+            return Option::Some(value);
+        }
+
+        Option<int> none() {
+            return Option::None;
+        }
+
+        int read_option(Option<int> item) {
+            match item {
+                Option::Some(value) => { return value; },
+                Option::None => { return 0; }
+            }
+        }
+
+        Result<int, MathError> make_result(bool ok) {
+            match ok {
+                true => { return Result::Ok(1); },
+                false => { return Result::Err(MathError::DivisionByZero); }
+            }
+        }
+
+        int read_result(Result<int, MathError> item) {
+            match item {
+                Result::Ok(value) => { return value; },
+                Result::Err(_) => { return 0; }
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "const int Option_Some = 0;" in generated_code
+    assert "const int Result_Ok = 0;" in generated_code
+    assert "struct Option_int {" in generated_code
+    assert "struct Result_int_MathError {" in generated_code
+    assert "struct Option {" not in generated_code
+    assert "struct Result {" not in generated_code
+    assert "Option_int Option_int_Some_make(int payload0)" in generated_code
+    assert "Option_int Option_int_None_make()" in generated_code
+    assert (
+        "Result_int_MathError Result_int_MathError_Ok_make(int payload0)"
+        in generated_code
+    )
+    assert (
+        "Result_int_MathError Result_int_MathError_Err_make(int payload0)"
+        in generated_code
+    )
+    assert "Option_int some(int value)" in generated_code
+    assert "Option_int none()" in generated_code
+    assert "Result_int_MathError make_result(bool ok)" in generated_code
+    assert "int read_result(Result_int_MathError item)" in generated_code
+    assert "return Option_int_Some_make(value);" in generated_code
+    assert "return Option_int_None_make();" in generated_code
+    assert "return Result_int_MathError_Ok_make(1);" in generated_code
+    assert (
+        "return Result_int_MathError_Err_make(MathError_DivisionByZero);"
+        in generated_code
+    )
+    assert "if ((item.variant == Option_Some))" in generated_code
+    assert "else if ((item.variant == Option_None))" in generated_code
+    assert "if ((item.variant == Result_Ok))" in generated_code
+    assert "else if ((item.variant == Result_Err))" in generated_code
+    assert "int value = item.Some_0;" in generated_code
+    assert "int value = item.Ok_0;" in generated_code
+    assert "Option<" not in generated_code
+    assert "Result<" not in generated_code
+    assert "Option::" not in generated_code
+    assert "Result::" not in generated_code
+
+
+def test_generic_enum_function_call_match_infers_result_type_once():
+    shader = """
+    shader FunctionCallResultMatch {
+        generic<T, E> struct Result {
+            enum ResultType { Ok(T), Err(E) }
+            ResultType variant;
+        }
+
+        enum MathError {
+            DivisionByZero
+        }
+
+        Result<int, MathError> make_result(bool ok) {
+            match ok {
+                true => { return Result::Ok(7); },
+                false => { return Result::Err(MathError::DivisionByZero); }
+            }
+        }
+
+        int read(bool ok) {
+            match make_result(ok) {
+                Result::Ok(value) => { return value; },
+                Result::Err(_) => { return -1; }
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Result_int_MathError make_result(bool ok)" in generated_code
+    assert (
+        "Result_int_MathError __crossgl_match_subject_0 = make_result(ok);"
+        in generated_code
+    )
+    assert generated_code.count("make_result(ok)") == 1
+    assert "if ((__crossgl_match_subject_0.variant == Result_Ok))" in generated_code
+    assert (
+        "else if ((__crossgl_match_subject_0.variant == Result_Err))" in generated_code
+    )
+    assert "int value = __crossgl_match_subject_0.Ok_0;" in generated_code
+    assert "Result::" not in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_generic_enum_local_function_call_type_infers_match_subject():
+    shader = """
+    shader LocalResultMatch {
+        generic<T, E> struct Result {
+            enum ResultType { Ok(T), Err(E) }
+            ResultType variant;
+        }
+
+        enum MathError {
+            DivisionByZero
+        }
+
+        Result<int, MathError> make_result(bool ok) {
+            match ok {
+                true => { return Result::Ok(7); },
+                false => { return Result::Err(MathError::DivisionByZero); }
+            }
+        }
+
+        int read(bool ok) {
+            let item = make_result(ok);
+            match item {
+                Result::Ok(value) => { return value; },
+                Result::Err(_) => { return -1; }
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Result_int_MathError item = make_result(ok);" in generated_code
+    assert "float item = make_result(ok);" not in generated_code
+    assert "if ((item.variant == Result_Ok))" in generated_code
+    assert "else if ((item.variant == Result_Err))" in generated_code
+    assert "int value = item.Ok_0;" in generated_code
+    assert "Result<" not in generated_code
+    assert "ConstructorNode(" not in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_generic_enum_match_expression_initializes_vector_local():
+    shader = """
+    shader MatchExpressionValue {
+        generic<T, E> struct Result {
+            enum ResultType { Ok(T), Err(E) }
+            ResultType variant;
+        }
+
+        enum MathError {
+            DivisionByZero
+        }
+
+        Result<vec3, MathError> make_result(bool ok) {
+            match ok {
+                true => { return Result::Ok(vec3(1.0, 2.0, 3.0)); },
+                false => { return Result::Err(MathError::DivisionByZero); }
+            }
+        }
+
+        vec3 read(bool ok, vec3 fallback) {
+            let value = match make_result(ok) {
+                Result::Ok(actual) => actual,
+                Result::Err(_) => fallback
+            };
+            return value;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Result_vec3_MathError make_result(bool ok)" in generated_code
+    assert "vec3 read(bool ok, vec3 fallback)" in generated_code
+    assert "vec3 value;" in generated_code
+    assert (
+        "Result_vec3_MathError __crossgl_match_subject_0 = make_result(ok);"
+        in generated_code
+    )
+    assert "if ((__crossgl_match_subject_0.variant == Result_Ok))" in generated_code
+    assert (
+        "else if ((__crossgl_match_subject_0.variant == Result_Err))" in generated_code
+    )
+    assert "vec3 actual = __crossgl_match_subject_0.Ok_0;" in generated_code
+    assert "value = actual;" in generated_code
+    assert "value = fallback;" in generated_code
+    assert "float value = MatchNode" not in generated_code
+    assert "MatchNode(" not in generated_code
+
+
+def test_enum_struct_variant_constructor_expression():
+    shader = """
+    shader EnumStructVariantConstructor {
+        enum RenderOutput {
+            Clear { color: vec4, depth: float },
+            StateSet
+        }
+
+        RenderOutput clear(vec4 color, float depth) {
+            return RenderOutput::Clear { color, depth };
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "RenderOutput RenderOutput_Clear_make(vec4 payload0, float payload1)"
+        in generated_code
+    )
+    assert "RenderOutput clear(vec4 color, float depth)" in generated_code
+    assert "return RenderOutput_Clear_make(color, depth);" in generated_code
+    assert "ConstructorNode(" not in generated_code
+    assert "RenderOutput::" not in generated_code
+
+
+def test_tail_expression_returns_struct_constructor_and_vector():
+    shader = """
+    shader TailExpressionReturn {
+        struct Pair {
+            value: vec3,
+            weight: float
+        }
+
+        Pair make_pair(vec3 value, float weight) {
+            Pair { value, weight }
+        }
+
+        vec4 make_color(vec3 color) {
+            vec4(color, 1.0)
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Pair make_pair(vec3 value, float weight)" in generated_code
+    assert "return Pair(value, weight);" in generated_code
+    assert "vec4 make_color(vec3 color)" in generated_code
+    assert "return vec4(color, 1.0);" in generated_code
+    assert "ConstructorNode(" not in generated_code
+
+
+def test_stage_tail_struct_constructor_returns_stage_output():
+    shader = """
+    shader StageTailReturn {
+        vertex {
+            struct VertexInput {
+                position: vec3,
+                color: vec4
+            }
+            struct VertexOutput {
+                position: vec4,
+                color: vec4
+            }
+            VertexOutput main(VertexInput input) {
+                VertexOutput {
+                    position: vec4(input.position, 1.0),
+                    color: input.color
+                }
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct VertexOutput {" not in generated_code
+    assert "void main()" in generated_code
+    assert "out_position = vec4(position, 1.0);" in generated_code
+    assert "out_color = color;" in generated_code
+    assert "return;" in generated_code
+    assert "ConstructorNode(" not in generated_code
+
+
+def test_flattened_vertex_output_struct_is_kept_when_helper_uses_type():
+    shader = """
+    shader StageOutputHelperUse {
+        struct VertexOutput {
+            position: vec4,
+            color: vec4
+        }
+
+        float readColor(VertexOutput value) {
+            return value.color.x;
+        }
+
+        vertex {
+            VertexOutput main() {
+                return VertexOutput(vec4(1.0), vec4(0.25));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct VertexOutput {" in generated_code
+    assert "float readColor(VertexOutput value)" in generated_code
+    assert "position = vec4(1.0);" in generated_code
+    assert "color = vec4(0.25);" in generated_code
+    assert "return VertexOutput" not in generated_code
+
+
+def test_trait_self_return_does_not_emit_generic_enum_specialization():
+    shader = """
+    shader TraitSelfOption {
+        generic<T> struct Option {
+            enum OptionType { Some(T), None }
+            OptionType variant;
+        }
+
+        trait VectorOps {
+            fn normalize(self) -> Option<Self>;
+        }
+
+        int passthrough(int value) {
+            return value;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct Option_Self" not in generated_code
+    assert "Option_Self" not in generated_code
+    assert "Self Some_0" not in generated_code
+    assert "int passthrough(int value)" in generated_code
+
+
+def test_generic_function_call_emits_concrete_specialization():
+    shader = """
+    shader GenericFunctionSpecialization {
+        generic<T> fn add_one(value: T) -> T {
+            return value.add(T::one());
+        }
+
+        float use_add_one(float value) {
+            return add_one(value);
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float add_one_float(float value)" in generated_code
+    assert "return (value + 1.0);" in generated_code
+    assert "return add_one_float(value);" in generated_code
+    assert "T add_one(T value)" not in generated_code
+    assert "return add_one(value);" not in generated_code
+    assert ".add(" not in generated_code
+    assert "T::one" not in generated_code
+
+
+def test_generic_struct_concrete_constructor_and_member_access():
+    shader = """
+    shader GenericStructConcrete {
+        generic<T> struct Box {
+            value: T;
+        }
+
+        generic<T> struct PairBox {
+            first: Box<T>;
+            second: T;
+        }
+
+        Box<int> make(int value) {
+            return Box { value: value };
+        }
+
+        int read(Box<int> item) {
+            return item.value;
+        }
+
+        PairBox<int> make_pair(int value) {
+            return PairBox {
+                first: Box { value: value },
+                second: value
+            };
+        }
+
+        int read_pair(PairBox<int> item) {
+            return item.first.value + item.second;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct Box_int {" in generated_code
+    assert "int value;" in generated_code
+    assert "struct PairBox_int {" in generated_code
+    assert "Box_int first;" in generated_code
+    assert "int second;" in generated_code
+    assert "struct Box {" not in generated_code
+    assert "struct PairBox {" not in generated_code
+    assert "Box_int make(int value)" in generated_code
+    assert "return Box_int(value);" in generated_code
+    assert "int read(Box_int item)" in generated_code
+    assert "return item.value;" in generated_code
+    assert "PairBox_int make_pair(int value)" in generated_code
+    assert "return PairBox_int(Box_int(value), value);" in generated_code
+    assert "int read_pair(PairBox_int item)" in generated_code
+    assert "item.first.value + item.second" in generated_code
+    assert "Box<" not in generated_code
+    assert "PairBox<" not in generated_code
+    assert "ConstructorNode(" not in generated_code
+
+
+def test_struct_constructor_and_inferred_generic_constructor_local():
+    shader = """
+    shader StructConstructors {
+        struct Geometry {
+            center: vec3;
+            normal: vec3;
+        }
+
+        generic<T> struct Box {
+            value: T;
+        }
+
+        Geometry make_geometry(vec3 center, vec3 normal) {
+            return Geometry { center: center, normal: normal };
+        }
+
+        Box<float> make_box(vec3 value) {
+            let normalized = normalize(value);
+            let wrapped = Box { value: normalized.x };
+            return wrapped;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct Geometry {" in generated_code
+    assert "struct Box_float {" in generated_code
+    assert "Geometry make_geometry(vec3 center, vec3 normal)" in generated_code
+    assert "return Geometry(center, normal);" in generated_code
+    assert "Box_float make_box(vec3 value)" in generated_code
+    assert "vec3 normalized = normalize(value);" in generated_code
+    assert "Box_float wrapped = Box_float(normalized.x);" in generated_code
+    assert "return wrapped;" in generated_code
+    assert "Option_Self normalized" not in generated_code
+    assert "Box<" not in generated_code
+    assert "ConstructorNode(" not in generated_code
 
 
 def test_else_statement():
@@ -3973,7 +6074,8 @@ def test_glsl_wave_and_mesh_intrinsics():
     ast = parse_code(tokens)
     generated = generate_code(ast)
     assert "WaveActiveSum" in generated
-    assert "SetMeshOutputCounts" in generated
+    assert "SetMeshOutputsEXT" in generated
+    assert "SetMeshOutputCounts" not in generated
 
 
 def test_else_if_statement():
@@ -5095,9 +7197,7 @@ def test_opengl_rejects_wrong_offset_dimension_for_resource_operation(call, oper
 
     with pytest.raises(
         ValueError,
-        match=(
-            f"OpenGL resource operation '{operation}' requires a " "2D integer offset"
-        ),
+        match=(f"OpenGL resource operation '{operation}' requires a 2D integer offset"),
     ):
         GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
@@ -5128,6 +7228,10 @@ def test_opengl_rejects_wrong_offset_dimension_for_resource_operation(call, oper
         (
             "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset3)",
             "textureGatherCompareOffset",
+        ),
+        (
+            "textureGatherCompareOffsets(shadowMap, compareSampler, input.uv, input.depth, input.offset3, input.offset3, input.offset3, input.offset3)",
+            "textureGatherCompareOffsets",
         ),
     ],
 )
@@ -5161,9 +7265,7 @@ def test_opengl_rejects_wrong_offset_dimension_for_extended_resource_operation(
 
     with pytest.raises(
         ValueError,
-        match=(
-            f"OpenGL resource operation '{operation}' requires a " "2D integer offset"
-        ),
+        match=(f"OpenGL resource operation '{operation}' requires a 2D integer offset"),
     ):
         GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
@@ -5206,6 +7308,10 @@ def test_opengl_rejects_float_offset_for_resource_operation():
         (
             "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset)",
             "textureGatherCompareOffset",
+        ),
+        (
+            "textureGatherCompareOffsets(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.offset, input.offset, input.offset)",
+            "textureGatherCompareOffsets",
         ),
     ],
 )
@@ -7089,6 +9195,91 @@ def test_opengl_texture_gather_offset_variants_filter_sampler_arguments():
     assert "linearSampler" not in generated_code
     assert ", s, uv" not in generated_code
     assert ", s, uvLayer" not in generated_code
+
+
+def test_opengl_texture_gather_compare_offsets_filter_sampler_arguments():
+    shader = """
+    shader GatherCompareOffsets {
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth @ TEXCOORD1;
+            ivec2 offset0 @ TEXCOORD2;
+            ivec2 offset1 @ TEXCOORD3;
+            ivec2 offset2 @ TEXCOORD4;
+            ivec2 offset3 @ TEXCOORD5;
+        };
+
+        vec4 gatherShadowOffsets(
+            sampler2DShadow tex,
+            sampler s,
+            vec2 uv,
+            float depth,
+            ivec2 offsets[4],
+            ivec2 offset0,
+            ivec2 offset1,
+            ivec2 offset2,
+            ivec2 offset3
+        ) {
+            vec4 arrayOffsets = textureGatherCompareOffsets(
+                tex,
+                s,
+                uv,
+                depth,
+                offsets
+            );
+            vec4 directOffsets = textureGatherCompareOffsets(
+                tex,
+                s,
+                uv,
+                depth,
+                offset0,
+                offset1,
+                offset2,
+                offset3
+            );
+            return arrayOffsets + directOffsets;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                ivec2 offsets[4];
+                offsets[0] = input.offset0;
+                offsets[1] = input.offset1;
+                offsets[2] = input.offset2;
+                offsets[3] = input.offset3;
+                return gatherShadowOffsets(
+                    shadowMap,
+                    compareSampler,
+                    input.uv,
+                    input.depth,
+                    offsets,
+                    input.offset0,
+                    input.offset1,
+                    input.offset2,
+                    input.offset3
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "sampler compareSampler" not in generated_code
+    assert "sampler s" not in generated_code
+    assert "textureGatherCompareOffsets" not in generated_code
+    assert "textureGatherOffsets(" not in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offsets[0]).x" in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offsets[1]).y" in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offsets[2]).z" in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offsets[3]).w" in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offset0).x" in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offset3).w" in generated_code
 
 
 def test_opengl_texture_gather_offsets_mix_literal_and_dynamic_offsets():
@@ -9102,14 +11293,17 @@ def test_opengl_direct_projected_cube_texture_lowers_supported_color_forms():
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
                 vec4 cubeProjected = textureProj(cubeMap, linearSampler, input.cubeProj);
+                vec4 cubeLod = textureProjLod(cubeMap, linearSampler, input.cubeProj, input.lod);
+                vec4 cubeGrad = textureProjGrad(cubeMap, linearSampler, input.cubeProj, input.ddx, input.ddy);
                 vec4 cubeLodOffset = textureProjLodOffset(cubeMap, linearSampler, input.cubeProj, input.lod, input.offset);
                 vec4 cubeGradOffset = textureProjGradOffset(cubeMap, linearSampler, input.cubeProj, input.ddx, input.ddy, input.offset);
                 vec4 cubeArrayProjected = textureProj(cubeArray, linearSampler, input.cubeArrayProj);
                 vec4 cubeArrayLodOffset = textureProjLodOffset(cubeArray, linearSampler, input.cubeArrayProj, input.lod, input.offset);
                 vec4 cubeArrayGradOffset = textureProjGradOffset(cubeArray, linearSampler, input.cubeArrayProj, input.ddx, input.ddy, input.offset);
                 vec4 implicitCube = textureProj(cubeMap, input.cubeProj);
+                vec4 implicitCubeGrad = textureProjGrad(cubeMap, input.cubeProj, input.ddx, input.ddy);
                 vec4 implicitCubeArray = textureProjLod(cubeArray, input.cubeArrayProj, input.lod);
-                return cubeProjected + cubeLodOffset + cubeGradOffset + cubeArrayProjected + cubeArrayLodOffset + cubeArrayGradOffset + implicitCube + implicitCubeArray;
+                return cubeProjected + cubeLod + cubeGrad + cubeLodOffset + cubeGradOffset + cubeArrayProjected + cubeArrayLodOffset + cubeArrayGradOffset + implicitCube + implicitCubeGrad + implicitCubeArray;
             }
         }
     }
@@ -9126,7 +11320,19 @@ def test_opengl_direct_projected_cube_texture_lowers_supported_color_forms():
         in generated_code
     )
     assert (
+        "vec4 cubeLod = textureLod(cubeMap, cubeProj.xyz / cubeProj.w, lod);"
+        in generated_code
+    )
+    assert (
+        "vec4 cubeGrad = textureGrad(cubeMap, cubeProj.xyz / cubeProj.w, ddx, ddy);"
+        in generated_code
+    )
+    assert (
         "vec4 implicitCube = texture(cubeMap, cubeProj.xyz / cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "vec4 implicitCubeGrad = textureGrad(cubeMap, cubeProj.xyz / cubeProj.w, ddx, ddy);"
         in generated_code
     )
     assert (
@@ -12141,7 +14347,7 @@ def test_opengl_fixed_rg_image_array_shadowed_const_index_stays_dynamic():
     )
 
     assert "const int COUNT = 4;" in generated_code
-    assert generated_code.count("int COUNT = 0;") == 2
+    assert generated_code.count("int COUNT = 0;") == 3
     assert (
         "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in generated_code
     )
@@ -12182,7 +14388,7 @@ def test_opengl_transitive_rg_image_array_shadowed_const_index_stays_dynamic():
     )
 
     assert "const int COUNT = 4;" in generated_code
-    assert generated_code.count("int COUNT = 0;") == 2
+    assert generated_code.count("int COUNT = 0;") == 4
     assert (
         "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in generated_code
     )
@@ -12342,8 +14548,14 @@ def test_opengl_formatted_image_arrays_preserve_expression_sizes():
         "imageStore(images[1], pixel, vec4((oldValue + value), 0.0, 0.0));"
         in generated_code
     )
-    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in generated_code
-    assert "vec2 b = touchPairs(rgPairs, ivec2(2, 3), vec2(0.5));" in generated_code
+    assert (
+        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
+        in generated_code
+    )
+    assert (
+        "vec2 b = touchPairs__glsl_images_rgPairs(ivec2(2, 3), vec2(0.5));"
+        in generated_code
+    )
     assert (
         "layout(r32ui, binding = 4) uniform uimage2D afterCounters;"
         not in generated_code
@@ -12458,8 +14670,14 @@ def test_opengl_formatted_image_arrays_infer_named_constant_size():
         "imageStore(images[0], pixel, vec4((oldValue + value), 0.0, 0.0));"
         in generated_code
     )
-    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in generated_code
-    assert "vec2 b = touchPairs(rgPairs, ivec2(2, 3), vec2(0.5));" in generated_code
+    assert (
+        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
+        in generated_code
+    )
+    assert (
+        "vec2 b = touchPairs__glsl_images_rgPairs(ivec2(2, 3), vec2(0.5));"
+        in generated_code
+    )
     assert "layout(rg16f, binding = 3) uniform image2D rgPairs[];" not in generated_code
     assert (
         "layout(r32ui, binding = 2) uniform uimage2D afterCounters;"
@@ -12507,7 +14725,10 @@ def test_opengl_formatted_image_arrays_ignore_shadowed_local_constant():
     assert "int LAYER = 0;" in generated_code
     assert "uint oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
-    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in generated_code
+    assert (
+        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
+        in generated_code
+    )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[4];" not in generated_code
     )
@@ -12586,8 +14807,14 @@ def test_opengl_formatted_image_arrays_infer_transitive_helper_size():
     )
     assert "return touchCountersDeep(images, pixel, value);" in generated_code
     assert "return touchPairsDeep(images, pixel, value);" in generated_code
-    assert "uint a = touchCountersMid(counters, ivec2(1, 2), 3);" in generated_code
-    assert "vec2 b = touchPairsMid(rgPairs, ivec2(2, 3), vec2(0.5));" in generated_code
+    assert (
+        "uint a = touchCountersMid__glsl_images_counters(ivec2(1, 2), 3);"
+        in generated_code
+    )
+    assert (
+        "vec2 b = touchPairsMid__glsl_images_rgPairs(ivec2(2, 3), vec2(0.5));"
+        in generated_code
+    )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[];" not in generated_code
     )
@@ -12649,7 +14876,10 @@ def test_opengl_formatted_image_arrays_ignore_unsupported_indices():
     )
     assert "uint oldValue = imageLoad(images[layer], pixel).x;" in dynamic_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in dynamic_code
-    assert "uint a = touchCounters(counters, 0, ivec2(1, 2), 3);" in dynamic_code
+    assert (
+        "uint a = touchCounters__glsl_images_counters(0, ivec2(1, 2), 3);"
+        in dynamic_code
+    )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[2];" not in dynamic_code
     )
@@ -12666,7 +14896,9 @@ def test_opengl_formatted_image_arrays_ignore_unsupported_indices():
     )
     assert "uint oldValue = imageLoad(images[(-1)], pixel).x;" in negative_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in negative_code
-    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in negative_code
+    assert (
+        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);" in negative_code
+    )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[0];" not in negative_code
     )
@@ -12714,7 +14946,10 @@ def test_opengl_formatted_image_arrays_ignore_function_call_indices():
     )
     assert "uint oldValue = imageLoad(images[getLayer()], pixel).x;" in generated_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
-    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in generated_code
+    assert (
+        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
+        in generated_code
+    )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[1];" not in generated_code
     )
@@ -12761,7 +14996,10 @@ def test_opengl_formatted_image_arrays_infer_local_constant_alias_size():
     assert "const int LOCAL = (GLOBAL + 1);" in generated_code
     assert "uint oldValue = imageLoad(images[LOCAL], pixel).x;" in generated_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
-    assert "uint a = touchCounters(counters, ivec2(1, 2), 3);" in generated_code
+    assert (
+        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
+        in generated_code
+    )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[];" not in generated_code
     )
@@ -12956,12 +15194,22 @@ def test_opengl_explicit_integer_image_formats_use_integer_image_types():
         "int exchangeLayer(iimage2DArray image, ivec3 pixelLayer, int value)"
         in generated_code
     )
-    assert "return imageAtomicAdd(image, pixel, value);" in generated_code
-    assert "return imageAtomicMin(image, pixel, value);" in generated_code
     assert (
-        "return imageAtomicCompSwap(image, voxel, expected, value);" in generated_code
+        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage2D', '0u')};"
+        in generated_code
     )
-    assert "return imageAtomicExchange(image, pixelLayer, value);" in generated_code
+    assert (
+        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicMin', 'iimage2D', '0')};"
+        in generated_code
+    )
+    assert (
+        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage3D', '0u')};"
+        in generated_code
+    )
+    assert (
+        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicExchange', 'iimage2DArray', '0')};"
+        in generated_code
+    )
 
 
 def test_opengl_explicit_vector_integer_image_formats():
@@ -13065,8 +15313,16 @@ def test_opengl_integer_image_atomic_add():
     assert (
         "int addSignedCounter(iimage2D image, ivec2 pixel, int value)" in generated_code
     )
-    assert "uint previous = imageAtomicAdd(image, pixel, value);" in generated_code
-    assert "int previous = imageAtomicAdd(image, pixel, value);" in generated_code
+    assert (
+        "uint previous = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage2D', '0u')};"
+        in generated_code
+    )
+    assert (
+        "int previous = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'iimage2D', '0')};"
+        in generated_code
+    )
 
 
 def test_opengl_integer_image_atomic_operations():
@@ -13112,7 +15368,20 @@ def test_opengl_integer_image_atomic_operations():
         "imageAtomicXor",
         "imageAtomicExchange",
     ]:
-        assert f"{operation}(image, pixel, value)" in generated_code
+        assert (
+            glsl_image_atomic_parameter_diagnostic(operation, "uimage2D", "0u")
+            in generated_code
+        )
+
+    for operation in [
+        "imageAtomicMin",
+        "imageAtomicMax",
+        "imageAtomicExchange",
+    ]:
+        assert (
+            glsl_image_atomic_parameter_diagnostic(operation, "iimage2D", "0")
+            in generated_code
+        )
 
     assert "uint unsignedOps(uimage2D image, ivec2 pixel, uint value)" in generated_code
     assert "int signedOps(iimage2D image, ivec2 pixel, int value)" in generated_code
@@ -13155,11 +15424,13 @@ def test_opengl_integer_image_atomic_compare_swap():
         in generated_code
     )
     assert (
-        "uint previous = imageAtomicCompSwap(image, pixel, expected, replacement);"
+        "uint previous = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage2D', '0u')};"
         in generated_code
     )
     assert (
-        "int previous = imageAtomicCompSwap(image, pixel, expected, replacement);"
+        "int previous = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'iimage2D', '0')};"
         in generated_code
     )
 
@@ -13216,14 +15487,24 @@ def test_opengl_integer_image_dimension_atomics():
         "int touchLayers(iimage2DArray image, ivec3 pixelLayer, int value)"
         in generated_code
     )
-    assert "uint oldValue = imageAtomicAdd(image, voxel, value);" in generated_code
     assert (
-        "uint swapped = imageAtomicCompSwap(image, voxel, oldValue, value);"
+        "uint oldValue = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage3D', '0u')};"
         in generated_code
     )
-    assert "int oldValue = imageAtomicMin(image, pixelLayer, value);" in generated_code
     assert (
-        "int swapped = imageAtomicCompSwap(image, pixelLayer, oldValue, value);"
+        "uint swapped = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage3D', '0u')};"
+        in generated_code
+    )
+    assert (
+        "int oldValue = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicMin', 'iimage2DArray', '0')};"
+        in generated_code
+    )
+    assert (
+        "int swapped = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'iimage2DArray', '0')};"
         in generated_code
     )
 
@@ -13486,13 +15767,13 @@ def test_opengl_storage_image_levels_and_lod_queries_emit_diagnostics():
         generated_code.count(
             "/* unsupported GLSL texture query: textureQueryLod on image2D */ vec2(0.0)"
         )
-        == 2
+        == 3
     )
     assert (
         generated_code.count(
             "/* unsupported GLSL texture query: textureQueryLod on image3D */ vec2(0.0)"
         )
-        == 2
+        == 3
     )
     assert "textureQueryLevels(" not in generated_code
     assert "textureQueryLod(" not in generated_code
@@ -13724,8 +16005,7 @@ def test_opengl_non_multisample_texture_samples_emit_diagnostics():
     )
 
     diagnostic = (
-        "/* unsupported GLSL texture samples query: "
-        "requires multisample sampler */ 0"
+        "/* unsupported GLSL texture samples query: requires multisample sampler */ 0"
     )
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
     assert "layout(binding = 1) uniform sampler2DArray layerMap;" in generated_code
@@ -13785,8 +16065,7 @@ def test_opengl_storage_image_samples_queries_emit_diagnostics():
     )
 
     diagnostic = (
-        "/* unsupported GLSL texture samples query: "
-        "requires multisample sampler */ 0"
+        "/* unsupported GLSL texture samples query: requires multisample sampler */ 0"
     )
     assert "layout(rgba32f, binding = 0) uniform image2D colorImage;" in generated_code
     assert "layout(rgba32f, binding = 1) uniform image3D volumeImage;" in generated_code
@@ -13796,7 +16075,7 @@ def test_opengl_storage_image_samples_queries_emit_diagnostics():
     )
     assert "layout(r32ui, binding = 3) uniform uimage2D uintImage;" in generated_code
     assert "layout(r32i, binding = 4) uniform iimage3D intVolume;" in generated_code
-    assert generated_code.count(diagnostic) == 13
+    assert generated_code.count(diagnostic) == 19
     assert "imageSamples(" not in generated_code
     assert "textureSamples(" not in generated_code
     assert "input." not in generated_code
@@ -13871,7 +16150,7 @@ def test_opengl_storage_image_sampling_and_fetch_emit_diagnostics():
         "layout(rgba32f, binding = 2) uniform image2DArray layerImage;"
         in generated_code
     )
-    assert generated_code.count(diagnostic) == 20
+    assert generated_code.count(diagnostic) == 35
     for operation in {
         "texture",
         "textureLod",
@@ -13957,8 +16236,8 @@ def test_opengl_storage_image_compare_calls_emit_diagnostics():
         "layout(rgba32f, binding = 2) uniform image2DArray layerImage;"
         in generated_code
     )
-    assert generated_code.count(comparison_diagnostic) == 14
-    assert generated_code.count(gather_diagnostic) == 4
+    assert generated_code.count(comparison_diagnostic) == 26
+    assert generated_code.count(gather_diagnostic) == 6
     assert "textureCompare(" not in generated_code
     assert "textureGatherCompare(" not in generated_code
     assert "textureGatherCompareOffset(" not in generated_code
@@ -16332,10 +18611,107 @@ def test_glsl_image_1d_and_1d_array_storage_operations():
     assert "imageStore(image, x, vec4((oldValue + value)));" in generated_code
     assert "vec4 oldValue = imageLoad(image, coord);" in generated_code
     assert "imageStore(image, coord, (oldValue + value));" in generated_code
-    assert "return imageAtomicAdd(image, x, value);" in generated_code
-    assert "return imageAtomicExchange(image, coord, value);" in generated_code
     assert (
-        "return imageAtomicCompSwap(image, coord, expected, value);" in generated_code
+        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage1D', '0u')};"
+        in generated_code
+    )
+    assert (
+        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicExchange', 'uimage1DArray', '0u')};"
+        in generated_code
+    )
+    assert (
+        f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage1DArray', '0u')};"
+        in generated_code
+    )
+
+
+def test_glsl_multisample_storage_images_lower_load_store_and_atomics():
+    shader = """
+    shader GLSLMultisampleStorageImages {
+        image2DMS colorImage @rgba16f;
+        uimage2DMS counters @r32ui;
+        image2DMSArray layered @rgba16f;
+
+        vec4 touch(
+            image2DMS image @rgba16f,
+            uimage2DMS counterImage @r32ui,
+            ivec2 pixel,
+            int sampleIndex,
+            vec4 value,
+            uint count
+        ) {
+            vec4 oldColor = imageLoad(image, pixel, sampleIndex);
+            uint oldCount = imageLoad(counterImage, pixel, sampleIndex);
+            imageStore(image, pixel, sampleIndex, oldColor + value);
+            imageStore(counterImage, pixel, sampleIndex, oldCount + count);
+            uint atomicOld = imageAtomicAdd(counterImage, pixel, sampleIndex, count);
+            uint exchanged = imageAtomicExchange(counterImage, pixel, sampleIndex, atomicOld + count);
+            uint swapped = imageAtomicCompSwap(counterImage, pixel, sampleIndex, exchanged, count);
+            return oldColor + vec4(float(oldCount + atomicOld + swapped));
+        }
+
+        vec4 touchLayer(image2DMSArray image @rgba16f, ivec3 pixelLayer, int sampleIndex, vec4 value) {
+            vec4 oldLayer = imageLoad(image, pixelLayer, sampleIndex);
+            imageStore(image, pixelLayer, sampleIndex, oldLayer + value);
+            return oldLayer;
+        }
+
+        compute {
+            void main() {
+                vec4 color = touch(colorImage, counters, ivec2(0, 1), 2, vec4(1.0), 3u);
+                vec4 layerColor = touchLayer(layered, ivec3(2, 3, 1), 0, color);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert (
+        "layout(rgba16f, binding = 0) uniform image2DMS colorImage;" in generated_code
+    )
+    assert "layout(r32ui, binding = 1) uniform uimage2DMS counters;" in generated_code
+    assert (
+        "layout(rgba16f, binding = 2) uniform image2DMSArray layered;" in generated_code
+    )
+    assert (
+        "vec4 touch(image2DMS image, uimage2DMS counterImage, ivec2 pixel, int sampleIndex, vec4 value, uint count)"
+        in generated_code
+    )
+    assert "vec4 oldColor = imageLoad(image, pixel, sampleIndex);" in generated_code
+    assert (
+        "uint oldCount = imageLoad(counterImage, pixel, sampleIndex).x;"
+        in generated_code
+    )
+    assert (
+        "imageStore(image, pixel, sampleIndex, (oldColor + value));" in generated_code
+    )
+    assert (
+        "imageStore(counterImage, pixel, sampleIndex, uvec4((oldCount + count)));"
+        in generated_code
+    )
+    assert (
+        "uint atomicOld = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicAdd', 'uimage2DMS', '0u')};"
+        in generated_code
+    )
+    assert (
+        "uint exchanged = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicExchange', 'uimage2DMS', '0u')};"
+        in generated_code
+    )
+    assert (
+        "uint swapped = "
+        f"{glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage2DMS', '0u')};"
+        in generated_code
+    )
+    assert (
+        "vec4 oldLayer = imageLoad(image, pixelLayer, sampleIndex);" in generated_code
+    )
+    assert (
+        "imageStore(image, pixelLayer, sampleIndex, (oldLayer + value));"
+        in generated_code
     )
 
 
@@ -16473,8 +18849,8 @@ def test_glsl_storage_image_access_allows_compatible_helper_calls():
     ast = crosstl.translator.parse(shader)
     generated_code = GLSLCodeGen().generate(ast)
 
-    assert "float value = readPixel(source, ivec2(0, 0));" in generated_code
-    assert "writePixel(target, ivec2(0, 0), vec4(value));" in generated_code
+    assert "float value = readPixel__glsl_image_source(ivec2(0, 0));" in generated_code
+    assert "writePixel__glsl_image_target(ivec2(0, 0), vec4(value));" in generated_code
 
 
 @pytest.mark.parametrize(

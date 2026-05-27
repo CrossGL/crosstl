@@ -16,7 +16,7 @@ class TestHipLexer:
         """Test HIP keyword tokenization"""
         code = """
         __global__ __device__ __host__ __shared__ __constant__
-        __forceinline__ __noinline__ template typename class
+        __forceinline__ __noinline__ __launch_bounds__ template typename class
         struct union enum namespace using extern static const
         """
         lexer = HipLexer(code)
@@ -33,6 +33,7 @@ class TestHipLexer:
         assert "__CONSTANT__" in token_types
         assert "__FORCEINLINE__" in token_types
         assert "__NOINLINE__" in token_types
+        assert "__LAUNCH_BOUNDS__" in token_types
         assert "TEMPLATE" in token_types
         assert "TYPENAME" in token_types
         assert "CLASS" in token_types

@@ -58,7 +58,7 @@ register_backend(
     BackendSpec(
         name="metal",
         codegen_class=MetalCodeGen,
-        aliases=("metal",),
+        aliases=("msl",),
         file_extensions=(".metal",),
         format_backend="metal",
     )

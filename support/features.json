@@ -66,15 +66,62 @@
       "name": "Native preprocessor handling",
       "description": "Handle native preprocessor directives, includes, defines, and conditional compilation where the backend language exposes them.",
       "support": {
-        "directx": {"status": "supported", "evidence": ["tests/test_backend/test_directx/test_preprocessor.py::def test_"]},
-        "opengl": {"status": "supported", "evidence": ["tests/test_backend/test_GLSL/test_preprocessor.py::def test_"]},
-        "metal": {"status": "unknown"},
-        "vulkan": {"status": "unknown"},
-        "cuda": {"status": "unknown"},
+        "directx": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_directx/test_preprocessor.py::def test_",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_preprocessor.py::def test_",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "evidence": [
+            "tests/test_backend/test_metal/test_preprocessor.py::def test_",
+            "tests/test_backend/test_metal/test_codegen.py::def test_codegen_expands_preprocessor_define",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_preprocessor_metal_output_compiles_with_xcrun_metal"
+          ]
+        },
+        "vulkan": {
+          "status": "diagnostic",
+          "notes": "Mesh/task IR operation nodes emit deterministic unsupported diagnostics with type-correct fallback values. Real SPIR-V mesh/task stage entry-point and payload lowering is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
+          ]
+        },
+        "cuda": {
+          "status": "partial",
+          "notes": "Plain 2D textureGather lowers to CUDA tex2Dgather with component selection and explicit-sampler overloads; native tex2Dgather imports back to CrossGL textureGather. Array, cube, offset, shadow, multisample, and sparse-residency gather forms emit deterministic diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_texture_gather_calls_emit_cuda_diagnostics",
+            "tests/test_backend/test_CUDA/test_codegen.py::def test_cuda_texture_gather_helpers_convert"
+          ]
+        },
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "unsupported",
+          "notes": "Mojo source has no C-style preprocessor expansion in this frontend; # lines are treated as comments and native import/from-import declarations are parsed separately.",
+          "evidence": [
+            "tests/test_backend/test_mojo/test_lexer.py::def test_comments_tokenization",
+            "tests/test_backend/test_mojo/test_parser.py::def test_import_parsing"
+          ]
+        },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Storage-image readonly/writeonly access metadata is tracked for Slang RWTexture resources; invalid reads, writes, and image atomics emit deterministic diagnostics. Structured-buffer and byte-address-buffer access qualifiers are not audited yet.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics"
+          ]
+        }
       }
     },
     {
@@ -89,7 +136,11 @@
         "vulkan": {"status": "supported"},
         "cuda": {"status": "partial", "notes": "Graphics examples lower to CUDA-shaped code, not native raster pipeline stages."},
         "hip": {"status": "partial", "notes": "Graphics examples lower to HIP-shaped code, not native raster pipeline stages."},
-        "mojo": {"status": "partial"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Vertex entry points lower to Mojo shader decorators and compile-oriented signatures, but Mojo has no complete raster pipeline/resource ABI in this repo.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader"]
+        },
         "rust": {"status": "partial"},
         "slang": {"status": "supported"}
       }
@@ -106,7 +157,11 @@
         "vulkan": {"status": "supported"},
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "partial"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Fragment entry points lower to Mojo shader decorators and compile-oriented signatures, but direct render-target ABI semantics are not complete.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader"]
+        },
         "rust": {"status": "partial"},
         "slang": {"status": "supported"}
       }
@@ -125,7 +180,14 @@
         "hip": {"status": "supported"},
         "mojo": {"status": "supported"},
         "rust": {"status": "supported"},
-        "slang": {"status": "supported"}
+        "slang": {
+          "status": "supported",
+          "notes": "Compute entry points lower to Slang shader entries with HLSL-compatible numthreads defaults and parsed local-size layouts.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_compute_stage_emits_default_numthreads",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_compute_stage_uses_execution_layout_numthreads"
+          ]
+        }
       }
     },
     {
@@ -140,9 +202,22 @@
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "unsupported"},
         "hip": {"status": "unsupported"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "unsupported",
+          "notes": "Mojo codegen rejects geometry stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"]
+        },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Maps geometry blocks to Slang geometry entry points, lowers geometry system-value builtins, preserves semantic aliases, emits maxvertexcount attributes, and validates stage-attribute shapes. Full stream-output/emission semantics are still incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_stage_builtins_emit_stage_specific_slang_parameters",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_invocation_builtin_uses_existing_semantic_parameter_alias",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics"
+          ]
+        }
       }
     },
     {
@@ -157,9 +232,22 @@
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "unsupported"},
         "hip": {"status": "unsupported"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "unsupported",
+          "notes": "Mojo codegen rejects tessellation stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"]
+        },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Maps tessellation_control and tessellation_evaluation to Slang hull/domain stages, lowers tessellation system values, tessellation-factor semantics, gl_in/gl_out patch rewrites, patch-constant functions, and validates hull/domain patch shapes and attributes. Full cross-stage compiler-backed tessellation coverage remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_factor_semantics_map_to_slang_patch_constant_outputs",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_control_gl_out_output_patch_lowers_to_hull_return",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_domain_output_patch_matches_hull_output_shape",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics"
+          ]
+        }
       }
     },
     {
@@ -168,15 +256,78 @@
       "name": "Mesh/task/amplification stages",
       "description": "Modern mesh-style stage entry points.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "unknown"},
-        "metal": {"status": "partial"},
+        "directx": {
+          "status": "partial",
+          "notes": "Entry points lower to HLSL mesh/amplification shader attributes with deterministic stage names, numthreads from local-size layouts or @numthreads, and optional mesh output topology attributes. Full mesh payload/output signature validation remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_ray_and_mesh_shader_attributes",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_mesh_task_stages_emit_numthreads_layouts"
+          ]
+        },
+        "opengl": {
+          "status": "partial",
+          "notes": "Entry points and combined-stage names lower with GL_EXT_mesh_shader enablement and local-size layouts for task/mesh stages. Full mesh output layout and payload semantics are not complete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_task_stage_entries_use_distinct_names",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_task_stage_extensions_and_local_size_layouts"
+          ]
+        },
+        "metal": {
+          "status": "partial",
+          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Literal output-count bounds, simple write-after-SetMeshOutputCounts ordering, if/switch branch dominance, and provable loop-exit dominance for post-branch/output writes are validated. Remaining gaps are symbolic loop iteration analysis and multi-payload pipeline shapes.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_mesh_object_stage_codegen",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_object_stage_attributes_and_threadgroup_limits",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_object_payload_parameters_use_object_data_address_space",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_payload_dispatch_argument_generates_object_data_payload",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_payload_dispatch_generated_name_avoids_local_collision",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_payload_dispatch_type_mismatch_is_rejected",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_stage_output_signature_and_counts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_stage_vertex_and_index_writes_lower_to_mesh_output_methods",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_roles_lower_to_mesh_output_parameter",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_single_member_writes_lower_to_setters",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_signature_multi_member_partial_writes_use_accumulator",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_output_writes_validate_order_and_literal_bounds",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_validates_literal_bounds",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_branch_dominance_allows_post_branch_writes",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_rejects_non_dominating_branch_counts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_switch_dominance_handles_breaks",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_rejects_non_exhaustive_switch_counts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_loop_break_dominance_allows_post_loop_writes",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_while_true_break_dominance_allows_post_loop_writes",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_do_while_false_dominates_post_loop_writes",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_rejects_skippable_loop_counts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_set_output_counts_rejects_uncounted_loop_break_path",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_output_signature_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_payload_dispatch_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_object_stages_compile_with_metal3"
+          ]
+        },
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "unsupported"},
         "hip": {"status": "unsupported"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "unsupported",
+          "notes": "Mojo codegen rejects mesh/task/object stages and mesh IR intrinsics explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen"
+          ]
+        },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Entry points lower to Slang mesh/amplification shader attributes with deterministic duplicate-entry names, local-size layouts or @numthreads attributes emit numthreads metadata, outputtopology emits quoted Slang attributes, and SetMeshOutputCounts/DispatchMesh lower to native Slang calls with arity and stage validation. Full mesh output signature/payload validation and slangc-backed mesh compilation remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_and_task_stages_emit_execution_layout_numthreads",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_numthreads_attribute_overrides_default_numthreads",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_and_task_intrinsics_lower_to_native_slang_calls",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_intrinsic_invalid_arities_emit_slang_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_intrinsics_reject_invalid_slang_stages"
+          ]
+        }
       }
     },
     {
@@ -185,15 +336,113 @@
       "name": "Ray tracing stages",
       "description": "Ray generation, hit, miss, callable, and intersection stages.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "unknown"},
-        "metal": {"status": "partial"},
-        "vulkan": {"status": "unknown"},
+        "directx": {
+          "status": "partial",
+          "notes": "Ray entry points lower to HLSL library shader attributes with stage-specific names and payload semantics, but full ray pipeline object/signature coverage remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_ray_payload_semantics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_ray_and_mesh_shader_attributes"
+          ]
+        },
+        "opengl": {
+          "status": "partial",
+          "notes": "Entry points and combined-stage names lower with GL_EXT_ray_tracing enablement, but full GLSL ray tracing layout and payload semantics are not complete.",
+          "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_ray_stage_entries_use_distinct_names"]
+        },
+        "metal": {
+          "status": "partial",
+          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_payload_semantics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_hit_and_callable_stages_lower_to_visible_functions",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_callable_data_semantic_uses_ray_data_address_space",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_acceleration_structure_globals_lower_to_buffer_parameters",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_full_signature_lowers_to_intersector_query",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_uses_single_intersection_function_table",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_threads_intersection_function_table_through_helpers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_forwards_thread_local_payload_with_intersection_table",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_forwards_helper_parameter_payload",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_payload_without_intersection_table_emits_diagnostic",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_rejects_non_thread_payload_parameter",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_skips_incompatible_intersection_function_table",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_trace_ray_uses_primitive_acceleration_structure_shape",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_acceleration_structure_globals_thread_through_helpers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_unsupported_ray_intrinsics_emit_compile_safe_diagnostics",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_tracing_intersection_table_trace_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_primitive_acceleration_trace_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_payload_trace_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_payload_diagnostic_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_callshader_lowers_to_visible_function_table_call",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_callshader_visible_function_table_threads_through_helpers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_callshader_accepts_explicit_visible_function_table_argument",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_callable_dispatch_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_stages_compile_with_metal3",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_intersection_function_table_globals_lower_to_buffer_parameters",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_intersection_function_table_globals_thread_through_helpers",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_intersection_function_table_compiles_with_metal3",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_visible_function_table_stage_parameter_maps_signature_and_binding",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_intersection_function_table_stage_parameter_gets_buffer_binding",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_function_table_parameters_compile_with_metal3",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_arrayed_visible_function_table_emits_compile_safe_diagnostic",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_arrayed_intersection_function_table_emits_compile_safe_diagnostic",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_arrayed_visible_function_table_parameter_emits_compile_safe_diagnostic",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_arrayed_intersection_function_table_parameter_emits_diagnostic",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_ray_function_table_array_diagnostics_compile_with_metal3",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_lowers_to_metal_intersection_attribute",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_accepts_bounding_box_result_struct",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
+          ]
+        },
+        "vulkan": {
+          "status": "partial",
+          "notes": "Registers RayQuery types and acceleration-structure resources as SPIR-V KHR objects; lowers TraceRayInline, Proceed, CandidateRayT, CommittedRayT, abort/terminate, generated/procedural intersection commits, non-opaque/confirm intersection commits, ray state getters for RayTMin and RayFlags, world ray vector getters, candidate/committed object ray vector getters, object/world transform matrix getters, candidate AABB opacity, and intersection metadata getters for type, primitive index, instance ID, instance custom index, shader-binding-table record offset, geometry index, barycentrics, and triangle front-face to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, TraceRay, acceleration-structure arrays, and triangle vertex positions remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_proceed_and_intersection_t_emit_khr_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_parsed_ray_query_generic_type_lowers_to_khr_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_supported_operations_reject_unexpected_arguments",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_trace_ray_inline_expanded_operands_initialize_query",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_trace_ray_inline_raydesc_fields_initialize_query",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_commit_and_abort_operations_emit_khr_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_commit_operations_reject_bad_arguments",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_intersection_metadata_getters_emit_khr_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_intersection_metadata_getters_reject_unexpected_arguments",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_ray_state_and_instance_record_getters_emit_khr_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_ray_state_and_instance_record_getters_reject_arguments",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_world_and_object_ray_getters_emit_khr_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_world_and_object_ray_getters_reject_arguments",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_transform_getters_emit_khr_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_transform_getters_reject_arguments",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_candidate_aabb_opaque_getter_emits_khr_instruction",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_candidate_aabb_opaque_getter_rejects_arguments",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "unsupported",
+          "notes": "Mojo codegen rejects ray tracing stages, ray tracing intrinsics, and ray query methods explicitly; no Mojo ray pipeline ABI is implemented in this repo.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_are_rejected_for_mojo_codegen"
+          ]
+        },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated, and RayQuery methods emit native Slang calls with receiver/argument validation and result type inference. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_builtins_lower_to_slang_intrinsics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_local_interface_variables_become_slang_parameters",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_query_methods_emit_native_calls_and_infer_results"
+          ]
+        }
       }
     },
     {
@@ -205,10 +454,25 @@
         "directx": {"status": "supported"},
         "opengl": {"status": "supported"},
         "metal": {"status": "supported"},
-        "vulkan": {"status": "partial"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "Global sampled textures, samplers, storage images, resource arrays, and cbuffers share deterministic DescriptorSet/Binding assignment with explicit @set/@group/@binding handling and duplicate binding rejection.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_resource_globals_respect_explicit_spirv_bindings_and_sets",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_cbuffer_globals_emit_spirv_uniform_blocks_and_bindings",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_cbuffer_globals_reject_duplicate_spirv_bindings"
+          ]
+        },
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "partial"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Stage parameter semantics are preserved as Mojo field/parameter comments for compile-smoke output, with duplicate parameter semantics, output-only input misuse, builtin stage misuse, and builtin parameter type mismatches rejected deterministically. Target-native builtin ABI mapping remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen"
+          ]
+        },
         "rust": {"status": "partial"},
         "slang": {"status": "partial"}
       }
@@ -225,9 +489,26 @@
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Direct staged function return semantics are preserved as deterministic Mojo metadata comments, and builtin return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen"
+          ]
+        },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Direct return semantics map to Slang system values, fragment color/depth returns can be rewritten through output structs, invalid void-return semantics are rejected, and stage/execution marker metadata is filtered so it does not become a return semantic. Full target ABI and slangc-backed return-semantics coverage remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_semantics_map_to_slang_system_values",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_void_return_semantics_raise_for_slang",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_marker_metadata_is_not_treated_as_slang_return_semantic",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_fragment_color_and_depth_outputs_rewrite_to_slang_output_struct",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_control_return_semantics_are_rejected"
+          ]
+        }
       }
     },
     {
@@ -242,7 +523,14 @@
         "vulkan": {"status": "partial"},
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "partial"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Struct member semantics are preserved as Mojo field comments, builtin output semantic types are validated, and struct-return builtin semantics validate stage compatibility. Target-native shader I/O ABI lowering remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo"
+          ]
+        },
         "rust": {"status": "partial"},
         "slang": {"status": "partial"}
       }
@@ -256,12 +544,36 @@
         "directx": {"status": "supported"},
         "opengl": {"status": "supported"},
         "metal": {"status": "supported"},
-        "vulkan": {"status": "partial"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "Global sampled textures, samplers, storage images, resource arrays, and cbuffers share deterministic DescriptorSet/Binding assignment with explicit @set/@group/@binding handling and duplicate binding rejection.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_resource_globals_respect_explicit_spirv_bindings_and_sets",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_cbuffer_globals_emit_spirv_uniform_blocks_and_bindings",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_cbuffer_globals_reject_duplicate_spirv_bindings"
+          ]
+        },
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Global texture, sampler, image, structured-buffer/resource-array, and cbuffer declarations emit deterministic CrossGL resource metadata comments with explicit @set/@group/@binding and HLSL register-space preservation, automatic per-namespace binding assignment, and duplicate/range-overlap diagnostics. Mojo still uses compile-smoke placeholders rather than a native GPU resource ABI.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_binding_metadata_comments_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_duplicate_resource_bindings_are_rejected_for_mojo_codegen"
+          ]
+        },
         "rust": {"status": "unknown"},
-        "slang": {"status": "partial"}
+        "slang": {
+          "status": "supported",
+          "notes": "Global resources and cbuffers receive deterministic automatic [[vk::binding(binding, set)]] and HLSL register(space) decorations, explicit @set/@group/@space/@binding and register metadata is preserved on globals, cbuffers, arrays, acceleration structures, storage images, samplers, sampled textures, and resource parameters, fixed resource arrays reserve binding ranges, and conflicting binding/register, set/space, duplicate, and range-overlap metadata raises deterministic diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_binding_metadata_emits_slang_vk_and_register_decorations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_metadata_raises",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_ranges_raise"
+          ]
+        }
       }
     },
     {
@@ -273,10 +585,25 @@
         "directx": {"status": "supported"},
         "opengl": {"status": "supported"},
         "metal": {"status": "supported"},
-        "vulkan": {"status": "partial"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "CrossGL cbuffers lower to SPIR-V Uniform blocks with Block, member Offset, matrix stride, array stride, descriptor set/binding decorations, bare/member access lowering, duplicate binding rejection, and spirv-as/spirv-val coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_cbuffer_globals_emit_spirv_uniform_blocks_and_bindings",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_uniform_buffer_compute_validates_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "partial"},
+        "mojo": {
+          "status": "partial",
+          "notes": "CrossGL cbuffers lower to registered Mojo value structs with scalar/vector/matrix/array member storage, deterministic resource metadata comments, and compile-smoke coverage for local values, function parameters, and returns. Target-native uniform binding ABI is not complete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_cbuffer_type_nodes_emit_mojo_storage_types",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_cbuffer_type_nodes_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_cbuffer_structs_register_for_mojo_value_usage"
+          ]
+        },
         "rust": {"status": "partial"},
         "slang": {"status": "partial"}
       }
@@ -287,15 +614,90 @@
       "name": "Structured/storage buffers",
       "description": "StructuredBuffer, RWStructuredBuffer, SSBO-style storage, and access helpers.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
-        "vulkan": {"status": "unknown"},
+        "directx": {
+          "status": "supported",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, fixed and inferred resource arrays, load/store/dimensions helpers, ByteAddressBuffer scalar/vector load/store helpers, byte-address vector helper resource/value shape diagnostics, native HLSL ByteAddressBuffer/RWByteAddressBuffer vector method import, register-space allocation, type aliases, append/consume buffers, access-mode diagnostics for readonly/append/consume misuse, rasterizer-ordered typed/structured buffers, and GLSL SSBO single-array round-trips.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_structured_buffer_access_contracts_are_preserved",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_structured_buffer_dimensions_lower_to_get_dimensions",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_structured_buffer_append_consume_lower_to_native_methods",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_byte_address_vector_buffer_helpers_lower_to_load_store_methods",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_byte_address_vector_helpers_validate_resource_and_value_shape",
+            "tests/test_backend/test_directx/test_codegen.py::def test_codegen_byte_address_vector_method_mapping",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_buffer_store_helpers_reject_readonly_resources",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_append_consume_buffers_reject_wrong_helpers",
+            "tests/test_backend/test_directx/test_codegen.py::def test_codegen_rasterizer_ordered_resources_roundtrip",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_hlsl_rasterizer_ordered_resources_compile_with_dxc",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer as SSBOs, fixed and inferred resource arrays, load/store/dimensions helpers, and AppendStructuredBuffer/ConsumeStructuredBuffer lowering through generated sidecar counter SSBOs.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_structured_buffer_access_contracts_are_preserved",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_append_consume_structured_buffers_use_sidecar_counters",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_append_consume_structured_buffer_helpers_thread_sidecar_counters",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_append_structured_buffer_arrays_use_sidecar_counter_arrays",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer as device pointers, fixed and inferred resource arrays, load/store helpers, buffer_dimensions through generated sidecar length buffers, and AppendStructuredBuffer/ConsumeStructuredBuffer through generated sidecar atomic counter buffers.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_structured_buffer_access_contracts_are_preserved",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_structured_buffer_operations_lower_to_device_buffer",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_structured_buffer_dimensions_helpers_thread_length_sidecars",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_append_consume_structured_buffers_use_sidecar_counters",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_append_consume_structured_buffer_helpers_thread_sidecar_counters",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_append_structured_buffer_arrays_use_sidecar_counter_arrays",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract"
+          ]
+        },
+        "vulkan": {
+          "status": "partial",
+          "notes": "StructuredBuffer and RWStructuredBuffer globals lower to Vulkan-compatible SPIR-V BufferBlock descriptors with runtime-array storage, descriptor set/binding allocation, std430-style member/array layout decorations, buffer_load/buffer_store lowering, direct indexed member access, read-only store diagnostics, and spirv-as/spirv-val coverage. Append/consume and byte-address buffer operations are not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffers_emit_spirv_buffer_blocks_and_accesses",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_diagnostic",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_structured_buffer_compute_validates_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "StructuredBuffer, RWStructuredBuffer, typed Buffer/RWBuffer aliases, rasterizer-ordered structured/typed/byte-address buffer aliases, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers and deterministic invalid member/free-helper diagnostics; real GPU memory binding semantics remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_structured_buffer_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_typed_buffer_vector_alias_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_buffer_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_vector_methods_and_reinterpret_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rasterizer_ordered_buffer_aliases_emit_mojo_buffer_helpers",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rasterizer_ordered_buffer_aliases_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_typed_buffer_aliases_emit_mojo_buffer_helpers",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_typed_buffer_aliases_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, explicit-result and expression-valued structured-buffer atomics, loop-context diagnostics for value-preserving atomic hoists, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_explicit_result_atomics_emit_slang_interlocked",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_expression_atomics_in_loop_contexts_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_append_consume_structured_buffers_emit_slang_methods_and_uav_bindings",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_append_consume_wrong_structured_buffer_kinds_emit_slang_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffers_emit_slang_load_store_dimensions_and_bindings",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_vector_methods_and_readonly_stores_emit_slang",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffer_store_to_readonly_helper_emits_slang_diagnostic",
+            "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
+          ]
+        }
       }
     },
     {
@@ -304,15 +706,68 @@
       "name": "Resource arrays",
       "description": "Fixed and unsized texture, sampler, image, and buffer arrays.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
+        "directx": {
+          "status": "supported",
+          "notes": "Covers fixed, expression-sized, and inferred unsized texture/sampler arrays, shadow arrays, formatted image arrays, multisample image arrays, and StructuredBuffer/ByteAddressBuffer resource arrays with deterministic size-conflict diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_unsized_texture_and_sampler_arrays_infer_helper_size",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_unsized_shadow_texture_and_sampler_arrays_infer_helper_size",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_formatted_image_arrays_preserve_format_metadata",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_storage_image_arrays_emit_srv_reads_and_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Covers fixed, expression-sized, and inferred unsized texture arrays, shadow arrays, formatted image arrays, multisample image arrays, and SSBO resource arrays with deterministic size-conflict diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_unsized_texture_array_infers_helper_size_and_filters_sampler_array",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_unsized_shadow_texture_array_infers_helper_size_and_filters_sampler_array",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_formatted_image_arrays_preserve_format_metadata",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Covers fixed, expression-sized, and inferred unsized texture/sampler arrays, shadow arrays, formatted image arrays, multisample image arrays, and Metal buffer resource arrays with deterministic size-conflict diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_unsized_texture_and_sampler_arrays_infer_helper_size",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_unsized_shadow_texture_and_sampler_arrays_infer_helper_size",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_formatted_image_arrays_preserve_format_metadata",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types"
+          ]
+        },
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Fixed resource arrays lower to InlineArray placeholders for textures, images, and buffers, and indexed image/buffer access honors readonly/writeonly validation. Unsized/resource-binding semantics are not complete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_arrays_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_structured_buffer_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_byte_address_buffer_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_array_access_qualifiers_apply_to_indexed_mojo_resources"
+          ]
+        },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Covers fixed and expression-sized texture, sampler, shadow, image, StructuredBuffer, Append/ConsumeStructuredBuffer, and ByteAddressBuffer arrays, nested resource arrays, dynamic resource-array parameters, indexed access through control flow and loops, automatic binding range allocation, and overlap diagnostics. Unsized/bindless resource-array semantics and compiler-backed coverage remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_texture_and_shadow_arrays_preserve_expression_sizes_and_group_indices",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_nested_resource_arrays_emit_slang_queries_and_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_dynamic_resource_array_params_emit_slang_queries_and_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_forwarded_dynamic_resource_array_params_emit_slang_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mixed_fixed_dynamic_resource_array_params_emit_slang_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_multihop_reordered_resource_array_params_emit_slang_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_nested_loop_resource_indices_emit_slang_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_arrays_preserve_expression_sizes",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffers_emit_slang_load_store_dimensions_and_bindings",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_ranges_raise"
+          ]
+        }
       }
     },
     {
@@ -321,13 +776,47 @@
       "name": "Texture and sampler object model",
       "description": "Represent combined and separate texture/sampler models without binding collisions.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
+        "directx": {
+          "status": "supported",
+          "notes": "Covers separate texture and sampler declarations, implicit sampler threading, comparison sampler role separation, arrayed samplers, register-space inheritance, and collision-free binding namespaces.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_generic_bindings_are_independent_between_register_namespaces",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_implicit_sampler_inherits_global_texture_register_space",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_texture_and_sampler_parameters",
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_shadow_texture_sampler_contracts_are_preserved"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Covers combined sampler emission, source sampler elision, shadow-compare coordinate construction, sampler/image binding independence, arrayed sampler filtering, and collision-free binding namespaces.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_texture_and_image_bindings_are_independent",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_sampler_parameter_is_dropped",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_shadow_compare_sampler_parameter_is_dropped",
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_shadow_texture_sampler_contracts_are_preserved"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Covers separate texture and sampler declarations, implicit sampler threading, comparison sampler role separation, arrayed samplers, and collision-free texture/sampler/buffer binding namespaces.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_sampler_and_buffer_bindings_are_independent",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_and_sampler_bindings_are_independent",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_and_sampler_parameters",
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_shadow_texture_sampler_contracts_are_preserved"
+          ]
+        },
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Separate sampler parameters are accepted and texture calls lower to Mojo placeholder helpers; sampler-state behavior is compile-smoke only.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "partial"}
       }
@@ -338,15 +827,121 @@
       "name": "GLSL buffer block lowering",
       "description": "Lower GLSL-style buffer blocks and preserve deterministic diagnostics for unsupported target shapes.",
       "support": {
-        "directx": {"status": "partial"},
+        "directx": {
+          "status": "partial",
+          "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, struct arrays, layout-distinct aggregate helpers, readonly aggregate helpers, nested aggregate leaf compound stores, aggregate struct load/store with fixed array fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_uint_atomics_lower_to_byteaddress_and_device_atomics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_bool_members_lower_as_uint_slots",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_struct_members_lower_as_leaf_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_struct_arrays_lower_as_leaf_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_struct_aggregates_materialize_leaf_fields",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_struct_aggregate_arrays_materialize_leaf_fields",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_readonly_aggregate_helpers_use_const_readers",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_aggregate_leaf_compound_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_aggregate_helpers_distinguish_std140_and_std430_layouts",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_int_atomics_lower_to_byteaddress_and_device_atomics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_runtime_array_atomics_lower_dynamic_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_std140_blocks_lower_to_explicit_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_only_scalar_vector_matrix_blocks_lower_to_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_only_blocks_lower_to_explicit_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_member_arrays_accept_global_const_size",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_hlsl_runtime_matrix_array_stores_use_column_stores",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_std140_hlsl_output_compiles_with_dxc",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_struct_hlsl_output_compiles_with_dxc",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_struct_array_hlsl_output_compiles_with_dxc",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_struct_aggregate_hlsl_output_compiles_with_dxc",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_struct_aggregate_array_hlsl_output_compiles_with_dxc",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_aggregate_layout_helper_hlsl_output_compiles_with_dxc",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_readonly_aggregate_hlsl_output_compiles_with_dxc",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_aggregate_leaf_compound_hlsl_output_compiles_with_dxc",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_atomics_hlsl_output_compiles_with_dxc"
+          ]
+        },
         "opengl": {"status": "supported"},
-        "metal": {"status": "partial"},
-        "vulkan": {"status": "unknown"},
+        "metal": {
+          "status": "partial",
+          "notes": "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, struct arrays, layout-distinct aggregate helpers, readonly aggregate helpers, nested aggregate leaf compound stores, aggregate struct load/store with fixed array fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types.",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_uint_atomics_lower_to_byteaddress_and_device_atomics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_bool_members_lower_as_uint_slots",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_struct_members_lower_as_leaf_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_struct_arrays_lower_as_leaf_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_struct_aggregates_materialize_leaf_fields",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_struct_aggregate_arrays_materialize_leaf_fields",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_readonly_aggregate_helpers_use_const_readers",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_nested_aggregate_leaf_compound_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_aggregate_helpers_distinguish_std140_and_std430_layouts",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_int_atomics_lower_to_byteaddress_and_device_atomics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_runtime_array_atomics_lower_dynamic_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_std140_blocks_lower_to_explicit_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_only_scalar_vector_matrix_blocks_lower_to_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_only_blocks_lower_to_explicit_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_fixed_member_arrays_accept_global_const_size",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_metal_runtime_matrix_arrays_use_column_offsets",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_unsupported_hlsl_layout_stays_diagnostic",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_std140_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_struct_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_struct_array_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_struct_aggregate_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_struct_aggregate_array_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_aggregate_layout_helper_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_readonly_aggregate_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_nested_aggregate_leaf_compound_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_uint_atomics_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_int_atomics_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_runtime_array_atomics_metal_output_compiles_with_xcrun_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_mixed_glsl_ssbo_unsupported_atomics_metal_output_compiles_with_xcrun_metal"
+          ]
+        },
+        "vulkan": {
+          "status": "partial",
+          "notes": "GLSL-style layout(...) buffer blocks, explicit @glsl_buffer_block declarations, and buffer-qualified runtime-array declarations lower to SPIR-V BufferBlock Uniform descriptors with descriptor set/binding decorations, std430/std140/scalar member offsets and array/matrix strides for scalar/vector/matrix/fixed-array/runtime-array members, direct block member access, fixed block descriptor arrays across layouts, runtime block descriptor arrays with RuntimeDescriptorArray/SPV_EXT_descriptor_indexing, single-member descriptor arrays, inlined helper parameters, buffer_load/buffer_store helper lowering, layout-compatible fixed aggregate load/store/return conversion, runtime-array element aggregate copy, readonly/writeonly/coherent/volatile/restrict member decorations with direct/helper diagnostics, deterministic diagnostics for invalid whole runtime-array aggregate values, scalar int/uint member and runtime-array atomics, and spirv-as/spirv-val coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_blocks_emit_spirv_buffer_block_layout",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_std140_layout_emits_spirv_offsets_and_strides",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_mixed_std430_std140_array_strides_do_not_conflict",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_scalar_layout_emits_scalar_offsets_and_strides",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_mixed_std430_scalar_layouts_do_not_conflict",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_std140_aggregate_load_store_converts_layout_types",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_std140_aggregate_return_converts_layout_type",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_fixed_arrays_preserve_layout_specific_types",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_runtime_arrays_request_descriptor_indexing",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_runtime_array_aggregate_values_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_runtime_array_element_aggregate_copy_is_supported",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_array_declarations_lower_to_buffer_blocks",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_parameters_inline_with_accesses",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_single_member_descriptor_arrays_preserve_accesses",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_atomics_emit_spirv_atomic_operations",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_glsl_buffer_block_compute_validates_with_spirv_tools",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_scalar_buffer_block_compute_validates_with_spirv_tools",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_glsl_buffer_block_arrays_validate_with_spirv_tools",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_storage_buffer_atomics_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "GLSL layout(...) buffer blocks, direct buffer array declarations, and explicit @glsl_buffer_block variables emit compile-safe Mojo value placeholders with resource metadata comments for layout, set/binding, and access. Fixed-array member access compile-smokes, readonly assignment diagnostics, and buffer-namespace binding collision diagnostics are covered; std140/std430 layout conversion, runtime-array storage semantics, atomics, and native GPU buffer ABI remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_glsl_buffer_block_metadata_comments_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen"
+          ]
+        },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Storage-image, structured-buffer, and byte-address-buffer readonly/writeonly access metadata is tracked for Slang resources; invalid reads, writes, appends, and atomics emit deterministic diagnostics. Coherent/volatile/restrict-style resource qualifiers and compiler-backed validation are not fully audited yet.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics"
+          ]
+        }
       }
     },
     {
@@ -355,13 +950,64 @@
       "name": "Resource memory qualifiers",
       "description": "Translate readonly/writeonly/coherent/volatile/restrict-style resource qualifiers where the target has an equivalent.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
-        "vulkan": {"status": "unknown"},
+        "directx": {
+          "status": "supported",
+          "notes": "coherent/globallycoherent lower to HLSL globallycoherent; readonly/writeonly enforce storage-image access validation; qualifiers without an HLSL resource equivalent do not leak as semantics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_supported",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_storage_image_access_attributes_validate_without_semantics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_storage_image_access_rejects_invalid_operations"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "GLSL-native resource qualifiers are preserved on globals and helper parameters; globallycoherent lowers to the closest GLSL coherent qualifier.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_supported",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_storage_image_access_attributes_emit_parameter_qualifiers",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_preserves_storage_image_parameter_memory_qualifiers",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_storage_image_access_rejects_invalid_operations"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "readonly/writeonly lower to Metal texture access modes; qualifiers without a Metal texture equivalent do not leak as attributes.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_cross_backend_properties.py::def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_supported",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_storage_image_access_attributes_select_texture_access",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_storage_image_access_rejects_invalid_operations"
+          ]
+        },
+        "vulkan": {
+          "status": "partial",
+          "notes": "Storage-image readonly/writeonly/coherent/volatile/restrict qualifiers lower to validated SPIR-V variable decorations with direct and interprocedural invalid read/write/atomic diagnostics; StructuredBuffer, RWStructuredBuffer, and GLSL buffer-block helper parameters inline to avoid invalid Uniform pointer calls while preserving read/write access diagnostics; GLSL buffer-block qualifiers lower to BufferBlock member decorations with direct/helper/atomic access diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_storage_image_memory_qualifiers_emit_decorations_and_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_storage_image_helper_access_contracts_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_storage_buffer_memory_qualifiers_emit_member_decorations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_helper_parameters_inline_with_accesses",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_structured_buffer_helper_parameter_access_contracts_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_parameter_access_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_direct_member_contracts_propagate",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_single_member_descriptor_arrays_preserve_accesses",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_single_member_descriptor_arrays_access_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_atomics_emit_diagnostics_for_invalid_targets",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_glsl_buffer_block_helper_atomics_require_read_write_access",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_resource_memory_qualifiers_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "readonly/writeonly access metadata is preserved in resource metadata comments and validated for Mojo image, indexed image arrays, image-atomic, buffer, indexed buffer arrays, byte-address member calls, and GLSL buffer-block placeholder reads/writes; coherent/globallycoherent/volatile/restrict are preserved as metadata comments because Mojo has no target-native equivalent in this placeholder backend.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_memory_qualifier_metadata_and_access_validation_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_array_access_qualifiers_apply_to_indexed_mojo_resources",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_image_atomics_require_read_write_access_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -378,7 +1024,15 @@
         "vulkan": {"status": "partial"},
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Basic sampled texture and shadow-sampler calls lower to compile-smoke Mojo placeholder helpers across common dimensions, including HLSL sampled texture aliases, SamplerState aliases, and split-sampler member calls. Real sampler filtering and texture memory semantics are not implemented.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_sampled_texture_aliases_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "partial"}
       }
@@ -389,13 +1043,58 @@
       "name": "Texture LOD, gradient, and offset operations",
       "description": "Lower explicit LOD, gradient, bias, and offset texture operations.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
-        "vulkan": {"status": "unknown"},
+        "directx": {
+          "status": "supported",
+          "notes": "Covers explicit LOD, gradient, bias, 2D/array offsets, cube/cube-array gradients, 3D offsets, resource arrays, and deterministic diagnostics for target-invalid offset forms.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_texture_sample_offset_variants_use_sample_offsets",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_cube_array_texture_grad_gather_keep_sampler_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_cube_texture_sample_offsets_emit_diagnostics_without_samplers",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fragment_texture_3d_sample_offset_validates_with_dxc"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Covers explicit LOD, gradient, bias, 2D/array offsets, cube/cube-array gradients, 3D offsets, resource arrays, and deterministic diagnostics for target-invalid offset forms.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_texture_lod_grad_offsets_filter_sampler_arguments",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_cube_array_texture_grad_gather_filter_sampler_arguments",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_cube_texture_sample_offsets_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fragment_texture_3d_sample_offset_validates_with_glslang"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Covers target-valid explicit LOD, gradient, bias, 2D/array offsets, cube/cube-array gradients, 3D offsets, resource arrays, and deterministic diagnostics for target-invalid offset, 1D LOD/query, and 1D bias/gradient forms.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_sample_offset_variants_use_sample_offsets",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_cube_array_texture_grad_gather_uses_cube_gradients",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_cube_texture_sample_offsets_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_sampler_1d_sampling_options_emit_target_diagnostics",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_fragment_texture_3d_sample_offset_compiles_with_metal"
+          ]
+        },
+        "vulkan": {
+          "status": "partial",
+          "notes": "Covers explicit LOD, gradient, offset, combined LOD/gradient-offset, fragment bias operands, compute-stage bias diagnostics, and shadow compare LOD/gradient-offset forms. Non-bias forms have spirv-as/spirv-val coverage; projected forms are tracked separately.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_lod_and_grad_emit_explicit_lod_sampling",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_bias_variants_emit_spirv_bias_operands",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_texture_bias_variants_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "LOD, gradient, and offset forms lower to compile-smoke Mojo placeholder helpers; target-valid coordinate and sampler-state semantics are not complete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_placeholder_builtins_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -434,10 +1133,24 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_forms"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "Covers projected color sampling for 2D, 2D-array, 3D, and cube textures plus projected 2D, 2D-array, and cube shadow comparisons across offset, LOD, gradient, and fragment bias variants. Non-bias projected forms have spirv-as/spirv-val coverage; cube-array projection is rejected deterministically.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_projected_texture_operations_emit_divided_spirv_coordinates",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_projected_shadow_compare_operations_emit_dref_sampling",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_projected_cube_texture_operations_and_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_bias_variants_emit_spirv_bias_operands",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Projected texture forms lower to compile-smoke Mojo placeholder helpers; complete target projection semantics are not implemented.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_placeholder_builtins_compile_with_mojo"]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -448,13 +1161,50 @@
       "name": "Texture gather operations",
       "description": "Lower gather, gather-offset, and gather-offsets texture operations.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
-        "vulkan": {"status": "unknown"},
+        "directx": {
+          "status": "supported",
+          "notes": "Covers gather, gather-offset, gather-offsets, dynamic component selection, resource arrays, cube/cube-array gather, and deterministic diagnostics for unsupported dimensions and offset forms.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_texture_gather_offset_variants_keep_sampler_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_cube_texture_gather_offsets_emit_diagnostics_without_samplers",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fragment_texture_gather_offset_validates_with_dxc"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Covers gather, gather-offset, gather-offsets, dynamic component selection, resource arrays, cube/cube-array gather, and deterministic diagnostics for unsupported dimensions and offset forms.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_texture_gather_offset_variants_filter_sampler_arguments",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_cube_texture_gather_offsets_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fragment_texture_gather_offset_validates_with_glslang"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Covers gather, gather-offset, gather-offsets, dynamic component selection, resource arrays, cube/cube-array gather, and deterministic diagnostics for unsupported dimensions and offset forms.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_gather_offset_variants_use_metal_overloads",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_cube_texture_gather_offsets_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_fragment_texture_gather_offset_compiles_with_metal"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "Covers gather, gather-offset, gather-offsets, dynamic component selection, resource arrays, and shadow gather-compare forms with spirv-as/spirv-val coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_offset_gather_and_fetch_emit_image_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_gather_offsets_emit_lane_specific_spirv_gathers",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Gather and gather-offset forms lower to compile-smoke Mojo placeholder helpers; component selection and target texture semantics are placeholder-only.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_placeholder_builtins_compile_with_mojo"]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -465,13 +1215,52 @@
       "name": "Shadow compare texture operations",
       "description": "Lower shadow sampler compare operations, including offset and LOD variants where target semantics allow them.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
-        "vulkan": {"status": "unknown"},
+        "directx": {
+          "status": "supported",
+          "notes": "Covers comparison samplers, shadow resource arrays, compare offsets, gather-compare, LOD/gradient compare variants where HLSL permits them, and deterministic diagnostics for target-invalid combinations.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_shadow_gather_compare_offsets_use_comparison_samplers",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_shadow_compare_lod_grad_use_comparison_samplers",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fragment_shadow_compare_lod_grad_validates_with_dxc"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Covers shadow samplers, shadow resource arrays, compare offsets, gather-compare, LOD/gradient compare variants where GLSL permits them, and deterministic diagnostics for target-invalid combinations.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_shadow_compare_lod_grad_filter_sampler_arguments",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fragment_shadow_compare_lod_grad_validates_with_glslang"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Covers depth textures, shadow resource arrays, compare offsets, gather-compare, LOD/gradient compare variants where Metal permits them, and deterministic diagnostics for target-invalid combinations.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_shadow_gather_compare_offsets_use_depth_overloads",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_shadow_compare_lod_grad_use_depth_overloads",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_fragment_shadow_compare_lod_grad_compiles_with_metal"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "Covers shadow comparison sampling, LOD/gradient/offset variants, gather-compare, resource arrays, and explicit sampler arguments with spirv-as/spirv-val coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_emits_dref_sampling",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Shadow compare texture calls lower to Float32-returning Mojo placeholder helpers including LOD/offset/gather-compare variants; native depth-compare semantics remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_placeholder_builtins_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -512,12 +1301,39 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_array_shadow_texture_query_functions"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "Covers textureSize, imageSize, textureQueryLevels, textureQueryLod, textureSamples, imageSamples, array/cube-array coordinate trimming, and multisample query forms with spirv-as/spirv-val coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_query_shapes_for_array_cube_and_multisample_samplers",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texture_samples_query_emits_image_query_samples",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_storage_image_samples_query_emits_image_query_samples",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Texture size, level, LOD-query, and multisample sample-count-style forms lower to compile-smoke Mojo placeholder helpers; target-invalid query validation is incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_query_and_image_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_placeholder_builtins_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Covers textureSize, imageSize, textureQueryLevels, textureQueryLod, textureSamples, imageSamples, array/cube-array, shadow, multisample, formatted image, and user-symbol-collision helper forms using Slang GetDimensions/CalculateLevelOfDetail helpers. slangc-backed coverage and some target-invalid query diagnostics remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_query_builtins_emit_slang_get_dimensions_helpers",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_texture_query_lod_emits_slang_lod_methods",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_queries_on_texture_arrays_emit_slang_helpers",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_queries_emit_typed_slang_helpers",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_query_helpers_avoid_user_symbol_collisions"
+          ]
+        }
       }
     },
     {
@@ -556,12 +1372,39 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_cube_texel_fetches_emit_diagnostics"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "Covers regular, array, fetch-offset, and multisample texelFetch lowering to OpImageFetch with spirv-as/spirv-val coverage, plus deterministic diagnostics for multisample fetch-offset and cube/cube-array target-invalid forms.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_offset_gather_and_fetch_emit_image_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texel_fetch_uses_sample_operand",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texel_fetch_offset_emits_diagnostic",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_cube_texel_fetches_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Texel fetch forms lower to compile-smoke Mojo placeholder helpers for regular and multisample resources; detailed target-invalid fetch diagnostics are incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_query_and_image_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Covers 1D, 1D-array, 2D, 2D-array, and multisample texelFetch lowering to Slang Load or multisample subscript forms, plus explicit sampler fetches and resource-array fetch paths. Cube/cube-array and some target-invalid offset diagnostics remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_one_dimensional_resources_emit_slang_methods_and_helpers",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_explicit_sampler_texel_fetch_emits_combined_slang_methods",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_nested_resource_arrays_emit_slang_queries_and_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_calls_in_control_flow_emit_slang_operations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_calls_in_loops_emit_slang_operations"
+          ]
+        }
       }
     },
     {
@@ -570,13 +1413,55 @@
       "name": "Multisample texture operations",
       "description": "Lower multisample texture fetch, query, and comparison forms with deterministic diagnostics for unsupported combinations.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
-        "vulkan": {"status": "unknown"},
+        "directx": {
+          "status": "supported",
+          "notes": "Covers 2D and 2D-array multisample fetches, sample-count and level queries, resource arrays, and deterministic diagnostics for unsupported sample, offset, LOD, compare, and gather combinations.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_texture_samples_queries_use_helpers",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_sampling_operations_emit_diagnostics_without_samplers",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_compare_operations_emit_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Covers 2D and 2D-array multisample fetches, sample-count and level queries, resource arrays, and deterministic diagnostics for unsupported sample, offset, LOD, compare, and gather combinations.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_multisample_texture_samples_queries_keep_builtin",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_multisample_sampling_operations_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_multisample_compare_operations_emit_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Covers 2D and 2D-array multisample fetches, sample-count and level queries, resource arrays, and deterministic diagnostics for unsupported sample, offset, LOD, compare, and gather combinations.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_multisample_texture_samples_queries_use_get_num_samples",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_multisample_sampling_operations_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_multisample_compare_operations_emit_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types"
+          ]
+        },
+        "vulkan": {
+          "status": "partial",
+          "notes": "Covers multisample texture fetches and sample-count/size queries for 2D and 2D-array resources with spirv-as/spirv-val coverage. Unsupported multisample compare/gather diagnostics are not complete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texel_fetch_uses_sample_operand",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multisample_texture_samples_query_emits_image_query_samples",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Multisample texture fetch and query forms lower to compile-smoke Mojo placeholder helpers; advanced sampling/gather/compare forms on multisample textures emit deterministic diagnostics. Real multisample memory semantics remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_builtins_reject_invalid_mojo_resources"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -590,10 +1475,27 @@
         "directx": {"status": "partial", "notes": "Several unsupported combinations intentionally emit diagnostics."},
         "opengl": {"status": "partial", "notes": "Several unsupported combinations intentionally emit diagnostics."},
         "metal": {"status": "partial", "notes": "Several unsupported combinations intentionally emit diagnostics."},
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "partial",
+          "notes": "Covers LOD, gradient, offset, projected sampling, fragment bias operands, gather, shadow compare, texel fetch, query, and multisample fetch/query forms. Most non-fragment-only forms have spirv-as/spirv-val coverage; sparse/min-lod style advanced operands remain untracked.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_lod_and_grad_emit_explicit_lod_sampling",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_projected_texture_operations_emit_divided_spirv_coordinates",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_bias_variants_emit_spirv_bias_operands",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shadow_texture_compare_explicit_variants_emit_dref_operations",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_texture_operations_validate_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Advanced texture operations lower to compile-smoke Mojo placeholder helpers across LOD, gradients, offsets, projection, gather, compare, and query families; image/non-texture targets, multisample targets for advanced sampling, and non-shadow compare targets emit deterministic diagnostics. Real target texture semantics are still placeholders.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_placeholder_builtins_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_builtins_reject_invalid_mojo_resources"
+          ]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -604,15 +1506,70 @@
       "name": "Storage image load/store",
       "description": "Readable and writable image resources with explicit formats and access qualifiers.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
-        "vulkan": {"status": "unknown"},
+        "directx": {
+          "status": "supported",
+          "notes": "Covers typed RWTexture load/store for scalar, vector, narrow, explicit-format, array, access-qualified, and rasterizer-ordered images, with deterministic diagnostics for incompatible access.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_storage_image_load_store",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_explicit_rg_image_formats",
+            "tests/test_backend/test_directx/test_codegen.py::def test_codegen_rasterizer_ordered_resources_roundtrip",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_hlsl_rasterizer_ordered_resources_compile_with_dxc",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_compute_rg_image_validates_with_dxc"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Covers image load/store for scalar, vector, narrow, explicit-format, array, and access-qualified images, with deterministic diagnostics for incompatible access.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_storage_image_load_store",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_explicit_rg_image_formats",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_compute_rg_image_validates_with_glslang"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Covers texture read/write for scalar, vector, narrow, explicit-format, array, and access-qualified images, with deterministic diagnostics for incompatible access.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_storage_image_load_store",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_explicit_rg_image_formats",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_compute_rg_image_compiles_with_metal"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "Covers OpImageRead/OpImageWrite for scalar, vector, explicit-format, array, and multisample storage images, with spirv-as/spirv-val coverage for resource-heavy compute shaders.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_resource_operations_emit_spirv_image_instructions",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_formatted_image_load_uses_matching_spirv_type",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_complex_resource_compute_validates_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Storage image load/store and size operations lower to compile-smoke Mojo placeholder helpers for float, signed, unsigned, and multisample images; HLSL RWTexture and RasterizerOrderedTexture aliases plus member Load/Store/GetDimensions lower to those helpers. Access qualifiers and native image memory semantics are incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_query_and_image_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rw_texture_aliases_emit_mojo_image_helpers",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rw_texture_aliases_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rasterizer_ordered_texture_aliases_emit_mojo_image_helpers",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rasterizer_ordered_texture_aliases_compile_with_mojo"
+          ]
+        },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Covers RWTexture load/store for scalar, vector, explicit-format, array, formatted-image, and multisample storage images using Slang subscript access, plus typed helper generation and deterministic readonly/writeonly access diagnostics. Compiler-backed coverage remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_load_store_emit_slang_subscript_access",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_explicit_image_formats_emit_slang_storage_element_types",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_arrays_preserve_expression_sizes",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_queries_emit_typed_slang_helpers"
+          ]
+        }
       }
     },
     {
@@ -621,15 +1578,66 @@
       "name": "Image atomics",
       "description": "Atomic operations on image resources.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
-        "vulkan": {"status": "unknown"},
+        "directx": {
+          "status": "supported",
+          "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported dimensions, including rasterizer-ordered textures, and emits deterministic diagnostics for unsupported formats and multisample atomics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_integer_image_atomic_operations",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_integer_image_atomic_compare_swap",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_hlsl_rasterizer_ordered_resources_compile_with_dxc",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_compute_integer_image_atomics_validates_with_dxc"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported dimensions and emits deterministic diagnostics for unsupported formats and argument shapes.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_integer_image_atomic_operations",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_integer_image_atomic_compare_swap",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_compute_integer_image_atomics_validates_with_glslang"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Covers integer texture atomics add/min/max/bitwise/exchange/compare-exchange across supported dimensions and emits deterministic diagnostics for unsupported formats and multisample atomics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_integer_image_atomic_operations",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_integer_image_atomic_compare_swap",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_compute_integer_image_atomics_compiles_with_metal"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "Covers integer storage-image atomic add/min/max/bitwise/exchange/compare-exchange through OpImageTexelPointer and OpAtomic instructions, with spirv-as/spirv-val coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_integer_image_atomics_emit_spirv_atomic_operations",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_integer_image_atomics_validates_with_spirv_tools"
+          ]
+        },
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Integer image atomic add/min/max/bitwise/exchange/compare-exchange forms lower to compile-smoke Mojo placeholder helpers, float-image atomics are rejected, and readonly/writeonly image atomics emit deterministic diagnostics. Native atomic memory semantics are not implemented.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_integer_image_atomic_placeholders_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_image_atomics_require_read_write_access_for_mojo_codegen"
+          ]
+        },
         "rust": {"status": "unknown"},
-        "slang": {"status": "unknown"}
+        "slang": {
+          "status": "partial",
+          "notes": "Covers integer image atomic add/min/max/bitwise/exchange/compare-exchange across supported RWTexture dimensions through Slang Interlocked helper methods, direct AtomicOpNode lowering, expression-valued atomic preludes where evaluation order is preserved, loop-context diagnostics where hoisting would change semantics, image arrays, deterministic readonly/writeonly access diagnostics, and diagnostics for unsupported multisample/vector formats. Float atomics and compiler-backed coverage remain incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_integer_image_atomics_emit_slang_interlocked_helpers",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_integer_image_array_atomics_preserve_expression_indices",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_image_expression_atomics_in_loop_contexts_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_unsupported_image_atomics_emit_slang_diagnostic_stubs",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_direct_atomic_op_nodes_emit_slang_image_atomic_helpers"
+          ]
+        }
       }
     },
     {
@@ -638,13 +1646,41 @@
       "name": "Multisample storage images",
       "description": "Represent multisample storage images and report unsupported load/store/atomic combinations deterministically.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
+        "directx": {
+          "status": "supported",
+          "notes": "Represents multisample storage images as read-capable SRVs, preserves size/sample queries and arrays, and emits deterministic diagnostics for DirectX-unsupported stores and atomics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_storage_images_emit_srv_reads_and_diagnostics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_multisample_storage_image_arrays_emit_srv_reads_and_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Covers multisample image load/store, sample-count and size queries, arrays, typed formats, and integer atomics where GLSL permits them.",
+          "evidence": [
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_multisample_image_query_helpers_cover_vector_integer_formats",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_glsl_multisample_storage_validates_with_glslangvalidator"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Represents multisample storage images as read-capable textures, preserves size/sample queries and arrays, and emits deterministic diagnostics for Metal-unsupported stores and atomics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_multisample_storage_images_emit_read_textures_and_diagnostics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnostics",
+            "tests/test_backend/test_GLSL/test_resources_and_atomics.py::def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types"
+          ]
+        },
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "unknown"},
         "hip": {"status": "unknown"},
-        "mojo": {"status": "unknown"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Multisample image load/store placeholders, arrays, and size/sample coordinates compile in Mojo; native multisample storage image semantics and validation are incomplete.",
+          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo"]
+        },
         "rust": {"status": "unknown"},
         "slang": {"status": "unknown"}
       }
@@ -718,19 +1754,196 @@
       }
     },
     {
+      "id": "language.synchronization",
+      "category": "language",
+      "name": "Synchronization and memory barriers",
+      "description": "Lower barrier, memoryBarrier, and workgroupBarrier calls to backend-native synchronization intrinsics.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "barrier/workgroupBarrier lower to GroupMemoryBarrierWithGroupSync; memoryBarrier lowers to AllMemoryBarrier; user-defined functions with the same names are preserved.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_user_defined_synchronization_names_are_not_lowered",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_hlsl_compute_synchronization_compiles_with_dxc"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "workgroupBarrier lowers to GLSL barrier; barrier and memoryBarrier remain native; user-defined workgroupBarrier functions are preserved.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_user_defined_workgroup_barrier_is_not_lowered",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_glsl_compute_synchronization_validates_with_glslangvalidator"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "barrier/workgroupBarrier, groupMemoryBarrier, and memoryBarrierShared lower to threadgroup barriers; memoryBarrier, memoryBarrierBuffer, and deviceMemoryBarrier lower to device-memory barriers; memoryBarrierImage lowers to a texture-memory barrier; allMemoryBarrier lowers to combined device/threadgroup/texture flags; threadgroup atomic arrays and GLSL buffer-block atomic compare helpers use address-form atomic operations across helper/kernel barrier ordering; atomic compare-exchange lowers target and expected-value address forms to toolchain-compatible Metal intrinsics, with deterministic diagnostics for unsupported expected-pointer address spaces; user-defined functions with the same names are preserved.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_synchronization_builtins_lower_to_threadgroup_barriers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_threadgroup_atomic_array_elements_use_address_arguments",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_atomic_compare_exchange_addresses_targets_and_expected_values",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_device_atomic_compare_exchange_preserves_expected_address_space",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_glsl_buffer_block_atomic_compare_helpers_cover_signed_and_parameters",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_user_defined_synchronization_names_are_not_lowered",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_threadgroup_helper_barriers_compile_with_metal",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_threadgroup_atomic_barriers_compile_with_metal",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_device_atomic_compare_exchange_compile_with_metal",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_buffer_block_atomic_compare_compile_with_metal",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_atomic_compare_exchange_compile_with_metal",
+            "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_metal_compute_synchronization_compiles_with_xcrun_metal"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "barrier/workgroupBarrier lower to OpControlBarrier; groupMemoryBarrier and memoryBarrierShared lower to workgroup-scoped OpMemoryBarrier, memoryBarrierBuffer and memoryBarrierImage lower to device-scoped buffer/image memory barriers, memoryBarrier/allMemoryBarrier lower to device-scoped all-memory barriers, user-defined functions with synchronization names are preserved, and spirv-as/spirv-val coverage exists.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_synchronization_builtins_emit_spirv_barriers",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_memory_barrier_variants_emit_scoped_spirv_barriers",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_user_defined_synchronization_names_are_not_lowered",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_synchronization_compute_validates_with_spirv_tools"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "notes": "Native CUDA barrier and cooperative-groups thread-block sync forms round-trip to CrossGL workgroup barriers, with unsupported non-workgroup cooperative scopes, cooperative-groups async copy/wait calls, CUDA barrier/pipeline async-copy helper calls, and CUDA primitive pipeline intrinsics emitted as expression-safe diagnostics.",
+          "evidence": [
+            "tests/test_backend/test_CUDA/test_codegen.py::def test_cooperative_groups_sync_factory_and_member_aliases_convert",
+            "tests/test_backend/test_CUDA/test_codegen.py::def test_cooperative_groups_async_copy_wait_emit_diagnostics",
+            "tests/test_backend/test_CUDA/test_codegen.py::def test_cuda_barrier_pipeline_async_copy_emit_diagnostics",
+            "tests/test_backend/test_CUDA/test_codegen.py::def test_cuda_pipeline_primitive_intrinsics_emit_diagnostics",
+            "tests/test_backend/test_CUDA/test_codegen.py::def test_unsupported_cooperative_group_rank_is_expression_safe"
+          ]
+        },
+        "hip": {"status": "partial"},
+        "mojo": {
+          "status": "partial",
+          "notes": "barrier/workgroupBarrier and memoryBarrier lower to compile-smoke Mojo placeholder helpers, while user-defined functions with those names are preserved.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_synchronization_builtins_lower_to_compile_smoke_helpers",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_user_defined_synchronization_names_are_not_lowered"
+          ]
+        },
+        "rust": {"status": "unknown"},
+        "slang": {"status": "supported"}
+      }
+    },
+    {
+      "id": "language.wave_intrinsics",
+      "category": "language",
+      "name": "Wave/subgroup intrinsics",
+      "description": "Lower CrossGL Wave* subgroup operations including lane queries, reductions, scans, votes, ballots, and lane reads.",
+      "support": {
+        "directx": {
+          "status": "partial",
+          "notes": "WaveOpNode calls are preserved as native HLSL Wave* intrinsics. Current tests cover pass-through for WaveActiveSum; broader Shader Model wave validation is still needed.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_wave_and_rayquery_intrinsics_codegen"
+          ]
+        },
+        "opengl": {
+          "status": "unsupported",
+          "notes": "The frontend parses WaveOpNode and the OpenGL backend currently preserves the HLSL Wave* spelling, but native GLSL subgroup lowering and validator coverage are not implemented.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_and_mesh_intrinsics"
+          ]
+        },
+        "metal": {
+          "status": "unsupported",
+          "notes": "The Metal backend currently preserves WaveOpNode spellings rather than lowering to simdgroup intrinsics.",
+          "evidence": ["crosstl/translator/codegen/metal_codegen.py::WaveOpNode"]
+        },
+        "vulkan": {
+          "status": "partial",
+          "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, QuadRead*, WaveMatch, and WaveMultiPrefix* to SPIR-V GroupNonUniform operations with spirv-as/spirv-val coverage where tools are available. Dynamic or out-of-range quad lanes and invalid multi-prefix masks emit deterministic diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_lane_intrinsics_emit_subgroup_builtins",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_intrinsics_emit_group_non_uniform_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_quad_wave_intrinsics_emit_group_non_uniform_quad_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_quad_read_lane_requires_literal_lane_index",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_match_and_multi_prefix_emit_partitioned_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_multi_prefix_requires_uvec4_ballot",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_unsupported_wave_intrinsics_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_wave_intrinsics_compute_validates_with_spirv_tools"
+          ]
+        },
+        "cuda": {"status": "unknown"},
+        "hip": {"status": "unknown"},
+        "mojo": {
+          "status": "validated_rejection",
+          "notes": "Mojo has no target-native subgroup ABI in this backend; WaveOpNode forms are rejected deterministically instead of stringifying unsupported IR.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_wave_intrinsics_are_rejected_for_mojo_codegen"
+          ]
+        },
+        "rust": {"status": "unknown"},
+        "slang": {
+          "status": "partial",
+          "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, QuadRead*, WaveMatch, and WaveMultiPrefix* forms to native Slang/HLSL wave intrinsics with deterministic arity diagnostics. slangc-backed coverage is optional and skips when slangc is unavailable locally.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsics_lower_to_native_slang_calls",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsics_compile_with_slangc_if_available",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsic_invalid_arities_emit_slang_diagnostics"
+          ]
+        }
+      }
+    },
+    {
       "id": "language.match",
       "category": "language",
       "name": "Match/pattern lowering",
       "description": "CrossGL match expressions and pattern arms.",
       "support": {
-        "directx": {"status": "partial"},
-        "opengl": {"status": "partial"},
-        "metal": {"status": "partial"},
+        "directx": {
+          "status": "supported",
+          "notes": "Covers switch-lowerable literal/wildcard arms, guarded if-chain arms, identifier bindings, struct fields, enum path and payload patterns, generic enum matches, match expressions, scoped case bodies, and shader validation with texture/image resources.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_match_literal_and_wildcard_arms_lower_to_switch",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_generic_enum_match_expression_initializes_vector_local",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_compute_do_while_switch_match_image_validates_with_dxc"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Covers switch-lowerable literal/wildcard arms, guarded if-chain arms, identifier bindings, struct fields, enum path and payload patterns, generic enum matches, match expressions, scoped case bodies, and shader validation with texture/image resources.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_match_literal_and_wildcard_arms_lower_to_switch",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_generic_enum_match_expression_initializes_vector_local",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_compute_do_while_switch_match_image_validates_with_glslang"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "Covers switch-lowerable literal/wildcard arms, guarded if-chain arms, identifier bindings, struct fields, enum path and payload patterns, generic enum matches, match expressions, scoped case bodies, and shader validation with texture/image resources.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_match_literal_and_wildcard_arms_lower_to_switch",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_generic_enum_match_expression_initializes_vector_local",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_compute_do_while_switch_match_image_compiles_with_metal"
+          ]
+        },
         "vulkan": {"status": "unknown"},
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "partial"},
-        "rust": {"status": "supported"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Unguarded literal/wildcard match arms lower to condition chains; guarded arms and richer pattern payloads are rejected.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_statement_lowers_to_mojo_condition_chain",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_guarded_arm_is_rejected_for_mojo_codegen"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "notes": "Rust lowering covers literal/wildcard arms, guarded arms, identifier bindings, struct fields, enum path and payload patterns, generic enum matches, struct-like enum variants, target-typed struct-like generic enum constructor inference, match expressions, scoped case bodies, and non-Copy generic enum payload move/clone planning.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_generated_rust_rich_match_patterns_smoke_compile_with_rustc",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_non_copy_generic_enum_variant_returns_and_match_arms_compile",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_non_copy_generic_struct_like_enum_variants_and_guards_compile",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_generic_struct_like_enum_variant_locals_infer_target_type_compile"
+          ]
+        },
         "slang": {"status": "partial"}
       }
     },
@@ -780,7 +1993,20 @@
         "vulkan": {"status": "partial"},
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
-        "mojo": {"status": "partial"},
+        "mojo": {
+          "status": "partial",
+          "notes": "Mojo codegen validates several unsupported enum, parameter/return semantic, buffer access/member-method, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_payload_enums_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_buffer_operations_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_guarded_arm_is_rejected_for_mojo_codegen"
+          ]
+        },
         "rust": {"status": "partial"},
         "slang": {"status": "partial"}
       }

@@ -1,5 +1,7 @@
 """CrossGL-to-GLSL code generator."""
 
+from copy import deepcopy
+
 from ..ast import (
     AssignmentNode,
     ArrayNode,
@@ -8,12 +10,12 @@ from ..ast import (
     BlockNode,
     BreakNode,
     ContinueNode,
+    ConstructorNode,
     DoWhileNode,
     ForInNode,
     ForNode,
     FunctionCallNode,
     IfNode,
-    LiteralPatternNode,
     LoopNode,
     MatchNode,
     MemberAccessNode,
@@ -30,11 +32,9 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
     WhileNode,
-    WildcardPatternNode,
 )
 from .array_utils import (
     parse_array_type,
-    format_array_type,
     format_c_style_array_declaration,
     split_array_type_suffix,
     get_array_size_from_node,
@@ -65,17 +65,61 @@ from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
     collect_stage_entry_reserved_function_names,
+    collect_stage_local_structs,
+    collect_stage_local_variables,
     compute_local_size,
+    deduplicate_named_declarations,
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
     stage_matches,
 )
 from .resource_arrays import collect_resource_array_size_hints
+from .enum_utils import (
+    collect_enum_type_names,
+    collect_enum_struct_variant_fields,
+    collect_enum_variant_constructor_fields,
+    collect_enum_variant_constructors,
+    collect_enum_variant_constants,
+    collect_generic_enum_specialization_member_types,
+    collect_generic_enum_specializations,
+    collect_generic_enum_struct_definitions,
+    collect_generic_enum_variant_constants,
+    collect_plain_enums,
+    collect_struct_payload_enums,
+    enum_value_expression,
+    generate_enum_constructor_expression,
+    generate_generic_enum_constructor_functions,
+    generate_generic_enum_constants,
+    generate_generic_enum_structs,
+    generate_enum_constructor_call,
+    generate_enum_constructor_functions,
+    generate_enum_constants,
+    generate_enum_structs,
+    generic_enum_specialized_type_name,
+    infer_enum_constructor_type,
+    sanitize_type_name,
+)
+from .generic_struct_utils import (
+    collect_generic_struct_definitions,
+    collect_generic_struct_specialization_member_types,
+    collect_generic_struct_specializations,
+    generate_generic_structs,
+    generate_struct_constructor_expression,
+    generic_struct_specialized_type_name,
+    infer_struct_constructor_type,
+)
+from .generic_function_utils import (
+    generate_numeric_trait_method_call,
+    generate_static_generic_numeric_call,
+    generic_function_call_name,
+    generic_function_emission_list,
+    generic_function_parameters,
+    numeric_trait_method_result_type,
+    prepare_generic_function_specializations,
+)
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .image_access_contracts import (
-    TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES,
-    TEXTURE_GATHER_INTRINSIC_NAMES,
     collect_function_image_access_requirements,
     collect_function_parameter_names,
     default_storage_image_channel_count,
@@ -140,7 +184,6 @@ from .image_access_contracts import (
     is_texture_compare_lod_operation,
     is_texture_compare_offset_operation,
     is_texture_gather_compare_operation,
-    is_texture_gather_compare_offset_operation,
     is_texture_gather_basic_operation,
     is_texture_gather_operation,
     is_texture_gather_multi_offset_operation,
@@ -150,7 +193,6 @@ from .image_access_contracts import (
     is_texture_query_lod_operation,
     is_texture_samples_query_operation,
     is_texture_sampling_operation,
-    is_texture_sampling_offset_operation,
     is_texture_sample_offset_operation,
     is_two_component_image_format,
     numeric_component_count_from_type,
@@ -165,6 +207,7 @@ from .image_access_contracts import (
     projected_texture_extra_argument_count_error,
     record_explicit_image_metadata,
     should_validate_image_load_result_shape,
+    storage_image_atomic_zero_value,
     storage_image_format_store_constructor,
     storage_image_load_component_suffix,
     storage_image_store_constructors,
@@ -207,6 +250,7 @@ from .image_access_contracts import (
     unsupported_multisample_texel_fetch_offset_expression,
     unsupported_projected_texture_call_expression,
     unsupported_projected_texture_operation_error,
+    unsupported_image_atomic_expression as image_atomic_diagnostic_expression,
     unsupported_cube_texel_fetch_expression,
     unsupported_storage_image_texture_comparison_scalar_expression,
     unsupported_storage_image_texture_operation_vector_expression,
@@ -219,10 +263,236 @@ from .image_access_contracts import (
     unsupported_texture_query_lod_expression,
     unsupported_texture_samples_query_call_expression,
 )
+from .match_utils import (
+    generate_match_expression_assignment,
+    generate_ordered_conditional_match,
+    generate_switch_match,
+    infer_match_expression_result_type,
+    is_switch_lowerable_match,
+)
 
 
 class GLSLCodeGen:
     """Emit GLSL source from the shared CrossGL translator AST."""
+
+    MESH_STAGE_NAMES = {"mesh", "task", "amplification", "object"}
+    RAY_STAGE_NAMES = {
+        "ray_generation",
+        "ray_intersection",
+        "ray_any_hit",
+        "ray_closest_hit",
+        "ray_miss",
+        "ray_callable",
+        "intersection",
+        "anyhit",
+        "closesthit",
+        "miss",
+        "callable",
+    }
+    RAY_QUERY_METHOD_MAP = {
+        "Initialize": ("rayQueryInitializeEXT", None),
+        "TraceRayInline": ("rayQueryInitializeEXT", None),
+        "Proceed": ("rayQueryProceedEXT", None),
+        "Abort": ("rayQueryTerminateEXT", None),
+        "Terminate": ("rayQueryTerminateEXT", None),
+        "GenerateIntersection": ("rayQueryGenerateIntersectionEXT", None),
+        "ConfirmIntersection": ("rayQueryConfirmIntersectionEXT", None),
+        "RayTMin": ("rayQueryGetRayTMinEXT", None),
+        "RayFlags": ("rayQueryGetRayFlagsEXT", None),
+        "WorldRayOrigin": ("rayQueryGetWorldRayOriginEXT", None),
+        "WorldRayDirection": ("rayQueryGetWorldRayDirectionEXT", None),
+        "CandidateType": ("rayQueryGetIntersectionTypeEXT", "false"),
+        "CommittedType": ("rayQueryGetIntersectionTypeEXT", "true"),
+        "CandidatePrimitiveIndex": (
+            "rayQueryGetIntersectionPrimitiveIndexEXT",
+            "false",
+        ),
+        "CommittedPrimitiveIndex": (
+            "rayQueryGetIntersectionPrimitiveIndexEXT",
+            "true",
+        ),
+        "CandidateInstanceID": ("rayQueryGetIntersectionInstanceIdEXT", "false"),
+        "CommittedInstanceID": ("rayQueryGetIntersectionInstanceIdEXT", "true"),
+        "CandidateGeometryIndex": (
+            "rayQueryGetIntersectionGeometryIndexEXT",
+            "false",
+        ),
+        "CommittedGeometryIndex": (
+            "rayQueryGetIntersectionGeometryIndexEXT",
+            "true",
+        ),
+        "CandidateInstanceCustomIndex": (
+            "rayQueryGetIntersectionInstanceCustomIndexEXT",
+            "false",
+        ),
+        "CommittedInstanceCustomIndex": (
+            "rayQueryGetIntersectionInstanceCustomIndexEXT",
+            "true",
+        ),
+        "CandidateInstanceShaderBindingTableRecordOffset": (
+            "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT",
+            "false",
+        ),
+        "CommittedInstanceShaderBindingTableRecordOffset": (
+            "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT",
+            "true",
+        ),
+        "CandidateObjectRayOrigin": (
+            "rayQueryGetIntersectionObjectRayOriginEXT",
+            "false",
+        ),
+        "CandidateObjectRayDirection": (
+            "rayQueryGetIntersectionObjectRayDirectionEXT",
+            "false",
+        ),
+        "CommittedObjectRayOrigin": (
+            "rayQueryGetIntersectionObjectRayOriginEXT",
+            "true",
+        ),
+        "CommittedObjectRayDirection": (
+            "rayQueryGetIntersectionObjectRayDirectionEXT",
+            "true",
+        ),
+        "CandidateRayT": ("rayQueryGetIntersectionTEXT", "false"),
+        "CommittedRayT": ("rayQueryGetIntersectionTEXT", "true"),
+        "CandidateTriangleBarycentrics": (
+            "rayQueryGetIntersectionBarycentricsEXT",
+            "false",
+        ),
+        "CommittedTriangleBarycentrics": (
+            "rayQueryGetIntersectionBarycentricsEXT",
+            "true",
+        ),
+        "CandidateTriangleFrontFace": (
+            "rayQueryGetIntersectionFrontFaceEXT",
+            "false",
+        ),
+        "CommittedTriangleFrontFace": (
+            "rayQueryGetIntersectionFrontFaceEXT",
+            "true",
+        ),
+        "CandidateTriangleVertexPositions": (
+            "rayQueryGetIntersectionTriangleVertexPositionsEXT",
+            "false",
+        ),
+        "CommittedTriangleVertexPositions": (
+            "rayQueryGetIntersectionTriangleVertexPositionsEXT",
+            "true",
+        ),
+        "CandidateAABBOpaque": ("rayQueryGetIntersectionCandidateAABBOpaqueEXT", None),
+        "CandidateObjectToWorld": (
+            "rayQueryGetIntersectionObjectToWorldEXT",
+            "false",
+        ),
+        "CommittedObjectToWorld": (
+            "rayQueryGetIntersectionObjectToWorldEXT",
+            "true",
+        ),
+        "CandidateObjectToWorld3x4": (
+            "rayQueryGetIntersectionObjectToWorldEXT",
+            "false",
+        ),
+        "CommittedObjectToWorld3x4": (
+            "rayQueryGetIntersectionObjectToWorldEXT",
+            "true",
+        ),
+        "CandidateWorldToObject": (
+            "rayQueryGetIntersectionWorldToObjectEXT",
+            "false",
+        ),
+        "CommittedWorldToObject": (
+            "rayQueryGetIntersectionWorldToObjectEXT",
+            "true",
+        ),
+        "CandidateWorldToObject3x4": (
+            "rayQueryGetIntersectionWorldToObjectEXT",
+            "false",
+        ),
+        "CommittedWorldToObject3x4": (
+            "rayQueryGetIntersectionWorldToObjectEXT",
+            "true",
+        ),
+    }
+    RAY_QUERY_POSITION_FETCH_METHODS = {
+        "CandidateTriangleVertexPositions",
+        "CommittedTriangleVertexPositions",
+    }
+    RAY_QUERY_RAY_DESC_FIELDS = (
+        ("Origin", "origin", "rayOrigin", "RayOrigin"),
+        ("TMin", "tMin", "Tmin", "tmin"),
+        ("Direction", "direction", "rayDirection", "RayDirection"),
+        ("TMax", "tMax", "Tmax", "tmax"),
+    )
+    GLSL_LAYOUT_ATTRIBUTE_NAMES = (
+        "location",
+        "component",
+        "index",
+        "stream",
+        "xfb_buffer",
+        "xfb_offset",
+        "xfb_stride",
+    )
+    GLSL_BLEND_SUPPORT_LAYOUT_NAMES = {
+        "blend_support_multiply",
+        "blend_support_screen",
+        "blend_support_overlay",
+        "blend_support_darken",
+        "blend_support_lighten",
+        "blend_support_colordodge",
+        "blend_support_colorburn",
+        "blend_support_hardlight",
+        "blend_support_softlight",
+        "blend_support_difference",
+        "blend_support_exclusion",
+        "blend_support_hsl_hue",
+        "blend_support_hsl_saturation",
+        "blend_support_hsl_color",
+        "blend_support_hsl_luminosity",
+        "blend_support_all_equations",
+    }
+    GLSL_BARE_LAYOUT_ATTRIBUTE_NAMES = {
+        "depth_any",
+        "depth_greater",
+        "depth_less",
+        "depth_unchanged",
+        *GLSL_BLEND_SUPPORT_LAYOUT_NAMES,
+    }
+    GLSL_VARIABLE_QUALIFIER_ATTRIBUTE_NAMES = {
+        "invariant",
+        "precise",
+        "patch",
+        "flat",
+        "smooth",
+        "noperspective",
+        "centroid",
+        "sample",
+        "in",
+        "out",
+        "inout",
+        "lowp",
+        "mediump",
+        "highp",
+    }
+    GLSL_STORAGE_QUALIFIER_ATTRIBUTE_NAMES = {
+        "shared",
+        "groupshared",
+        "workgroup",
+        "taskpayloadshared",
+        "taskpayloadsharedext",
+        "task_payload_shared",
+        "raypayload",
+        "raypayloadext",
+        "raypayloadin",
+        "raypayloadinext",
+        "hitattribute",
+        "hitattributeext",
+        "callabledata",
+        "callabledataext",
+        "callabledatain",
+        "callabledatainext",
+    }
+    GLSL_PRECISION_QUALIFIERS = {"lowp", "mediump", "highp"}
+    GLSL_RESERVED_IDENTIFIERS = {"active"}
 
     def __init__(self):
         """Initialize GLSL type maps and per-generation stage/resource state."""
@@ -230,6 +500,7 @@ class GLSLCodeGen:
         self.current_sampler_parameters = set()
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
+        self.current_resource_aliases = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
         self.image_variable_accesses = {}
@@ -240,6 +511,11 @@ class GLSLCodeGen:
         self.function_parameter_infos = {}
         self.function_return_types = {}
         self.function_image_access_requirements = {}
+        self.function_definitions = {}
+        self.glsl_resource_function_specializations = {}
+        self.glsl_resource_function_call_names = {}
+        self.glsl_resource_specialized_source_names = set()
+        self.emitted_glsl_resource_specialization_names = set()
         self.unsupported_structured_buffer_array_functions = {}
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
@@ -249,6 +525,10 @@ class GLSLCodeGen:
         self.current_stage_outputs = {}
         self.current_stage_output_member_map = {}
         self.current_stage_parameter_aliases = {}
+        self.current_identifier_aliases = {}
+        self.current_mesh_output_parameters = {}
+        self.current_mesh_output_topology = None
+        self.task_payload_shared_variables = []
         self.current_target_stage = None
         self.stage_io_used_locations = {}
         self.stage_io_declarations = {}
@@ -261,14 +541,27 @@ class GLSLCodeGen:
         self.fragment_input_member_names = set()
         self.fragment_output_struct_names = set()
         self.fragment_output_member_name_maps = {}
+        self.fragment_output_member_layout_maps = {}
         self.vertex_input_member_names = set()
         self.current_function_return_type = None
         self.current_stage_return_type = None
+        self.current_stage_entry_type = None
         self.current_expression_expected_type = None
+        self.current_generic_function_substitutions = {}
+        self.match_temp_variable_index = 0
         self.local_variable_types = {}
         self.current_structured_buffer_array_parameters = {}
+        self.current_structured_buffer_counter_parameters = {}
         self.struct_member_types = {}
+        self.generic_struct_definitions = {}
+        self.generic_struct_specializations = {}
+        self.generic_function_definitions = {}
+        self.generic_function_specializations = {}
+        self.generic_function_specialized_names = {}
+        self.current_generic_function_substitutions = {}
         self.structured_buffer_instance_members = {}
+        self.structured_buffer_counter_members = {}
+        self.structured_buffer_counter_instances = {}
         self.glsl_buffer_block_struct_names = set()
         self.semantic_map = {
             "gl_VertexID": "gl_VertexID",
@@ -361,6 +654,7 @@ class GLSLCodeGen:
             "double2": "dvec2",
             "double3": "dvec3",
             "double4": "dvec4",
+            "str": "int",
             "ivec2": "ivec2",
             "ivec3": "ivec3",
             "ivec4": "ivec4",
@@ -560,6 +854,7 @@ class GLSLCodeGen:
             "image2DArray": "image2DArray",
             "image2DMS": "image2DMS",
             "image2DMSArray": "image2DMSArray",
+            "accelerationStructureEXT": "accelerationStructureEXT",
         }
 
         self.function_map = {
@@ -584,6 +879,11 @@ class GLSLCodeGen:
             "textureQueryLevels": "textureQueryLevels",
             "textureQueryLod": "textureQueryLod",
             "texelFetch": "texelFetch",
+            "TraceRay": "traceRayEXT",
+            "ReportHit": "reportIntersectionEXT",
+            "ReportIntersection": "reportIntersectionEXT",
+            "CallShader": "executeCallableEXT",
+            "ExecuteCallable": "executeCallableEXT",
             "imageAtomicAdd": "imageAtomicAdd",
             "imageAtomicMin": "imageAtomicMin",
             "imageAtomicMax": "imageAtomicMax",
@@ -646,6 +946,136 @@ class GLSLCodeGen:
         """Generate GLSL source for a single requested shader stage."""
         return self.generate_program(ast, target_stage=shader_type)
 
+    def glsl_stage_names(self, ast, target_stage=None):
+        stage_names = set()
+
+        for func in getattr(ast, "functions", []) or []:
+            qualifier = (
+                func.qualifiers[0]
+                if getattr(func, "qualifiers", None)
+                else getattr(func, "qualifier", None)
+            )
+            stage_name = normalize_stage_name(qualifier)
+            if should_emit_qualified_function(target_stage, stage_name):
+                stage_names.add(stage_name)
+
+        for stage_type in getattr(ast, "stages", {}) or {}:
+            stage_name = normalize_stage_name(stage_type)
+            if stage_matches(target_stage, stage_name):
+                stage_names.add(stage_name)
+
+        return stage_names
+
+    def default_glsl_version_line(self, ast, target_stage=None):
+        if self.glsl_stage_names(
+            ast, target_stage
+        ) & self.RAY_STAGE_NAMES or self.uses_ray_extension_type(ast, target_stage):
+            return "#version 460 core"
+        return "#version 450 core"
+
+    def glsl_stage_extension_lines(self, ast, target_stage=None):
+        stage_names = self.glsl_stage_names(ast, target_stage)
+
+        lines = []
+        if stage_names & self.MESH_STAGE_NAMES:
+            lines.append("#extension GL_EXT_mesh_shader : require")
+        uses_ray_stage = bool(stage_names & self.RAY_STAGE_NAMES)
+        if uses_ray_stage:
+            lines.append("#extension GL_EXT_ray_tracing : require")
+        if self.uses_ray_query(ast, target_stage) or (
+            self.uses_acceleration_structure(ast, target_stage) and not uses_ray_stage
+        ):
+            lines.append("#extension GL_EXT_ray_query : require")
+        if self.uses_ray_tracing_position_fetch(ast, target_stage):
+            lines.append("#extension GL_EXT_ray_tracing_position_fetch : require")
+        return lines
+
+    def uses_ray_extension_type(self, ast, target_stage=None):
+        return (
+            self.uses_ray_query(ast, target_stage)
+            or self.uses_acceleration_structure(ast, target_stage)
+            or self.uses_ray_tracing_position_fetch(ast, target_stage)
+        )
+
+    def uses_ray_query(self, ast, target_stage=None):
+        for root in self.ray_query_search_roots(ast, target_stage):
+            for node in self.walk_ast(root):
+                if isinstance(node, RayQueryOpNode):
+                    return True
+                if any(
+                    self.is_ray_query_type(type_node)
+                    for type_node in self.ray_extension_type_nodes(node)
+                ):
+                    return True
+        return False
+
+    def uses_ray_tracing_position_fetch(self, ast, target_stage=None):
+        for root in self.ray_query_search_roots(ast, target_stage):
+            for node in self.walk_ast(root):
+                if isinstance(node, RayQueryOpNode) and (
+                    node.operation in self.RAY_QUERY_POSITION_FETCH_METHODS
+                ):
+                    return True
+                if isinstance(node, FunctionCallNode):
+                    func_expr = getattr(node, "function", getattr(node, "name", None))
+                    if (
+                        isinstance(func_expr, MemberAccessNode)
+                        and func_expr.member in self.RAY_QUERY_POSITION_FETCH_METHODS
+                    ):
+                        return True
+                    if (
+                        self.function_call_name(node)
+                        == "rayQueryGetIntersectionTriangleVertexPositionsEXT"
+                    ):
+                        return True
+                if getattr(node, "name", None) == "gl_HitTriangleVertexPositionsEXT":
+                    return True
+        return False
+
+    def uses_acceleration_structure(self, ast, target_stage=None):
+        for root in self.ray_query_search_roots(ast, target_stage):
+            for node in self.walk_ast(root):
+                if any(
+                    self.is_acceleration_structure_type(type_node)
+                    for type_node in self.ray_extension_type_nodes(node)
+                ):
+                    return True
+        return False
+
+    def ray_extension_type_nodes(self, node):
+        return (
+            getattr(node, "var_type", None),
+            getattr(node, "vtype", None),
+            getattr(node, "param_type", None),
+            getattr(node, "return_type", None),
+        )
+
+    def ray_query_search_roots(self, ast, target_stage=None):
+        target_stage = normalize_stage_name(target_stage)
+        if target_stage is None:
+            return [ast]
+
+        roots = []
+        roots.extend(getattr(ast, "global_variables", []) or [])
+        roots.extend(getattr(ast, "constants", []) or [])
+
+        for func in getattr(ast, "functions", []) or []:
+            qualifier = (
+                func.qualifiers[0]
+                if getattr(func, "qualifiers", None)
+                else getattr(func, "qualifier", None)
+            )
+            stage_name = normalize_stage_name(qualifier)
+            if should_emit_qualified_function(target_stage, stage_name):
+                roots.append(func)
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if stage_matches(target_stage, stage_name):
+                roots.append(stage)
+
+        return roots
+
     def generate_program(self, ast, target_stage=None):
         """Render an AST to GLSL, optionally filtering stage entry points."""
         target_stage = normalize_stage_name(target_stage)
@@ -655,6 +1085,7 @@ class GLSLCodeGen:
         self.current_sampler_parameters = set()
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
+        self.current_resource_aliases = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
         self.image_variable_accesses = {}
@@ -671,6 +1102,13 @@ class GLSLCodeGen:
         self.function_parameter_names = collect_function_parameter_names(functions)
         self.function_parameter_types = self.collect_function_parameter_types(functions)
         self.function_parameter_infos = self.collect_function_parameter_infos(functions)
+        self.function_definitions = {
+            func.name: func for func in functions if getattr(func, "name", None)
+        }
+        self.glsl_resource_function_specializations = {}
+        self.glsl_resource_function_call_names = {}
+        self.glsl_resource_specialized_source_names = set()
+        self.emitted_glsl_resource_specialization_names = set()
         self.function_image_access_requirements = (
             collect_function_image_access_requirements(
                 functions,
@@ -688,20 +1126,124 @@ class GLSLCodeGen:
         self.current_stage_outputs = {}
         self.current_stage_output_member_map = {}
         self.current_stage_parameter_aliases = {}
+        self.current_identifier_aliases = {}
         self.current_target_stage = target_stage
+        self.task_payload_shared_variables = []
         self.stage_io_used_locations = {}
         self.stage_io_declarations = {}
         self.flattened_stage_variables = set()
+        self.fragment_output_member_layout_maps = {}
+        self.fragment_blend_support_layout_parts = []
         self.current_function_return_type = None
         self.current_stage_return_type = None
+        self.current_stage_entry_type = None
         self.current_expression_expected_type = None
+        self.match_temp_variable_index = 0
         self.local_variable_types = {}
         self.current_structured_buffer_array_parameters = {}
+        self.current_structured_buffer_counter_parameters = {}
         self.structured_buffer_instance_members = {}
+        self.structured_buffer_counter_members = {}
+        self.structured_buffer_counter_instances = {}
         self.glsl_buffer_block_struct_names = set()
-        self.struct_member_types = collect_struct_member_types(
-            getattr(ast, "structs", []), self.type_name_string
+        structs = deduplicate_named_declarations(
+            list(getattr(ast, "structs", []) or [])
+            + collect_stage_local_structs(ast, target_stage),
+            "struct",
         )
+        self.struct_member_types = collect_struct_member_types(
+            structs, self.type_name_string
+        )
+        self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
+            structs
+        )
+        self.generic_struct_definitions = collect_generic_struct_definitions(
+            structs,
+            excluded_names=set(self.generic_enum_struct_definitions),
+        )
+        self.generic_enum_specializations = collect_generic_enum_specializations(
+            ast,
+            self.generic_enum_struct_definitions,
+            self.type_name_string,
+        )
+        self.generic_struct_specializations = collect_generic_struct_specializations(
+            ast,
+            self.generic_struct_definitions,
+            self.type_name_string,
+        )
+        self.struct_member_types.update(
+            collect_generic_enum_specialization_member_types(
+                self,
+                self.generic_enum_specializations,
+            )
+        )
+        self.struct_member_types.update(
+            collect_generic_struct_specialization_member_types(
+                self,
+                self.generic_struct_specializations,
+            )
+        )
+        generic_function_specializations = prepare_generic_function_specializations(
+            self,
+            functions,
+        )
+        self.function_return_types.update(
+            {
+                func.name: self.type_name_string(getattr(func, "return_type", "void"))
+                for func in generic_function_specializations.values()
+            }
+        )
+        if generic_function_specializations:
+            self.function_definitions.update(
+                {
+                    func.name: func
+                    for func in generic_function_specializations.values()
+                    if getattr(func, "name", None)
+                }
+            )
+            self.function_parameter_names.update(
+                collect_function_parameter_names(
+                    generic_function_specializations.values()
+                )
+            )
+            self.function_parameter_types.update(
+                self.collect_function_parameter_types(
+                    generic_function_specializations.values()
+                )
+            )
+            self.function_parameter_infos.update(
+                self.collect_function_parameter_infos(
+                    generic_function_specializations.values()
+                )
+            )
+        self.plain_enums = collect_plain_enums(structs)
+        self.struct_payload_enums = collect_struct_payload_enums(structs)
+        self.enum_type_names = collect_enum_type_names(self.plain_enums)
+        self.enum_struct_type_names = (
+            collect_enum_type_names(self.struct_payload_enums)
+            | set(self.generic_enum_struct_definitions)
+            | {
+                specialization["struct_name"]
+                for specialization in self.generic_enum_specializations.values()
+            }
+        )
+        self.enum_struct_variant_fields = collect_enum_struct_variant_fields(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constructors = collect_enum_variant_constructors(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constructor_fields = collect_enum_variant_constructor_fields(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constants = {
+            **collect_enum_variant_constants(
+                self.plain_enums + self.struct_payload_enums
+            ),
+            **collect_generic_enum_variant_constants(
+                self.generic_enum_struct_definitions
+            ),
+        }
         (
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
@@ -731,22 +1273,66 @@ class GLSLCodeGen:
             elif line:
                 extra_lines.append(line)
         if version_line is None:
-            version_line = "#version 450 core"
+            version_line = self.default_glsl_version_line(ast, target_stage)
         code += f"{version_line}\n"
+        for line in self.glsl_stage_extension_lines(ast, target_stage):
+            if line not in extra_lines:
+                code += f"{line}\n"
         if extra_lines:
             code += "\n".join(extra_lines) + "\n"
+        code += generate_enum_constants(
+            self,
+            self.plain_enums + self.struct_payload_enums,
+            qualifier="const",
+        )
+        code += generate_generic_enum_constants(
+            self,
+            self.generic_enum_struct_definitions,
+            qualifier="const",
+        )
         code += self.generate_constants(ast)
+        code += generate_generic_structs(self, self.generic_struct_specializations)
+        code += generate_enum_structs(self, self.struct_payload_enums)
+        code += generate_generic_enum_structs(self, self.generic_enum_specializations)
+        code += generate_enum_constructor_functions(self, self.struct_payload_enums)
+        code += generate_generic_enum_constructor_functions(
+            self,
+            self.generic_enum_specializations,
+        )
 
-        structs = getattr(ast, "structs", [])
-        global_vars = getattr(ast, "global_variables", [])
+        global_vars = list(getattr(ast, "global_variables", []) or [])
+        stage_local_resource_vars = collect_stage_local_variables(
+            ast, target_stage, self.is_stage_local_resource_variable
+        )
+        stage_local_interface_vars = self.deduplicate_stage_interface_declarations(
+            collect_stage_local_variables(
+                ast, target_stage, self.is_stage_local_interface_variable
+            )
+        )
+        self.fragment_blend_support_layout_parts = (
+            self.glsl_fragment_output_blend_support_layout_parts(
+                global_vars + stage_local_interface_vars
+            )
+        )
+        self.task_payload_shared_variables = (
+            self.glsl_task_payload_shared_variable_infos(
+                global_vars + stage_local_interface_vars
+            )
+        )
         self.structs_by_name = {
             node.name: node for node in structs if isinstance(node, StructNode)
+        }
+        self.glsl_interface_block_structs_by_name = {
+            node.name: node
+            for node in structs
+            if isinstance(node, StructNode)
+            and self.is_glsl_interface_block_struct(node)
         }
         stage_resource_params = self.collect_stage_entry_resource_parameters(
             ast, target_stage
         )
         resource_declaration_nodes = self.deduplicate_resource_declaration_nodes(
-            global_vars + stage_resource_params
+            global_vars + stage_local_resource_vars + stage_resource_params
         )
         self.glsl_buffer_block_struct_names = (
             self.collect_glsl_buffer_block_struct_names(resource_declaration_nodes)
@@ -777,11 +1363,21 @@ class GLSLCodeGen:
             self.stage_value_parameter_input_names(ast, "fragment")
         )
         self.fragment_output_member_name_maps = self.fragment_output_member_maps()
+        self.fragment_output_member_layout_maps = (
+            self.fragment_output_member_layout_maps_for_outputs()
+        )
         emit_vertex_io = target_stage in {None, "vertex"}
         emit_fragment_io = target_stage in {None, "fragment"}
         emit_graphics_io = target_stage in {None, "vertex", "fragment"}
         for node in structs:
             if isinstance(node, StructNode):
+                if node.name in self.generic_enum_struct_definitions:
+                    continue
+                if node.name in self.generic_struct_definitions:
+                    continue
+                if self.is_glsl_interface_block_struct(node):
+                    code += self.generate_glsl_interface_block_declaration(node)
+                    continue
                 if node.name in self.glsl_buffer_block_struct_names:
                     continue
                 elif (
@@ -817,19 +1413,26 @@ class GLSLCodeGen:
                     elif node.name in self.fragment_output_struct_names:
                         code += self.generate_struct(node)
                 elif node.name in self.vertex_output_struct_names:
+                    emitted_io = False
                     if emit_vertex_io:
                         code += self.generate_vertex_output_declarations(node)
+                        emitted_io = True
                     if (
                         node.name in self.fragment_input_struct_names
                         and emit_fragment_io
                     ):
                         code += self.generate_fragment_input_declarations(node)
+                        emitted_io = True
                     if (
                         node.name in self.fragment_output_struct_names
                         and emit_fragment_io
                     ):
                         code += self.generate_fragment_output_declarations(node)
-                    code += self.generate_struct(node)
+                        emitted_io = True
+                    if self.should_emit_flattened_stage_io_struct(
+                        ast, node.name, emitted_io, emit_graphics_io
+                    ):
+                        code += self.generate_struct(node)
                 elif node.name == "PSInput":
                     if emit_fragment_io:
                         code += self.generate_fragment_input_declarations(node)
@@ -877,6 +1480,19 @@ class GLSLCodeGen:
                 var_name = f"var{index}"
 
             if self.is_glsl_buffer_block_variable(node, vtype):
+                if self.is_shader_record_buffer_block(node):
+                    if self.explicit_resource_binding_index(node) is not None:
+                        raise ValueError(
+                            "GLSL shaderRecordEXT buffer blocks cannot declare "
+                            "binding layout qualifiers"
+                        )
+                    declaration = self.glsl_buffer_block_declaration(
+                        node, vtype, var_name, None, array_suffix
+                    )
+                    if declaration is not None:
+                        code += declaration
+                        continue
+
                 binding_namespace = "buffer binding"
                 explicit_binding = self.explicit_resource_binding_index(node)
                 resource_binding = (
@@ -944,6 +1560,33 @@ class GLSLCodeGen:
                     resource_binding,
                     resource_count,
                 )
+                if self.structured_buffer_requires_counter(vtype):
+                    counter_binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        resource_binding_cursors,
+                        binding_namespace,
+                        resource_count,
+                    )
+                    counter_name = self.structured_buffer_counter_resource_name(
+                        var_name
+                    )
+                    self.reserve_resource_binding_range(
+                        used_resource_bindings,
+                        "OpenGL",
+                        binding_namespace,
+                        counter_binding,
+                        resource_count,
+                        counter_name,
+                    )
+                    code += self.structured_buffer_counter_block_declaration(
+                        var_name, counter_binding, array_size
+                    )
+                    self.advance_resource_binding(
+                        resource_binding_cursors,
+                        binding_namespace,
+                        counter_binding,
+                        resource_count,
+                    )
                 continue
             if self.is_opaque_resource_type(mapped_type):
                 self.texture_variable_types[var_name] = mapped_type
@@ -999,12 +1642,16 @@ class GLSLCodeGen:
                     node, declaration, vtype
                 )
 
+        for node in stage_local_interface_vars:
+            code += self.generate_stage_local_interface_variable_declaration(node)
+
         cbuffers = getattr(ast, "cbuffers", [])
         if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast)
 
         combined_stage_entry_names = self.combined_stage_entry_names(ast, target_stage)
+        self.prepare_glsl_resource_function_specializations(ast)
 
         functions = getattr(ast, "functions", [])
         for func in functions:
@@ -1016,6 +1663,35 @@ class GLSLCodeGen:
             qualifier_name = normalize_stage_name(qualifier)
 
             if not should_emit_qualified_function(target_stage, qualifier_name):
+                continue
+
+            resource_specializations = self.glsl_resource_function_emission_list(
+                getattr(func, "name", None)
+            )
+            if resource_specializations and qualifier_name not in {
+                "vertex",
+                "fragment",
+                "compute",
+                "geometry",
+                "tessellation_control",
+                "tessellation_evaluation",
+                "mesh",
+                "task",
+                "amplification",
+                "object",
+                "ray_generation",
+                "ray_intersection",
+                "ray_closest_hit",
+                "ray_any_hit",
+                "ray_miss",
+                "ray_callable",
+            }:
+                for specialized_func in resource_specializations:
+                    code += self.generate_function(specialized_func)
+
+            if generic_function_parameters(func):
+                for specialized_func in generic_function_emission_list(self, func):
+                    code += self.generate_function(specialized_func)
                 continue
 
             if qualifier_name == "vertex":
@@ -1056,13 +1732,32 @@ class GLSLCodeGen:
                     self.function_call_name,
                     FunctionCallNode,
                 ):
-                    stage_code += self.generate_function(func)
+                    resource_specializations = (
+                        self.glsl_resource_function_emission_list(
+                            getattr(func, "name", None)
+                        )
+                    )
+                    if resource_specializations:
+                        for specialized_func in resource_specializations:
+                            stage_code += self.generate_function(specialized_func)
+
+                    if generic_function_parameters(func):
+                        for specialized_func in generic_function_emission_list(
+                            self,
+                            func,
+                        ):
+                            stage_code += self.generate_function(specialized_func)
+                    else:
+                        stage_code += self.generate_function(func)
 
                 if hasattr(stage, "entry_point"):
                     stage_code += self.generate_function(
                         stage.entry_point,
                         shader_type=stage_name,
                         execution_config=getattr(stage, "execution_config", None),
+                        stage_layout_qualifiers=getattr(
+                            stage, "layout_qualifiers", None
+                        ),
                         entry_name=combined_stage_entry_names.get(
                             id(stage.entry_point)
                         ),
@@ -1073,6 +1768,240 @@ class GLSLCodeGen:
                     code += stage_code
 
         return code
+
+    def prepare_glsl_resource_function_specializations(self, ast):
+        """Create GLSL helper variants for concrete storage image arguments."""
+        self.glsl_resource_function_specializations = {}
+        self.glsl_resource_function_call_names = {}
+        self.glsl_resource_specialized_source_names = set()
+        pending = []
+
+        def scan_function(func, aliases):
+            before = set(self.glsl_resource_function_specializations)
+            self.collect_glsl_resource_specializations_from_body(
+                getattr(func, "body", []),
+                aliases,
+            )
+            after = set(self.glsl_resource_function_specializations)
+            pending.extend(after - before)
+
+        for func in self.collect_functions(ast):
+            scan_function(func, {})
+
+        seen = set()
+        while pending:
+            key = pending.pop(0)
+            if key in seen:
+                continue
+            seen.add(key)
+            specialized_func = self.glsl_resource_function_specializations.get(key)
+            if specialized_func is None:
+                continue
+            scan_function(
+                specialized_func,
+                getattr(specialized_func, "_glsl_resource_aliases", {}) or {},
+            )
+
+        if not self.glsl_resource_function_specializations:
+            return
+
+        specialized_functions = list(
+            self.glsl_resource_function_specializations.values()
+        )
+        self.function_definitions.update(
+            {
+                func.name: func
+                for func in specialized_functions
+                if getattr(func, "name", None)
+            }
+        )
+        self.function_return_types.update(
+            {
+                func.name: self.type_name_string(getattr(func, "return_type", "void"))
+                for func in specialized_functions
+                if getattr(func, "name", None)
+            }
+        )
+        self.function_parameter_names.update(
+            collect_function_parameter_names(specialized_functions)
+        )
+        self.function_parameter_types.update(
+            self.collect_function_parameter_types(specialized_functions)
+        )
+        self.function_parameter_infos.update(
+            self.collect_function_parameter_infos(specialized_functions)
+        )
+        self.function_sampler_parameter_indices.update(
+            self.collect_function_sampler_parameter_indices(specialized_functions)
+        )
+
+    def collect_glsl_resource_specializations_from_body(self, body, aliases):
+        for node in self.walk_ast(body):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            func_name = self.function_call_name(node)
+            if not func_name:
+                continue
+            args = list(getattr(node, "arguments", getattr(node, "args", [])) or [])
+            self.ensure_glsl_resource_function_specialization(
+                func_name,
+                args,
+                aliases,
+            )
+
+    def glsl_resource_function_emission_list(self, source_name):
+        if not source_name:
+            return []
+        functions = [
+            func
+            for func in self.glsl_resource_function_specializations.values()
+            if getattr(func, "_glsl_resource_source_name", None) == source_name
+        ]
+        functions.sort(key=lambda func: getattr(func, "name", ""))
+        result = []
+        for func in functions:
+            name = getattr(func, "name", None)
+            if name in self.emitted_glsl_resource_specialization_names:
+                continue
+            self.emitted_glsl_resource_specialization_names.add(name)
+            result.append(func)
+        return result
+
+    def glsl_resource_binding_info(self, arg, aliases):
+        arg_name = self.expression_name(arg)
+        if arg_name in aliases:
+            return aliases[arg_name]
+
+        resource_type = self.texture_argument_resource_type(arg)
+        if not self.is_storage_image_type(resource_type):
+            return None
+
+        expression = self.glsl_resource_argument_expression(arg, aliases)
+        if expression is None:
+            return None
+
+        return {
+            "expression": expression,
+            "type": resource_type,
+            "format": self.image_resource_format(arg),
+            "access": self.image_resource_access(arg),
+        }
+
+    def glsl_resource_argument_expression(self, arg, aliases):
+        arg_name = self.expression_name(arg)
+        if arg_name in aliases:
+            return aliases[arg_name]["expression"]
+        if isinstance(arg, str):
+            return arg
+        if hasattr(arg, "name") and isinstance(arg.name, str):
+            return arg.name
+        if isinstance(arg, ArrayAccessNode) or (
+            hasattr(arg, "__class__") and "ArrayAccess" in str(arg.__class__)
+        ):
+            array_expr = getattr(arg, "array", getattr(arg, "array_expr", None))
+            index_expr = getattr(arg, "index", getattr(arg, "index_expr", None))
+            array_code = self.glsl_resource_argument_expression(array_expr, aliases)
+            if array_code is None:
+                return None
+            return f"{array_code}[{self.generate_expression(index_expr)}]"
+        return None
+
+    def glsl_resource_function_specialization_key(self, func_name, args, aliases):
+        callee = self.function_definitions.get(func_name)
+        if callee is None:
+            return None, None
+
+        params = list(getattr(callee, "parameters", getattr(callee, "params", [])))
+        access_requirements = self.function_image_access_requirements.get(func_name, {})
+        bindings = {}
+        key_parts = []
+        for index, (param, arg) in enumerate(zip(params, args or [])):
+            param_type = self.type_name_string(
+                getattr(param, "param_type", getattr(param, "vtype", None))
+            )
+            if not self.is_storage_image_type(param_type):
+                continue
+            binding = self.glsl_resource_binding_info(arg, aliases)
+            if binding is None:
+                continue
+            param_name = getattr(param, "name", None)
+            if not param_name:
+                continue
+            required_access = access_requirements.get(param_name)
+            if required_access is not None and not image_access_satisfies_requirement(
+                required_access,
+                binding.get("access"),
+            ):
+                return None, None
+            bindings[index] = (param_name, binding)
+            key_parts.append((index, binding["expression"]))
+
+        if not bindings:
+            return None, None
+        return (func_name, tuple(key_parts)), bindings
+
+    def ensure_glsl_resource_function_specialization(self, func_name, args, aliases):
+        key, bindings = self.glsl_resource_function_specialization_key(
+            func_name,
+            args,
+            aliases,
+        )
+        if key is None:
+            return None
+        if key in self.glsl_resource_function_specializations:
+            return self.glsl_resource_function_specializations[key]
+
+        source_func = self.function_definitions.get(func_name)
+        if source_func is None:
+            return None
+
+        clone = deepcopy(source_func)
+        clone.name = self.glsl_resource_specialization_name(func_name, bindings)
+        clone.parameters = [
+            param
+            for index, param in enumerate(
+                getattr(clone, "parameters", getattr(clone, "params", []))
+            )
+            if index not in bindings
+        ]
+        clone._glsl_resource_source_name = func_name
+        clone._glsl_resource_bound_indices = set(bindings)
+        clone._glsl_resource_aliases = {
+            param_name: binding for param_name, binding in bindings.values()
+        }
+
+        self.glsl_resource_function_specializations[key] = clone
+        self.glsl_resource_function_call_names[key] = clone.name
+        self.glsl_resource_specialized_source_names.add(func_name)
+        return clone
+
+    def glsl_resource_specialization_name(self, func_name, bindings):
+        suffix_parts = []
+        for _, (param_name, binding) in sorted(bindings.items()):
+            suffix_parts.append(
+                "{}_{}".format(
+                    sanitize_type_name(param_name),
+                    sanitize_type_name(binding["expression"]),
+                )
+            )
+        suffix = "_".join(suffix_parts)
+        return "{}__glsl_{}".format(sanitize_type_name(func_name), suffix)
+
+    def glsl_resource_function_call_specialization(self, func_name, args):
+        key, _ = self.glsl_resource_function_specialization_key(
+            func_name,
+            args,
+            self.current_resource_aliases,
+        )
+        if key is None:
+            return None
+        return self.glsl_resource_function_specializations.get(key)
+
+    def glsl_resource_specialized_call_arguments(self, specialized_func, args):
+        bound_indices = getattr(specialized_func, "_glsl_resource_bound_indices", set())
+        return [
+            arg for index, arg in enumerate(args or []) if index not in bound_indices
+        ]
 
     def generate_constants(self, ast):
         code = ""
@@ -1173,8 +2102,7 @@ class GLSLCodeGen:
         if declaration_conflicts:
             names = ", ".join(sorted(declaration_conflicts))
             raise ValueError(
-                "Cbuffer name(s) conflict with existing OpenGL declaration(s): "
-                f"{names}"
+                f"Cbuffer name(s) conflict with existing OpenGL declaration(s): {names}"
             )
 
         duplicate_members = collect_duplicate_cbuffer_member_names(cbuffers)
@@ -1291,10 +2219,621 @@ class GLSLCodeGen:
     def generate_compute_layout(self, execution_config=None):
         x, y, z = compute_local_size(execution_config)
         return (
-            f"layout(local_size_x = {x}, "
-            f"local_size_y = {y}, "
-            f"local_size_z = {z}) in;\n"
+            f"layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;\n"
         )
+
+    def generate_stage_layout(self, shader_type, func, stage_layout_qualifiers=None):
+        if shader_type == "fragment":
+            return self.generate_fragment_stage_layout(func, stage_layout_qualifiers)
+        if shader_type == "geometry":
+            return self.generate_geometry_stage_layout(func, stage_layout_qualifiers)
+        if shader_type == "tessellation_control":
+            return self.generate_tessellation_control_layout(
+                func, stage_layout_qualifiers
+            )
+        if shader_type == "tessellation_evaluation":
+            return self.generate_tessellation_evaluation_layout(
+                func, stage_layout_qualifiers
+            )
+        if shader_type == "mesh":
+            return self.generate_mesh_stage_layout(func, stage_layout_qualifiers)
+        return ""
+
+    def generate_fragment_stage_layout(self, func, stage_layout_qualifiers=None):
+        code = ""
+        if self.glsl_stage_bare_attribute(
+            func, {"early_fragment_tests"}, stage_layout_qualifiers, "in"
+        ):
+            code += "layout(early_fragment_tests) in;\n"
+
+        blend_support = self.glsl_fragment_blend_support_layout_parts(
+            func, stage_layout_qualifiers
+        )
+        if blend_support:
+            code += f"layout({', '.join(blend_support)}) out;\n"
+        return code
+
+    def glsl_fragment_blend_support_layout_parts(
+        self, func, stage_layout_qualifiers=None
+    ):
+        parts = []
+        seen = set()
+
+        def add_if_blend_support(attr):
+            attr_name = self.glsl_stage_control_attribute_name(attr)
+            if attr_name not in self.GLSL_BLEND_SUPPORT_LAYOUT_NAMES:
+                return
+            if getattr(attr, "arguments", []) or attr_name in seen:
+                return
+            seen.add(attr_name)
+            parts.append(attr_name)
+
+        for attr in getattr(func, "attributes", []) or []:
+            add_if_blend_support(attr)
+        for attr_name in getattr(self, "fragment_blend_support_layout_parts", []):
+            if attr_name not in seen:
+                seen.add(attr_name)
+                parts.append(attr_name)
+        for attr in self.glsl_stage_layout_entries(stage_layout_qualifiers, "out"):
+            add_if_blend_support(attr)
+
+        return parts
+
+    def glsl_fragment_output_blend_support_layout_parts(self, nodes):
+        parts = []
+        seen = set()
+
+        for node in nodes:
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(node, "qualifiers", []) or []
+            }
+            if "out" not in qualifiers:
+                continue
+            for attr in getattr(node, "attributes", []) or []:
+                attr_name = self.glsl_stage_control_attribute_name(attr)
+                if attr_name not in self.GLSL_BLEND_SUPPORT_LAYOUT_NAMES:
+                    continue
+                if getattr(attr, "arguments", []) or attr_name in seen:
+                    continue
+                seen.add(attr_name)
+                parts.append(attr_name)
+
+        return parts
+
+    def generate_geometry_stage_layout(self, func, stage_layout_qualifiers=None):
+        input_primitive = self.glsl_stage_bare_attribute(
+            func,
+            {
+                "points",
+                "lines",
+                "lines_adjacency",
+                "triangles",
+                "triangles_adjacency",
+            },
+            stage_layout_qualifiers,
+            "in",
+        )
+        output_primitive = self.glsl_single_stage_attribute_argument(
+            func, "outputtopology", stage_layout_qualifiers, "out"
+        )
+        if output_primitive is None:
+            output_primitive = self.glsl_stage_bare_attribute(
+                func,
+                {"points", "line_strip", "triangle_strip"},
+                stage_layout_qualifiers,
+                "out",
+            )
+        max_vertices = self.glsl_single_stage_attribute_argument(
+            func, "max_vertices", stage_layout_qualifiers, "out"
+        )
+        if max_vertices is None:
+            max_vertices = self.glsl_single_stage_attribute_argument(
+                func, "maxvertexcount", stage_layout_qualifiers, "out"
+            )
+        invocations = self.glsl_single_stage_attribute_argument(
+            func, "invocations", stage_layout_qualifiers, "in"
+        )
+
+        code = ""
+        input_layout = []
+        if input_primitive:
+            input_layout.append(input_primitive)
+        if invocations is not None:
+            input_layout.append(f"invocations = {invocations}")
+        if input_layout:
+            code += f"layout({', '.join(input_layout)}) in;\n"
+
+        output_layout = []
+        if output_primitive:
+            output_layout.append(self.glsl_geometry_output_topology(output_primitive))
+        if max_vertices is not None:
+            output_layout.append(f"max_vertices = {max_vertices}")
+        if output_layout:
+            code += f"layout({', '.join(output_layout)}) out;\n"
+        return code
+
+    def generate_tessellation_control_layout(self, func, stage_layout_qualifiers=None):
+        vertices = self.glsl_single_stage_attribute_argument(
+            func, "vertices", stage_layout_qualifiers, "out"
+        )
+        if vertices is None:
+            vertices = self.glsl_single_stage_attribute_argument(
+                func, "outputcontrolpoints", stage_layout_qualifiers, "out"
+            )
+        if vertices is None:
+            return ""
+        return f"layout(vertices = {vertices}) out;\n"
+
+    def generate_tessellation_evaluation_layout(
+        self, func, stage_layout_qualifiers=None
+    ):
+        layout_parts = []
+        domain = self.glsl_single_stage_attribute_argument(
+            func, "domain", stage_layout_qualifiers, "in"
+        )
+        if domain is None:
+            domain = self.glsl_stage_bare_attribute(
+                func, {"triangles", "quads", "isolines"}, stage_layout_qualifiers, "in"
+            )
+        if domain:
+            layout_parts.append(self.glsl_tessellation_domain(domain))
+
+        partitioning = self.glsl_single_stage_attribute_argument(
+            func, "partitioning", stage_layout_qualifiers, "in"
+        )
+        if partitioning is None:
+            partitioning = self.glsl_stage_bare_attribute(
+                func,
+                {
+                    "equal_spacing",
+                    "fractional_even_spacing",
+                    "fractional_odd_spacing",
+                },
+                stage_layout_qualifiers,
+                "in",
+            )
+        if partitioning:
+            layout_parts.append(self.glsl_tessellation_partitioning(partitioning))
+
+        winding = self.glsl_stage_bare_attribute(
+            func, {"cw", "ccw"}, stage_layout_qualifiers, "in"
+        )
+        if winding:
+            layout_parts.append(winding)
+
+        if self.glsl_stage_bare_attribute(
+            func, {"point_mode"}, stage_layout_qualifiers, "in"
+        ):
+            layout_parts.append("point_mode")
+
+        if not layout_parts:
+            return ""
+        return f"layout({', '.join(layout_parts)}) in;\n"
+
+    def generate_mesh_stage_layout(self, func, stage_layout_qualifiers=None):
+        output_primitive = self.glsl_mesh_stage_output_topology_name(
+            func, stage_layout_qualifiers
+        )
+
+        max_vertices = self.glsl_single_stage_attribute_argument(
+            func, "max_vertices", stage_layout_qualifiers, "out"
+        )
+        if max_vertices is None:
+            max_vertices = self.glsl_single_stage_attribute_argument(
+                func, "maxvertexcount", stage_layout_qualifiers, "out"
+            )
+
+        max_primitives = self.glsl_single_stage_attribute_argument(
+            func, "max_primitives", stage_layout_qualifiers, "out"
+        )
+        if max_primitives is None:
+            max_primitives = self.glsl_single_stage_attribute_argument(
+                func, "maxprimitivecount", stage_layout_qualifiers, "out"
+            )
+
+        layout_parts = []
+        if output_primitive:
+            layout_parts.append(output_primitive)
+        if max_vertices is not None:
+            layout_parts.append(f"max_vertices = {max_vertices}")
+        if max_primitives is not None:
+            layout_parts.append(f"max_primitives = {max_primitives}")
+
+        if not layout_parts:
+            return ""
+        return f"layout({', '.join(layout_parts)}) out;\n"
+
+    def glsl_mesh_stage_output_topology_name(self, func, stage_layout_qualifiers=None):
+        output_primitive = self.glsl_stage_bare_attribute(
+            func, {"points", "lines", "triangles"}, stage_layout_qualifiers, "out"
+        )
+        if output_primitive is None:
+            output_primitive = self.glsl_single_stage_attribute_argument(
+                func, "outputtopology", stage_layout_qualifiers, "out"
+            )
+        if output_primitive is None:
+            return None
+        return self.glsl_mesh_output_topology(output_primitive)
+
+    def glsl_stage_bare_attribute(
+        self, func, names, stage_layout_qualifiers=None, direction=None
+    ):
+        names = set(names)
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = self.glsl_stage_control_attribute_name(attr)
+            if attr_name in names and not getattr(attr, "arguments", []):
+                return attr_name
+        for attr in self.glsl_stage_layout_entries(stage_layout_qualifiers, direction):
+            attr_name = self.glsl_stage_control_attribute_name(attr)
+            if attr_name in names and not getattr(attr, "arguments", []):
+                return attr_name
+        return None
+
+    def glsl_single_stage_attribute_argument(
+        self, func, attribute_name, stage_layout_qualifiers=None, direction=None
+    ):
+        arguments = self.glsl_stage_attribute_arguments(
+            func, attribute_name, stage_layout_qualifiers, direction
+        )
+        if not arguments:
+            return None
+        if len(arguments) != 1:
+            raise ValueError(
+                f"GLSL stage attribute {attribute_name} requires exactly one argument"
+            )
+        return self.attribute_value_to_string(arguments[0])
+
+    def glsl_stage_attribute_arguments(
+        self, func, attribute_name, stage_layout_qualifiers=None, direction=None
+    ):
+        for attr in getattr(func, "attributes", []) or []:
+            if self.glsl_stage_control_attribute_name(attr) == attribute_name:
+                return getattr(attr, "arguments", []) or []
+        for attr in self.glsl_stage_layout_entries(stage_layout_qualifiers, direction):
+            if self.glsl_stage_control_attribute_name(attr) == attribute_name:
+                return getattr(attr, "arguments", []) or []
+        return []
+
+    def glsl_stage_layout_entries(self, stage_layout_qualifiers, direction=None):
+        if direction is not None:
+            direction = str(direction).lower()
+        for layout in stage_layout_qualifiers or []:
+            layout_direction = getattr(layout, "direction", None)
+            if layout_direction is not None:
+                layout_direction = str(layout_direction).lower()
+            if direction is not None and layout_direction != direction:
+                continue
+            yield from getattr(layout, "entries", []) or []
+
+    def glsl_geometry_output_topology(self, topology):
+        topology_name = str(topology).strip().strip('"').lower()
+        topology_map = {
+            "point": "points",
+            "points": "points",
+            "line": "line_strip",
+            "lines": "line_strip",
+            "line_strip": "line_strip",
+            "triangle": "triangle_strip",
+            "triangles": "triangle_strip",
+            "triangle_strip": "triangle_strip",
+        }
+        mapped = topology_map.get(topology_name)
+        if mapped is None:
+            raise ValueError(
+                f"GLSL geometry output topology cannot be lowered: {topology}"
+            )
+        return mapped
+
+    def glsl_mesh_output_topology(self, topology):
+        topology_name = str(topology).strip().strip('"').lower()
+        topology_map = {
+            "point": "points",
+            "points": "points",
+            "line": "lines",
+            "lines": "lines",
+            "triangle": "triangles",
+            "triangles": "triangles",
+        }
+        mapped = topology_map.get(topology_name)
+        if mapped is None:
+            raise ValueError(f"GLSL mesh output topology cannot be lowered: {topology}")
+        return mapped
+
+    def map_mesh_intrinsic(self, operation):
+        mesh_intrinsics = {
+            "SetMeshOutputCounts": "SetMeshOutputsEXT",
+            "DispatchMesh": "EmitMeshTasksEXT",
+        }
+        return mesh_intrinsics.get(operation, operation)
+
+    def is_task_payload_shared_variable(self, node):
+        return (
+            "taskPayloadSharedEXT" in self.glsl_variable_qualifier_prefix(node).split()
+        )
+
+    def glsl_task_payload_shared_variable_infos(self, nodes):
+        infos = []
+        for node in nodes:
+            if not self.is_task_payload_shared_variable(node):
+                continue
+            name = self.resource_node_name(node)
+            if not name:
+                continue
+            vtype, _, array_suffix, _ = self.resource_declaration_shape(node)
+            infos.append(
+                {
+                    "name": name,
+                    "type": self.map_type(vtype),
+                    "raw_type": self.type_name_string(vtype),
+                    "array_suffix": array_suffix,
+                }
+            )
+        return infos
+
+    def glsl_dispatch_mesh_payload_target(self, payload_expr):
+        if not self.task_payload_shared_variables:
+            return None
+
+        payload_name = self.expression_name(payload_expr)
+        for info in self.task_payload_shared_variables:
+            if payload_name == info["name"]:
+                return info
+
+        payload_type = self.expression_result_type(payload_expr)
+        mapped_payload_type = self.map_type(payload_type) if payload_type else None
+        if mapped_payload_type:
+            matches = [
+                info
+                for info in self.task_payload_shared_variables
+                if info["type"] == mapped_payload_type
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                names = ", ".join(sorted(info["name"] for info in matches))
+                raise ValueError(
+                    "Ambiguous GLSL DispatchMesh payload target for "
+                    f"{mapped_payload_type}: {names}"
+                )
+
+        if len(self.task_payload_shared_variables) == 1:
+            return self.task_payload_shared_variables[0]
+
+        names = ", ".join(
+            sorted(info["name"] for info in self.task_payload_shared_variables)
+        )
+        raise ValueError(f"Ambiguous GLSL DispatchMesh payload target: {names}")
+
+    def mesh_output_parameter_role(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            normalized = str(attr_name).lower().replace("-", "_")
+            if normalized.startswith("glsl_"):
+                normalized = normalized[len("glsl_") :]
+            if normalized in {"vertices", "vertex", "mesh_vertices"}:
+                return "vertices"
+            if normalized in {"indices", "index", "primitive_indices"}:
+                return "indices"
+            if normalized in {"primitives", "primitive", "mesh_primitives"}:
+                return "primitives"
+        return None
+
+    def is_mesh_output_parameter(self, node):
+        if self.mesh_output_parameter_role(node) is None:
+            return False
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        return bool(qualifiers & {"out", "inout"})
+
+    def mesh_output_parameter_element_type(self, node):
+        node_type = self.resource_node_type(node)
+        if (
+            hasattr(node_type, "element_type")
+            and str(type(node_type)).find("ArrayType") != -1
+        ):
+            node_type = node_type.element_type
+        return self.type_name_string(node_type)
+
+    def mesh_output_parameter_count(self, node):
+        node_type = self.resource_node_type(node)
+        if not (
+            hasattr(node_type, "element_type")
+            and str(type(node_type)).find("ArrayType") != -1
+        ):
+            return None
+        size = getattr(node_type, "size", None)
+        return self.generate_expression(size) if size is not None else None
+
+    def mesh_primitive_index_builtin(self, topology):
+        return {
+            "points": "gl_PrimitivePointIndicesEXT",
+            "lines": "gl_PrimitiveLineIndicesEXT",
+            "triangles": "gl_PrimitiveTriangleIndicesEXT",
+        }.get(topology)
+
+    def mesh_output_parameter_infos(
+        self, func, shader_type, stage_layout_qualifiers=None
+    ):
+        if shader_type != "mesh":
+            return {}
+
+        topology = self.glsl_mesh_stage_output_topology_name(
+            func, stage_layout_qualifiers
+        )
+        infos = {}
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            if not self.is_mesh_output_parameter(param):
+                continue
+
+            role = self.mesh_output_parameter_role(param)
+            element_type = self.mesh_output_parameter_element_type(param)
+            info = {
+                "name": param.name,
+                "role": role,
+                "element_type": element_type,
+                "count": self.mesh_output_parameter_count(param),
+                "topology": topology,
+                "index_builtin": self.mesh_primitive_index_builtin(topology),
+                "members": {},
+            }
+
+            struct = self.structs_by_name.get(element_type)
+            if struct is not None:
+                for member in getattr(struct, "members", []) or []:
+                    mapped_semantic = self.map_semantic(self.semantic_from_node(member))
+                    info["members"][member.name] = {
+                        "node": member,
+                        "type": self.member_type_name(member),
+                        "output_name": member.name,
+                        "semantic": mapped_semantic,
+                    }
+
+            infos[param.name] = info
+        return infos
+
+    def generate_mesh_output_parameter_declarations(self, mesh_outputs):
+        code = ""
+        emitted = set()
+        for info in mesh_outputs.values():
+            role = info["role"]
+            if role == "indices":
+                continue
+            for member_name, member_info in info["members"].items():
+                semantic = member_info["semantic"]
+                if role == "vertices" and self.is_vertex_builtin_output(semantic):
+                    continue
+                if role == "primitives" and self.is_mesh_primitive_builtin(semantic):
+                    continue
+
+                member = member_info["node"]
+                output_name = member_info["output_name"]
+                declaration_key = (role, output_name)
+                if declaration_key in emitted:
+                    continue
+                emitted.add(declaration_key)
+
+                member_type = member_info["type"]
+                count = info["count"]
+                array_type = (
+                    f"{member_type}[{count}]"
+                    if count is not None
+                    else f"{member_type}[]"
+                )
+                declaration = format_c_style_array_declaration(array_type, output_name)
+                prefix = self.mesh_output_declaration_prefix(member, role)
+                code += f"{prefix} {declaration};\n"
+        return code
+
+    def mesh_output_declaration_prefix(self, member, role):
+        prefix = self.stage_io_declaration_prefix(member, "out")
+        if role != "primitives":
+            return prefix
+
+        parts = prefix.split()
+        if "perprimitiveEXT" in parts:
+            return prefix
+        if "out" in parts:
+            parts.insert(parts.index("out"), "perprimitiveEXT")
+            return " ".join(parts)
+        return f"{prefix} perprimitiveEXT".strip()
+
+    def is_mesh_primitive_builtin(self, semantic):
+        return semantic in {
+            "gl_PrimitiveID",
+            "gl_Layer",
+            "gl_ViewportIndex",
+            "gl_CullPrimitiveEXT",
+        }
+
+    def map_ray_tracing_intrinsic(self, operation, args):
+        ray_intrinsics = {
+            "TraceRay": "traceRayEXT",
+            "ReportHit": "reportIntersectionEXT",
+            "CallShader": "executeCallableEXT",
+            "AcceptHitAndEndSearch": "terminateRayEXT",
+            "IgnoreHit": "ignoreIntersectionEXT",
+        }
+        mapped = ray_intrinsics.get(operation, operation)
+        if mapped in {"ignoreIntersectionEXT", "terminateRayEXT"} and not args:
+            return mapped
+        return f"{mapped}({', '.join(args)})"
+
+    def map_ray_query_intrinsic(self, operation, query, args):
+        mapping = self.RAY_QUERY_METHOD_MAP.get(operation)
+        query_expr = self.generate_expression(query)
+        if mapping is None:
+            generated_args = [self.generate_expression(arg) for arg in args]
+            return f"{query_expr}.{operation}({', '.join(generated_args)})"
+
+        function_name, committed = mapping
+        call_args = [query_expr]
+        if committed is not None:
+            call_args.append(committed)
+        args = self.ray_query_initialize_arguments(operation, args)
+        args = [self.generate_expression(arg) for arg in args]
+        call_args.extend(args)
+        return f"{function_name}({', '.join(call_args)})"
+
+    def ray_query_initialize_arguments(self, operation, args):
+        if operation not in {"Initialize", "TraceRayInline"} or len(args) != 4:
+            return args
+
+        acceleration, ray_flags, cull_mask, ray_desc = args
+        return [
+            acceleration,
+            ray_flags,
+            cull_mask,
+            *[
+                MemberAccessNode(
+                    ray_desc,
+                    self.ray_desc_field_name(ray_desc, field_names),
+                )
+                for field_names in self.RAY_QUERY_RAY_DESC_FIELDS
+            ],
+        ]
+
+    def ray_desc_field_name(self, ray_desc, field_names):
+        ray_desc_type = self.type_name_string(self.expression_result_type(ray_desc))
+        members = self.struct_member_types.get(ray_desc_type, {})
+        for field_name in field_names:
+            if field_name in members:
+                return field_name
+        return field_names[0]
+
+    def glsl_tessellation_domain(self, domain):
+        domain_name = str(domain).strip().strip('"').lower()
+        domain_map = {
+            "tri": "triangles",
+            "triangle": "triangles",
+            "triangles": "triangles",
+            "quad": "quads",
+            "quads": "quads",
+            "isoline": "isolines",
+            "isolines": "isolines",
+        }
+        mapped = domain_map.get(domain_name)
+        if mapped is None:
+            raise ValueError(f"GLSL tessellation domain cannot be lowered: {domain}")
+        return mapped
+
+    def glsl_tessellation_partitioning(self, partitioning):
+        partition_name = str(partitioning).strip().strip('"').lower()
+        partition_map = {
+            "equal": "equal_spacing",
+            "equal_spacing": "equal_spacing",
+            "fractional_even": "fractional_even_spacing",
+            "fractional_even_spacing": "fractional_even_spacing",
+            "fractional_odd": "fractional_odd_spacing",
+            "fractional_odd_spacing": "fractional_odd_spacing",
+        }
+        mapped = partition_map.get(partition_name)
+        if mapped is None:
+            raise ValueError(
+                f"GLSL tessellation partitioning cannot be lowered: {partitioning}"
+            )
+        return mapped
 
     def generate_function(
         self,
@@ -1303,6 +2842,7 @@ class GLSLCodeGen:
         shader_type=None,
         execution_config=None,
         entry_name=None,
+        stage_layout_qualifiers=None,
     ):
         """Render a function or GLSL ``main`` stage entry point."""
         code = ""
@@ -1314,6 +2854,7 @@ class GLSLCodeGen:
         texture_parameters = {}
         image_format_parameters = {}
         image_access_parameters = {}
+        resource_aliases = getattr(func, "_glsl_resource_aliases", {}) or {}
         unsupported_buffer_array_info = (
             self.unsupported_structured_buffer_array_functions.get(func.name, {})
         )
@@ -1322,11 +2863,23 @@ class GLSLCodeGen:
         )
         previous_function_return_type = self.current_function_return_type
         previous_local_variable_types = self.local_variable_types
+        previous_generic_function_substitutions = (
+            self.current_generic_function_substitutions
+        )
         previous_structured_buffer_array_parameters = (
             self.current_structured_buffer_array_parameters
         )
+        previous_structured_buffer_counter_parameters = (
+            self.current_structured_buffer_counter_parameters
+        )
         self.local_variable_types = {}
+        self.current_generic_function_substitutions = (
+            getattr(func, "_generic_substitutions", {}) or {}
+        )
         self.current_structured_buffer_array_parameters = {}
+        self.current_structured_buffer_counter_parameters = {}
+        for alias_name, binding in resource_aliases.items():
+            self.local_variable_types[alias_name] = binding.get("type")
         for index, p in enumerate(param_list):
             if hasattr(p, "param_type"):
                 raw_param_type = (
@@ -1354,10 +2907,17 @@ class GLSLCodeGen:
                 expanded_names = [
                     f"{p.name}_{index}" for index in range(buffer_array["count"])
                 ]
-                self.current_structured_buffer_array_parameters[p.name] = {
+                buffer_info = {
                     **buffer_array,
                     "expanded_names": expanded_names,
                 }
+                if self.structured_buffer_requires_counter(buffer_array["base_type"]):
+                    counter_names = [
+                        f"{p.name}Counter_{index}"
+                        for index in range(buffer_array["count"])
+                    ]
+                    buffer_info["counter_expanded_names"] = counter_names
+                self.current_structured_buffer_array_parameters[p.name] = buffer_info
                 for expanded_name in expanded_names:
                     self.local_variable_types[expanded_name] = (
                         f"{buffer_array['element_type']}[]"
@@ -1367,6 +2927,10 @@ class GLSLCodeGen:
                             f"{buffer_array['element_type']}[]",
                             expanded_name,
                         )
+                    )
+                for counter_name in buffer_info.get("counter_expanded_names", []):
+                    params.append(
+                        format_c_style_array_declaration("uint[]", counter_name)
                     )
                 continue
 
@@ -1400,6 +2964,10 @@ class GLSLCodeGen:
             params.append(
                 f"{declaration} {semantic_attr}" if semantic_attr else declaration
             )
+            if self.structured_buffer_requires_counter(raw_param_type):
+                counter_name = self.structured_buffer_counter_parameter_name(p.name)
+                self.current_structured_buffer_counter_parameters[p.name] = counter_name
+                params.append(format_c_style_array_declaration("uint[]", counter_name))
 
         if shader_type == "compute":
             self.validate_compute_builtin_parameter_types(param_list)
@@ -1430,11 +2998,29 @@ class GLSLCodeGen:
         if shader_type is not None:
             self.validate_function_return_semantic(func, shader_type)
 
+        mesh_output_parameters = self.mesh_output_parameter_infos(
+            func, shader_type, stage_layout_qualifiers
+        )
+        mesh_output_topology = (
+            self.glsl_mesh_stage_output_topology_name(func, stage_layout_qualifiers)
+            if shader_type == "mesh"
+            else None
+        )
         stage_output = self.stage_return_output(func, shader_type)
         if stage_output and stage_output["declaration"]:
             code += f"{stage_output['declaration']}\n"
+        if mesh_output_parameters:
+            code += self.generate_mesh_output_parameter_declarations(
+                mesh_output_parameters
+            )
 
-        if shader_type == "compute":
+        stage_layout = self.generate_stage_layout(
+            shader_type, func, stage_layout_qualifiers
+        )
+        if stage_layout:
+            code += stage_layout
+
+        if shader_type in {"compute", "mesh", "task"}:
             code += self.generate_compute_layout(execution_config)
 
         if shader_type in stage_entry_types:
@@ -1448,6 +3034,7 @@ class GLSLCodeGen:
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
+        previous_resource_aliases = self.current_resource_aliases
         previous_image_format_parameters = self.current_image_format_parameters
         previous_image_access_parameters = self.current_image_access_parameters
         previous_stage_output = self.current_stage_output
@@ -1455,12 +3042,36 @@ class GLSLCodeGen:
         previous_stage_outputs = self.current_stage_outputs
         previous_stage_output_member_map = self.current_stage_output_member_map
         previous_stage_parameter_aliases = self.current_stage_parameter_aliases
+        previous_mesh_output_parameters = self.current_mesh_output_parameters
+        previous_mesh_output_topology = self.current_mesh_output_topology
         previous_flattened_stage_variables = self.flattened_stage_variables
         previous_stage_return_type = self.current_stage_return_type
+        previous_stage_entry_type = self.current_stage_entry_type
         self.current_sampler_parameters = sampler_parameters
-        self.current_texture_parameters = texture_parameters
-        self.current_image_format_parameters = image_format_parameters
-        self.current_image_access_parameters = image_access_parameters
+        self.current_texture_parameters = {
+            **texture_parameters,
+            **{
+                alias_name: binding.get("type")
+                for alias_name, binding in resource_aliases.items()
+            },
+        }
+        self.current_resource_aliases = resource_aliases
+        self.current_image_format_parameters = {
+            **image_format_parameters,
+            **{
+                alias_name: binding.get("format")
+                for alias_name, binding in resource_aliases.items()
+                if binding.get("format") is not None
+            },
+        }
+        self.current_image_access_parameters = {
+            **image_access_parameters,
+            **{
+                alias_name: binding.get("access")
+                for alias_name, binding in resource_aliases.items()
+                if binding.get("access") is not None
+            },
+        }
         self.current_stage_output = stage_output
         self.current_stage_inputs = self.stage_input_member_maps(func, shader_type)
         self.current_stage_output_member_map = self.stage_output_member_map(
@@ -1470,10 +3081,13 @@ class GLSLCodeGen:
         self.current_stage_parameter_aliases = self.stage_parameter_aliases(
             func, shader_type
         )
+        self.current_mesh_output_parameters = mesh_output_parameters
+        self.current_mesh_output_topology = mesh_output_topology
         self.flattened_stage_variables = set(self.current_stage_outputs)
         self.current_stage_return_type = self.type_node_name(
             getattr(func, "return_type", None)
         )
+        self.current_stage_entry_type = shader_type
         body = getattr(func, "body", [])
         if unsupported_buffer_array_info:
             code += self.unsupported_structured_buffer_array_function_body(
@@ -1487,6 +3101,7 @@ class GLSLCodeGen:
                 code += self.generate_statement(stmt, 1)
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
+        self.current_resource_aliases = previous_resource_aliases
         self.current_image_format_parameters = previous_image_format_parameters
         self.current_image_access_parameters = previous_image_access_parameters
         self.current_stage_output = previous_stage_output
@@ -1494,12 +3109,21 @@ class GLSLCodeGen:
         self.current_stage_outputs = previous_stage_outputs
         self.current_stage_output_member_map = previous_stage_output_member_map
         self.current_stage_parameter_aliases = previous_stage_parameter_aliases
+        self.current_mesh_output_parameters = previous_mesh_output_parameters
+        self.current_mesh_output_topology = previous_mesh_output_topology
         self.flattened_stage_variables = previous_flattened_stage_variables
         self.current_stage_return_type = previous_stage_return_type
+        self.current_stage_entry_type = previous_stage_entry_type
         self.current_function_return_type = previous_function_return_type
         self.local_variable_types = previous_local_variable_types
+        self.current_generic_function_substitutions = (
+            previous_generic_function_substitutions
+        )
         self.current_structured_buffer_array_parameters = (
             previous_structured_buffer_array_parameters
+        )
+        self.current_structured_buffer_counter_parameters = (
+            previous_structured_buffer_counter_parameters
         )
 
         code += "}\n\n"
@@ -1522,6 +3146,127 @@ class GLSLCodeGen:
                 functions.append(stage.entry_point)
 
         return functions
+
+    def stage_entry_function_ids(self, ast):
+        stage_names = {
+            "vertex",
+            "fragment",
+            "compute",
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
+            "mesh",
+            "task",
+            "amplification",
+            "object",
+            "ray_generation",
+            "ray_intersection",
+            "ray_closest_hit",
+            "ray_any_hit",
+            "ray_miss",
+            "ray_callable",
+        }
+        entry_ids = set()
+        for stage_name in stage_names:
+            entry_ids.update(id(func) for func in self.stage_functions(ast, stage_name))
+        return entry_ids
+
+    def type_node_references_name(self, type_node, struct_name):
+        if type_node is None:
+            return False
+        if self.type_node_name(type_node) == struct_name:
+            return True
+        element_type = getattr(type_node, "element_type", None)
+        if element_type is not None and self.type_node_references_name(
+            element_type, struct_name
+        ):
+            return True
+        return any(
+            self.type_node_references_name(arg, struct_name)
+            for arg in getattr(type_node, "generic_args", []) or []
+        )
+
+    def statement_declares_type(self, statement, struct_name):
+        if isinstance(statement, VariableNode) and self.type_node_references_name(
+            getattr(statement, "var_type", None), struct_name
+        ):
+            return True
+        for child_name in ("body", "else_body", "cases", "default", "statements"):
+            child = getattr(statement, child_name, None)
+            if child is None:
+                continue
+            if isinstance(child, list):
+                if any(
+                    self.statement_declares_type(item, struct_name) for item in child
+                ):
+                    return True
+            elif self.statement_declares_type(child, struct_name):
+                return True
+        return False
+
+    def function_signature_references_type(self, func, struct_name):
+        if self.type_node_references_name(
+            getattr(func, "return_type", None), struct_name
+        ):
+            return True
+        return any(
+            self.type_node_references_name(
+                getattr(param, "param_type", None), struct_name
+            )
+            for param in getattr(func, "parameters", getattr(func, "params", [])) or []
+        )
+
+    def function_body_declares_type(self, func, struct_name):
+        body = getattr(func, "body", [])
+        statements = getattr(body, "statements", body if isinstance(body, list) else [])
+        return any(
+            self.statement_declares_type(stmt, struct_name) for stmt in statements
+        )
+
+    def struct_member_references_type(self, struct, struct_name):
+        return any(
+            self.type_node_references_name(
+                getattr(member, "member_type", None), struct_name
+            )
+            for member in getattr(struct, "members", []) or []
+        )
+
+    def stage_io_struct_referenced_outside_stage_entries(self, ast, struct_name):
+        stage_entry_ids = self.stage_entry_function_ids(ast)
+        for func in getattr(ast, "functions", []) or []:
+            if id(func) in stage_entry_ids:
+                continue
+            if self.function_signature_references_type(
+                func, struct_name
+            ) or self.function_body_declares_type(func, struct_name):
+                return True
+
+        for stage in getattr(ast, "stages", {}).values():
+            for func in getattr(stage, "functions", []) or []:
+                if id(func) in stage_entry_ids:
+                    continue
+                if self.function_signature_references_type(
+                    func, struct_name
+                ) or self.function_body_declares_type(func, struct_name):
+                    return True
+
+        for struct in getattr(ast, "structs", []) or []:
+            if getattr(struct, "name", None) == struct_name:
+                continue
+            if self.struct_member_references_type(struct, struct_name):
+                return True
+        return False
+
+    def should_emit_flattened_stage_io_struct(
+        self, ast, struct_name, emitted_io, emit_graphics_io
+    ):
+        if not emit_graphics_io:
+            return True
+        if not emitted_io:
+            return True
+        if struct_name in self.fragment_output_struct_names:
+            return True
+        return self.stage_io_struct_referenced_outside_stage_entries(ast, struct_name)
 
     def stage_parameter_struct_names(self, ast, stage_name):
         struct_names = set()
@@ -1593,6 +3338,52 @@ class GLSLCodeGen:
                 add_parameters(entry_point)
 
         return parameters
+
+    def is_stage_local_resource_variable(self, node):
+        vtype = self.type_name_string(
+            getattr(node, "var_type", getattr(node, "vtype", "float"))
+        )
+        base_type = self.resource_base_type(vtype)
+        mapped_type = self.map_resource_type_with_format(base_type, node)
+        return (
+            mapped_type == "sampler"
+            or self.is_opaque_resource_type(mapped_type)
+            or self.is_structured_buffer_type(vtype)
+            or self.is_glsl_buffer_block_variable(node, vtype)
+        )
+
+    def is_stage_local_interface_variable(self, node):
+        if self.is_stage_local_resource_variable(node):
+            return False
+        return bool(self.glsl_variable_qualifier_prefix(node))
+
+    def deduplicate_stage_interface_declarations(self, nodes):
+        declarations = []
+        declarations_by_name = {}
+        for node in nodes:
+            name = self.resource_node_name(node)
+            if not name:
+                declarations.append(node)
+                continue
+
+            vtype, _, array_suffix, _ = self.resource_declaration_shape(node)
+            signature = (
+                self.map_type(vtype),
+                array_suffix,
+                self.glsl_variable_layout_prefix(node),
+                self.glsl_variable_qualifier_prefix(node),
+            )
+            existing = declarations_by_name.get(name)
+            if existing is None:
+                declarations_by_name[name] = signature
+                declarations.append(node)
+                continue
+            if existing != signature:
+                raise ValueError(
+                    "Conflicting OpenGL stage interface declaration for "
+                    f"'{name}': {signature} differs from {existing}"
+                )
+        return declarations
 
     def deduplicate_resource_declaration_nodes(self, nodes):
         declarations = []
@@ -1793,6 +3584,8 @@ class GLSLCodeGen:
         }
 
         def add_parameter(param, stage_name):
+            if stage_name == "mesh" and self.is_mesh_output_parameter(param):
+                return
             if not self.is_stage_entry_value_parameter(param):
                 return
             semantic = self.semantic_from_node(param)
@@ -1800,7 +3593,7 @@ class GLSLCodeGen:
                 return
 
             param_type = self.map_type(self.resource_node_type(param))
-            layout = self.map_semantic(semantic)
+            layout = self.stage_io_layout_for_node(param)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 stage_name,
@@ -1809,11 +3602,11 @@ class GLSLCodeGen:
                 param_type,
                 param.name,
             )
-            prefix = f"{layout} " if layout.startswith("layout(") else ""
+            prefix = self.stage_io_declaration_prefix(param, "in")
             parameter_declaration = format_c_style_array_declaration(
                 param_type, param.name
             )
-            declaration = f"{prefix}in {parameter_declaration};"
+            declaration = f"{prefix} {parameter_declaration};"
             if self.reserve_stage_io_declaration(
                 stage_name, "input", param.name, declaration
             ):
@@ -2001,6 +3794,79 @@ class GLSLCodeGen:
             maps[struct_name] = member_map
         return maps
 
+    def next_available_stage_io_layout(self, stage_name, direction, mapped_type):
+        count = self.stage_io_location_count(mapped_type)
+        ranges = sorted(self.stage_io_used_locations.get((stage_name, direction), []))
+        location = 0
+
+        while True:
+            end = location + count - 1
+            overlap = next(
+                (
+                    (used_start, used_end)
+                    for used_start, used_end, _ in ranges
+                    if location <= used_end and used_start <= end
+                ),
+                None,
+            )
+            if overlap is None:
+                return f"layout(location = {location})"
+            location = overlap[1] + 1
+
+    def fragment_output_member_layout_maps_for_outputs(self):
+        maps = {}
+
+        for struct_name, struct in self.structs_by_name.items():
+            if struct_name not in self.fragment_output_struct_names:
+                continue
+
+            member_layouts = {}
+            for member in getattr(struct, "members", []) or []:
+                output_name = self.fragment_output_member_name(member, struct_name)
+                layout = self.stage_io_layout_for_node(member)
+                if layout == "gl_FragDepth" or output_name == "gl_FragDepth":
+                    member_layouts[member.name] = "gl_FragDepth"
+                    continue
+                if not layout.startswith("layout("):
+                    continue
+
+                self.reserve_stage_io_layout(
+                    self.stage_io_used_locations,
+                    "fragment",
+                    "output",
+                    layout,
+                    self.member_type_name(member),
+                    output_name,
+                )
+                member_layouts[member.name] = layout
+
+            maps[struct_name] = member_layouts
+
+        for struct_name, struct in self.structs_by_name.items():
+            if struct_name not in self.fragment_output_struct_names:
+                continue
+
+            member_layouts = maps.setdefault(struct_name, {})
+            for member in getattr(struct, "members", []) or []:
+                if member.name in member_layouts:
+                    continue
+
+                output_name = self.fragment_output_member_name(member, struct_name)
+                layout = self.next_available_stage_io_layout(
+                    "fragment", "output", self.member_type_name(member)
+                )
+                self.reserve_stage_io_layout(
+                    self.stage_io_used_locations,
+                    "fragment",
+                    "output",
+                    layout,
+                    self.member_type_name(member),
+                    output_name,
+                )
+                member_layouts[member.name] = layout
+
+        return maps
+
     def type_node_name(self, type_node):
         if type_node is None:
             return None
@@ -2012,8 +3878,7 @@ class GLSLCodeGen:
         code = ""
         for member in getattr(node, "members", []) or []:
             member_type = self.member_type_name(member)
-            semantic = self.semantic_from_node(member)
-            layout = self.map_semantic(semantic)
+            layout = self.stage_io_layout_for_node(member)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "vertex",
@@ -2022,8 +3887,8 @@ class GLSLCodeGen:
                 member_type,
                 member.name,
             )
-            prefix = f"{layout} " if layout.startswith("layout(") else ""
-            declaration = f"{prefix}in {member_type} {member.name};"
+            prefix = self.stage_io_declaration_prefix(member, "in")
+            declaration = f"{prefix} {member_type} {member.name};"
             if self.reserve_stage_io_declaration(
                 "vertex", "input", member.name, declaration
             ):
@@ -2047,8 +3912,7 @@ class GLSLCodeGen:
             if self.is_vertex_builtin_output(output_name):
                 continue
 
-            semantic = self.semantic_from_node(member)
-            layout = self.map_semantic(semantic)
+            layout = self.stage_io_layout_for_node(member)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "vertex",
@@ -2057,8 +3921,8 @@ class GLSLCodeGen:
                 self.member_type_name(member),
                 output_name,
             )
-            prefix = f"{layout} " if layout.startswith("layout(") else ""
-            declaration = f"{prefix}out {self.member_type_name(member)} {output_name};"
+            prefix = self.stage_io_declaration_prefix(member, "out")
+            declaration = f"{prefix} {self.member_type_name(member)} {output_name};"
             if self.reserve_stage_io_declaration(
                 "vertex", "output", output_name, declaration
             ):
@@ -2072,8 +3936,7 @@ class GLSLCodeGen:
             if input_name is None:
                 continue
 
-            semantic = self.semantic_from_node(member)
-            layout = self.map_semantic(semantic)
+            layout = self.stage_io_layout_for_node(member)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "fragment",
@@ -2082,8 +3945,8 @@ class GLSLCodeGen:
                 self.member_type_name(member),
                 input_name,
             )
-            prefix = f"{layout} " if layout.startswith("layout(") else ""
-            declaration = f"{prefix}in {self.member_type_name(member)} {input_name};"
+            prefix = self.stage_io_declaration_prefix(member, "in")
+            declaration = f"{prefix} {self.member_type_name(member)} {input_name};"
             if self.reserve_stage_io_declaration(
                 "fragment", "input", input_name, declaration
             ):
@@ -2097,10 +3960,13 @@ class GLSLCodeGen:
             output_name = self.fragment_output_member_name(member, node.name)
             if output_name == "gl_FragDepth":
                 continue
-            semantic = self.semantic_from_node(member)
-            layout = self.map_semantic(semantic)
-            if not layout.startswith("layout("):
-                layout = "layout(location = 0)"
+            layout = self.fragment_output_member_layout_maps.get(node.name, {}).get(
+                member.name
+            )
+            if layout is None:
+                layout = self.map_semantic(self.semantic_from_node(member))
+                if not layout.startswith("layout("):
+                    layout = "layout(location = 0)"
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
                 "fragment",
@@ -2109,7 +3975,8 @@ class GLSLCodeGen:
                 member_type,
                 output_name,
             )
-            declaration = f"{layout} out {member_type} {output_name};"
+            prefix = self.stage_io_declaration_prefix(member, "out", layout)
+            declaration = f"{prefix} {member_type} {output_name};"
             if self.reserve_stage_io_declaration(
                 "fragment", "output", output_name, declaration
             ):
@@ -2254,6 +4121,13 @@ class GLSLCodeGen:
             return self.vertex_stage_output(func)
         return None
 
+    def is_void_stage_entry_return_value(self):
+        if self.current_stage_output is not None:
+            return False
+        if self.current_stage_entry_type is None:
+            return False
+        return self.current_function_return_type == "void"
+
     def vertex_stage_output(self, func):
         output_type = self.function_return_type(func)
         if output_type == "void":
@@ -2347,7 +4221,9 @@ class GLSLCodeGen:
                 "declaration": "",
             }
 
-        layout = self.map_semantic(semantic)
+        layout = self.stage_io_layout_for_node(func)
+        if not layout:
+            layout = self.map_semantic(semantic)
         if not layout.startswith("layout("):
             layout = "layout(location = 0)"
 
@@ -2360,7 +4236,8 @@ class GLSLCodeGen:
             output_type,
             output_name,
         )
-        declaration = f"{layout} out {output_type} {output_name};"
+        prefix = self.stage_io_declaration_prefix(func, "out", layout)
+        declaration = f"{prefix} {output_type} {output_name};"
         if not self.reserve_stage_io_declaration(
             "fragment", "output", output_name, declaration
         ):
@@ -2388,23 +4265,19 @@ class GLSLCodeGen:
     def generate_stage_struct_constructor_return(self, expr, indent):
         if not self.current_stage_output_member_map:
             return None
-        if not isinstance(expr, FunctionCallNode):
-            return None
-        if self.function_call_name(expr) != self.current_stage_return_type:
-            return None
 
         struct = self.structs_by_name.get(self.current_stage_return_type)
         if struct is None:
             return None
 
-        args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
         members = getattr(struct, "members", []) or []
-        if len(args) != len(members):
+        field_values = self.stage_struct_constructor_field_values(expr, members)
+        if field_values is None:
             return None
 
         indent_str = "    " * indent
         code = ""
-        for member, value_expr in zip(members, args):
+        for member, value_expr in field_values:
             output_name = self.current_stage_output_member_map.get(member.name)
             if output_name is None:
                 continue
@@ -2415,6 +4288,38 @@ class GLSLCodeGen:
         code += f"{indent_str}return;\n"
         return code
 
+    def stage_struct_constructor_field_values(self, expr, members):
+        if isinstance(expr, FunctionCallNode):
+            if self.function_call_name(expr) != self.current_stage_return_type:
+                return None
+            args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+            if len(args) != len(members):
+                return None
+            return list(zip(members, args))
+
+        if isinstance(expr, ConstructorNode):
+            constructor_type = self.type_name_string(
+                getattr(expr, "constructor_type", None)
+            )
+            if constructor_type != self.current_stage_return_type:
+                return None
+            args = list(getattr(expr, "arguments", []) or [])
+            named_args = dict(getattr(expr, "named_arguments", {}) or {})
+            if len(args) > len(members):
+                return None
+
+            values = []
+            for index, member in enumerate(members):
+                if index < len(args):
+                    values.append((member, args[index]))
+                    continue
+                if member.name not in named_args:
+                    return None
+                values.append((member, named_args[member.name]))
+            return values
+
+        return None
+
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as GLSL source."""
         indent_str = "    " * indent
@@ -2422,21 +4327,40 @@ class GLSLCodeGen:
         if isinstance(stmt, VariableNode):
             if stmt.name in self.flattened_stage_variables:
                 return ""
-            if hasattr(stmt, "var_type"):
-                var_type = self.convert_type_node_to_string(stmt.var_type)
-            elif hasattr(stmt, "vtype"):
-                var_type = stmt.vtype
-            else:
-                var_type = "float"
+            var_type = self.local_variable_declared_type(stmt)
+            if (
+                self.current_stage_output is not None
+                and stmt.name == self.current_stage_output["name"]
+            ):
+                initial_value = getattr(stmt, "initial_value", None)
+                if initial_value is None:
+                    return ""
+                init_expr = self.generate_expression_with_expected(
+                    initial_value, var_type
+                )
+                return f"{indent_str}{stmt.name} = {init_expr};\n"
+            local_name = self.glsl_local_identifier_name(stmt.name)
             self.local_variable_types[stmt.name] = var_type
 
             declaration = format_c_style_array_declaration(
-                self.map_type(var_type), stmt.name
+                self.map_type(var_type), local_name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
-            if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
+            initial_value = getattr(stmt, "initial_value", None)
+            if isinstance(initial_value, MatchNode):
+                code = f"{indent_str}{declaration};\n"
+                code += generate_match_expression_assignment(
+                    self,
+                    initial_value,
+                    local_name,
+                    var_type,
+                    indent,
+                    "GLSL",
+                )
+                return code
+            if initial_value is not None:
                 init_expr = self.generate_expression_with_expected(
-                    stmt.initial_value, var_type
+                    initial_value, var_type
                 )
                 return f"{indent_str}{declaration} = {init_expr};\n"
             else:
@@ -2444,6 +4368,11 @@ class GLSLCodeGen:
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)
         elif isinstance(stmt, AssignmentNode):
+            mesh_assignment = self.generate_mesh_output_assignment_statement(
+                stmt, indent
+            )
+            if mesh_assignment is not None:
+                return mesh_assignment
             return f"{indent_str}{self.generate_assignment(stmt)};\n"
         elif isinstance(stmt, BlockNode):
             return self.generate_block(stmt, indent)
@@ -2473,6 +4402,11 @@ class GLSLCodeGen:
             return_value_name = self.expression_name(stmt.value)
             if return_value_name in self.flattened_stage_variables:
                 return f"{indent_str}return;\n"
+            if (
+                self.current_stage_output is not None
+                and return_value_name == self.current_stage_output["name"]
+            ):
+                return f"{indent_str}return;\n"
             stage_struct_return = self.generate_stage_struct_constructor_return(
                 stmt.value, indent
             )
@@ -2492,6 +4426,8 @@ class GLSLCodeGen:
                     f"{indent_str}{self.current_stage_output['name']} = {value};\n"
                     f"{indent_str}return;\n"
                 )
+            if self.is_void_stage_entry_return_value():
+                return f"{indent_str}return;\n"
             if isinstance(stmt.value, list):
                 # Multiple return values
                 values = ", ".join(self.generate_expression(val) for val in stmt.value)
@@ -2505,22 +4441,102 @@ class GLSLCodeGen:
             type(stmt)
         ):
             # Handle ExpressionStatementNode
+            tail_return = self.generate_tail_expression_statement(stmt, indent)
+            if tail_return is not None:
+                return tail_return
+            mesh_assignment = self.generate_mesh_output_assignment_statement(
+                getattr(stmt, "expression", None), indent
+            )
+            if mesh_assignment is not None:
+                return mesh_assignment
+            mesh_intrinsic = self.generate_mesh_intrinsic_statement(
+                getattr(stmt, "expression", None), indent
+            )
+            if mesh_intrinsic is not None:
+                return mesh_intrinsic
+            mesh_helper = self.generate_mesh_output_helper_call_statement(
+                getattr(stmt, "expression", None), indent
+            )
+            if mesh_helper is not None:
+                return mesh_helper
             expr_code = self.generate_expression_statement(stmt)
             return f"{indent_str}{expr_code};\n"
         else:
             # Handle expressions that may be used as statements
+            mesh_intrinsic = self.generate_mesh_intrinsic_statement(stmt, indent)
+            if mesh_intrinsic is not None:
+                return mesh_intrinsic
+            mesh_helper = self.generate_mesh_output_helper_call_statement(stmt, indent)
+            if mesh_helper is not None:
+                return mesh_helper
             expr_result = self.generate_expression(stmt)
             if expr_result.strip():
                 return f"{indent_str}{expr_result};\n"
             else:
                 return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
 
+    def generate_tail_expression_statement(self, stmt, indent=0):
+        if not getattr(stmt, "is_tail_expression", False):
+            return None
+        value_expr = getattr(stmt, "expression", None)
+
+        stage_struct_return = self.generate_stage_struct_constructor_return(
+            value_expr,
+            indent,
+        )
+        if stage_struct_return is not None:
+            return stage_struct_return
+
+        indent_str = "    " * indent
+        if self.current_stage_output is not None:
+            value = self.generate_expression_with_expected(
+                value_expr,
+                self.current_function_return_type,
+            )
+            return (
+                f"{indent_str}{self.current_stage_output['name']} = {value};\n"
+                f"{indent_str}return;\n"
+            )
+
+        return_type = self.type_name_string(self.current_function_return_type)
+        if not return_type or return_type == "void":
+            return None
+
+        value = self.generate_expression_with_expected(value_expr, return_type)
+        return f"{indent_str}return {value};\n"
+
+    def local_variable_declared_type(self, stmt):
+        var_type = getattr(stmt, "var_type", None)
+        if var_type is None:
+            var_type = getattr(stmt, "vtype", None)
+        if var_type is None:
+            var_type = self.expression_result_type(getattr(stmt, "initial_value", None))
+        return self.type_name_string(var_type) or "float"
+
+    def glsl_local_identifier_name(self, name):
+        if name not in self.GLSL_RESERVED_IDENTIFIERS:
+            return name
+
+        used_names = set(self.local_variable_types)
+        used_names.update(self.current_identifier_aliases.values())
+        alias = f"{name}_"
+        suffix = 1
+        while alias in used_names:
+            suffix += 1
+            alias = f"{name}_{suffix}"
+        self.current_identifier_aliases[name] = alias
+        return alias
+
     def local_variable_qualifier(self, node):
         return "const " if "const" in getattr(node, "qualifiers", []) else ""
 
     def global_variable_qualifier(self, node):
+        qualifier_prefix = self.glsl_variable_qualifier_prefix(node)
+        if qualifier_prefix:
+            return f"{qualifier_prefix} "
+
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
-        if "shared" in qualifiers:
+        if qualifiers & {"shared", "groupshared", "workgroup", "threadgroup"}:
             return "shared "
         if "const" in qualifiers:
             return "const "
@@ -2534,7 +4550,186 @@ class GLSLCodeGen:
             initializer = (
                 f" = {self.generate_expression_with_expected(initial_value, vtype)}"
             )
-        return f"{qualifier}{declaration}{initializer};\n"
+        layout = self.glsl_variable_layout_prefix(node)
+        return f"{layout}{qualifier}{declaration}{initializer};\n"
+
+    def generate_stage_local_interface_variable_declaration(self, node):
+        vtype, _, array_suffix, _ = self.resource_declaration_shape(node)
+        declaration = format_c_style_array_declaration(
+            f"{self.map_type(vtype)}{array_suffix}", self.resource_node_name(node, "")
+        )
+        return self.generate_global_variable_declaration(node, declaration, vtype)
+
+    def glsl_variable_qualifier_prefix(self, node):
+        qualifiers = [
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        ]
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name:
+                qualifiers.append(str(attr_name).lower())
+
+        emitted = []
+
+        def add(qualifier):
+            if qualifier not in emitted:
+                emitted.append(qualifier)
+
+        for qualifier in qualifiers:
+            normalized = (
+                qualifier[len("glsl_") :]
+                if qualifier.startswith("glsl_")
+                else qualifier
+            )
+            normalized = normalized.replace("-", "_")
+            if normalized in {"perprimitive", "perprimitiveext"}:
+                add("perprimitiveEXT")
+            elif normalized in {
+                "task_payload_shared",
+                "taskpayloadshared",
+                "taskpayloadsharedext",
+            }:
+                add("taskPayloadSharedEXT")
+            elif normalized in {"raypayload", "raypayloadext"}:
+                add("rayPayloadEXT")
+            elif normalized in {"raypayloadin", "raypayloadinext"}:
+                add("rayPayloadInEXT")
+            elif normalized in {"hitattribute", "hitattributeext"}:
+                add("hitAttributeEXT")
+            elif normalized in {"callabledata", "callabledataext"}:
+                add("callableDataEXT")
+            elif normalized in {"callabledatain", "callabledatainext"}:
+                add("callableDataInEXT")
+            elif normalized in {"shared", "groupshared", "workgroup", "threadgroup"}:
+                add("shared")
+            elif normalized in {
+                "invariant",
+                "precise",
+                "patch",
+                "flat",
+                "smooth",
+                "noperspective",
+                "centroid",
+                "sample",
+                "in",
+                "out",
+                "lowp",
+                "mediump",
+                "highp",
+            }:
+                add(normalized)
+
+        if not emitted:
+            return ""
+
+        order = {
+            "invariant": 0,
+            "precise": 1,
+            "patch": 2,
+            "perprimitiveEXT": 3,
+            "flat": 4,
+            "smooth": 5,
+            "noperspective": 6,
+            "centroid": 7,
+            "sample": 8,
+            "in": 9,
+            "out": 10,
+            "lowp": 11,
+            "mediump": 12,
+            "highp": 13,
+            "shared": 14,
+            "taskPayloadSharedEXT": 15,
+            "rayPayloadEXT": 16,
+            "rayPayloadInEXT": 17,
+            "hitAttributeEXT": 18,
+            "callableDataEXT": 19,
+            "callableDataInEXT": 20,
+        }
+        emitted.sort(key=lambda qualifier: order.get(qualifier, len(order)))
+        return " ".join(emitted)
+
+    def glsl_variable_layout_prefix(self, node):
+        layout_parts = []
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            normalized = str(attr_name).lower()
+            if normalized.startswith("glsl_"):
+                normalized = normalized[len("glsl_") :]
+            normalized = normalized.replace("-", "_")
+            if normalized in self.GLSL_BLEND_SUPPORT_LAYOUT_NAMES:
+                continue
+            if normalized in self.GLSL_BARE_LAYOUT_ATTRIBUTE_NAMES:
+                arguments = getattr(attr, "arguments", []) or []
+                if arguments:
+                    continue
+                layout_parts.append(normalized)
+                continue
+            if normalized not in self.GLSL_LAYOUT_ATTRIBUTE_NAMES:
+                continue
+            arguments = getattr(attr, "arguments", []) or []
+            if len(arguments) != 1:
+                continue
+            layout_parts.append(
+                f"{normalized} = {self.attribute_value_to_string(arguments[0])}"
+            )
+        if not layout_parts:
+            return ""
+        return f"layout({', '.join(layout_parts)}) "
+
+    def is_glsl_stage_io_metadata_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return False
+
+        normalized = str(attr_name).lower()
+        if normalized.startswith("glsl_"):
+            normalized = normalized[len("glsl_") :]
+        normalized = normalized.replace("-", "_")
+
+        return (
+            normalized in self.GLSL_LAYOUT_ATTRIBUTE_NAMES
+            or normalized in self.GLSL_BARE_LAYOUT_ATTRIBUTE_NAMES
+            or normalized in self.GLSL_VARIABLE_QUALIFIER_ATTRIBUTE_NAMES
+            or normalized in self.GLSL_STORAGE_QUALIFIER_ATTRIBUTE_NAMES
+            or normalized
+            in {"interface_block", "interface_instance", "interface_array"}
+        )
+
+    def stage_io_layout_for_node(self, node):
+        explicit_layout = self.glsl_variable_layout_prefix(node).strip()
+        if explicit_layout:
+            return explicit_layout
+        return self.map_semantic(self.semantic_from_node(node))
+
+    def stage_io_declaration_prefix(self, node, direction, layout=None):
+        parts = []
+        if layout is None:
+            layout = self.stage_io_layout_for_node(node)
+        if layout.startswith("layout("):
+            parts.append(layout)
+
+        qualifiers = [
+            qualifier
+            for qualifier in self.glsl_variable_qualifier_prefix(node).split()
+            if qualifier not in {"in", "out", "inout"}
+        ]
+        precision = [
+            qualifier
+            for qualifier in qualifiers
+            if qualifier in self.GLSL_PRECISION_QUALIFIERS
+        ]
+        other_qualifiers = [
+            qualifier
+            for qualifier in qualifiers
+            if qualifier not in self.GLSL_PRECISION_QUALIFIERS
+        ]
+        parts.extend(other_qualifiers)
+        parts.append(direction)
+        parts.extend(precision)
+        return " ".join(parts)
 
     def type_name_string(self, vtype):
         if vtype is None:
@@ -2715,10 +4910,31 @@ class GLSLCodeGen:
             if len(member_types) == 1:
                 return next(iter(member_types))
             return None
+        if isinstance(expr, ConstructorNode):
+            return infer_enum_constructor_type(
+                self, expr
+            ) or infer_struct_constructor_type(self, expr)
+        if isinstance(expr, MatchNode):
+            return infer_match_expression_result_type(self, expr)
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            numeric_result_type = numeric_trait_method_result_type(self, expr)
+            if numeric_result_type:
+                return numeric_result_type
+            if func_name in {"normalize", "reflect"} and args:
+                return self.expression_result_type(args[0])
+            if func_name == "dot" and args:
+                return (
+                    self.vector_component_type(self.expression_result_type(args[0]))
+                    or "float"
+                )
+            if func_name == "cross" and args:
+                return self.expression_result_type(args[0])
+            specialized_func_name = generic_function_call_name(self, func_name, args)
+            if specialized_func_name in self.function_return_types:
+                return self.function_return_types[specialized_func_name]
             if func_name in self.function_return_types:
                 return self.function_return_types[func_name]
             if func_name == "imageLoad" and args:
@@ -2732,6 +4948,234 @@ class GLSLCodeGen:
                 return literal_type
         if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             return self.local_variable_types.get(getattr(expr, "name", None))
+        return None
+
+    def generate_mesh_intrinsic_statement(self, node, indent=0):
+        if not isinstance(node, MeshOpNode):
+            return None
+        if node.operation != "DispatchMesh":
+            return None
+
+        if self.current_stage_entry_type not in {"task", "amplification", "object"}:
+            return None
+
+        args = getattr(node, "arguments", []) or []
+        if len(args) not in {3, 4}:
+            return None
+
+        indent_str = "    " * indent
+        dispatch_args = ", ".join(self.generate_expression(arg) for arg in args[:3])
+        statements = []
+
+        if len(args) == 4:
+            payload_expr = args[3]
+            target = self.glsl_dispatch_mesh_payload_target(payload_expr)
+            if target is None:
+                statements.append(
+                    f"{indent_str}/* GLSL DispatchMesh payload argument "
+                    "requires taskPayloadSharedEXT storage */;"
+                )
+            elif self.expression_name(payload_expr) != target["name"]:
+                payload_value = self.generate_expression_with_expected(
+                    payload_expr, target["raw_type"]
+                )
+                statements.append(f"{indent_str}{target['name']} = {payload_value};")
+
+        statements.append(f"{indent_str}EmitMeshTasksEXT({dispatch_args});")
+        return "\n".join(statements) + "\n"
+
+    def generate_mesh_output_helper_call_statement(self, node, indent=0):
+        if not isinstance(node, FunctionCallNode):
+            return None
+        if self.current_stage_entry_type != "mesh":
+            return None
+
+        func_name = self.function_call_name(node)
+        args = getattr(node, "arguments", getattr(node, "args", [])) or []
+        indent_str = "    " * indent
+
+        if func_name == "SetVertex" and len(args) == 2:
+            index = self.generate_expression(args[0])
+            value = self.glsl_mesh_vertex_helper_value(args[1])
+            return (
+                f"{indent_str}gl_MeshVerticesEXT[{index}].gl_Position = " f"{value};\n"
+            )
+
+        if func_name == "SetPrimitive" and len(args) == 2:
+            index_builtin = self.mesh_primitive_index_builtin(
+                self.current_mesh_output_topology
+            )
+            if index_builtin is None:
+                return (
+                    f"{indent_str}/* GLSL mesh SetPrimitive requires "
+                    "output topology */;\n"
+                )
+            index = self.generate_expression(args[0])
+            value = self.generate_expression_with_expected(args[1], None)
+            return f"{indent_str}{index_builtin}[{index}] = {value};\n"
+
+        return None
+
+    def glsl_mesh_vertex_helper_value(self, expr):
+        value = self.generate_expression_with_expected(expr, None)
+        value_type = self.map_type(self.expression_result_type(expr))
+        if value_type == "vec3":
+            return f"vec4({value}, 1.0)"
+        return value
+
+    def generate_mesh_output_assignment_statement(self, node, indent=0):
+        if (
+            not isinstance(node, AssignmentNode)
+            or not self.current_mesh_output_parameters
+        ):
+            return None
+
+        left_node = getattr(node, "target", getattr(node, "left", None))
+        right_node = getattr(node, "value", getattr(node, "right", None))
+        op = self.map_operator(getattr(node, "operator", getattr(node, "op", "=")))
+        indent_str = "    " * indent
+
+        target = self.mesh_output_assignment_target(left_node)
+        if target is not None:
+            right = self.generate_expression_with_expected(
+                right_node, self.expression_result_type(left_node)
+            )
+            return f"{indent_str}{target} {op} {right};\n"
+
+        expanded_targets = self.mesh_output_whole_assignment_targets(left_node)
+        if expanded_targets is None or op != "=":
+            return None
+
+        access = self.mesh_output_array_access(left_node)
+        constructor_values = (
+            self.mesh_output_constructor_assignment_values(access[0], right_node)
+            if access is not None
+            else None
+        )
+        right = self.generate_expression_with_expected(
+            right_node, self.expression_result_type(left_node)
+        )
+        code = ""
+        for target, member_name, member_type in expanded_targets:
+            value_expr = (
+                constructor_values.get(member_name)
+                if constructor_values is not None
+                else None
+            )
+            if value_expr is None:
+                value = f"{right}.{member_name}"
+            else:
+                value = self.generate_expression_with_expected(value_expr, member_type)
+            code += f"{indent_str}{target} = {value};\n"
+        return code
+
+    def mesh_output_constructor_assignment_values(self, info, expr):
+        struct = self.structs_by_name.get(info["element_type"])
+        if struct is None:
+            return None
+
+        members = getattr(struct, "members", []) or []
+        field_values = self.mesh_output_constructor_field_values(
+            expr, info["element_type"], members
+        )
+        if field_values is None:
+            return None
+        return {member.name: value_expr for member, value_expr in field_values}
+
+    def mesh_output_constructor_field_values(self, expr, struct_name, members):
+        if isinstance(expr, FunctionCallNode):
+            if self.function_call_name(expr) != struct_name:
+                return None
+            args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+            if len(args) != len(members):
+                return None
+            return list(zip(members, args))
+
+        if not isinstance(expr, ConstructorNode):
+            return None
+
+        constructor_type = self.type_name_string(
+            getattr(expr, "constructor_type", None)
+        )
+        if constructor_type != struct_name:
+            return None
+
+        args = list(getattr(expr, "arguments", []) or [])
+        named_args = dict(getattr(expr, "named_arguments", {}) or {})
+        if len(args) > len(members):
+            return None
+
+        values = []
+        for index, member in enumerate(members):
+            if index < len(args):
+                values.append((member, args[index]))
+                continue
+            if member.name not in named_args:
+                return None
+            values.append((member, named_args[member.name]))
+        return values
+
+    def mesh_output_assignment_target(self, node):
+        if isinstance(node, MemberAccessNode):
+            access = self.mesh_output_array_access(getattr(node, "object", None))
+            if access is None:
+                return None
+            info, index = access
+            if info["role"] not in {"vertices", "primitives"}:
+                return None
+            return self.mesh_output_member_target(info, index, str(node.member))
+
+        access = self.mesh_output_array_access(node)
+        if access is None:
+            return None
+        info, index = access
+        if info["role"] != "indices":
+            return None
+        index_builtin = info.get("index_builtin")
+        return f"{index_builtin}[{index}]" if index_builtin else None
+
+    def mesh_output_whole_assignment_targets(self, node):
+        access = self.mesh_output_array_access(node)
+        if access is None:
+            return None
+        info, index = access
+        if info["role"] not in {"vertices", "primitives"}:
+            return None
+        targets = []
+        for member_name, member_info in info["members"].items():
+            target = self.mesh_output_member_target(info, index, member_name)
+            if target is None:
+                return None
+            targets.append((target, member_name, member_info["type"]))
+        return targets
+
+    def mesh_output_array_access(self, node):
+        if not isinstance(node, ArrayAccessNode):
+            return None
+        array_expr = getattr(node, "array", getattr(node, "array_expr", None))
+        name = self.expression_name(array_expr)
+        info = self.current_mesh_output_parameters.get(name)
+        if info is None:
+            return None
+        index_expr = getattr(node, "index", getattr(node, "index_expr", None))
+        return info, self.generate_expression(index_expr)
+
+    def mesh_output_member_target(self, info, index, member_name):
+        member_info = info["members"].get(member_name)
+        if member_info is None:
+            return None
+
+        semantic = member_info["semantic"]
+        if info["role"] == "vertices":
+            if self.is_vertex_builtin_output(semantic):
+                return f"gl_MeshVerticesEXT[{index}].{semantic}"
+            return f"{member_info['output_name']}[{index}]"
+
+        if info["role"] == "primitives":
+            if self.is_mesh_primitive_builtin(semantic):
+                return f"gl_MeshPrimitivesEXT[{index}].{semantic}"
+            return f"{member_info['output_name']}[{index}]"
+
         return None
 
     def generate_assignment(self, node, is_main=False):
@@ -2766,7 +5210,7 @@ class GLSLCodeGen:
                 code += f"{indent_str}}}"
 
         if hasattr(node, "else_body") and node.else_body:
-            code += f" else {{\n"
+            code += " else {\n"
             else_body = node.else_body
             code += self.generate_scoped_statement_body(else_body, indent + 1)
             code += f"{indent_str}}}"
@@ -2893,33 +5337,9 @@ class GLSLCodeGen:
         return code
 
     def generate_match(self, node, indent):
-        indent_str = "    " * indent
-        expression = self.generate_expression(getattr(node, "expression", ""))
-
-        code = f"{indent_str}switch ({expression}) {{\n"
-        for arm in getattr(node, "arms", []) or []:
-            pattern = getattr(arm, "pattern", None)
-            if not self.is_supported_switch_match_arm(arm):
-                raise ValueError(
-                    "Unsupported match arm for GLSL codegen; only unguarded "
-                    "literal and wildcard patterns can be lowered to switch"
-                )
-
-            if isinstance(pattern, WildcardPatternNode):
-                label = "default"
-            else:
-                label = f"case {self.generate_expression(pattern.literal)}"
-            body = getattr(arm, "body", [])
-            code += self.generate_switch_case(label, body, indent + 1, auto_break=True)
-
-        code += f"{indent_str}}}\n"
-        return code
-
-    def is_supported_switch_match_arm(self, arm):
-        if getattr(arm, "guard", None) is not None:
-            return False
-        pattern = getattr(arm, "pattern", None)
-        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
+        if is_switch_lowerable_match(node):
+            return generate_switch_match(self, node, indent)
+        return generate_ordered_conditional_match(self, node, indent, "GLSL")
 
     def statement_body_terminates(self, body):
         if hasattr(body, "statements"):
@@ -2965,10 +5385,12 @@ class GLSLCodeGen:
 
     def generate_scoped_statement_body(self, body, indent):
         previous_local_variable_types = dict(self.local_variable_types)
+        previous_identifier_aliases = dict(self.current_identifier_aliases)
         try:
             return self.generate_statement_body(body, indent)
         finally:
             self.local_variable_types = previous_local_variable_types
+            self.current_identifier_aliases = previous_identifier_aliases
 
     def generate_statement_body(self, body, indent):
         code = ""
@@ -3005,10 +5427,22 @@ class GLSLCodeGen:
             return str(expr)
         elif hasattr(expr, "__class__") and "VariableNode" in str(type(expr)):
             if hasattr(expr, "name"):
+                if expr.name in self.current_resource_aliases:
+                    return self.current_resource_aliases[expr.name]["expression"]
+                if expr.name in getattr(self, "enum_variant_constants", {}):
+                    return enum_value_expression(self, expr.name)
+                if expr.name in self.current_identifier_aliases:
+                    return self.current_identifier_aliases[expr.name]
                 return self.current_stage_parameter_aliases.get(expr.name, expr.name)
             else:
                 return str(expr)
         elif hasattr(expr, "__class__") and "IdentifierNode" in str(type(expr)):
+            if expr.name in self.current_resource_aliases:
+                return self.current_resource_aliases[expr.name]["expression"]
+            if expr.name in getattr(self, "enum_variant_constants", {}):
+                return enum_value_expression(self, expr.name)
+            if expr.name in self.current_identifier_aliases:
+                return self.current_identifier_aliases[expr.name]
             return self.current_stage_parameter_aliases.get(expr.name, expr.name)
         elif hasattr(expr, "__class__") and "LiteralNode" in str(type(expr)):
             literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
@@ -3036,15 +5470,19 @@ class GLSLCodeGen:
             args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
             return f"{expr.operation}({args})"
         elif isinstance(expr, RayTracingOpNode):
-            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
-            return f"{expr.operation}({args})"
+            args = [self.generate_expression(arg) for arg in expr.arguments]
+            return self.map_ray_tracing_intrinsic(expr.operation, args)
         elif isinstance(expr, MeshOpNode):
-            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
-            return f"{expr.operation}({args})"
+            arguments = expr.arguments
+            if expr.operation == "DispatchMesh" and len(arguments) == 4:
+                arguments = arguments[:3]
+            args = ", ".join(self.generate_expression(arg) for arg in arguments)
+            operation = self.map_mesh_intrinsic(expr.operation)
+            return f"{operation}({args})"
         elif isinstance(expr, RayQueryOpNode):
-            query = self.generate_expression(expr.query_expr)
-            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
-            return f"{query}.{expr.operation}({args})"
+            return self.map_ray_query_intrinsic(
+                expr.operation, expr.query_expr, expr.arguments
+            )
         elif hasattr(expr, "__class__") and "ArrayAccessNode" in str(type(expr)):
             # Handle array access properly
             if hasattr(expr, "array") and hasattr(expr, "index"):
@@ -3053,11 +5491,27 @@ class GLSLCodeGen:
                 return f"{array}[{index}]"
             else:
                 return str(expr)
+        elif isinstance(expr, ConstructorNode):
+            enum_constructor = generate_enum_constructor_expression(self, expr)
+            if enum_constructor is not None:
+                return enum_constructor
+            constructor = generate_struct_constructor_expression(self, expr)
+            if constructor is not None:
+                return constructor
+            return str(expr)
         elif hasattr(expr, "__class__") and "FunctionCallNode" in str(type(expr)):
             # Map function names to GLSL equivalents
             func_expr = getattr(expr, "function", getattr(expr, "name", expr))
+            numeric_trait_call = generate_numeric_trait_method_call(
+                self,
+                func_expr,
+                expr.args,
+            )
+            if numeric_trait_call is not None:
+                return numeric_trait_call
+
             func_name = None
-            if hasattr(func_expr, "name"):
+            if hasattr(func_expr, "name") and isinstance(func_expr.name, str):
                 func_name = func_expr.name
                 callee = func_name
             elif isinstance(func_expr, str):
@@ -3066,7 +5520,33 @@ class GLSLCodeGen:
             else:
                 callee = self.generate_expression(func_expr)
             original_func_name = func_name
+
+            ray_query_member_call = self.ray_query_member_function_call(
+                func_expr, expr.args
+            )
+            if ray_query_member_call is not None:
+                return ray_query_member_call
+
+            synchronization_call = self.synchronization_function_call(
+                original_func_name, expr.args
+            )
+            if synchronization_call is not None:
+                return synchronization_call
+
             func_name = self.function_map.get(func_name, func_name)
+
+            static_generic_call = generate_static_generic_numeric_call(
+                self,
+                original_func_name,
+            )
+            if static_generic_call is not None:
+                return static_generic_call
+
+            enum_constructor = generate_enum_constructor_call(
+                self, original_func_name, expr.args
+            )
+            if enum_constructor is not None:
+                return enum_constructor
 
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:
@@ -3075,6 +5555,15 @@ class GLSLCodeGen:
             buffer_call = self.generate_buffer_call(func_name, expr.args)
             if buffer_call is not None:
                 return buffer_call
+
+            specialized_func_name = generic_function_call_name(
+                self,
+                original_func_name,
+                expr.args,
+            )
+            if specialized_func_name is not None:
+                func_name = specialized_func_name
+                callee = specialized_func_name
 
             constructor = self.glsl_constructor_type(func_name)
             if constructor:
@@ -3085,9 +5574,24 @@ class GLSLCodeGen:
                 return f"{constructor}({args})"
 
             self.validate_function_image_access_arguments(func_name, expr.args)
-            call_args = self.filter_sampler_arguments(original_func_name, expr.args)
+            resource_specialization = self.glsl_resource_function_call_specialization(
+                func_name,
+                expr.args,
+            )
+            argument_func_name = original_func_name
+            if resource_specialization is not None:
+                func_name = resource_specialization.name
+                callee = resource_specialization.name
+                argument_func_name = func_name
+                call_args = self.glsl_resource_specialized_call_arguments(
+                    resource_specialization,
+                    expr.args,
+                )
+                call_args = self.filter_sampler_arguments(func_name, call_args)
+            else:
+                call_args = self.filter_sampler_arguments(original_func_name, expr.args)
             args = ", ".join(
-                self.generate_function_call_arguments(original_func_name, call_args)
+                self.generate_function_call_arguments(argument_func_name, call_args)
             )
             return f"{func_name or callee}({args})"
         elif hasattr(expr, "__class__") and "MemberAccessNode" in str(type(expr)):
@@ -3103,6 +5607,18 @@ class GLSLCodeGen:
             return f"({condition} ? {true_expr} : {false_expr})"
         else:
             return str(expr)
+
+    def synchronization_function_call(self, func_name, args):
+        if args or func_name in self.function_return_types:
+            return None
+        if func_name == "workgroupBarrier":
+            return "barrier()"
+        return None
+
+    def ray_query_member_function_call(self, func_expr, args):
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+        return self.map_ray_query_intrinsic(func_expr.member, func_expr.object, args)
 
     def generate_buffer_call(self, func_name, args):
         if func_name == "buffer_load" and len(args) >= 2:
@@ -3123,15 +5639,26 @@ class GLSLCodeGen:
                 f"{self.structured_buffer_access_expression(args[0], index)} = {value}"
             )
         if func_name == "buffer_append" and len(args) >= 2:
+            value = self.generate_expression(args[1])
+            counter = self.structured_buffer_counter_reference(args[0])
+            if counter is None:
+                return (
+                    "/* unsupported GLSL buffer append: requires append/consume "
+                    "counter buffer */"
+                )
+            index = f"atomicAdd({counter}, 1u)"
             return (
-                "/* unsupported GLSL buffer append: requires explicit "
-                "counter buffer */"
+                f"{self.structured_buffer_access_expression(args[0], index)} = {value}"
             )
         if func_name == "buffer_consume" and args:
-            return (
-                "0 /* unsupported GLSL buffer consume: requires explicit "
-                "counter buffer */"
-            )
+            counter = self.structured_buffer_counter_reference(args[0])
+            if counter is None:
+                return (
+                    "0 /* unsupported GLSL buffer consume: requires append/consume "
+                    "counter buffer */"
+                )
+            index = f"(atomicAdd({counter}, uint(-1)) - 1u)"
+            return self.structured_buffer_access_expression(args[0], index)
         if func_name == "buffer_dimensions" and args:
             length_expr = self.structured_buffer_length_expression(args[0])
             if len(args) >= 2:
@@ -3171,6 +5698,24 @@ class GLSLCodeGen:
         if instance_member:
             return f"{buffer}.{instance_member}.length()"
         return f"{buffer}.length()"
+
+    def structured_buffer_counter_reference(self, buffer_arg):
+        array_access = self.structured_buffer_array_parameter_access(buffer_arg)
+        if array_access is not None:
+            info, selector = array_access
+            counter_names = info.get("counter_expanded_names")
+            if counter_names:
+                counter_info = {**info, "expanded_names": counter_names}
+                return self.structured_buffer_array_select_expression(
+                    counter_info,
+                    selector,
+                    lambda name: f"{name}[0]",
+                )
+
+        counter_data = self.structured_buffer_counter_data_argument(buffer_arg)
+        if counter_data is None:
+            return None
+        return f"{counter_data}[0]"
 
     def flattened_stage_member_name(self, expr):
         object_name = self.expression_name(getattr(expr, "object", None))
@@ -3262,15 +5807,23 @@ class GLSLCodeGen:
             param_type, param_name, func_name
         )
         if buffer_array is not None:
-            return self.structured_buffer_array_data_arguments(
+            generated_args = self.structured_buffer_array_data_arguments(
                 arg, buffer_array["count"]
             )
+            if self.structured_buffer_requires_counter(buffer_array["base_type"]):
+                generated_args += self.structured_buffer_array_counter_arguments(
+                    arg, buffer_array["count"]
+                )
+            return generated_args
         if (
             param_type is not None
             and self.is_structured_buffer_type(param_type)
             and not self.is_array_type(param_type)
         ):
-            return self.structured_buffer_data_argument(arg)
+            data_arg = self.structured_buffer_data_argument(arg)
+            if self.structured_buffer_requires_counter(param_type):
+                return [data_arg, self.structured_buffer_counter_data_argument(arg)]
+            return data_arg
         return self.generate_expression(arg)
 
     def structured_buffer_array_data_arguments(self, arg, count):
@@ -3293,6 +5846,56 @@ class GLSLCodeGen:
         if instance_member:
             return f"{arg_code}.{instance_member}"
         return arg_code
+
+    def structured_buffer_array_counter_arguments(self, arg, count):
+        arg_name = self.expression_name(arg)
+        expanded = self.current_structured_buffer_array_parameters.get(arg_name)
+        if expanded is not None:
+            counter_names = expanded.get("counter_expanded_names", [])
+            return counter_names[:count]
+
+        instance_name = self.structured_buffer_counter_instances.get(arg_name)
+        member_name = self.structured_buffer_counter_members.get(arg_name)
+        if instance_name and member_name:
+            return [f"{instance_name}[{index}].{member_name}" for index in range(count)]
+        return [self.structured_buffer_counter_data_argument(arg)] * count
+
+    def structured_buffer_counter_data_argument(self, arg):
+        array_access = self.structured_buffer_array_parameter_access(arg)
+        if array_access is not None:
+            info, selector = array_access
+            counter_names = info.get("counter_expanded_names")
+            if counter_names:
+                counter_info = {**info, "expanded_names": counter_names}
+                return self.structured_buffer_array_select_expression(
+                    counter_info,
+                    selector,
+                    lambda name: name,
+                )
+
+        arg_name = self.expression_name(arg)
+        counter_parameter = self.current_structured_buffer_counter_parameters.get(
+            arg_name
+        )
+        if counter_parameter is not None:
+            return counter_parameter
+
+        if isinstance(arg, ArrayAccessNode) or (
+            hasattr(arg, "__class__") and "ArrayAccess" in str(arg.__class__)
+        ):
+            array_expr = getattr(arg, "array", getattr(arg, "array_expr", None))
+            index_expr = getattr(arg, "index", getattr(arg, "index_expr", None))
+            array_name = self.expression_name(array_expr)
+            instance_name = self.structured_buffer_counter_instances.get(array_name)
+            member_name = self.structured_buffer_counter_members.get(array_name)
+            if instance_name and member_name:
+                index = self.generate_expression(index_expr)
+                return f"{instance_name}[{index}].{member_name}"
+
+        member_name = self.structured_buffer_counter_members.get(arg_name)
+        if member_name and arg_name not in self.structured_buffer_counter_instances:
+            return member_name
+        return None
 
     def structured_buffer_array_parameter_access(self, buffer_arg):
         if not isinstance(buffer_arg, ArrayAccessNode) and not (
@@ -3372,6 +5975,9 @@ class GLSLCodeGen:
         texture_name = self.expression_name(texture_arg)
         if not texture_name:
             return None
+        alias = self.current_resource_aliases.get(texture_name)
+        if alias is not None:
+            return alias.get("type")
         return self.current_texture_parameters.get(
             texture_name, self.texture_variable_types.get(texture_name)
         )
@@ -4142,6 +6748,29 @@ class GLSLCodeGen:
             component_values.append(f"{gather}.{component_suffixes[index]}")
         return f"vec4({', '.join(component_values)})"
 
+    def texture_gather_compare_offsets_args(self, extra_args):
+        if not extra_args:
+            return None, None
+
+        compare_arg = extra_args[0]
+        offset_args, component_arg = self.texture_gather_offsets_args(extra_args[1:])
+        if component_arg is not None:
+            return None, None
+        return compare_arg, offset_args
+
+    def texture_gather_compare_offsets_expression(
+        self, texture_name, coord, compare, offset_args
+    ):
+        component_suffixes = ("x", "y", "z", "w")
+        component_values = []
+        for index, offset_arg in enumerate(offset_args):
+            offset = self.generate_expression(offset_arg)
+            gather = (
+                f"textureGatherOffset({texture_name}, {coord}, {compare}, {offset})"
+            )
+            component_values.append(f"{gather}.{component_suffixes[index]}")
+        return f"vec4({', '.join(component_values)})"
+
     def texture_gather_dynamic_component_expression(self, build_expression, component):
         component_calls = [build_expression(index) for index in range(4)]
         return (
@@ -4871,6 +7500,93 @@ class GLSLCodeGen:
     def texture_gather_compare_offset_supported(self, texture_type):
         return self.texture_sampling_capabilities(texture_type)["gather_compare_offset"]
 
+    def validate_texture_gather_compare_offsets_argument(
+        self, func_name, texture_type, offset_arg
+    ):
+        offset_type = self.expression_result_type(offset_arg)
+        if offset_type is None:
+            return
+        if not self.is_integer_coordinate_type(offset_type):
+            raise ValueError(
+                operation_argument_type_error(
+                    "OpenGL",
+                    "resource",
+                    func_name,
+                    "an integer",
+                    "offset",
+                    expression_debug_name(offset_arg),
+                    self.type_name_string(offset_type),
+                )
+            )
+        expected_dimension = self.resource_offset_dimension(
+            "textureGatherCompareOffset", texture_type
+        )
+        offset_dimension = integer_coordinate_dimension_from_type_name(
+            self.type_name_string(offset_type), self.map_type
+        )
+        if offset_dimension is None or offset_dimension == expected_dimension:
+            return
+        raise ValueError(
+            operation_dimension_argument_error(
+                "OpenGL",
+                "resource",
+                func_name,
+                expected_dimension,
+                "integer",
+                "offset",
+                self.resource_base_type(texture_type),
+                expression_debug_name(offset_arg),
+                self.type_name_string(offset_type),
+            )
+        )
+
+    def generate_texture_gather_compare_offsets_call(self, func_name, args):
+        parts = self.texture_call_parts(args)
+        if parts is None:
+            return self.unsupported_texture_gather_compare_call(
+                func_name, texture_coordinate_arguments_error()
+            )
+
+        texture_name, coord, extra_args = parts
+        texture_type = self.texture_resource_type(args[0])
+        if self.is_multisample_texture_resource_type(texture_type):
+            return self.unsupported_multisample_texture_gather_compare_call(
+                func_name, texture_type
+            )
+
+        compare_arg, offset_args = self.texture_gather_compare_offsets_args(extra_args)
+        if offset_args is None:
+            return self.unsupported_texture_gather_compare_call(
+                func_name, "requires compare and typed offsets array or four offsets"
+            )
+        if not self.texture_gather_compare_offset_supported(texture_type):
+            return self.unsupported_texture_gather_compare_call(
+                func_name, texture_compare_offset_capability_error("GLSL")
+            )
+
+        compare_type = self.expression_result_type(compare_arg)
+        if compare_type is not None and not self.is_scalar_floating_type(compare_type):
+            raise ValueError(
+                operation_argument_type_error(
+                    "OpenGL",
+                    "texture compare",
+                    func_name,
+                    "a scalar floating",
+                    "compare",
+                    expression_debug_name(compare_arg),
+                    self.type_name_string(compare_type),
+                )
+            )
+        for offset_arg in offset_args:
+            self.validate_texture_gather_compare_offsets_argument(
+                func_name, texture_type, offset_arg
+            )
+
+        compare = self.generate_expression(compare_arg)
+        return self.texture_gather_compare_offsets_expression(
+            texture_name, coord, compare, offset_args
+        )
+
     def generate_texture_gather_compare_call(self, func_name, args):
         parts = self.texture_call_parts(args)
         if parts is None:
@@ -4927,6 +7643,51 @@ class GLSLCodeGen:
             self.expression_name,
             self.current_image_access_parameters,
             self.image_variable_accesses,
+        )
+
+    def image_atomic_parameter_requires_diagnostic(self, texture_arg):
+        texture_name = self.expression_name(texture_arg)
+        if texture_name is None:
+            return False
+        if texture_name in self.current_resource_aliases:
+            return False
+        return (
+            texture_name in self.current_texture_parameters
+            and texture_name not in self.texture_variable_types
+        )
+
+    def image_atomic_zero_value(self, texture_type, image_format):
+        component_kind = image_format_component_kind(image_format)
+        if component_kind is None:
+            texture_type = self.resource_base_type(texture_type)
+            if texture_type and texture_type.startswith("uimage"):
+                component_kind = "uint"
+            elif texture_type and texture_type.startswith("image"):
+                component_kind = "float"
+            else:
+                component_kind = "int"
+        return storage_image_atomic_zero_value(component_kind)
+
+    def image_atomic_parameter_fallback_call(self, func_name, args):
+        texture_type = self.texture_argument_resource_type(args[0])
+        image_format = self.image_resource_format(args[0])
+        zero_value = self.image_atomic_zero_value(texture_type, image_format)
+        texture_type = self.resource_base_type(texture_type) or expression_debug_name(
+            args[0]
+        )
+        return image_atomic_diagnostic_expression(
+            "GLSL",
+            func_name,
+            f"{texture_type} parameter",
+            zero_value,
+        )
+
+    def generate_image_atomic_call(self, func_name, args):
+        if self.image_atomic_parameter_requires_diagnostic(args[0]):
+            return self.image_atomic_parameter_fallback_call(func_name, args)
+        return "{}({})".format(
+            func_name,
+            ", ".join(self.generate_expression(arg) for arg in args),
         )
 
     def is_integer_image_type(self, texture_type):
@@ -5262,6 +8023,9 @@ class GLSLCodeGen:
                 return f"imageStore({image_name}, {coord}, {sample}, {value})"
             return f"imageStore({image_name}, {coord}, {value})"
 
+        if is_image_atomic_operation(func_name) and args:
+            return self.generate_image_atomic_call(func_name, args)
+
         texture_type = self.texture_resource_type(args[0])
         storage_image_operation = self.storage_image_texture_operation_expression(
             func_name, texture_type
@@ -5271,6 +8035,9 @@ class GLSLCodeGen:
 
         if is_texture_compare_operation(func_name):
             return self.generate_texture_compare_call(func_name, args)
+
+        if func_name == "textureGatherCompareOffsets":
+            return self.generate_texture_gather_compare_offsets_call(func_name, args)
 
         if is_texture_gather_compare_operation(func_name):
             return self.generate_texture_gather_compare_call(func_name, args)
@@ -5769,6 +8536,12 @@ class GLSLCodeGen:
             "ConsumeStructuredBuffer",
         }
 
+    def structured_buffer_requires_counter(self, vtype):
+        return self.structured_buffer_type_name(vtype) in {
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+        }
+
     def structured_buffer_element_type(self, vtype):
         type_name = str(self.resource_base_type(vtype))
         if "<" not in type_name or not type_name.endswith(">"):
@@ -5871,9 +8644,7 @@ class GLSLCodeGen:
         mapped_return_type = self.map_type(return_type)
         if mapped_return_type == "void" or self.current_stage_output is not None:
             return f"{code}{indent_str}return;\n"
-        return (
-            f"{code}{indent_str}return " f"{self.zero_value_expression(return_type)};\n"
-        )
+        return f"{code}{indent_str}return {self.zero_value_expression(return_type)};\n"
 
     def zero_value_expression(self, vtype):
         mapped_type = self.map_type(vtype)
@@ -5937,6 +8708,33 @@ class GLSLCodeGen:
             f"{name}Buffer {{ {element_type} {name}[]; }};\n"
         )
 
+    def structured_buffer_counter_resource_name(self, name):
+        return f"{name}Counter"
+
+    def structured_buffer_counter_parameter_name(self, name):
+        return f"{name}Counter"
+
+    def structured_buffer_counter_block_declaration(
+        self, name, binding, array_size=None
+    ):
+        counter_member = self.structured_buffer_counter_resource_name(name)
+        if array_size is not None:
+            counter_member = "counter"
+            counter_instance = f"{name}Counters"
+            self.structured_buffer_counter_members[name] = counter_member
+            self.structured_buffer_counter_instances[name] = counter_instance
+            array_suffix = f"[{array_size}]" if array_size else "[]"
+            return (
+                f"layout(std430, binding = {binding}) buffer {name}CounterBuffer "
+                f"{{ uint {counter_member}[]; }} {counter_instance}{array_suffix};\n"
+            )
+
+        self.structured_buffer_counter_members[name] = counter_member
+        return (
+            f"layout(std430, binding = {binding}) buffer {name}CounterBuffer "
+            f"{{ uint {counter_member}[]; }};\n"
+        )
+
     def glsl_buffer_block_attribute(self, node):
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
@@ -5948,10 +8746,20 @@ class GLSLCodeGen:
         attr = self.glsl_buffer_block_attribute(node)
         arguments = getattr(attr, "arguments", []) if attr is not None else []
         if arguments:
-            layout = self.attribute_value_to_string(arguments[0])
-            if layout:
-                return layout
+            layout_parts = [
+                self.attribute_value_to_string(argument) for argument in arguments
+            ]
+            layout_parts = [part for part in layout_parts if part]
+            if layout_parts:
+                return ", ".join(layout_parts)
         return "std430"
+
+    def is_shader_record_buffer_block(self, node):
+        layout_parts = {
+            part.strip().lower().replace("_", "")
+            for part in self.glsl_buffer_block_layout(node).split(",")
+        }
+        return "shaderrecordext" in layout_parts
 
     def is_glsl_buffer_block_variable(self, node, vtype=None):
         if self.glsl_buffer_block_attribute(node) is None:
@@ -5980,10 +8788,12 @@ class GLSLCodeGen:
         layout = self.glsl_buffer_block_layout(node)
         memory_qualifiers = self.resource_memory_qualifiers(node)
         qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
-        code = (
-            f"layout({layout}, binding = {binding}) {qualifier_prefix}buffer "
-            f"{block_name} {{\n"
+        layout_prefix = (
+            f"layout({layout})"
+            if binding is None
+            else f"layout({layout}, binding = {binding})"
         )
+        code = f"{layout_prefix} {qualifier_prefix}buffer " f"{block_name} {{\n"
         for member in getattr(struct, "members", []) or []:
             code += self.generate_struct_member_declaration(member)
         code += f"}} {name}{array_suffix};\n"
@@ -6274,12 +9084,47 @@ class GLSLCodeGen:
         else:
             vtype_str = str(vtype)
 
+        if self.is_ray_query_type_name(vtype_str):
+            return "rayQueryEXT"
+
         if "[" in vtype_str and "]" in vtype_str:
             base_type, array_suffix = split_array_type_suffix(vtype_str)
-            base_mapped = self.type_mapping.get(base_type, base_type)
+            base_mapped = self.map_type(base_type)
             return f"{base_mapped}{array_suffix}"
 
+        generic_enum_type = generic_enum_specialized_type_name(self, vtype_str)
+        if generic_enum_type is not None:
+            return generic_enum_type
+
+        generic_struct_type = generic_struct_specialized_type_name(self, vtype_str)
+        if generic_struct_type is not None:
+            return generic_struct_type
+
+        if vtype_str in getattr(self, "enum_type_names", set()):
+            return "int"
+
+        if vtype_str in getattr(self, "enum_struct_type_names", set()):
+            return vtype_str
+
         return self.type_mapping.get(vtype_str, vtype_str)
+
+    def is_ray_query_type(self, vtype):
+        if vtype is None:
+            return False
+        return self.is_ray_query_type_name(self.type_name_string(vtype))
+
+    def is_acceleration_structure_type(self, vtype):
+        if vtype is None:
+            return False
+        return self.resource_base_type(vtype) == "accelerationStructureEXT"
+
+    def is_ray_query_type_name(self, type_name):
+        type_name = str(type_name)
+        return (
+            type_name == "rayQueryEXT"
+            or type_name == "RayQuery"
+            or type_name.startswith("RayQuery<")
+        )
 
     def map_resource_parameter_type_with_hint(
         self, vtype, node=None, function_name=None
@@ -6566,6 +9411,7 @@ class GLSLCodeGen:
             "uimage2DMS",
             "uimage2DMSArray",
             "atomic_uint",
+            "accelerationStructureEXT",
         }
 
     def supported_image_formats(self):
@@ -6576,8 +9422,9 @@ class GLSLCodeGen:
             return None
         if isinstance(value, str):
             return value
-        if hasattr(value, "name"):
-            return str(value.name)
+        name = getattr(value, "name", None)
+        if name is not None:
+            return str(name)
         if hasattr(value, "value"):
             return str(value.value).strip('"')
         return str(value)
@@ -6652,8 +9499,11 @@ class GLSLCodeGen:
         if not hasattr(node, "attributes"):
             return None
         for attr in node.attributes:
+            if self.glsl_stage_control_attribute_name(attr):
+                continue
             if (
-                is_image_format_attribute(attr)
+                self.is_glsl_stage_io_metadata_attribute(attr)
+                or is_image_format_attribute(attr)
                 or self.is_resource_binding_attribute(attr)
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
@@ -6680,12 +9530,14 @@ class GLSLCodeGen:
             "cw",
             "ccw",
             "domain",
+            "early_fragment_tests",
             "equal_spacing",
             "fractional_even_spacing",
             "fractional_odd_spacing",
             "invocations",
             "isolines",
             "layout",
+            "local_size",
             "line_strip",
             "lines",
             "lines_adjacency",
@@ -6693,7 +9545,10 @@ class GLSLCodeGen:
             "local_size_y",
             "local_size_z",
             "max_vertices",
+            "max_primitives",
+            "maxprimitivecount",
             "maxvertexcount",
+            "numthreads",
             "outputcontrolpoints",
             "outputtopology",
             "partitioning",
@@ -6705,7 +9560,8 @@ class GLSLCodeGen:
             "triangles_adjacency",
             "triangle_strip",
             "vertices",
-        }
+            "workgroup_size",
+        } | self.GLSL_BLEND_SUPPORT_LAYOUT_NAMES
         if normalized in valid_names:
             return normalized
         return None
@@ -6720,7 +9576,8 @@ class GLSLCodeGen:
             if self.glsl_stage_control_attribute_name(attr):
                 continue
             if (
-                is_image_format_attribute(attr)
+                self.is_glsl_stage_io_metadata_attribute(attr)
+                or is_image_format_attribute(attr)
                 or self.is_resource_binding_attribute(attr)
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
@@ -6772,7 +9629,14 @@ class GLSLCodeGen:
         return f"layout(binding = {binding})"
 
     def resource_memory_qualifiers(self, node):
-        supported = {"coherent", "volatile", "restrict", "readonly", "writeonly"}
+        supported = {
+            "coherent",
+            "globallycoherent",
+            "volatile",
+            "restrict",
+            "readonly",
+            "writeonly",
+        }
         qualifiers = set()
 
         for qualifier in getattr(node, "qualifiers", []) or []:
@@ -6787,6 +9651,9 @@ class GLSLCodeGen:
             attr_name = str(attr_name).lower()
             if attr_name in supported:
                 qualifiers.add(attr_name)
+
+        if "globallycoherent" in qualifiers:
+            qualifiers.add("coherent")
 
         order = ("coherent", "volatile", "restrict", "readonly", "writeonly")
         return " ".join(qualifier for qualifier in order if qualifier in qualifiers)
@@ -6817,12 +9684,10 @@ class GLSLCodeGen:
             "MOD": "%",
             "BITWISE_OR": "|",
             "BITWISE_AND": "&",
-            "BITWISE_XOR": "^",
             "ASSIGN_SHIFT_LEFT": "<<=",
             "ASSIGN_SHIFT_RIGHT": ">>=",
             "ASSIGN_AND": "&=",
             "LOGICAL_AND": "&&",
-            "ASSIGN_XOR": "^=",
             "BITWISE_SHIFT_RIGHT": ">>",
             "BITWISE_SHIFT_LEFT": "<<",
         }
@@ -6923,6 +9788,90 @@ class GLSLCodeGen:
             return f"{indent_str}{element_type} {stmt.name}[];\n"
         else:
             return f"{indent_str}{element_type} {stmt.name}[{size}];\n"
+
+    def glsl_attribute(self, node, name):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name and str(attr_name).lower() == name:
+                return attr
+        return None
+
+    def is_glsl_interface_block_struct(self, node):
+        return self.glsl_attribute(node, "glsl_interface_block") is not None
+
+    def glsl_attribute_arguments(self, node, name):
+        attr = self.glsl_attribute(node, name)
+        if attr is None:
+            return []
+        return getattr(attr, "arguments", getattr(attr, "args", [])) or []
+
+    def glsl_interface_block_qualifiers(self, node):
+        return [
+            self.attribute_value_to_string(argument)
+            for argument in self.glsl_attribute_arguments(node, "glsl_interface_block")
+        ]
+
+    def glsl_interface_block_instance_suffix(self, node):
+        instance_args = self.glsl_attribute_arguments(node, "glsl_interface_instance")
+        if not instance_args:
+            return ""
+
+        instance_name = self.attribute_value_to_string(instance_args[0])
+        array_attr = self.glsl_attribute(node, "glsl_interface_array")
+        array_suffix = ""
+        if array_attr is not None:
+            array_args = getattr(
+                array_attr, "arguments", getattr(array_attr, "args", [])
+            )
+            if array_args:
+                array_suffix = f"[{self.attribute_value_to_string(array_args[0])}]"
+            else:
+                array_suffix = "[]"
+        return f" {instance_name}{array_suffix}"
+
+    def generate_glsl_interface_block_member_declaration(self, member, indent="    "):
+        qualifier = self.glsl_variable_qualifier_prefix(member)
+        qualifier = f"{qualifier} " if qualifier else ""
+
+        if isinstance(member, ArrayNode):
+            element_type = getattr(
+                member, "element_type", getattr(member, "vtype", "float")
+            )
+            if member.size:
+                return (
+                    f"{indent}{qualifier}{self.map_type(element_type)} "
+                    f"{member.name}[{member.size}];\n"
+                )
+            return (
+                f"{indent}{qualifier}{self.map_type(element_type)} {member.name}[];\n"
+            )
+
+        if hasattr(member, "member_type"):
+            member_type_str = self.convert_type_node_to_string(member.member_type)
+            member_type = self.map_type(member_type_str)
+            if str(type(member.member_type)).find("ArrayType") != -1:
+                declaration = format_c_style_array_declaration(member_type, member.name)
+                return f"{indent}{qualifier}{declaration};\n"
+            return f"{indent}{qualifier}{member_type} {member.name};\n"
+
+        if hasattr(member, "vtype"):
+            member_type = self.map_type(member.vtype)
+            return f"{indent}{qualifier}{member_type} {member.name};\n"
+
+        return f"{indent}{qualifier}float {member.name};\n"
+
+    def generate_glsl_interface_block_declaration(self, node):
+        layout = self.glsl_variable_layout_prefix(node)
+        qualifiers = self.glsl_interface_block_qualifiers(node)
+        qualifier_prefix = " ".join(qualifiers)
+        if qualifier_prefix:
+            qualifier_prefix += " "
+
+        code = f"{layout}{qualifier_prefix}{node.name} {{\n"
+        for member in getattr(node, "members", []) or []:
+            code += self.generate_glsl_interface_block_member_declaration(member)
+        code += f"}}{self.glsl_interface_block_instance_suffix(node)};\n"
+        return code
 
     def generate_struct_member_declaration(self, member, indent="    "):
         if isinstance(member, ArrayNode):

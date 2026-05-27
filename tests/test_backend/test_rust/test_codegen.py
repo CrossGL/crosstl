@@ -864,6 +864,503 @@ def test_scalar_math_method_conversion():
         pytest.fail(f"Scalar math method conversion failed: {e}")
 
 
+def test_common_math_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn common_intrinsics(
+        normal: Vec3<f32>,
+        incident: Vec3<f32>,
+        reference: Vec3<f32>,
+        x: f32,
+        y: f32,
+        angle: f32,
+    ) -> f32 {
+        let dist = distance(normal, incident);
+        let facing = faceforward(normal, incident, reference);
+        let rounded = round(x);
+        let exponential = exp(x);
+        let exponential2 = exp2(x);
+        let natural_log = log(y);
+        let binary_log = log2(y);
+        let deg = degrees(angle);
+        let rad = radians(deg);
+        let arc = asin(x) + acos(x) + atan(x) + atan2(y, x);
+        let hyper = sinh(x) + cosh(x) + tanh(x);
+        return dist + rounded + exponential + exponential2 + natural_log
+            + binary_log + deg + rad + arc + hyper;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "dist = distance(normal, incident);" in result
+    assert "facing = faceforward(normal, incident, reference);" in result
+    assert "rounded = round(x);" in result
+    assert "exponential = exp(x);" in result
+    assert "exponential2 = exp2(x);" in result
+    assert "natural_log = log(y);" in result
+    assert "binary_log = log2(y);" in result
+    assert "deg = degrees(angle);" in result
+    assert "rad = radians(deg);" in result
+    assert "arc = (((asin(x) + acos(x)) + atan(x)) + atan2(y, x));" in result
+    assert "hyper = ((sinh(x) + cosh(x)) + tanh(x));" in result
+    assert "Vec3" not in result
+
+
+def test_unary_math_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn unary_math_ops(value: Vec3<f32>, scalar: f32) -> Vec3<f32> {
+        let root = crate::math::sqrt(value);
+        let inv_root = rsqrt(value);
+        let fractional = crate::math::fract(value);
+        let angles = degrees(value) + radians(value);
+        let trig = sin(value) + cos(value) + tan(value);
+        let inverse_trig = asin(value) + acos(value) + atan(value);
+        let hyper = sinh(value) + cosh(value) + tanh(value);
+        let logs = exp(value) + exp2(value) + log(value) + log2(value);
+        let rounded = floor(value) + ceil(value) + round(value) + trunc(value)
+            + round_even(value);
+        let scalar_root = scalar.sqrt();
+        let scalar_fraction = scalar.fract();
+        return root + inv_root + fractional + angles + trig + inverse_trig
+            + hyper + logs + rounded
+            + Vec3::<f32>::new(scalar_root, scalar_fraction, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec3 unary_math_ops(vec3 value, float scalar)" in result
+    assert "root = sqrt(value);" in result
+    assert "inv_root = inversesqrt(value);" in result
+    assert "fractional = fract(value);" in result
+    assert "degrees(value)" in result
+    assert "radians(value)" in result
+    assert "sin(value)" in result
+    assert "cos(value)" in result
+    assert "tan(value)" in result
+    assert "asin(value)" in result
+    assert "acos(value)" in result
+    assert "atan(value)" in result
+    assert "sinh(value)" in result
+    assert "cosh(value)" in result
+    assert "tanh(value)" in result
+    assert "exp(value)" in result
+    assert "exp2(value)" in result
+    assert "log(value)" in result
+    assert "log2(value)" in result
+    assert "floor(value)" in result
+    assert "ceil(value)" in result
+    assert "round(value)" in result
+    assert "trunc(value)" in result
+    assert "roundEven(value)" in result
+    assert "scalar_root = sqrt(scalar);" in result
+    assert "scalar_fraction = fract(scalar);" in result
+    assert "crate::math::sqrt" not in result
+    assert "rsqrt(value)" not in result
+    assert "crate::math::fract" not in result
+    assert ".sqrt()" not in result
+    assert ".fract()" not in result
+
+
+def test_rounding_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn rounding_ops(value: Vec3<f32>, scale: f32) -> Vec3<f32> {
+        let truncated = trunc(value);
+        let even = crate::math::round_even(value);
+        let scalar_truncated = scale.trunc();
+        let scalar_even = scale.round_ties_even();
+        return truncated + even + Vec3::<f32>::new(scalar_truncated, scalar_even, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec3 rounding_ops(vec3 value, float scale)" in result
+    assert "truncated = trunc(value);" in result
+    assert "even = roundEven(value);" in result
+    assert "scalar_truncated = trunc(scale);" in result
+    assert "scalar_even = roundEven(scale);" in result
+    assert "crate::math::round_even" not in result
+    assert ".trunc()" not in result
+    assert ".round_ties_even()" not in result
+
+
+def test_min_max_mixed_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn min_max_ops(value: Vec3<f32>, other: Vec3<f32>, scalar: f32) -> Vec3<f32> {
+        let min_vector_scalar = min(value, scalar);
+        let max_vector_scalar = crate::math::max(value, scalar);
+        let min_scalar_vector = min(scalar, other);
+        let max_scalar_vector = max(scalar, other);
+        let min_vector_vector = min(value, other);
+        let max_vector_vector = crate::math::max(value, other);
+        let min_scalar_scalar = scalar.min(1.0);
+        let max_scalar_scalar = scalar.max(0.0);
+        return min_vector_scalar + max_vector_scalar + min_scalar_vector
+            + max_scalar_vector + min_vector_vector + max_vector_vector;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec3 min_max_ops(vec3 value, vec3 other, float scalar)" in result
+    assert "min_vector_scalar = min(value, scalar);" in result
+    assert "max_vector_scalar = max(value, scalar);" in result
+    assert "min_scalar_vector = min(scalar, other);" in result
+    assert "max_scalar_vector = max(scalar, other);" in result
+    assert "min_vector_vector = min(value, other);" in result
+    assert "max_vector_vector = max(value, other);" in result
+    assert "min_scalar_scalar = min(scalar, 1.0);" in result
+    assert "max_scalar_scalar = max(scalar, 0.0);" in result
+    assert "crate::math::max" not in result
+    assert ".min(" not in result
+    assert ".max(" not in result
+
+
+def test_binary_math_mixed_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn binary_math_ops(value: Vec3<f32>, other: Vec3<f32>, scalar: f32) -> Vec3<f32> {
+        let pow_vector_scalar = pow(value, scalar);
+        let pow_scalar_vector = crate::math::pow(scalar, other);
+        let mod_vector_scalar = modulo(value, scalar);
+        let mod_scalar_vector = crate::math::modulo(scalar, other);
+        let atan_vector_scalar = atan2(value, scalar);
+        let atan_scalar_vector = crate::math::atan2(scalar, other);
+        let pow_scalar_scalar = scalar.powf(2.0);
+        let atan_scalar_scalar = scalar.atan2(1.0);
+        return pow_vector_scalar + pow_scalar_vector + mod_vector_scalar
+            + mod_scalar_vector + atan_vector_scalar + atan_scalar_vector;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec3 binary_math_ops(vec3 value, vec3 other, float scalar)" in result
+    assert "pow_vector_scalar = pow(value, scalar);" in result
+    assert "pow_scalar_vector = pow(scalar, other);" in result
+    assert "mod_vector_scalar = mod(value, scalar);" in result
+    assert "mod_scalar_vector = mod(scalar, other);" in result
+    assert "atan_vector_scalar = atan2(value, scalar);" in result
+    assert "atan_scalar_vector = atan2(scalar, other);" in result
+    assert "pow_scalar_scalar = pow(scalar, 2.0);" in result
+    assert "atan_scalar_scalar = atan2(scalar, 1.0);" in result
+    assert "crate::math::pow" not in result
+    assert "crate::math::modulo" not in result
+    assert "crate::math::atan2" not in result
+    assert ".powf(" not in result
+    assert ".atan2(" not in result
+
+
+def test_matrix_intrinsic_calls_and_types_convert_to_crossgl_intrinsics():
+    code = """
+    fn matrix_intrinsics(transform: Mat3<f64>, affine: Mat3x4<f32>) -> f64 {
+        let basis = transpose(transform);
+        let inverted = inverse(basis);
+        let det = determinant(inverted);
+        let rectangular = transpose(affine);
+        return det;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "double matrix_intrinsics(dmat3 transform, mat3x4 affine)" in result
+    assert "basis = transpose(transform);" in result
+    assert "inverted = inverse(basis);" in result
+    assert "det = determinant(inverted);" in result
+    assert "rectangular = transpose(affine);" in result
+    assert "Mat3" not in result
+    assert "Mat3x4" not in result
+
+
+def test_matrix_product_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn matrix_product_intrinsics(column: Vec3<f32>, row: Vec2<f32>, transform: Mat2<f32>, precise: Mat2<f64>) -> Mat2x3<f32> {
+        let basis = outer_product(column, row);
+        let componentwise = crate::math::matrix_comp_mult(transform, precise);
+        return basis;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "mat2x3 matrix_product_intrinsics(vec3 column, vec2 row, mat2 transform, dmat2 precise)"
+        in result
+    )
+    assert "basis = outerProduct(column, row);" in result
+    assert "componentwise = matrixCompMult(transform, precise);" in result
+    assert "crate::math::matrix_comp_mult" not in result
+    assert "Mat2x3" not in result
+
+
+def test_step_and_smoothstep_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn thresholds(low: Vec3<f32>, high: Vec3<f32>, value: Vec3<f32>, scalar: f32) -> Vec3<f32> {
+        let vector_gate = step(0.25, value);
+        let vector_edge_gate = crate::math::step(low, scalar);
+        let soft_value = smoothstep(0.0, 1.0, value);
+        let soft_edges = crate::math::smoothstep(low, high, scalar);
+        return vector_gate + vector_edge_gate + soft_value + soft_edges;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec3 thresholds(vec3 low, vec3 high, vec3 value, float scalar)" in result
+    assert "vector_gate = step(0.25, value);" in result
+    assert "vector_edge_gate = step(low, scalar);" in result
+    assert "soft_value = smoothstep(0.0, 1.0, value);" in result
+    assert "soft_edges = smoothstep(low, high, scalar);" in result
+    assert "crate::math::step" not in result
+    assert "crate::math::smoothstep" not in result
+
+
+def test_derivative_and_fused_math_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn derivative_ops(value: Vec3<f32>, scale: f32, bias: f32) -> Vec3<f32> {
+        let dx = dfdx(value);
+        let dy = crate::math::dfdy(value);
+        let fine = dfdx_fine(value);
+        let coarse = crate::math::dfdy_coarse(value);
+        let wide = fwidth(value);
+        let wide_fine = fwidth_fine(value);
+        let wide_coarse = crate::math::fwidth_coarse(value);
+        let fused = fma(value, scale, wide);
+        let scalar = scale.mul_add(bias, 1.0);
+        return dx + dy + fine + coarse + wide + wide_fine + wide_coarse + fused;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec3 derivative_ops(vec3 value, float scale, float bias)" in result
+    assert "dx = dFdx(value);" in result
+    assert "dy = dFdy(value);" in result
+    assert "fine = dFdxFine(value);" in result
+    assert "coarse = dFdyCoarse(value);" in result
+    assert "wide = fwidth(value);" in result
+    assert "wide_fine = fwidthFine(value);" in result
+    assert "wide_coarse = fwidthCoarse(value);" in result
+    assert "fused = fma(value, scale, wide);" in result
+    assert "scalar = fma(scale, bias, 1.0);" in result
+    assert "crate::math::dfdy" not in result
+    assert "crate::math::fwidth_coarse" not in result
+    assert ".mul_add(" not in result
+
+
+def test_ldexp_intrinsic_calls_convert_to_crossgl_intrinsic():
+    code = """
+    fn exponent_ops(value: Vec3<f32>, exponents: Vec3<i32>, scale: f32, scalar_exponent: i32) -> Vec3<f32> {
+        let shifted = ldexp(value, exponents);
+        let scalar_shifted = crate::math::ldexp(scale, scalar_exponent);
+        return shifted + Vec3::<f32>::new(scalar_shifted, scalar_shifted, scalar_shifted);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "vec3 exponent_ops(vec3 value, ivec3 exponents, float scale, int scalar_exponent)"
+        in result
+    )
+    assert "shifted = ldexp(value, exponents);" in result
+    assert "scalar_shifted = ldexp(scale, scalar_exponent);" in result
+    assert "crate::math::ldexp" not in result
+
+
+def test_sign_and_classification_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn classify(value: Vec3<f32>, scale: f32) -> f32 {
+        let signed_value = sign(value);
+        let signed_scale = scale.signum();
+        let nan_mask = isnan(value);
+        let inf_mask = crate::math::isinf(value);
+        let finite_mask = isfinite(value);
+        let scalar_nan = scale.is_nan();
+        let scalar_inf = scale.is_infinite();
+        let scalar_finite = scale.is_finite();
+        return signed_scale;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "float classify(vec3 value, float scale)" in result
+    assert "signed_value = sign(value);" in result
+    assert "signed_scale = sign(scale);" in result
+    assert "nan_mask = isnan(value);" in result
+    assert "inf_mask = isinf(value);" in result
+    assert "finite_mask = isfinite(value);" in result
+    assert "scalar_nan = isnan(scale);" in result
+    assert "scalar_inf = isinf(scale);" in result
+    assert "scalar_finite = isfinite(scale);" in result
+    assert "crate::math::isinf" not in result
+    assert ".signum(" not in result
+    assert ".is_nan(" not in result
+    assert ".is_infinite(" not in result
+    assert ".is_finite(" not in result
+
+
+def test_any_and_all_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn reduce_masks(mask: Vec3<bool>, flag: bool) -> bool {
+        let has_any = any(mask);
+        let has_all = crate::math::all(mask);
+        let scalar_any = any(flag);
+        let scalar_all = crate::math::all(flag);
+        return has_any || has_all || scalar_any || scalar_all;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "bool reduce_masks(bvec3 mask, bool flag)" in result
+    assert "has_any = any(mask);" in result
+    assert "has_all = all(mask);" in result
+    assert "scalar_any = any(flag);" in result
+    assert "scalar_all = all(flag);" in result
+    assert "crate::math::all" not in result
+
+
+def test_relational_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn relational_ops(left: Vec3<f32>, right: Vec3<f32>, threshold: f32, mask: Vec3<bool>) -> bool {
+        let lt = less_than(left, right);
+        let le = less_than_equal(left, threshold);
+        let gt = crate::math::greater_than(threshold, right);
+        let ge = crate::math::greater_than_equal(left, right);
+        let eq = equal(mask, Vec3::<bool>::new(true, false, true));
+        let ne = not_equal(left, right);
+        let scalar_eq = equal(threshold, 1.0);
+        return any(lt) || any(le) || any(gt) || any(ge) || any(eq) || any(ne) || scalar_eq;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "bool relational_ops(vec3 left, vec3 right, float threshold, bvec3 mask)"
+        in result
+    )
+    assert "lt = lessThan(left, right);" in result
+    assert "le = lessThanEqual(left, threshold);" in result
+    assert "gt = greaterThan(threshold, right);" in result
+    assert "ge = greaterThanEqual(left, right);" in result
+    assert "eq = equal(mask, bvec3(true, false, true));" in result
+    assert "ne = notEqual(left, right);" in result
+    assert "scalar_eq = equal(threshold, 1.0);" in result
+    assert "crate::math::greater_than" not in result
+    assert "crate::math::greater_than_equal" not in result
+
+
+def test_integer_bit_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn bit_ops(mask: Vec3<u32>, signed_mask: Vec3<i32>, scalar: u32, offset: i32, bits: i32) -> Vec3<u32> {
+        let reversed = bitfield_reverse(mask);
+        let signed_reversed = bitfield_reverse(signed_mask);
+        let counts = bit_count(mask);
+        let signed_counts = crate::math::bit_count(signed_mask);
+        let lsb = find_lsb(mask);
+        let msb = crate::math::find_msb(signed_mask);
+        let extracted = bitfield_extract(mask, offset, bits);
+        let inserted = crate::math::bitfield_insert(mask, extracted, offset, bits);
+        let scalar_count = bit_count(scalar);
+        return inserted;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "uvec3 bit_ops(uvec3 mask, ivec3 signed_mask, uint scalar, int offset, int bits)"
+        in result
+    )
+    assert "reversed = bitfieldReverse(mask);" in result
+    assert "signed_reversed = bitfieldReverse(signed_mask);" in result
+    assert "counts = bitCount(mask);" in result
+    assert "signed_counts = bitCount(signed_mask);" in result
+    assert "lsb = findLSB(mask);" in result
+    assert "msb = findMSB(signed_mask);" in result
+    assert "extracted = bitfieldExtract(mask, offset, bits);" in result
+    assert "inserted = bitfieldInsert(mask, extracted, offset, bits);" in result
+    assert "scalar_count = bitCount(scalar);" in result
+    assert "crate::math::bit_count" not in result
+    assert "crate::math::find_msb" not in result
+    assert "crate::math::bitfield_insert" not in result
+
+
+def test_bit_reinterpret_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn reinterpret_ops(value: Vec3<f32>, scalar: f32, signed_bits: Vec3<i32>, unsigned_bits: Vec3<u32>) -> Vec3<f32> {
+        let signed_from_vector = float_bits_to_int(value);
+        let unsigned_from_vector = crate::math::float_bits_to_uint(value);
+        let signed_from_scalar = float_bits_to_int(scalar);
+        let unsigned_from_scalar = float_bits_to_uint(scalar);
+        let float_from_signed = int_bits_to_float(signed_bits);
+        let float_from_unsigned = crate::math::uint_bits_to_float(unsigned_bits);
+        return float_from_signed + float_from_unsigned;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "vec3 reinterpret_ops(vec3 value, float scalar, ivec3 signed_bits, uvec3 unsigned_bits)"
+        in result
+    )
+    assert "signed_from_vector = floatBitsToInt(value);" in result
+    assert "unsigned_from_vector = floatBitsToUint(value);" in result
+    assert "signed_from_scalar = floatBitsToInt(scalar);" in result
+    assert "unsigned_from_scalar = floatBitsToUint(scalar);" in result
+    assert "float_from_signed = intBitsToFloat(signed_bits);" in result
+    assert "float_from_unsigned = uintBitsToFloat(unsigned_bits);" in result
+    assert "crate::math::float_bits_to_uint" not in result
+    assert "crate::math::uint_bits_to_float" not in result
+
+
+def test_pack_unpack_intrinsic_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn pack_unpack_ops(pair: Vec2<f32>, color: Vec4<f32>, packed2: u32, packed4: u32, double_bits: Vec2<u32>, packed_double: f64) -> Vec4<f32> {
+        let packed_unorm2 = pack_unorm_2x16(pair);
+        let packed_snorm2 = crate::math::pack_snorm_2x16(pair);
+        let packed_unorm4 = pack_unorm_4x8(color);
+        let packed_snorm4 = pack_snorm_4x8(color);
+        let packed_half = crate::math::pack_half_2x16(pair);
+        let packed_double_value = pack_double_2x32(double_bits);
+        let unpacked_unorm2 = unpack_unorm_2x16(packed2);
+        let unpacked_snorm2 = crate::math::unpack_snorm_2x16(packed2);
+        let unpacked_unorm4 = unpack_unorm_4x8(packed4);
+        let unpacked_snorm4 = unpack_snorm_4x8(packed4);
+        let unpacked_half = unpack_half_2x16(packed2);
+        let unpacked_double = crate::math::unpack_double_2x32(packed_double);
+        return unpacked_unorm4 + unpacked_snorm4;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "vec4 pack_unpack_ops(vec2 pair, vec4 color, uint packed2, uint packed4, uvec2 double_bits, double packed_double)"
+        in result
+    )
+    assert "packed_unorm2 = packUnorm2x16(pair);" in result
+    assert "packed_snorm2 = packSnorm2x16(pair);" in result
+    assert "packed_unorm4 = packUnorm4x8(color);" in result
+    assert "packed_snorm4 = packSnorm4x8(color);" in result
+    assert "packed_half = packHalf2x16(pair);" in result
+    assert "packed_double_value = packDouble2x32(double_bits);" in result
+    assert "unpacked_unorm2 = unpackUnorm2x16(packed2);" in result
+    assert "unpacked_snorm2 = unpackSnorm2x16(packed2);" in result
+    assert "unpacked_unorm4 = unpackUnorm4x8(packed4);" in result
+    assert "unpacked_snorm4 = unpackSnorm4x8(packed4);" in result
+    assert "unpacked_half = unpackHalf2x16(packed2);" in result
+    assert "unpacked_double = unpackDouble2x32(packed_double);" in result
+    assert "crate::math::pack_snorm_2x16" not in result
+    assert "crate::math::unpack_snorm_2x16" not in result
+    assert "crate::math::unpack_double_2x32" not in result
+
+
 def test_lerp_function_converts_to_crossgl_mix():
     code = """
     fn blend(a: f32, b: f32, t: f32) -> f32 {
@@ -2303,6 +2800,512 @@ def test_function_call_conversion():
         assert "vec3(" in result
     except Exception as e:
         pytest.fail(f"Function call conversion failed: {e}")
+
+
+def test_gpu_texture_helper_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn texture_helpers(
+        tex: Texture2D<f32>,
+        cube: TextureCube<f32>,
+        uv: Vec2<f32>,
+        projected: Vec3<f32>,
+        ddx: Vec2<f32>,
+        ddy: Vec2<f32>,
+        pixel: Vec2<i32>,
+        offset: Vec2<i32>,
+        offsets: [Vec2<i32>; 4],
+    ) -> Vec4<f32> {
+        let base = sample(tex, uv);
+        let lod = sample_lod(tex, uv, 1.0);
+        let grad = sample_grad(tex, uv, ddx, ddy);
+        let shifted = sample_offset(tex, uv, offset);
+        let projected_color = sample_projected(tex, projected);
+        let projected_lod = sample_projected_lod(tex, projected, 1.0);
+        let projected_grad = sample_projected_grad(tex, projected, ddx, ddy);
+        let projected_offset = sample_projected_offset(tex, projected, offset);
+        let projected_lod_offset = sample_projected_lod_offset(tex, projected, 1.0, offset);
+        let projected_grad_offset = sample_projected_grad_offset(tex, projected, ddx, ddy, offset);
+        let fetched = texel_fetch(tex, pixel, 0);
+        let fetched_offset = texel_fetch_offset(tex, pixel, 0, offset);
+        let size = texture_size_lod(tex, 0);
+        let cube_size = texture_size(cube);
+        let levels = texture_query_levels(tex);
+        let query_lod = texture_query_lod(tex, uv);
+        let samples = texture_samples(tex);
+        let gather = texture_gather(tex, uv);
+        let gather_component = texture_gather_component(tex, uv, 1);
+        let gather_offset = texture_gather_offset(tex, uv, offset);
+        let gather_offset_component = texture_gather_offset_component(tex, uv, offset, 2);
+        let gather_offsets = texture_gather_offsets(tex, uv, offsets);
+        let gather_offsets_component = texture_gather_offsets_component(tex, uv, offsets, 3);
+        return base;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec4 texture_helpers(sampler2D tex, samplerCube cube" in result
+    assert "ivec2 offsets[4]" in result
+    assert "base = texture(tex, uv);" in result
+    assert "lod = textureLod(tex, uv, 1.0);" in result
+    assert "grad = textureGrad(tex, uv, ddx, ddy);" in result
+    assert "shifted = textureOffset(tex, uv, offset);" in result
+    assert "projected_color = textureProj(tex, projected);" in result
+    assert "projected_lod = textureProjLod(tex, projected, 1.0);" in result
+    assert "projected_grad = textureProjGrad(tex, projected, ddx, ddy);" in result
+    assert "projected_offset = textureProjOffset(tex, projected, offset);" in result
+    assert (
+        "projected_lod_offset = textureProjLodOffset(tex, projected, 1.0, offset);"
+        in result
+    )
+    assert (
+        "projected_grad_offset = textureProjGradOffset(tex, projected, ddx, ddy, offset);"
+        in result
+    )
+    assert "fetched = texelFetch(tex, pixel, 0);" in result
+    assert "fetched_offset = texelFetchOffset(tex, pixel, 0, offset);" in result
+    assert "size = textureSize(tex, 0);" in result
+    assert "cube_size = textureSize(cube);" in result
+    assert "levels = textureQueryLevels(tex);" in result
+    assert "query_lod = textureQueryLod(tex, uv);" in result
+    assert "samples = textureSamples(tex);" in result
+    assert "gather = textureGather(tex, uv);" in result
+    assert "gather_component = textureGather(tex, uv, 1);" in result
+    assert "gather_offset = textureGatherOffset(tex, uv, offset);" in result
+    assert (
+        "gather_offset_component = textureGatherOffset(tex, uv, offset, 2);" in result
+    )
+    assert "gather_offsets = textureGatherOffsets(tex, uv, offsets);" in result
+    assert (
+        "gather_offsets_component = textureGatherOffsets(tex, uv, offsets, 3);"
+        in result
+    )
+    assert "sample_lod" not in result
+    assert "texture_size_lod" not in result
+    assert "texture_gather_component" not in result
+
+
+def test_gpu_multisample_texture_types_convert_to_crossgl_intrinsics():
+    code = """
+    fn multisample_texture_helpers(
+        ms_tex: Texture2DMS<f32>,
+        ms_array: Texture2DMSArray<f32>,
+        pixel: Vec2<i32>,
+        pixel_layer: Vec3<i32>,
+        sample_index: i32,
+    ) -> Vec4<f32> {
+        let size = texture_size(ms_tex);
+        let array_size = texture_size(ms_array);
+        let samples = texture_samples(ms_tex);
+        let fetched = texel_fetch(ms_tex, pixel, sample_index);
+        let fetched_array = texel_fetch(ms_array, pixel_layer, sample_index);
+        return fetched;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "vec4 multisample_texture_helpers(sampler2DMS ms_tex, sampler2DMSArray ms_array"
+        in result
+    )
+    assert "size = textureSize(ms_tex);" in result
+    assert "array_size = textureSize(ms_array);" in result
+    assert "samples = textureSamples(ms_tex);" in result
+    assert "fetched = texelFetch(ms_tex, pixel, sample_index);" in result
+    assert "fetched_array = texelFetch(ms_array, pixel_layer, sample_index);" in result
+    assert "Texture2DMS" not in result
+    assert "texture_size" not in result
+    assert "texture_samples" not in result
+    assert "texel_fetch" not in result
+
+
+def test_gpu_explicit_sampler_texture_helpers_convert_to_crossgl_intrinsics():
+    code = """
+    fn texture_sampler_helpers(
+        tex: Texture2D<f32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        projected: Vec3<f32>,
+        ddx: Vec2<f32>,
+        ddy: Vec2<f32>,
+        offset: Vec2<i32>,
+        offsets: [Vec2<i32>; 4],
+    ) -> Vec4<f32> {
+        let base = sample_sampler(tex, sampler_state, uv);
+        let biased = sample_bias(tex, uv, 0.25);
+        let biased_sampler = sample_bias_sampler(tex, sampler_state, uv, 0.5);
+        let lod = sample_lod_sampler(tex, sampler_state, uv, 1.0);
+        let lod_offset = sample_lod_offset_sampler(tex, sampler_state, uv, 1.0, offset);
+        let grad = sample_grad_sampler(tex, sampler_state, uv, ddx, ddy);
+        let grad_offset = sample_grad_offset_sampler(tex, sampler_state, uv, ddx, ddy, offset);
+        let shifted = sample_offset_sampler(tex, sampler_state, uv, offset);
+        let shifted_bias = sample_offset_bias(tex, uv, offset, 0.125);
+        let shifted_bias_sampler = sample_offset_bias_sampler(tex, sampler_state, uv, offset, 0.125);
+        let projected_color = sample_projected_sampler(tex, sampler_state, projected);
+        let projected_bias = sample_projected_bias(tex, projected, 0.25);
+        let projected_bias_sampler = sample_projected_bias_sampler(tex, sampler_state, projected, 0.25);
+        let projected_lod = sample_projected_lod_sampler(tex, sampler_state, projected, 1.0);
+        let projected_grad = sample_projected_grad_sampler(tex, sampler_state, projected, ddx, ddy);
+        let projected_offset = sample_projected_offset_sampler(tex, sampler_state, projected, offset);
+        let projected_offset_bias = sample_projected_offset_bias(tex, projected, offset, 0.25);
+        let projected_offset_bias_sampler = sample_projected_offset_bias_sampler(tex, sampler_state, projected, offset, 0.25);
+        let projected_lod_offset = sample_projected_lod_offset_sampler(tex, sampler_state, projected, 1.0, offset);
+        let projected_grad_offset = sample_projected_grad_offset_sampler(tex, sampler_state, projected, ddx, ddy, offset);
+        let query = texture_query_lod_sampler(tex, sampler_state, uv);
+        let gather = texture_gather_sampler(tex, sampler_state, uv);
+        let gather_component = texture_gather_component_sampler(tex, sampler_state, uv, 1);
+        let gather_offset = texture_gather_offset_sampler(tex, sampler_state, uv, offset);
+        let gather_offset_component = texture_gather_offset_component_sampler(tex, sampler_state, uv, offset, 2);
+        let gather_offsets = texture_gather_offsets_sampler(tex, sampler_state, uv, offsets);
+        let gather_offsets_component = texture_gather_offsets_component_sampler(tex, sampler_state, uv, offsets, 3);
+        return base;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec4 texture_sampler_helpers(sampler2D tex, sampler sampler_state" in result
+    assert "base = texture(tex, sampler_state, uv);" in result
+    assert "biased = texture(tex, uv, 0.25);" in result
+    assert "biased_sampler = texture(tex, sampler_state, uv, 0.5);" in result
+    assert "lod = textureLod(tex, sampler_state, uv, 1.0);" in result
+    assert (
+        "lod_offset = textureLodOffset(tex, sampler_state, uv, 1.0, offset);" in result
+    )
+    assert "grad = textureGrad(tex, sampler_state, uv, ddx, ddy);" in result
+    assert (
+        "grad_offset = textureGradOffset(tex, sampler_state, uv, ddx, ddy, offset);"
+        in result
+    )
+    assert "shifted = textureOffset(tex, sampler_state, uv, offset);" in result
+    assert "shifted_bias = textureOffset(tex, uv, offset, 0.125);" in result
+    assert (
+        "shifted_bias_sampler = textureOffset(tex, sampler_state, uv, offset, 0.125);"
+        in result
+    )
+    assert "projected_color = textureProj(tex, sampler_state, projected);" in result
+    assert "projected_bias = textureProj(tex, projected, 0.25);" in result
+    assert (
+        "projected_bias_sampler = textureProj(tex, sampler_state, projected, 0.25);"
+        in result
+    )
+    assert (
+        "projected_lod = textureProjLod(tex, sampler_state, projected, 1.0);" in result
+    )
+    assert (
+        "projected_grad = textureProjGrad(tex, sampler_state, projected, ddx, ddy);"
+        in result
+    )
+    assert (
+        "projected_offset = textureProjOffset(tex, sampler_state, projected, offset);"
+        in result
+    )
+    assert (
+        "projected_offset_bias = textureProjOffset(tex, projected, offset, 0.25);"
+        in result
+    )
+    assert (
+        "projected_offset_bias_sampler = textureProjOffset(tex, sampler_state, projected, offset, 0.25);"
+        in result
+    )
+    assert (
+        "projected_lod_offset = textureProjLodOffset(tex, sampler_state, projected, 1.0, offset);"
+        in result
+    )
+    assert (
+        "projected_grad_offset = textureProjGradOffset(tex, sampler_state, projected, ddx, ddy, offset);"
+        in result
+    )
+    assert "query = textureQueryLod(tex, sampler_state, uv);" in result
+    assert "gather = textureGather(tex, sampler_state, uv);" in result
+    assert "gather_component = textureGather(tex, sampler_state, uv, 1);" in result
+    assert (
+        "gather_offset = textureGatherOffset(tex, sampler_state, uv, offset);" in result
+    )
+    assert (
+        "gather_offset_component = textureGatherOffset(tex, sampler_state, uv, offset, 2);"
+        in result
+    )
+    assert (
+        "gather_offsets = textureGatherOffsets(tex, sampler_state, uv, offsets);"
+        in result
+    )
+    assert (
+        "gather_offsets_component = textureGatherOffsets(tex, sampler_state, uv, offsets, 3);"
+        in result
+    )
+    assert "sample_sampler" not in result
+    assert "sample_bias" not in result
+    assert "texture_gather" not in result
+
+
+def test_gpu_shadow_compare_helper_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn shadow_helpers(
+        shadow: DepthTexture2D<f32>,
+        shadow_array: DepthTexture2DArray<f32>,
+        cube_shadow: DepthTextureCube<f32>,
+        cube_array_shadow: DepthTextureCubeArray<f32>,
+        compare_sampler: Sampler,
+        uv: Vec2<f32>,
+        uv_layer: Vec3<f32>,
+        direction: Vec3<f32>,
+        cube_layer: Vec4<f32>,
+        uvq: Vec3<f32>,
+        uvqw: Vec4<f32>,
+        depth: f32,
+        lod: f32,
+        ddx: Vec2<f32>,
+        ddy: Vec2<f32>,
+        offset: Vec2<i32>,
+    ) -> f32 {
+        let base = texture_compare(shadow, uv, depth);
+        let base_sampler = texture_compare_sampler(shadow, compare_sampler, uv, depth);
+        let array_compare = texture_compare(shadow_array, uv_layer, depth);
+        let cube_compare = texture_compare(cube_shadow, direction, depth);
+        let cube_array_compare = texture_compare(cube_array_shadow, cube_layer, depth);
+        let offset_compare = texture_compare_offset(shadow, uv, depth, offset);
+        let offset_sampler = texture_compare_offset_sampler(shadow, compare_sampler, uv, depth, offset);
+        let lod_compare = texture_compare_lod(shadow, uv, depth, lod);
+        let lod_sampler = texture_compare_lod_sampler(shadow, compare_sampler, uv, depth, lod);
+        let lod_offset = texture_compare_lod_offset(shadow, uv, depth, lod, offset);
+        let lod_offset_sampler = texture_compare_lod_offset_sampler(shadow, compare_sampler, uv, depth, lod, offset);
+        let grad_compare = texture_compare_grad(shadow, uv, depth, ddx, ddy);
+        let grad_sampler = texture_compare_grad_sampler(shadow, compare_sampler, uv, depth, ddx, ddy);
+        let grad_offset = texture_compare_grad_offset(shadow, uv, depth, ddx, ddy, offset);
+        let grad_offset_sampler = texture_compare_grad_offset_sampler(shadow, compare_sampler, uv, depth, ddx, ddy, offset);
+        let projected = texture_compare_projected(shadow, uvq, depth);
+        let projected_sampler = texture_compare_projected_sampler(shadow, compare_sampler, uvq, depth);
+        let projected_w = texture_compare_projected(shadow, uvqw, depth);
+        let projected_offset = texture_compare_projected_offset(shadow, uvq, depth, offset);
+        let projected_offset_sampler = texture_compare_projected_offset_sampler(shadow, compare_sampler, uvq, depth, offset);
+        let projected_lod = texture_compare_projected_lod(shadow, uvq, depth, lod);
+        let projected_lod_sampler = texture_compare_projected_lod_sampler(shadow, compare_sampler, uvq, depth, lod);
+        let projected_lod_offset = texture_compare_projected_lod_offset(shadow, uvq, depth, lod, offset);
+        let projected_lod_offset_sampler = texture_compare_projected_lod_offset_sampler(shadow, compare_sampler, uvq, depth, lod, offset);
+        let projected_grad = texture_compare_projected_grad(shadow, uvq, depth, ddx, ddy);
+        let projected_grad_sampler = texture_compare_projected_grad_sampler(shadow, compare_sampler, uvq, depth, ddx, ddy);
+        let projected_grad_offset = texture_compare_projected_grad_offset(shadow, uvq, depth, ddx, ddy, offset);
+        let projected_grad_offset_sampler = texture_compare_projected_grad_offset_sampler(shadow, compare_sampler, uvq, depth, ddx, ddy, offset);
+        let gathered = texture_gather_compare(shadow, uv, depth);
+        let gathered_sampler = texture_gather_compare_sampler(shadow, compare_sampler, uv, depth);
+        let gathered_offset = texture_gather_compare_offset(shadow, uv, depth, offset);
+        let gathered_offset_sampler = texture_gather_compare_offset_sampler(shadow, compare_sampler, uv, depth, offset);
+        return base;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "float shadow_helpers(sampler2DShadow shadow, sampler2DArrayShadow shadow_array"
+        in result
+    )
+    assert "samplerCubeShadow cube_shadow" in result
+    assert "samplerCubeArrayShadow cube_array_shadow" in result
+    assert "sampler compare_sampler" in result
+    assert "base = textureCompare(shadow, uv, depth);" in result
+    assert (
+        "base_sampler = textureCompare(shadow, compare_sampler, uv, depth);" in result
+    )
+    assert "array_compare = textureCompare(shadow_array, uv_layer, depth);" in result
+    assert "cube_compare = textureCompare(cube_shadow, direction, depth);" in result
+    assert (
+        "cube_array_compare = textureCompare(cube_array_shadow, cube_layer, depth);"
+        in result
+    )
+    assert "offset_compare = textureCompareOffset(shadow, uv, depth, offset);" in result
+    assert (
+        "offset_sampler = textureCompareOffset(shadow, compare_sampler, uv, depth, offset);"
+        in result
+    )
+    assert "lod_compare = textureCompareLod(shadow, uv, depth, lod);" in result
+    assert (
+        "lod_sampler = textureCompareLod(shadow, compare_sampler, uv, depth, lod);"
+        in result
+    )
+    assert (
+        "lod_offset = textureCompareLodOffset(shadow, uv, depth, lod, offset);"
+        in result
+    )
+    assert (
+        "lod_offset_sampler = textureCompareLodOffset(shadow, compare_sampler, uv, depth, lod, offset);"
+        in result
+    )
+    assert "grad_compare = textureCompareGrad(shadow, uv, depth, ddx, ddy);" in result
+    assert (
+        "grad_sampler = textureCompareGrad(shadow, compare_sampler, uv, depth, ddx, ddy);"
+        in result
+    )
+    assert (
+        "grad_offset = textureCompareGradOffset(shadow, uv, depth, ddx, ddy, offset);"
+        in result
+    )
+    assert (
+        "grad_offset_sampler = textureCompareGradOffset(shadow, compare_sampler, uv, depth, ddx, ddy, offset);"
+        in result
+    )
+    assert "projected = textureCompareProj(shadow, uvq, depth);" in result
+    assert (
+        "projected_sampler = textureCompareProj(shadow, compare_sampler, uvq, depth);"
+        in result
+    )
+    assert (
+        "projected_offset = textureCompareProjOffset(shadow, uvq, depth, offset);"
+        in result
+    )
+    assert (
+        "projected_offset_sampler = textureCompareProjOffset(shadow, compare_sampler, uvq, depth, offset);"
+        in result
+    )
+    assert "projected_lod = textureCompareProjLod(shadow, uvq, depth, lod);" in result
+    assert (
+        "projected_lod_sampler = textureCompareProjLod(shadow, compare_sampler, uvq, depth, lod);"
+        in result
+    )
+    assert (
+        "projected_lod_offset = textureCompareProjLodOffset(shadow, uvq, depth, lod, offset);"
+        in result
+    )
+    assert (
+        "projected_lod_offset_sampler = textureCompareProjLodOffset(shadow, compare_sampler, uvq, depth, lod, offset);"
+        in result
+    )
+    assert (
+        "projected_grad = textureCompareProjGrad(shadow, uvq, depth, ddx, ddy);"
+        in result
+    )
+    assert (
+        "projected_grad_sampler = textureCompareProjGrad(shadow, compare_sampler, uvq, depth, ddx, ddy);"
+        in result
+    )
+    assert (
+        "projected_grad_offset = textureCompareProjGradOffset(shadow, uvq, depth, ddx, ddy, offset);"
+        in result
+    )
+    assert (
+        "projected_grad_offset_sampler = textureCompareProjGradOffset(shadow, compare_sampler, uvq, depth, ddx, ddy, offset);"
+        in result
+    )
+    assert "gathered = textureGatherCompare(shadow, uv, depth);" in result
+    assert (
+        "gathered_sampler = textureGatherCompare(shadow, compare_sampler, uv, depth);"
+        in result
+    )
+    assert (
+        "gathered_offset = textureGatherCompareOffset(shadow, uv, depth, offset);"
+        in result
+    )
+    assert (
+        "gathered_offset_sampler = textureGatherCompareOffset(shadow, compare_sampler, uv, depth, offset);"
+        in result
+    )
+    assert "DepthTexture2D" not in result
+    assert "texture_compare" not in result
+    assert "texture_gather_compare" not in result
+
+
+def test_gpu_image_and_buffer_helper_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn resource_helpers(
+        color_image: Image2D<Vec4<f32>>,
+        counter_image: Image2D<Vec4<u32>>,
+        ramp_image: Image1D<Vec4<f32>>,
+        ramp_array_image: Image1DArray<Vec4<f32>>,
+        volume_image: Image3D<Vec4<f32>>,
+        cube_image: ImageCube<Vec4<f32>>,
+        layer_image: Image2DArray<Vec4<f32>>,
+        ms_image: Image2DMS<Vec4<f32>>,
+        ms_array_image: Image2DMSArray<Vec4<f32>>,
+        signed_volume: Image3D<Vec4<i32>>,
+        counter_layers: Image2DArray<Vec4<u32>>,
+        values: RwBuffer<i32>,
+        weights: Buffer<f32>,
+        append_values: AppendBuffer<u32>,
+        consume_values: ConsumeBuffer<u32>,
+        raw_bytes: ByteAddressBuffer,
+        raw_out: RwByteAddressBuffer,
+        pixel: Vec2<i32>,
+        index: u32,
+        amount: u32,
+    ) -> Vec4<f32> {
+        let color = image_load(color_image, pixel);
+        image_store(color_image, pixel, color);
+        let color_size = image_size(color_image);
+        let ramp_size = image_size(ramp_image);
+        let volume_size = image_size(volume_image);
+        let samples = image_samples(ms_image);
+        let previous = image_atomic_add(counter_image, pixel, amount);
+        let min_value = image_atomic_min(counter_image, pixel, amount);
+        let max_value = image_atomic_max(counter_image, pixel, amount);
+        let and_value = image_atomic_and(counter_image, pixel, amount);
+        let or_value = image_atomic_or(counter_image, pixel, amount);
+        let xor_value = image_atomic_xor(counter_image, pixel, amount);
+        let exchanged = image_atomic_exchange(counter_image, pixel, amount);
+        let swapped = image_atomic_comp_swap(counter_image, pixel, previous, amount);
+        let value = buffer_load(values, index);
+        let weight = buffer_load(weights, index);
+        let length: u32 = 0;
+        buffer_dimensions(values, length);
+        buffer_store(values, index, value);
+        return color;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec4 resource_helpers(image2D color_image, uimage2D counter_image" in result
+    assert "image1D ramp_image" in result
+    assert "image1DArray ramp_array_image" in result
+    assert "image3D volume_image" in result
+    assert "imageCube cube_image" in result
+    assert "image2DArray layer_image" in result
+    assert "image2DMS ms_image" in result
+    assert "image2DMSArray ms_array_image" in result
+    assert "iimage3D signed_volume" in result
+    assert "uimage2DArray counter_layers" in result
+    assert "RWStructuredBuffer<int> values" in result
+    assert "StructuredBuffer<float> weights" in result
+    assert "AppendStructuredBuffer<uint> append_values" in result
+    assert "ConsumeStructuredBuffer<uint> consume_values" in result
+    assert "ByteAddressBuffer raw_bytes" in result
+    assert "RWByteAddressBuffer raw_out" in result
+    assert "color = imageLoad(color_image, pixel);" in result
+    assert "imageStore(color_image, pixel, color);" in result
+    assert "color_size = imageSize(color_image);" in result
+    assert "ramp_size = imageSize(ramp_image);" in result
+    assert "volume_size = imageSize(volume_image);" in result
+    assert "samples = imageSamples(ms_image);" in result
+    assert "previous = imageAtomicAdd(counter_image, pixel, amount);" in result
+    assert "min_value = imageAtomicMin(counter_image, pixel, amount);" in result
+    assert "max_value = imageAtomicMax(counter_image, pixel, amount);" in result
+    assert "and_value = imageAtomicAnd(counter_image, pixel, amount);" in result
+    assert "or_value = imageAtomicOr(counter_image, pixel, amount);" in result
+    assert "xor_value = imageAtomicXor(counter_image, pixel, amount);" in result
+    assert "exchanged = imageAtomicExchange(counter_image, pixel, amount);" in result
+    assert (
+        "swapped = imageAtomicCompSwap(counter_image, pixel, previous, amount);"
+        in result
+    )
+    assert "value = buffer_load(values, index);" in result
+    assert "weight = buffer_load(weights, index);" in result
+    assert "length = 0;" in result
+    assert "buffer_dimensions(values, length);" in result
+    assert "buffer_store(values, index, value);" in result
+    assert "Image2D" not in result
+    assert "RwBuffer" not in result
+    assert "Buffer<f32>" not in result
+    assert "image_load" not in result
+    assert "image_size" not in result
+    assert "image_samples" not in result
+    assert "image_atomic_min" not in result
+    assert "image_atomic_max" not in result
+    assert "image_atomic_and" not in result
+    assert "image_atomic_or" not in result
+    assert "image_atomic_xor" not in result
+    assert "image_atomic_exchange" not in result
+    assert "image_atomic_comp_swap" not in result
 
 
 def test_char_literal_conversion():
@@ -5076,32 +6079,32 @@ def test_complex_shader_conversion():
         #[location(2)]
         texcoord: Vec2<f32>,
     }
-    
+
     #[repr(C)]
     pub struct VertexOutput {
         position: Vec4<f32>,
         normal: Vec3<f32>,
         texcoord: Vec2<f32>,
     }
-    
+
     #[vertex_shader]
     pub fn vertex_main(input: VertexInput) -> VertexOutput {
         let world_position = transform * Vec4::new(input.position.x, input.position.y, input.position.z, 1.0);
         let world_normal = normalize((normal_matrix * Vec4::new(input.normal.x, input.normal.y, input.normal.z, 0.0)).xyz());
-        
+
         VertexOutput {
             position: world_position,
             normal: world_normal,
             texcoord: input.texcoord,
         }
     }
-    
+
     #[fragment_shader]
     pub fn fragment_main(input: VertexOutput) -> Vec4<f32> {
         let light_dir = normalize(light_position - input.position.xyz());
         let diffuse = max(dot(input.normal, light_dir), 0.0);
         let color = texture_sample(diffuse_texture, input.texcoord);
-        
+
         Vec4::new(color.xyz() * diffuse, color.w)
     }
     """

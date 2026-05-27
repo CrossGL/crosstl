@@ -18,12 +18,16 @@ from crosstl.translator.ast import (
     MatrixType,
     MemberAccessNode,
     NamedType,
+    PointerType,
+    PointerAccessNode,
     PreprocessorNode,
     PrimitiveType,
     RangeNode,
+    ReferenceType,
     ShaderNode,
     ShaderStage,
     StructPatternNode,
+    UnaryOpNode,
     VariableNode,
     VectorType,
     WaveOpNode,
@@ -1141,8 +1145,9 @@ def test_resource_parameter_syntax():
 def test_compute_layout_execution_config_parsing():
     code = """
     shader ComputeLayout {
+        const int GROUP_SIZE = 8;
         compute {
-            layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+            layout(local_size_x = GROUP_SIZE * 2, local_size_y = 8, local_size_z = 1) in;
             void main() {
             }
         }
@@ -1153,10 +1158,69 @@ def test_compute_layout_execution_config_parsing():
     compute_stage = ast.stages[ShaderStage.COMPUTE]
 
     assert compute_stage.execution_config == {
-        "local_size_x": "8",
+        "local_size_x": "GROUP_SIZE * 2",
         "local_size_y": "8",
         "local_size_z": "1",
     }
+    assert len(compute_stage.layout_qualifiers) == 1
+    layout = compute_stage.layout_qualifiers[0]
+    assert layout.direction == "in"
+    assert [entry.name for entry in layout.entries] == [
+        "local_size_x",
+        "local_size_y",
+        "local_size_z",
+    ]
+    assert layout.entries[0].arguments[0].op == "*"
+    assert [entry.arguments[0].value for entry in layout.entries[1:]] == [8, 1]
+
+
+def test_square_bracket_stage_attributes_parse_to_function_metadata():
+    code = """
+    shader NativeStageAttributes {
+        compute {
+            [shader("compute")]
+            [numthreads(8, GROUP_SIZE, 1)]
+            void main() {
+            }
+        }
+
+        hull HullMain {
+            [domain("tri"), partitioning("fractional_odd")]
+            [outputtopology("triangle_cw")]
+            [outputcontrolpoints(3)]
+            [patchconstantfunc("HSConst")]
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    compute_stage = ast.stages[ShaderStage.COMPUTE]
+    compute_attrs = compute_stage.entry_point.attributes
+
+    assert compute_stage.execution_config == {"numthreads": ("8", "GROUP_SIZE", "1")}
+    assert [attr.name for attr in compute_attrs] == ["shader", "numthreads"]
+    assert compute_attrs[0].arguments[0].value == "compute"
+    assert [arg.value for arg in compute_attrs[1].arguments[::2]] == [8, 1]
+    assert compute_attrs[1].arguments[1].name == "GROUP_SIZE"
+
+    hull_entry = ast.stages[ShaderStage.TESSELLATION_CONTROL].entry_point
+    assert hull_entry.name == "HullMain"
+    assert [attr.name for attr in hull_entry.attributes] == [
+        "domain",
+        "partitioning",
+        "outputtopology",
+        "outputcontrolpoints",
+        "patchconstantfunc",
+    ]
+    assert [attr.arguments[0].value for attr in hull_entry.attributes] == [
+        "tri",
+        "fractional_odd",
+        "triangle_cw",
+        3,
+        "HSConst",
+    ]
 
 
 def test_compute_layout_does_not_consume_resource_layouts():
@@ -1182,11 +1246,1501 @@ def test_compute_layout_does_not_consume_resource_layouts():
         "local_size_y": "8",
         "local_size_z": "1",
     }
+    assert len(compute_stage.layout_qualifiers) == 1
     assert [variable.name for variable in compute_stage.local_variables] == [
         "values",
         "sourceTexture",
         "sourceSampler",
     ]
+    assert [
+        attribute.name for attribute in compute_stage.local_variables[0].attributes
+    ] == [
+        "set",
+        "binding",
+    ]
+    assert [
+        attribute.arguments[0].value
+        for attribute in compute_stage.local_variables[0].attributes
+    ] == [0, 0]
+    assert [
+        attribute.name for attribute in compute_stage.local_variables[1].attributes
+    ] == [
+        "set",
+        "binding",
+    ]
+    assert compute_stage.local_variables[1].attributes[1].arguments[0].value == 1
+
+
+def test_global_resource_layout_attributes_are_preserved():
+    code = """
+    shader GlobalResourceLayouts {
+        layout(set = 2, binding = 7) uniform sampler2D sourceTexture;
+        layout(binding = 3) sampler sourceSampler;
+
+        fragment {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    source_texture, source_sampler = ast.global_variables
+
+    assert source_texture.name == "sourceTexture"
+    assert [attribute.name for attribute in source_texture.attributes] == [
+        "set",
+        "binding",
+    ]
+    assert [
+        attribute.arguments[0].value for attribute in source_texture.attributes
+    ] == [
+        2,
+        7,
+    ]
+
+    assert source_sampler.name == "sourceSampler"
+    assert [attribute.name for attribute in source_sampler.attributes] == ["binding"]
+    assert source_sampler.attributes[0].arguments[0].value == 3
+
+
+def test_translation_unit_resource_layout_attributes_are_preserved():
+    code = """
+    layout(set = 1, binding = 4) uniform sampler2D sourceTexture;
+
+    shader TranslationUnitResourceLayout {
+        fragment {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    source_texture = ast.global_variables[0]
+
+    assert ast.name == "TranslationUnitResourceLayout"
+    assert source_texture.name == "sourceTexture"
+    assert source_texture.qualifiers == ["uniform"]
+    assert [attribute.name for attribute in source_texture.attributes] == [
+        "set",
+        "binding",
+    ]
+    assert [
+        attribute.arguments[0].value for attribute in source_texture.attributes
+    ] == [
+        1,
+        4,
+    ]
+
+
+def test_stage_interface_layout_qualifiers_are_preserved_on_variables():
+    code = """
+    shader StageInterfaceLayouts {
+        vertex {
+            layout(location = 0) flat in vec3 position;
+            layout(location = 1) noperspective centroid out vec2 texCoord;
+            threadgroup float scratch[64];
+
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    vertex_stage = ast.stages[ShaderStage.VERTEX]
+    position, tex_coord, scratch = vertex_stage.local_variables
+
+    assert position.name == "position"
+    assert position.qualifiers == ["flat", "in"]
+    assert [attribute.name for attribute in position.attributes] == ["location"]
+    assert position.attributes[0].arguments[0].value == 0
+
+    assert tex_coord.name == "texCoord"
+    assert tex_coord.qualifiers == ["noperspective", "centroid", "out"]
+    assert [attribute.name for attribute in tex_coord.attributes] == ["location"]
+    assert tex_coord.attributes[0].arguments[0].value == 1
+
+    assert scratch.name == "scratch"
+    assert scratch.qualifiers == ["threadgroup"]
+    assert isinstance(scratch.var_type, ArrayType)
+    assert scratch.var_type.size.value == 64
+
+
+def test_cross_stage_interface_location_variables_are_validated():
+    code = """
+    shader CrossStageInterfaceLocations {
+        vertex {
+            layout(location = 0) flat out vec2 uv;
+            void main() {
+            }
+        }
+
+        fragment {
+            layout(location = 0) flat in vec2 uv;
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    assert ast.stages[ShaderStage.VERTEX].local_variables[0].name == "uv"
+    assert ast.stages[ShaderStage.FRAGMENT].local_variables[0].name == "uv"
+
+
+def test_cross_stage_interface_semantic_variables_are_validated():
+    code = """
+    shader CrossStageInterfaceSemantics {
+        vertex {
+            out vec2 uv @TEXCOORD0;
+            void main() {
+            }
+        }
+
+        fragment {
+            in vec2 uv @TEXCOORD0;
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    vertex_uv = ast.stages[ShaderStage.VERTEX].local_variables[0]
+    fragment_uv = ast.stages[ShaderStage.FRAGMENT].local_variables[0]
+    assert [attr.name for attr in vertex_uv.attributes] == ["TEXCOORD0"]
+    assert [attr.name for attr in fragment_uv.attributes] == ["TEXCOORD0"]
+
+
+def test_cross_stage_interface_struct_return_and_parameter_are_validated():
+    code = """
+    shader CrossStageInterfaceStructs {
+        struct VSOutput {
+            layout(location = 0) vec2 uv;
+        };
+
+        vertex {
+            VSOutput main() {
+                VSOutput output;
+                return output;
+            }
+        }
+
+        fragment {
+            void main(VSOutput input) {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    assert ast.stages[ShaderStage.VERTEX].entry_point.return_type.name == "VSOutput"
+    assert ast.stages[ShaderStage.FRAGMENT].entry_point.parameters[0].name == "input"
+
+
+@pytest.mark.parametrize(
+    ("vertex_output", "fragment_input", "message"),
+    [
+        (
+            "layout(location = 1) out vec2 uv;",
+            "layout(location = 0) in vec2 uv;",
+            "Missing cross-stage interface output.*location 0 component 0",
+        ),
+        (
+            "layout(location = 0) out vec3 uv;",
+            "layout(location = 0) in vec2 uv;",
+            "Conflicting cross-stage interface type.*location 0 component 0.*vec3.*vec2",
+        ),
+        (
+            "layout(location = 0) flat out vec2 uv;",
+            "layout(location = 0) noperspective in vec2 uv;",
+            "Conflicting cross-stage interface interpolation mode.*@flat.*@noperspective",
+        ),
+        (
+            "out vec2 uv @TEXCOORD1;",
+            "in vec2 uv @TEXCOORD0;",
+            "Missing cross-stage interface output.*semantic texcoord0",
+        ),
+        (
+            "layout(location = 0) out vec2 uv @TEXCOORD0;",
+            "layout(location = 0) in vec2 uv @COLOR0;",
+            "Conflicting cross-stage interface semantic metadata.*semantic texcoord0.*semantic color0",
+        ),
+        (
+            "layout(location = 1) out vec2 uv @TEXCOORD0;",
+            "layout(location = 0) in vec2 uv @TEXCOORD0;",
+            "Conflicting cross-stage interface location metadata.*location 1 component 0.*location 0 component 0",
+        ),
+    ],
+)
+def test_conflicting_cross_stage_interface_metadata_fails_validation(
+    vertex_output, fragment_input, message
+):
+    code = f"""
+    shader ConflictingCrossStageInterface {{
+        vertex {{
+            {vertex_output}
+            void main() {{
+            }}
+        }}
+
+        fragment {{
+            {fragment_input}
+            void main() {{
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_resource_layout_preserves_access_and_memory_qualifiers():
+    code = """
+    shader ResourceQualifierLayouts {
+        layout(binding = 0, r32ui) coherent readonly uniform uimage2D counters;
+        layout(binding = 1, rgba32f) writeonly uniform image2D outImage;
+
+        compute {
+            layout(std430, binding = 2) readonly buffer float values[];
+            device float deviceValue;
+            constant int lookup;
+
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    counters, out_image = ast.global_variables
+    compute_stage = ast.stages[ShaderStage.COMPUTE]
+    values, device_value, lookup = compute_stage.local_variables
+
+    assert counters.name == "counters"
+    assert counters.qualifiers == ["coherent", "readonly", "uniform"]
+    assert [attribute.name for attribute in counters.attributes] == [
+        "binding",
+        "r32ui",
+    ]
+
+    assert out_image.name == "outImage"
+    assert out_image.qualifiers == ["writeonly", "uniform"]
+    assert [attribute.name for attribute in out_image.attributes] == [
+        "binding",
+        "rgba32f",
+    ]
+
+    assert values.name == "values"
+    assert values.qualifiers == ["readonly", "buffer"]
+    assert [attribute.name for attribute in values.attributes] == [
+        "std430",
+        "binding",
+    ]
+    assert isinstance(values.var_type, ArrayType)
+
+    assert device_value.qualifiers == ["device"]
+    assert lookup.qualifiers == ["constant"]
+
+
+def test_texture_resource_type_tokens_parse_with_generic_metadata():
+    code = """
+    shader TextureResourceTypes {
+        layout(binding = 0) texture2d<float> colorTexture;
+        readonly texture2d<uint, access::read> readOnlyTexture;
+        texturecube<float> skyTexture;
+
+        void consume(texture2darray<float> layers[4]) {
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    color_texture, read_only_texture, sky_texture = ast.global_variables
+
+    assert color_texture.var_type.name == "texture2D"
+    assert color_texture.var_type.generic_args[0].name == "float"
+    assert color_texture.attributes[0].name == "binding"
+
+    assert read_only_texture.qualifiers == ["readonly"]
+    assert read_only_texture.var_type.name == "texture2D"
+    assert [arg.name for arg in read_only_texture.var_type.generic_args] == [
+        "uint",
+        "access::read",
+    ]
+
+    assert sky_texture.var_type.name == "textureCube"
+    assert sky_texture.var_type.generic_args[0].name == "float"
+
+    layers = ast.functions[0].parameters[0]
+    assert isinstance(layers.param_type, ArrayType)
+    assert layers.param_type.element_type.name == "texture2DArray"
+    assert layers.param_type.element_type.generic_args[0].name == "float"
+    assert layers.param_type.size.value == 4
+
+
+def test_hlsl_colon_semantics_parse_as_attributes():
+    code = """
+    shader HlslColonSemantics {
+        cbuffer Camera : register(b2, space1) {
+            mat4 viewProj;
+        }
+
+        struct VSOutput {
+            vec4 position : SV_Position;
+            vec2 uv : TEXCOORD0;
+        };
+
+        Texture2D colorMap : register(t0);
+
+        vertex {
+            vec4 main(vec3 position : POSITION) : SV_Position {
+                return vec4(position, 1.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    cbuffer = ast.cbuffers[0]
+    assert [attr.name for attr in cbuffer.attributes] == ["register"]
+    assert [arg.name for arg in cbuffer.attributes[0].arguments] == ["b2", "space1"]
+
+    output_struct = ast.structs[0]
+    position, uv = output_struct.members
+    assert [attr.name for attr in position.attributes] == ["SV_Position"]
+    assert [attr.name for attr in uv.attributes] == ["TEXCOORD0"]
+
+    color_map = ast.global_variables[0]
+    assert color_map.var_type.name == "Texture2D"
+    assert [attr.name for attr in color_map.attributes] == ["register"]
+    assert color_map.attributes[0].arguments[0].name == "t0"
+
+    entry = ast.stages[ShaderStage.VERTEX].entry_point
+    assert [attr.name for attr in entry.attributes] == ["SV_Position"]
+    assert [attr.name for attr in entry.parameters[0].attributes] == ["POSITION"]
+
+
+def test_duplicate_matching_register_metadata_values_are_allowed():
+    code = """
+    shader MatchingRegisterMetadata {
+        cbuffer Camera : register(b0, space1) @register(b0, space1) {
+            mat4 viewProj;
+        }
+
+        Texture2D colorMap : register(t0, space1) @register(t0, space1);
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    cbuffer = ast.cbuffers[0]
+    assert [attribute.name for attribute in cbuffer.attributes] == [
+        "register",
+        "register",
+    ]
+    assert [
+        [arg.name for arg in attribute.arguments] for attribute in cbuffer.attributes
+    ] == [
+        ["b0", "space1"],
+        ["b0", "space1"],
+    ]
+
+    color_map = ast.global_variables[0]
+    assert [attribute.name for attribute in color_map.attributes] == [
+        "register",
+        "register",
+    ]
+    assert [
+        [arg.name for arg in attribute.arguments] for attribute in color_map.attributes
+    ] == [
+        ["t0", "space1"],
+        ["t0", "space1"],
+    ]
+
+
+def test_conflicting_register_metadata_values_fail_validation():
+    code = """
+    shader ConflictingRegisterMetadata {
+        Texture2D colorMap : register(t0, space1) @register(t0, space2);
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting register metadata"):
+        parse_code(tokenize_code(code))
+
+
+def test_cbuffer_members_preserve_packoffset_layout_and_matrix_qualifiers():
+    code = """
+    shader CBufferMemberMetadata {
+        cbuffer Camera : register(b0) {
+            row_major mat4 viewProj : packoffset(c0) @packoffset(c0);
+            column_major mat4 world @packoffset(c4);
+            layout(offset = 128) vec4 tint @align(16);
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    view_proj, world, tint = ast.cbuffers[0].members
+
+    assert [attribute.name for attribute in view_proj.attributes] == [
+        "row_major",
+        "packoffset",
+        "packoffset",
+    ]
+    assert view_proj.attributes[1].arguments[0].name == "c0"
+    assert view_proj.attributes[2].arguments[0].name == "c0"
+
+    assert [attribute.name for attribute in world.attributes] == [
+        "column_major",
+        "packoffset",
+    ]
+    assert world.attributes[1].arguments[0].name == "c4"
+
+    assert [attribute.name for attribute in tint.attributes] == ["offset", "align"]
+    assert tint.attributes[0].arguments[0].value == 128
+    assert tint.attributes[1].arguments[0].value == 16
+
+
+def test_conflicting_cbuffer_member_packoffset_values_fail_validation():
+    code = """
+    shader ConflictingCBufferMemberPackoffset {
+        cbuffer Camera {
+            mat4 viewProj : packoffset(c0) @packoffset(c1);
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting packoffset metadata"):
+        parse_code(tokenize_code(code))
+
+
+def test_duplicate_matching_metal_and_layout_metadata_values_are_allowed():
+    code = """
+    shader MatchingMetalAndLayoutMetadata {
+        sampler linearSampler [[sampler(0)]] @sampler(0);
+        float weights[4] [[buffer(1)]] @buffer(1);
+
+        cbuffer Camera {
+            layout(offset = 128) vec4 tint @offset(128) @align(16) @align(16);
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    sampler_var, weights = ast.global_variables
+    tint = ast.cbuffers[0].members[0]
+
+    assert [attr.name for attr in sampler_var.attributes] == ["sampler", "sampler"]
+    assert [attr.arguments[0].value for attr in sampler_var.attributes] == [0, 0]
+    assert [attr.name for attr in weights.attributes] == ["buffer", "buffer"]
+    assert [attr.arguments[0].value for attr in weights.attributes] == [1, 1]
+    assert [attr.name for attr in tint.attributes] == [
+        "offset",
+        "offset",
+        "align",
+        "align",
+    ]
+    assert [attr.arguments[0].value for attr in tint.attributes] == [
+        128,
+        128,
+        16,
+        16,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "sampler linearSampler [[sampler(0)]] @sampler(1);",
+            "Conflicting sampler metadata",
+        ),
+        (
+            "float weights[4] [[buffer(1)]] @buffer(2);",
+            "Conflicting buffer metadata",
+        ),
+    ],
+)
+def test_conflicting_metal_resource_metadata_values_fail_validation(
+    declaration, message
+):
+    code = f"""
+    shader ConflictingMetalResourceMetadata {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("member", "message"),
+    [
+        (
+            "layout(offset = 128) vec4 tint @offset(256);",
+            "Conflicting offset metadata",
+        ),
+        (
+            "vec4 tint @align(16) @align(32);",
+            "Conflicting align metadata",
+        ),
+    ],
+)
+def test_conflicting_layout_member_metadata_values_fail_validation(member, message):
+    code = f"""
+    shader ConflictingLayoutMemberMetadata {{
+        cbuffer Camera {{
+            {member}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_duplicate_matching_user_builtin_and_specialization_metadata_values_are_allowed():
+    code = """
+    shader MatchingUserBuiltinMetadata {
+        constant float scale [[function_constant(0)]] @function_constant(0);
+        constant int mode @constant_id(1) @constant_id(1);
+
+        struct VertexOut {
+            vec4 position @builtin(position) @builtin(position);
+            vec4 clipPosition @builtin(position) @gl_Position;
+            vec4 metalPosition [[position]] @builtin(position);
+            uint vertexID @builtin(vertex_index) @SV_VertexID;
+            vec2 uv [[user(texcoord0)]] @user(texcoord0);
+        };
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    scale, mode = ast.global_variables
+    position, clip_position, metal_position, vertex_id, uv = ast.structs[0].members
+
+    assert [attr.name for attr in scale.attributes] == [
+        "function_constant",
+        "function_constant",
+    ]
+    assert [attr.arguments[0].value for attr in scale.attributes] == [0, 0]
+    assert [attr.name for attr in mode.attributes] == ["constant_id", "constant_id"]
+    assert [attr.arguments[0].value for attr in mode.attributes] == [1, 1]
+    assert [attr.name for attr in position.attributes] == ["builtin", "builtin"]
+    assert [attr.arguments[0].name for attr in position.attributes] == [
+        "position",
+        "position",
+    ]
+    assert [attr.name for attr in clip_position.attributes] == [
+        "builtin",
+        "gl_Position",
+    ]
+    assert [attr.name for attr in metal_position.attributes] == [
+        "position",
+        "builtin",
+    ]
+    assert [attr.name for attr in vertex_id.attributes] == [
+        "builtin",
+        "SV_VertexID",
+    ]
+    assert [attr.name for attr in uv.attributes] == ["user", "user"]
+    assert [attr.arguments[0].name for attr in uv.attributes] == [
+        "texcoord0",
+        "texcoord0",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "constant float scale [[function_constant(0)]] @function_constant(1);",
+            "Conflicting function_constant metadata",
+        ),
+        (
+            "constant int mode @constant_id(1) @constant_id(2);",
+            "Conflicting constant_id metadata",
+        ),
+    ],
+)
+def test_conflicting_specialization_metadata_values_fail_validation(
+    declaration, message
+):
+    code = f"""
+    shader ConflictingSpecializationMetadata {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("member", "message"),
+    [
+        (
+            "vec4 position @builtin(position) @builtin(vertex_index);",
+            "Conflicting builtin metadata",
+        ),
+        (
+            "vec2 uv [[user(texcoord0)]] @user(color0);",
+            "Conflicting user metadata",
+        ),
+        (
+            "vec4 position @builtin(vertex_index) @gl_Position;",
+            "Conflicting builtin metadata.*@builtin\\(vertex_index\\).*@gl_Position",
+        ),
+        (
+            "vec4 position @builtin(position) @gl_PointSize;",
+            "Conflicting builtin metadata.*@builtin\\(position\\).*@gl_PointSize",
+        ),
+        (
+            "uint vertexID @builtin(instance_index) @SV_VertexID;",
+            "Conflicting builtin metadata.*(@builtin\\(instance_index\\).*@SV_VertexID|@SV_VertexID.*@builtin\\(instance_index\\))",
+        ),
+    ],
+)
+def test_conflicting_user_and_builtin_metadata_values_fail_validation(member, message):
+    code = f"""
+    shader ConflictingUserBuiltinMetadata {{
+        struct VertexOut {{
+            {member}
+        }};
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_conflicting_fragment_color_and_depth_return_metadata_fails_validation():
+    code = """
+    shader ConflictingFragmentReturnMetadata {
+        fragment {
+            vec4 main() [[color(0)]] [[depth(any)]] {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting semantic metadata"):
+        parse_code(tokenize_code(code))
+
+
+def test_conflicting_matrix_layout_metadata_fails_validation():
+    code = """
+    shader ConflictingMatrixLayout {
+        cbuffer Camera {
+            row_major column_major mat4 viewProj;
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="@row_major and @column_major"):
+        parse_code(tokenize_code(code))
+
+
+def test_metal_double_bracket_attributes_parse_as_declaration_metadata():
+    code = """
+    shader MetalDoubleBracketAttributes {
+        texture2D<float> colorTexture [[texture(0)]];
+        sampler linearSampler [[sampler(0)]];
+        float weights[4] [[buffer(1)]];
+
+        struct VertexOut {
+            vec4 position [[position]];
+            vec2 uv [[user(texcoord0)]];
+        };
+
+        fragment {
+            vec4 main(
+                VertexOut stageInput [[stage_in]],
+                texture2D<float> tex [[texture(0)]],
+                sampler s [[sampler(0)]]
+            ) [[color(0)]] {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    texture, sampler_var, weights = ast.global_variables
+
+    assert [attr.name for attr in texture.attributes] == ["texture"]
+    assert texture.attributes[0].arguments[0].value == 0
+    assert [attr.name for attr in sampler_var.attributes] == ["sampler"]
+    assert sampler_var.attributes[0].arguments[0].value == 0
+    assert isinstance(weights.var_type, ArrayType)
+    assert [attr.name for attr in weights.attributes] == ["buffer"]
+    assert weights.attributes[0].arguments[0].value == 1
+
+    position, uv = ast.structs[0].members
+    assert [attr.name for attr in position.attributes] == ["position"]
+    assert [attr.name for attr in uv.attributes] == ["user"]
+    assert uv.attributes[0].arguments[0].name == "texcoord0"
+
+    entry = ast.stages[ShaderStage.FRAGMENT].entry_point
+    assert [attr.name for attr in entry.attributes] == ["color"]
+    assert entry.attributes[0].arguments[0].value == 0
+    assert [attr.name for attr in entry.parameters[0].attributes] == ["stage_in"]
+    assert [attr.name for attr in entry.parameters[1].attributes] == ["texture"]
+    assert [attr.name for attr in entry.parameters[2].attributes] == ["sampler"]
+
+
+def test_duplicate_matching_hlsl_semantic_metadata_is_allowed():
+    code = """
+    shader MatchingSemanticMetadata {
+        struct VSOutput {
+            vec4 position : SV_Position @SV_Position;
+            vec2 uv : TEXCOORD0 @TEXCOORD0;
+        };
+
+        vertex {
+            vec4 main(vec3 position : POSITION @POSITION) : SV_Position @SV_Position {
+                return vec4(position, 1.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    output_struct = ast.structs[0]
+    entry = ast.stages[ShaderStage.VERTEX].entry_point
+
+    assert [attr.name for attr in output_struct.members[0].attributes] == [
+        "SV_Position",
+        "SV_Position",
+    ]
+    assert [attr.name for attr in output_struct.members[1].attributes] == [
+        "TEXCOORD0",
+        "TEXCOORD0",
+    ]
+    assert [attr.name for attr in entry.attributes] == [
+        "SV_Position",
+        "SV_Position",
+    ]
+    assert [attr.name for attr in entry.parameters[0].attributes] == [
+        "POSITION",
+        "POSITION",
+    ]
+
+
+def test_conflicting_hlsl_semantic_metadata_fails_validation():
+    code = """
+    shader ConflictingSemanticMetadata {
+        struct VSOutput {
+            vec4 position : SV_Position @POSITION;
+        };
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting semantic metadata"):
+        parse_code(tokenize_code(code))
+
+
+def test_conflicting_function_return_semantic_metadata_fails_validation():
+    code = """
+    shader ConflictingFunctionReturnSemanticMetadata {
+        fragment {
+            vec4 main() : SV_Target0 @SV_Target1 {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting semantic metadata"):
+        parse_code(tokenize_code(code))
+
+
+def test_conflicting_metal_color_return_metadata_values_fail_validation():
+    code = """
+    shader ConflictingMetalReturnColorMetadata {
+        fragment {
+            vec4 main() [[color(0)]] [[color(1)]] {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting semantic metadata"):
+        parse_code(tokenize_code(code))
+
+
+def test_glsl_layout_buffer_block_lowers_to_struct_and_resource_variable():
+    code = """
+    shader BufferBlockLayouts {
+        layout(std430, set = 1, binding = 2) readonly buffer ParticleBlock {
+            vec4 position;
+            uint count;
+        } particles[4];
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    block_struct = ast.structs[0]
+    particles = ast.global_variables[0]
+
+    assert block_struct.name == "ParticleBlock"
+    assert [member.name for member in block_struct.members] == ["position", "count"]
+
+    assert particles.name == "particles"
+    assert particles.qualifiers == ["readonly", "buffer"]
+    assert isinstance(particles.var_type, ArrayType)
+    assert particles.var_type.element_type.name == "ParticleBlock"
+    assert particles.var_type.size.value == 4
+    assert [attribute.name for attribute in particles.attributes] == [
+        "glsl_buffer_block",
+        "set",
+        "binding",
+    ]
+    assert particles.attributes[0].arguments[0].name == "std430"
+    assert [attribute.arguments[0].value for attribute in particles.attributes[1:]] == [
+        1,
+        2,
+    ]
+
+
+def test_translation_unit_glsl_layout_buffer_block_lowers_to_ir():
+    code = """
+    layout(std140, binding = 3) buffer Globals {
+        mat4 transform;
+    };
+
+    shader BufferBlockTranslationUnit {
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    block_struct = ast.structs[0]
+    globals_block = ast.global_variables[0]
+
+    assert block_struct.name == "Globals"
+    assert block_struct.members[0].name == "transform"
+    assert globals_block.name == "globals"
+    assert globals_block.var_type.name == "Globals"
+    assert globals_block.qualifiers == ["buffer"]
+    assert [attribute.name for attribute in globals_block.attributes] == [
+        "glsl_buffer_block",
+        "binding",
+    ]
+    assert globals_block.attributes[0].arguments[0].name == "std140"
+    assert globals_block.attributes[1].arguments[0].value == 3
+
+
+def test_capitalized_type_names_are_not_mistaken_for_qualifiers():
+    code = """
+    shader CapitalizedTypeNames {
+        struct Out {
+            vec4 color;
+        };
+
+        vertex {
+            Out main() {
+                Out output;
+                return output;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    entry_point = ast.stages[ShaderStage.VERTEX].entry_point
+
+    assert entry_point.return_type.name == "Out"
+    assert len(entry_point.body.statements) == 2
+    assert entry_point.body.statements[0].name == "output"
+    assert entry_point.body.statements[0].var_type.name == "Out"
+
+
+def test_stage_layout_qualifiers_preserve_geometry_and_tessellation_metadata():
+    code = """
+    shader StageLayouts {
+        geometry {
+            layout(triangles) in;
+            layout(triangle_strip, max_vertices = 3) out;
+            void main() {
+            }
+        }
+
+        tessellation_control {
+            layout(vertices = 4) out;
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    geometry_stage = ast.stages[ShaderStage.GEOMETRY]
+    tessellation_stage = ast.stages[ShaderStage.TESSELLATION_CONTROL]
+
+    assert [layout.direction for layout in geometry_stage.layout_qualifiers] == [
+        "in",
+        "out",
+    ]
+    assert [entry.name for entry in geometry_stage.layout_qualifiers[0].entries] == [
+        "triangles"
+    ]
+    output_layout = geometry_stage.layout_qualifiers[1]
+    assert [entry.name for entry in output_layout.entries] == [
+        "triangle_strip",
+        "max_vertices",
+    ]
+    assert output_layout.entries[1].arguments[0].value == 3
+
+    assert tessellation_stage.layout_qualifiers[0].direction == "out"
+    assert tessellation_stage.layout_qualifiers[0].entries[0].name == "vertices"
+    assert tessellation_stage.layout_qualifiers[0].entries[0].arguments[0].value == 4
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            compute {
+                layout(local_size_x = 8) in;
+                layout(local_size_x = 16) in;
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage layout 'local_size_x'",
+        ),
+        (
+            """
+            compute {
+                layout(local_size_x = 8) out;
+                void main() {
+                }
+            }
+            """,
+            "local_size_x.*must use 'in' direction",
+        ),
+        (
+            """
+            geometry {
+                layout(triangles) in;
+                layout(lines) in;
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage layout entries.*lines.*triangles",
+        ),
+        (
+            """
+            tessellation_evaluation {
+                layout(triangles, quads) in;
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage layout entries.*quads.*triangles",
+        ),
+        (
+            """
+            tessellation_evaluation {
+                layout(equal_spacing, fractional_even_spacing) in;
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage layout entries.*equal_spacing.*fractional_even_spacing",
+        ),
+        (
+            """
+            tessellation_evaluation {
+                layout(cw, ccw) in;
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage layout entries.*ccw.*cw",
+        ),
+    ],
+)
+def test_conflicting_stage_layout_metadata_fails_validation(stage_source, message):
+    code = f"""
+    shader ConflictingStageLayouts {{
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_duplicate_matching_stage_layout_metadata_values_are_allowed():
+    code = """
+    shader MatchingStageLayouts {
+        compute {
+            layout(local_size_x = GROUP_SIZE * 2) in;
+            layout(local_size_x = GROUP_SIZE * 2, local_size_y = 4) in;
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    compute_stage = ast.stages[ShaderStage.COMPUTE]
+
+    assert compute_stage.execution_config == {
+        "local_size_x": "GROUP_SIZE * 2",
+        "local_size_y": "4",
+    }
+    assert len(compute_stage.layout_qualifiers) == 2
+
+
+def test_matching_layout_and_function_threadgroup_size_metadata_values_are_allowed():
+    code = """
+    shader MatchingThreadgroupSize {
+        compute {
+            layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
+            [numthreads(8, 4, 1)]
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    compute_stage = ast.stages[ShaderStage.COMPUTE]
+
+    assert compute_stage.execution_config == {
+        "local_size_x": "8",
+        "local_size_y": "4",
+        "local_size_z": "1",
+        "numthreads": ("8", "4", "1"),
+    }
+
+
+def test_conflicting_function_threadgroup_size_metadata_fails_validation():
+    code = """
+    shader ConflictingFunctionThreadgroupSize {
+        compute {
+            void main() @numthreads(8, 4, 1) @workgroup_size(16, 4, 1) {
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting numthreads metadata"):
+        parse_code(tokenize_code(code))
+
+
+def test_conflicting_layout_and_function_threadgroup_size_metadata_fails_validation():
+    code = """
+    shader ConflictingThreadgroupSize {
+        compute {
+            layout(local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
+            [numthreads(16, 4, 1)]
+            void main() {
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Conflicting stage threadgroup size metadata.*"
+            "local_size_x=8.*numthreads\\[0\\]=16"
+        ),
+    ):
+        parse_code(tokenize_code(code))
+
+
+def test_matching_layout_and_function_tessellation_metadata_values_are_allowed():
+    code = """
+    shader MatchingTessellationMetadata {
+        tessellation_control {
+            layout(vertices = 3) out;
+            [outputcontrolpoints(3)]
+            void main() {
+            }
+        }
+
+        tessellation_evaluation {
+            layout(triangles, fractional_odd_spacing, cw) in;
+            [domain("tri"), partitioning("fractional_odd")]
+            [outputtopology("triangle_cw")]
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    control_stage = ast.stages[ShaderStage.TESSELLATION_CONTROL]
+    evaluation_stage = ast.stages[ShaderStage.TESSELLATION_EVALUATION]
+
+    assert [attr.name for attr in control_stage.entry_point.attributes] == [
+        "outputcontrolpoints"
+    ]
+    assert [attr.name for attr in evaluation_stage.entry_point.attributes] == [
+        "domain",
+        "partitioning",
+        "outputtopology",
+    ]
+
+
+def test_tessellation_patch_and_control_point_metadata_are_allowed():
+    code = """
+    shader TessellationPatchMetadata {
+        struct VSOut {
+            vec4 position @position;
+        };
+
+        struct HSOut {
+            vec4 position @position;
+        };
+
+        tessellation_control {
+            layout(vertices = 3) out;
+            void main(
+                InputPatch<VSOut, 4> inputPatch,
+                OutputPatch<HSOut, 3> outputPatch
+            ) @outputcontrolpoints(3) @patchconstantfunc(HSConst) {
+            }
+        }
+
+        tessellation_evaluation {
+            layout(triangles, fractional_odd_spacing, cw, point_mode) in;
+            void main(OutputPatch<HSOut, 3> patch)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @cw
+                @point_mode
+            {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    control = ast.stages[ShaderStage.TESSELLATION_CONTROL].entry_point
+    evaluation = ast.stages[ShaderStage.TESSELLATION_EVALUATION].entry_point
+
+    assert [parameter.param_type.name for parameter in control.parameters] == [
+        "InputPatch",
+        "OutputPatch",
+    ]
+    assert control.parameters[0].param_type.generic_args[1].value == 4
+    assert control.parameters[1].param_type.generic_args[1].value == 3
+    assert [attr.name for attr in control.attributes] == [
+        "outputcontrolpoints",
+        "patchconstantfunc",
+    ]
+    assert evaluation.parameters[0].param_type.name == "OutputPatch"
+    assert evaluation.parameters[0].param_type.generic_args[1].value == 3
+    assert [attr.name for attr in evaluation.attributes] == [
+        "domain",
+        "partitioning",
+        "cw",
+        "point_mode",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            geometry {
+                layout(vertices = 3) out;
+                void main() {
+                }
+            }
+            """,
+            "Stage layout 'vertices'.*requires tessellation_control stage 'out' layout",
+        ),
+        (
+            """
+            tessellation_control {
+                layout(quads) in;
+                void main() {
+                }
+            }
+            """,
+            "Stage layout 'quads'.*requires tessellation_evaluation stage 'in' layout",
+        ),
+        (
+            """
+            compute {
+                layout(fractional_odd_spacing) in;
+                void main() {
+                }
+            }
+            """,
+            (
+                "Stage layout 'fractional_odd_spacing'.*requires "
+                "tessellation_evaluation stage 'in' layout"
+            ),
+        ),
+    ],
+)
+def test_tessellation_layout_metadata_requires_matching_stage(stage_source, message):
+    code = f"""
+    shader InvalidTessellationLayoutMetadata {{
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            geometry {
+                void main() @outputcontrolpoints(3) {
+                }
+            }
+            """,
+            "Function metadata '@outputcontrolpoints'.*requires tessellation_control stage",
+        ),
+        (
+            """
+            tessellation_evaluation {
+                void main() @patchconstantfunc(HSConst) {
+                }
+            }
+            """,
+            "Function metadata '@patchconstantfunc'.*requires tessellation_control stage",
+        ),
+        (
+            """
+            compute {
+                void main() @domain(tri) {
+                }
+            }
+            """,
+            "Function metadata '@domain'.*requires tessellation stage",
+        ),
+        (
+            """
+            fragment {
+                void main() @cw {
+                }
+            }
+            """,
+            "Function metadata '@cw'.*requires tessellation_evaluation stage",
+        ),
+    ],
+)
+def test_tessellation_function_metadata_requires_matching_stage(stage_source, message):
+    code = f"""
+    shader InvalidTessellationFunctionMetadata {{
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            vertex {
+                void main(InputPatch<VSOut, 3> patch) {
+                }
+            }
+            """,
+            (
+                "Patch type 'InputPatch'.*requires tessellation_control or "
+                "tessellation_evaluation stage"
+            ),
+        ),
+        (
+            """
+            fragment {
+                void main(OutputPatch<HSOut, 3> patch) {
+                }
+            }
+            """,
+            (
+                "Patch type 'OutputPatch'.*requires tessellation_control or "
+                "tessellation_evaluation stage"
+            ),
+        ),
+    ],
+)
+def test_tessellation_patch_parameters_require_matching_stage(stage_source, message):
+    code = f"""
+    shader InvalidTessellationPatchParameters {{
+        struct VSOut {{
+            vec4 position;
+        }};
+
+        struct HSOut {{
+            vec4 position;
+        }};
+
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            tessellation_control {
+                void main(OutputPatch<HSOut, 4> outputPatch)
+                    @outputcontrolpoints(3)
+                {
+                }
+            }
+            """,
+            (
+                "Conflicting tessellation output control-point metadata.*"
+                "OutputPatch<HSOut, 4>.*outputcontrolpoints\\(3\\).*"
+                "OutputPatch control points=4"
+            ),
+        ),
+        (
+            """
+            tessellation_control {
+                HSOut main() @outputcontrolpoints(3) {
+                    HSOut output;
+                    return output;
+                }
+            }
+
+            tessellation_evaluation {
+                void main(OutputPatch<HSOut, 4> patch) @domain(tri) {
+                }
+            }
+            """,
+            (
+                "Conflicting tessellation patch control-point metadata.*"
+                "OutputPatch<HSOut, 4>.*tessellation_control output "
+                "OutputPatch<HSOut, 3>.*outputcontrolpoints\\(3\\).*"
+                "OutputPatch control points=4"
+            ),
+        ),
+    ],
+)
+def test_tessellation_patch_control_point_mismatches_fail_validation(
+    stage_source, message
+):
+    code = f"""
+    shader InvalidTessellationPatchCounts {{
+        struct HSOut {{
+            vec4 position;
+        }};
+
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            tessellation_evaluation {
+                layout(quads) in;
+                [domain("tri")]
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage/function metadata.*layout quads.*domain\\(tri\\)",
+        ),
+        (
+            """
+            tessellation_evaluation {
+                layout(equal_spacing) in;
+                [partitioning("fractional_odd")]
+                void main() {
+                }
+            }
+            """,
+            (
+                "Conflicting stage/function metadata.*layout equal_spacing.*"
+                "partitioning\\(fractional_odd\\)"
+            ),
+        ),
+        (
+            """
+            tessellation_evaluation {
+                layout(ccw) in;
+                [outputtopology("triangle_cw")]
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage/function metadata.*layout ccw.*outputtopology",
+        ),
+        (
+            """
+            tessellation_control {
+                layout(vertices = 3) out;
+                [outputcontrolpoints(4)]
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage/function metadata.*layout vertices=3.*outputcontrolpoints=4",
+        ),
+        (
+            """
+            geometry {
+                layout(max_vertices = 3) out;
+                [maxvertexcount(4)]
+                void main() {
+                }
+            }
+            """,
+            "Conflicting stage/function metadata.*layout max_vertices=3.*maxvertexcount=4",
+        ),
+    ],
+)
+def test_conflicting_layout_and_function_stage_metadata_fails_validation(
+    stage_source, message
+):
+    code = f"""
+    shader ConflictingStageFunctionMetadata {{
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
 
 
 def test_lambda_call_preserves_typed_parameters_and_block_body_parse():
@@ -1381,6 +2935,136 @@ def test_hlsl_parameter_qualifiers_parse():
     assert patch_param.param_type.name == "OutputPatch"
     assert patch_param.param_type.generic_args[0].name == "GSOutput"
     assert patch_param.param_type.generic_args[1].value == 3
+
+
+def test_backend_parameter_address_and_access_qualifiers_parse():
+    code = """
+    shader BackendParameterQualifiers {
+        struct Payload {
+            float value;
+        };
+
+        void consume(
+            threadgroup Payload* payload @payload,
+            constant Payload& payloadRef,
+            device Payload& mut mutablePayloadRef,
+            device float values[],
+            constant int count,
+            readonly image2D source @r32f,
+            writeonly image2D target @rgba32f
+        ) { }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    (
+        payload,
+        payload_ref,
+        mutable_payload_ref,
+        values,
+        count,
+        source,
+        target,
+    ) = ast.functions[0].parameters
+
+    assert payload.qualifiers == ["threadgroup"]
+    assert payload.name == "payload"
+    assert isinstance(payload.param_type, PointerType)
+    assert payload.param_type.pointee_type.name == "Payload"
+    assert payload.attributes[0].name == "payload"
+
+    assert payload_ref.qualifiers == ["constant"]
+    assert isinstance(payload_ref.param_type, ReferenceType)
+    assert payload_ref.param_type.referenced_type.name == "Payload"
+    assert payload_ref.param_type.is_mutable is False
+
+    assert mutable_payload_ref.qualifiers == ["device"]
+    assert isinstance(mutable_payload_ref.param_type, ReferenceType)
+    assert mutable_payload_ref.param_type.referenced_type.name == "Payload"
+    assert mutable_payload_ref.param_type.is_mutable is True
+
+    assert values.qualifiers == ["device"]
+    assert isinstance(values.param_type, ArrayType)
+
+    assert count.qualifiers == ["constant"]
+    assert count.param_type.name == "int"
+
+    assert source.qualifiers == ["readonly"]
+    assert source.attributes[0].name == "r32f"
+
+    assert target.qualifiers == ["writeonly"]
+    assert target.attributes[0].name == "rgba32f"
+
+
+def test_address_space_alias_qualifiers_are_allowed():
+    code = """
+    shader AddressSpaceAliases {
+        shared threadgroup float workgroupScratch;
+        groupshared workgroup int groupCounter;
+        global device float deviceValue;
+        local private float localValue;
+        function thread int threadValue;
+
+        void consume(global device float* data, shared threadgroup float* scratch) {
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert ast.global_variables[0].qualifiers == ["shared", "threadgroup"]
+    assert ast.global_variables[1].qualifiers == ["groupshared", "workgroup"]
+    assert ast.global_variables[2].qualifiers == ["global", "device"]
+    assert ast.global_variables[3].qualifiers == ["local", "private"]
+    assert ast.global_variables[4].qualifiers == ["function", "thread"]
+    data, scratch = ast.functions[0].parameters
+    assert data.qualifiers == ["global", "device"]
+    assert scratch.qualifiers == ["shared", "threadgroup"]
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "device threadgroup float scratch;",
+            "Conflicting address space metadata.*@device.*@threadgroup",
+        ),
+        (
+            "constant global float value;",
+            "Conflicting address space metadata.*@constant.*@global",
+        ),
+        (
+            "storage private float value;",
+            "Conflicting address space metadata.*@private.*@storage",
+        ),
+    ],
+)
+def test_conflicting_variable_address_space_metadata_fails_validation(
+    declaration, message
+):
+    code = f"""
+    shader ConflictingVariableAddressSpaces {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_conflicting_parameter_address_space_metadata_fails_validation():
+    code = """
+    shader ConflictingParameterAddressSpaces {
+        void consume(device threadgroup float* scratch) {
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting address space metadata.*@device.*@threadgroup",
+    ):
+        parse_code(tokenize_code(code))
 
 
 def test_shader_generic_struct_wrapper_parses_without_leaking_members(capsys):
@@ -1776,6 +3460,57 @@ def test_image_format_attributes_parse():
     assert ast.global_variables[2].attributes[0].arguments[0].name == "rgba8"
 
 
+def test_storage_image_format_metadata_is_allowed_on_storage_images():
+    code = """
+    shader StorageImageFormats {
+        image2D color @rgba32f;
+        uimage2D counters @format(r32ui);
+        RWTexture2D<uint> hlslCounters @r32ui;
+
+        void consume(
+            image3D volume @rgba16f,
+            RWTexture2D<float4> target @format(rgba32f),
+            texture2d<uint, access::read> storageTexture @format(r32ui)
+        ) {
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert [attr.name for attr in ast.global_variables[0].attributes] == ["rgba32f"]
+    assert [attr.name for attr in ast.global_variables[1].attributes] == ["format"]
+    assert [attr.name for attr in ast.global_variables[2].attributes] == ["r32ui"]
+
+    volume, target, storage_texture = ast.functions[0].parameters
+    assert [attr.name for attr in volume.attributes] == ["rgba16f"]
+    assert [attr.name for attr in target.attributes] == ["format"]
+    assert [attr.name for attr in storage_texture.attributes] == ["format"]
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "sampler2D sampled @rgba32f;",
+        "Texture2D sampled @format(rgba32f);",
+        "texture2d<float> sampled @r32f;",
+        "float scalar @format(r32f);",
+    ],
+)
+def test_image_format_metadata_requires_storage_image_type(declaration):
+    code = f"""
+    shader NonStorageImageFormat {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Image format metadata.*requires storage image type",
+    ):
+        parse_code(tokenize_code(code))
+
+
 def test_global_io_location_attributes_parse():
     code = """
     shader Interface {
@@ -1810,6 +3545,664 @@ def test_global_io_location_attributes_parse():
     assert isinstance(output_value.attributes[1].arguments[0], LiteralNode)
     assert output_value.attributes[1].arguments[0].value == 5
     assert output_value.attributes[2].arguments[0].value == 1
+
+
+def test_struct_member_layout_attributes_parse_with_post_attributes():
+    code = """
+    shader InterfaceStructLayouts {
+        struct VSInput {
+            layout(location = 0) vec3 position @flat;
+            layout(location = 1, component = 2) vec2 uv @centroid;
+        };
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    position, uv = ast.structs[0].members
+
+    assert [attribute.name for attribute in position.attributes] == [
+        "location",
+        "flat",
+    ]
+    assert position.attributes[0].arguments[0].value == 0
+
+    assert [attribute.name for attribute in uv.attributes] == [
+        "location",
+        "component",
+        "centroid",
+    ]
+    assert [attribute.arguments[0].value for attribute in uv.attributes[:2]] == [1, 2]
+
+
+def test_struct_members_preserve_leading_attribute_metadata():
+    code = """
+    shader LeadingStructMemberAttributes {
+        struct VertexOut {
+            @builtin(position) vec4 position;
+            [[user(texcoord0)]] uv: vec2;
+            @location(1) @component(2) vec2 texCoord;
+        };
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    position, uv, tex_coord = ast.structs[0].members
+
+    assert [attr.name for attr in position.attributes] == ["builtin"]
+    assert position.attributes[0].arguments[0].name == "position"
+
+    assert uv.name == "uv"
+    assert isinstance(uv.member_type, VectorType)
+    assert uv.member_type.size == 2
+    assert [attr.name for attr in uv.attributes] == ["user"]
+    assert uv.attributes[0].arguments[0].name == "texcoord0"
+
+    assert [attr.name for attr in tex_coord.attributes] == [
+        "location",
+        "component",
+    ]
+    assert [attr.arguments[0].value for attr in tex_coord.attributes] == [1, 2]
+
+
+def test_cbuffer_members_preserve_leading_attribute_metadata():
+    code = """
+    shader LeadingCBufferMemberAttributes {
+        cbuffer Camera {
+            @packoffset(c0) row_major mat4 viewProj;
+            @align(16) layout(offset = 128) vec4 tint;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    view_proj, tint = ast.cbuffers[0].members
+
+    assert [attr.name for attr in view_proj.attributes] == [
+        "packoffset",
+        "row_major",
+    ]
+    assert view_proj.attributes[0].arguments[0].name == "c0"
+
+    assert [attr.name for attr in tint.attributes] == ["align", "offset"]
+    assert [attr.arguments[0].value for attr in tint.attributes] == [16, 128]
+
+
+def test_cbuffer_declaration_preserves_leading_and_layout_metadata():
+    code = """
+    @binding(0) @set(1)
+    cbuffer Camera : register(b0, space1) {
+        mat4 viewProj;
+    };
+
+    shader LeadingCBufferDeclarationAttributes {
+        [[buffer(2)]]
+        cbuffer Material {
+            vec4 tint;
+        };
+
+        layout(std140, binding = 3) [[buffer(4)]] uniform Globals {
+            vec4 color;
+        };
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    camera, material, globals_block = ast.cbuffers
+
+    assert [attr.name for attr in camera.attributes] == [
+        "binding",
+        "set",
+        "register",
+    ]
+    assert camera.attributes[0].arguments[0].value == 0
+    assert camera.attributes[1].arguments[0].value == 1
+    assert [arg.name for arg in camera.attributes[2].arguments] == ["b0", "space1"]
+
+    assert [attr.name for attr in material.attributes] == ["buffer"]
+    assert material.attributes[0].arguments[0].value == 2
+
+    assert [attr.name for attr in globals_block.attributes] == [
+        "std140",
+        "binding",
+        "buffer",
+    ]
+    assert globals_block.attributes[0].arguments == []
+    assert globals_block.attributes[1].arguments[0].value == 3
+    assert globals_block.attributes[2].arguments[0].value == 4
+
+
+def test_stage_local_cbuffers_preserve_declaration_metadata():
+    code = """
+    shader StageLocalCBufferMetadata {
+        compute {
+            @binding(0)
+            cbuffer Camera @binding(0) {
+                mat4 viewProj;
+            };
+
+            layout(std140, binding = 1) [[buffer(2)]] uniform Globals {
+                vec4 color;
+            };
+
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    compute_stage = ast.stages[ShaderStage.COMPUTE]
+    camera, globals_block = compute_stage.local_cbuffers
+
+    assert [cbuffer.name for cbuffer in compute_stage.local_cbuffers] == [
+        "Camera",
+        "Globals",
+    ]
+    assert [attr.name for attr in camera.attributes] == ["binding", "binding"]
+    assert [attr.arguments[0].value for attr in camera.attributes] == [0, 0]
+
+    assert [attr.name for attr in globals_block.attributes] == [
+        "std140",
+        "binding",
+        "buffer",
+    ]
+    assert globals_block.attributes[1].arguments[0].value == 1
+    assert globals_block.attributes[2].arguments[0].value == 2
+
+
+@pytest.mark.parametrize(
+    ("cbuffer_source", "message"),
+    [
+        (
+            """
+            @binding(0)
+            cbuffer Camera @binding(1) {
+                mat4 viewProj;
+            };
+            """,
+            "Conflicting binding metadata",
+        ),
+        (
+            """
+            @register(b0, space0)
+            cbuffer Camera : register(b0, space1) {
+                mat4 viewProj;
+            };
+            """,
+            "Conflicting register metadata",
+        ),
+        (
+            """
+            layout(binding = 0) @binding(1) uniform Globals {
+                vec4 color;
+            };
+            """,
+            "Conflicting binding metadata",
+        ),
+    ],
+)
+def test_conflicting_cbuffer_declaration_metadata_fails_validation(
+    cbuffer_source, message
+):
+    code = f"""
+    shader ConflictingCBufferDeclarationMetadata {{
+        {cbuffer_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    "layout_source",
+    [
+        """
+        layout(std140, std430) uniform Globals {
+            vec4 color;
+        };
+        """,
+        """
+        layout(std430, scalar) buffer Globals {
+            vec4 color;
+        } globals;
+        """,
+    ],
+)
+def test_conflicting_declaration_memory_layout_metadata_fails_validation(
+    layout_source,
+):
+    code = f"""
+    shader ConflictingMemoryLayoutMetadata {{
+        {layout_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match="Conflicting memory layout metadata"):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("stage_cbuffer_source", "message"),
+    [
+        (
+            """
+            @binding(0)
+            cbuffer Camera @binding(1) {
+                mat4 viewProj;
+            };
+            """,
+            "Conflicting binding metadata",
+        ),
+        (
+            """
+            layout(std140, std430) uniform Globals {
+                vec4 color;
+            };
+            """,
+            "Conflicting memory layout metadata",
+        ),
+    ],
+)
+def test_conflicting_stage_local_cbuffer_metadata_fails_validation(
+    stage_cbuffer_source, message
+):
+    code = f"""
+    shader ConflictingStageLocalCBufferMetadata {{
+        compute {{
+            {stage_cbuffer_source}
+
+            void main() {{
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_struct_declaration_attributes_are_preserved():
+    code = """
+    @user(record0)
+    struct TopLevelRecord @user(record0) {
+        float value;
+    };
+
+    shader StructDeclarationAttributes {
+        @payload
+        struct Payload @payload {
+            float value;
+        };
+
+        compute {
+            [[user(localRecord)]]
+            struct LocalRecord {
+                float value;
+            };
+
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    top_level, payload = ast.structs
+    local_record = ast.stages[ShaderStage.COMPUTE].local_structs[0]
+
+    assert [attr.name for attr in top_level.attributes] == ["user", "user"]
+    assert [attr.arguments[0].name for attr in top_level.attributes] == [
+        "record0",
+        "record0",
+    ]
+    assert [attr.name for attr in payload.attributes] == ["payload", "payload"]
+    assert [attr.name for attr in local_record.attributes] == ["user"]
+    assert local_record.attributes[0].arguments[0].name == "localRecord"
+
+
+@pytest.mark.parametrize(
+    ("struct_source", "message"),
+    [
+        (
+            """
+            @payload
+            struct Payload @hit_attribute {
+                float value;
+            };
+            """,
+            "Conflicting declaration role metadata.*@hit_attribute.*@payload",
+        ),
+        (
+            """
+            @user(record0)
+            struct Record @user(record1) {
+                float value;
+            };
+            """,
+            "Conflicting user metadata",
+        ),
+    ],
+)
+def test_conflicting_struct_declaration_metadata_fails_validation(
+    struct_source, message
+):
+    code = f"""
+    shader ConflictingStructDeclarationMetadata {{
+        {struct_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "float value @input @location(0) @flat @noperspective;",
+            "@flat and @noperspective",
+        ),
+        (
+            "float value @input @location(0) @smooth @flat;",
+            "@flat and @smooth",
+        ),
+        (
+            "float value @input @location(0) @linear @nointerpolation;",
+            "@linear and @nointerpolation",
+        ),
+        (
+            "float value @input @location(0) @centroid @sample;",
+            "@centroid and @sample",
+        ),
+        (
+            "float value @input @location(0) @linear_centroid @sample;",
+            "@linear_centroid and @sample",
+        ),
+    ],
+)
+def test_conflicting_interpolation_metadata_fails_validation(declaration, message):
+    code = f"""
+    shader ConflictingInterpolation {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "readonly image2D source @writeonly;",
+            "readonly.*writeonly|writeonly.*readonly",
+        ),
+        (
+            "writeonly image2D target @access(read);",
+            "readonly.*writeonly|writeonly.*readonly",
+        ),
+    ],
+)
+def test_conflicting_resource_access_metadata_fails_validation(declaration, message):
+    code = f"""
+    shader ConflictingResourceAccess {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_resource_access_metadata_is_allowed_on_resource_families():
+    code = """
+    shader ResourceAccessFamilies {
+        readonly image2D source @rgba32f;
+        writeonly RWStructuredBuffer<int> values;
+
+        struct BlockData {
+            uint value;
+        };
+
+        ReadBlock readonlyBlocks[] @glsl_buffer_block(std430) @readonly;
+
+        void consume(
+            readonly device BlockData* rawBlock @buffer(0),
+            readonly texture2d<uint, access::read> storageTexture
+        ) {
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert ast.global_variables[0].qualifiers == ["readonly"]
+    assert ast.global_variables[1].qualifiers == ["writeonly"]
+    assert [attr.name for attr in ast.global_variables[2].attributes] == [
+        "glsl_buffer_block",
+        "readonly",
+    ]
+
+    raw_block, storage_texture = ast.functions[0].parameters
+    assert raw_block.qualifiers == ["readonly", "device"]
+    assert storage_texture.qualifiers == ["readonly"]
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "readonly float scalar;",
+        "vec4 color @writeonly;",
+        "struct Payload { float value @access(read); };",
+    ],
+)
+def test_resource_access_metadata_requires_resource_family(declaration):
+    code = f"""
+    shader NonResourceAccess {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Resource access metadata.*requires resource type",
+    ):
+        parse_code(tokenize_code(code))
+
+
+def test_descriptor_index_metadata_is_allowed_on_matching_resource_roles():
+    code = """
+    shader DescriptorIndexRoles {
+        sampler2D sampled @texture(0);
+        image2D storage @texture(1);
+        sampler linearSampler @sampler(0);
+        RWStructuredBuffer<int> values @uav(2);
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert [attr.name for attr in ast.global_variables[0].attributes] == ["texture"]
+    assert [attr.name for attr in ast.global_variables[1].attributes] == ["texture"]
+    assert [attr.name for attr in ast.global_variables[2].attributes] == ["sampler"]
+    assert [attr.name for attr in ast.global_variables[3].attributes] == ["uav"]
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        ("float scalar @texture(0);", "texture metadata.*requires texture resource"),
+        (
+            "sampler linearSampler @texture(0);",
+            "texture metadata.*requires texture resource",
+        ),
+        ("vec4 color @sampler(0);", "sampler metadata.*requires sampler resource"),
+        (
+            "sampler2D sampled @sampler(0);",
+            "sampler metadata.*requires sampler resource",
+        ),
+        ("float scalar @uav(0);", "uav metadata.*requires storage resource"),
+    ],
+)
+def test_descriptor_index_metadata_requires_matching_resource_role(
+    declaration, message
+):
+    code = f"""
+    shader NonResourceDescriptorRole {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "sampler2D sampled @texture;",
+            "texture metadata.*requires exactly one descriptor index value",
+        ),
+        (
+            "sampler linearSampler @sampler;",
+            "sampler metadata.*requires exactly one descriptor index value",
+        ),
+        (
+            "RWStructuredBuffer<int> values @uav;",
+            "uav metadata.*requires exactly one descriptor index value",
+        ),
+        (
+            "sampler2D sampled @texture(0, 1);",
+            "texture metadata.*requires exactly one descriptor index value",
+        ),
+        (
+            "sampler linearSampler @sampler(0, 1);",
+            "sampler metadata.*requires exactly one descriptor index value",
+        ),
+        (
+            "RWStructuredBuffer<int> values @uav(0, 1);",
+            "uav metadata.*requires exactly one descriptor index value",
+        ),
+    ],
+)
+def test_descriptor_index_metadata_requires_one_value(declaration, message):
+    code = f"""
+    shader DescriptorIndexArity {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_conflicting_layout_attribute_values_fail_validation():
+    code = """
+    shader ConflictingLayoutValues {
+        struct VSInput {
+            layout(location = 0) vec3 position @location(1);
+        };
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting location metadata"):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "layout(binding = 0) image2D color @binding(1);",
+            "Conflicting binding metadata",
+        ),
+        (
+            "layout(set = 0) image2D color @set(1);",
+            "Conflicting set metadata",
+        ),
+        (
+            "layout(set = 0) image2D color @group(1);",
+            "Conflicting set metadata",
+        ),
+        (
+            "image2D color @group(0) @set(1);",
+            "Conflicting set metadata",
+        ),
+        (
+            "image2D color @format(r32f) @format(rgba32f);",
+            "Conflicting format metadata",
+        ),
+    ],
+)
+def test_conflicting_resource_layout_metadata_values_fail_validation(
+    declaration, message
+):
+    code = f"""
+    shader ConflictingResourceLayoutMetadata {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "image2D color @binding(0, 1);",
+            "Metadata '@binding'.*accepts at most one value",
+        ),
+        (
+            "image2D color @group(0, 1);",
+            "Metadata '@group'.*accepts at most one value",
+        ),
+        (
+            "image2D color @format(r32f, rgba32f);",
+            "Metadata '@format'.*accepts at most one value",
+        ),
+    ],
+)
+def test_single_value_resource_metadata_rejects_extra_values(declaration, message):
+    code = f"""
+    shader SingleValueResourceMetadata {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_duplicate_matching_resource_layout_metadata_values_are_allowed():
+    code = """
+    shader MatchingResourceLayoutMetadata {
+        layout(set = 0, binding = 1) image2D color @set(0) @group(0) @binding(1);
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    color = ast.global_variables[0]
+
+    assert [attribute.name for attribute in color.attributes] == [
+        "set",
+        "binding",
+        "set",
+        "group",
+        "binding",
+    ]
+    assert [attribute.arguments[0].value for attribute in color.attributes] == [
+        0,
+        1,
+        0,
+        0,
+        1,
+    ]
 
 
 def test_precise_variable_attribute_parse():
@@ -1858,6 +4251,157 @@ def test_image_format_parameter_attributes_parse():
     assert params[2].attributes[0].arguments[0].name == "r32ui"
 
 
+def test_ray_and_mesh_role_metadata_parse():
+    code = """
+    shader RoleMetadata {
+        struct Payload @payload {
+            float value;
+        };
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+        struct CallableData {
+            uint id;
+        };
+        struct MeshPayload @mesh_payload {
+            uint meshlet;
+        };
+        struct MeshVertex {
+            vec4 position;
+        };
+        struct MeshPrimitive {
+            uint material;
+        };
+
+        ray_generation {
+            void trace(
+                Payload payload @payload,
+                HitAttributes hit @hit_attribute,
+                CallableData data @callable_data
+            ) {
+            }
+        }
+
+        mesh {
+            void emit(
+                MeshPayload payload @mesh_payload,
+                MeshVertex vertices[] @vertices,
+                uint indices[] @indices,
+                MeshPrimitive primitives[] @primitives
+            ) {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    payload_struct = ast.structs[0]
+    mesh_payload_struct = ast.structs[3]
+
+    assert [attr.name for attr in payload_struct.attributes] == ["payload"]
+    assert [attr.name for attr in mesh_payload_struct.attributes] == ["mesh_payload"]
+
+    trace = ast.stages[ShaderStage.RAY_GENERATION].local_functions[0]
+    ray_payload, hit_attributes, callable_data = trace.parameters
+
+    assert [attr.name for attr in ray_payload.attributes] == ["payload"]
+    assert [attr.name for attr in hit_attributes.attributes] == ["hit_attribute"]
+    assert [attr.name for attr in callable_data.attributes] == ["callable_data"]
+
+    emit = ast.stages[ShaderStage.MESH].local_functions[0]
+    mesh_payload, vertices, indices, primitives = emit.parameters
+
+    assert [attr.name for attr in mesh_payload.attributes] == ["mesh_payload"]
+    assert [attr.name for attr in vertices.attributes] == ["vertices"]
+    assert [attr.name for attr in indices.attributes] == ["indices"]
+    assert [attr.name for attr in primitives.attributes] == ["primitives"]
+    assert isinstance(vertices.param_type, ArrayType)
+    assert isinstance(indices.param_type, ArrayType)
+    assert isinstance(primitives.param_type, ArrayType)
+
+
+@pytest.mark.parametrize(
+    ("parameter", "message"),
+    [
+        (
+            "Payload payload @payload @hit_attribute",
+            "Conflicting declaration role metadata.*@hit_attribute.*@payload",
+        ),
+        (
+            "Payload payload @payload @callable_data",
+            "Conflicting declaration role metadata.*@callable_data.*@payload",
+        ),
+        (
+            "Payload payload @vertices @primitives",
+            "Conflicting declaration role metadata.*@primitives.*@vertices",
+        ),
+        (
+            "Payload payload @payload @mesh_payload",
+            "Conflicting declaration role metadata.*@mesh_payload.*@payload",
+        ),
+    ],
+)
+def test_conflicting_declaration_role_metadata_fails_validation(parameter, message):
+    code = f"""
+    shader ConflictingRoleMetadata {{
+        struct Payload {{
+            float value;
+        }};
+
+        mesh {{
+            void emit({parameter}) {{
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "Payload payload @payload;",
+            "Declaration role metadata.*@payload.*requires function parameter or role struct",
+        ),
+        (
+            "Payload payload @callable_data;",
+            "Declaration role metadata.*@callable_data.*requires function parameter or role struct",
+        ),
+        (
+            "MeshVertex vertices[] @vertices;",
+            "Declaration role metadata.*@vertices.*requires function parameter",
+        ),
+        (
+            "struct MeshVertex @vertices { vec4 position; };",
+            "Declaration role metadata.*@vertices.*requires function parameter",
+        ),
+        (
+            "struct Payload { float value @hit_attribute; };",
+            "Declaration role metadata.*@hit_attribute.*requires function parameter or role struct",
+        ),
+    ],
+)
+def test_declaration_role_metadata_requires_valid_owner(declaration, message):
+    code = f"""
+    shader InvalidRoleOwner {{
+        struct Payload {{
+            float value;
+        }};
+        struct MeshVertex {{
+            vec4 position;
+        }};
+
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
 def test_extended_shader_stages_parse():
     code = """
     shader main {
@@ -1892,6 +4436,186 @@ def test_extended_shader_stages_parse():
         assert ShaderStage.RAY_ANY_HIT in ast.stages
     except SyntaxError as e:
         pytest.fail(f"Extended shader stage parsing failed: {e}")
+
+
+def test_hlsl_tessellation_and_ray_stage_aliases_parse_to_canonical_stages():
+    code = """
+    shader AliasStages {
+        hull HullMain {
+            void main() { return; }
+        }
+        domain DomainMain {
+            void main() { return; }
+        }
+        intersection IntersectionMain {
+            void main() { return; }
+        }
+        closesthit ClosestHitMain {
+            void main() { return; }
+        }
+        anyhit AnyHitMain {
+            void main() { return; }
+        }
+        miss MissMain {
+            void main() { return; }
+        }
+        callable CallableMain {
+            void main() { return; }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert ast.stages[ShaderStage.TESSELLATION_CONTROL].entry_point.name == "HullMain"
+    assert (
+        ast.stages[ShaderStage.TESSELLATION_EVALUATION].entry_point.name == "DomainMain"
+    )
+    assert (
+        ast.stages[ShaderStage.RAY_INTERSECTION].entry_point.name == "IntersectionMain"
+    )
+    assert ast.stages[ShaderStage.RAY_CLOSEST_HIT].entry_point.name == "ClosestHitMain"
+    assert ast.stages[ShaderStage.RAY_ANY_HIT].entry_point.name == "AnyHitMain"
+    assert ast.stages[ShaderStage.RAY_MISS].entry_point.name == "MissMain"
+    assert ast.stages[ShaderStage.RAY_CALLABLE].entry_point.name == "CallableMain"
+
+
+def test_shader_stage_attribute_values_match_stage_aliases():
+    code = """
+    shader ShaderAttributeAliases {
+        vertex {
+            [shader("vertex")]
+            void main() { return; }
+        }
+        fragment {
+            [shader("pixel")]
+            void main() { return; }
+        }
+        compute {
+            void main() @shader(compute) { return; }
+        }
+        hull {
+            [shader("hull")]
+            void main() @outputcontrolpoints(3) { return; }
+        }
+        domain {
+            [shader("domain")]
+            void main() @domain(tri) { return; }
+        }
+        ray_generation {
+            [shader("raygeneration")]
+            void main() { return; }
+        }
+        closesthit {
+            [shader("closesthit")]
+            void main() { return; }
+        }
+        anyhit {
+            void main() @shader(anyhit) { return; }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert ast.stages[ShaderStage.VERTEX].entry_point.attributes[0].name == "shader"
+    assert ast.stages[ShaderStage.FRAGMENT].entry_point.attributes[0].name == "shader"
+    assert ast.stages[ShaderStage.COMPUTE].entry_point.attributes[0].name == "shader"
+    assert (
+        ast.stages[ShaderStage.TESSELLATION_CONTROL].entry_point.attributes[0].name
+        == "shader"
+    )
+    assert (
+        ast.stages[ShaderStage.TESSELLATION_EVALUATION].entry_point.attributes[0].name
+        == "shader"
+    )
+    assert (
+        ast.stages[ShaderStage.RAY_GENERATION]
+        .entry_point.attributes[0]
+        .arguments[0]
+        .value
+        == "raygeneration"
+    )
+    assert (
+        ast.stages[ShaderStage.RAY_CLOSEST_HIT]
+        .entry_point.attributes[0]
+        .arguments[0]
+        .value
+        == "closesthit"
+    )
+    assert (
+        ast.stages[ShaderStage.RAY_ANY_HIT].entry_point.attributes[0].name == "shader"
+    )
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            compute {
+                [shader("fragment")]
+                void main() { return; }
+            }
+            """,
+            "Function metadata '@shader\\(fragment\\)'.*conflicts with compute stage",
+        ),
+        (
+            """
+            fragment {
+                [shader("pixel", "compute")]
+                void main() { return; }
+            }
+            """,
+            "Function metadata '@shader\\(pixel, compute\\)'.*requires exactly one",
+        ),
+        (
+            """
+            mesh {
+                [shader("not_a_stage")]
+                void main() { return; }
+            }
+            """,
+            "Function metadata '@shader\\(not_a_stage\\)'.*unknown shader stage",
+        ),
+        (
+            """
+            compute {
+                void helper() @shader(fragment) { return; }
+                void main() { return; }
+            }
+            """,
+            "compute stage local function 'helper'.*conflicts with compute stage",
+        ),
+    ],
+)
+def test_shader_stage_attribute_values_require_matching_stage(stage_source, message):
+    code = f"""
+    shader InvalidShaderAttribute {{
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        parse_code(tokenize_code(code))
+
+
+def test_global_shader_attribute_values_do_not_require_stage_block_context():
+    code = """
+    shader NativeEntrypointAttributes {
+        [shader("fragment")]
+        void helper() { return; }
+
+        compute {
+            void main() { return; }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert ast.functions[0].attributes[0].name == "shader"
+    assert ast.functions[0].attributes[0].arguments[0].value == "fragment"
 
 
 def test_wave_intrinsic_parses_to_node():
@@ -1948,6 +4672,55 @@ def test_mesh_intrinsic_parses_to_node():
     assert isinstance(var_decl.initial_value, MeshOpNode)
 
 
+def test_stage_body_preserves_address_of_pointer_locals_and_arrow_access():
+    code = """
+    shader main {
+        struct Payload {
+            vec4 color;
+        };
+
+        object {
+            void main(Payload payload @payload) {
+                Payload* alias = &payload;
+                alias = &payload;
+                alias->color = vec4(1.0, 0.0, 0.0, 1.0);
+                DispatchMesh(1, 1, 1);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    stage = ast.stages[ShaderStage.OBJECT]
+    body = stage.entry_point.body.statements
+
+    assert len(body) == 4
+
+    declaration = body[0]
+    assert isinstance(declaration, VariableNode)
+    assert isinstance(declaration.var_type, PointerType)
+    assert isinstance(declaration.initial_value, UnaryOpNode)
+    assert declaration.initial_value.op == "&"
+    assert declaration.initial_value.operand.name == "payload"
+
+    assignment = body[1].expression
+    assert isinstance(assignment, AssignmentNode)
+    assert assignment.target.name == "alias"
+    assert isinstance(assignment.value, UnaryOpNode)
+    assert assignment.value.op == "&"
+    assert assignment.value.operand.name == "payload"
+
+    pointer_write = body[2].expression
+    assert isinstance(pointer_write, AssignmentNode)
+    assert isinstance(pointer_write.target, PointerAccessNode)
+    assert pointer_write.target.pointer_expr.name == "alias"
+    assert pointer_write.target.member == "color"
+
+    dispatch = body[3].expression
+    assert isinstance(dispatch, MeshOpNode)
+    assert dispatch.operation == "DispatchMesh"
+
+
 def test_rayquery_method_parses_to_node():
     code = """
     shader main {
@@ -1964,6 +4737,28 @@ def test_rayquery_method_parses_to_node():
     body = stage.entry_point.body.statements
     var_decl = next(stmt for stmt in body if isinstance(stmt, VariableNode))
     assert isinstance(var_decl.initial_value, RayQueryOpNode)
+
+
+def test_trace_ray_inline_method_parses_to_rayquery_node():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int ignored = rayQuery.TraceRayInline(accel, 0, 0xFF, ray);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    stage = ast.stages[ShaderStage.COMPUTE]
+    body = stage.entry_point.body.statements
+    var_decl = next(stmt for stmt in body if isinstance(stmt, VariableNode))
+
+    assert isinstance(var_decl.initial_value, RayQueryOpNode)
+    assert var_decl.initial_value.operation == "TraceRayInline"
+    assert var_decl.initial_value.query_expr.name == "rayQuery"
+    assert len(var_decl.initial_value.arguments) == 4
 
 
 def test_unsigned_integer_literals_parse_as_uint_nodes():

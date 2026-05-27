@@ -60,6 +60,26 @@ TOKENS = tuple(
         ("RWTEXTURE3D", r"\bRWTexture3D\b"),
         ("RWTEXTURECUBE", r"\bRWTextureCube\b"),
         ("RWTEXTURECUBEARRAY", r"\bRWTextureCubeArray\b"),
+        ("RASTERIZERORDEREDTEXTURE1D", r"\bRasterizerOrderedTexture1D\b"),
+        (
+            "RASTERIZERORDEREDTEXTURE1DARRAY",
+            r"\bRasterizerOrderedTexture1DArray\b",
+        ),
+        ("RASTERIZERORDEREDTEXTURE2D", r"\bRasterizerOrderedTexture2D\b"),
+        (
+            "RASTERIZERORDEREDTEXTURE2DARRAY",
+            r"\bRasterizerOrderedTexture2DArray\b",
+        ),
+        ("RASTERIZERORDEREDTEXTURE3D", r"\bRasterizerOrderedTexture3D\b"),
+        ("RASTERIZERORDEREDBUFFER", r"\bRasterizerOrderedBuffer\b"),
+        (
+            "RASTERIZERORDEREDSTRUCTUREDBUFFER",
+            r"\bRasterizerOrderedStructuredBuffer\b",
+        ),
+        (
+            "RASTERIZERORDEREDBYTEADDRESSBUFFER",
+            r"\bRasterizerOrderedByteAddressBuffer\b",
+        ),
         ("STRUCTUREDBUFFER", r"\bStructuredBuffer\b"),
         ("RWSTRUCTUREDBUFFER", r"\bRWStructuredBuffer\b"),
         ("APPENDSTRUCTUREDBUFFER", r"\bAppendStructuredBuffer\b"),
@@ -78,11 +98,15 @@ TOKENS = tuple(
         ("LINESTREAM", r"\bLineStream\b"),
         ("TRIANGLESTREAM", r"\bTriangleStream\b"),
         # Matrix types (must come before vector and scalar types)
-        ("MATRIX", r"\b(float|half|double|int|uint|bool)[2-4]x[2-4]\b"),
+        (
+            "MATRIX",
+            r"\b(float|half|double|int|uint|bool|min16float|min10float|"
+            r"min16int|min12int|min16uint)[2-4]x[2-4]\b",
+        ),
         # Vector types (must come before scalar types)
-        ("FVECTOR", r"\b(float|half|double)[2-4]\b"),
-        ("IVECTOR", r"\bint[2-4]\b"),
-        ("UVECTOR", r"\buint[2-4]\b"),
+        ("FVECTOR", r"\b(float|half|double|min16float|min10float)[2-4]\b"),
+        ("IVECTOR", r"\b(int|min16int|min12int)[2-4]\b"),
+        ("UVECTOR", r"\b(uint|min16uint)[2-4]\b"),
         ("BVECTOR", r"\bbool[2-4]\b"),
         # Scalar types
         ("FLOAT", r"\bfloat\b"),
@@ -246,6 +270,14 @@ KEYWORDS = {
     "RWTexture3D": "RWTEXTURE3D",
     "RWTextureCube": "RWTEXTURECUBE",
     "RWTextureCubeArray": "RWTEXTURECUBEARRAY",
+    "RasterizerOrderedTexture1D": "RASTERIZERORDEREDTEXTURE1D",
+    "RasterizerOrderedTexture1DArray": "RASTERIZERORDEREDTEXTURE1DARRAY",
+    "RasterizerOrderedTexture2D": "RASTERIZERORDEREDTEXTURE2D",
+    "RasterizerOrderedTexture2DArray": "RASTERIZERORDEREDTEXTURE2DARRAY",
+    "RasterizerOrderedTexture3D": "RASTERIZERORDEREDTEXTURE3D",
+    "RasterizerOrderedBuffer": "RASTERIZERORDEREDBUFFER",
+    "RasterizerOrderedStructuredBuffer": "RASTERIZERORDEREDSTRUCTUREDBUFFER",
+    "RasterizerOrderedByteAddressBuffer": "RASTERIZERORDEREDBYTEADDRESSBUFFER",
     "StructuredBuffer": "STRUCTUREDBUFFER",
     "RWStructuredBuffer": "RWSTRUCTUREDBUFFER",
     "AppendStructuredBuffer": "APPENDSTRUCTUREDBUFFER",
@@ -347,6 +379,14 @@ class TokenType(Enum):
     RWTEXTURE3D = auto()
     RWTEXTURECUBE = auto()
     RWTEXTURECUBEARRAY = auto()
+    RASTERIZERORDEREDTEXTURE1D = auto()
+    RASTERIZERORDEREDTEXTURE1DARRAY = auto()
+    RASTERIZERORDEREDTEXTURE2D = auto()
+    RASTERIZERORDEREDTEXTURE2DARRAY = auto()
+    RASTERIZERORDEREDTEXTURE3D = auto()
+    RASTERIZERORDEREDBUFFER = auto()
+    RASTERIZERORDEREDSTRUCTUREDBUFFER = auto()
+    RASTERIZERORDEREDBYTEADDRESSBUFFER = auto()
     STRUCTUREDBUFFER = auto()
     RWSTRUCTUREDBUFFER = auto()
     APPENDSTRUCTUREDBUFFER = auto()

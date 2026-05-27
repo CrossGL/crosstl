@@ -18,6 +18,8 @@ class HLSLToCrossGLConverter:
     def __init__(self):
         """Initialize HLSL-to-CrossGL type, function, and semantic mappings."""
         self.structured_buffer_types = {
+            "Buffer",
+            "RWBuffer",
             "StructuredBuffer",
             "RWStructuredBuffer",
             "AppendStructuredBuffer",
@@ -116,6 +118,11 @@ class HLSLToCrossGLConverter:
             "RWTexture3D": "image3D",
             "RWTextureCube": "imageCube",
             "RWTextureCubeArray": "imageCubeArray",
+            "RasterizerOrderedTexture1D": "image1D",
+            "RasterizerOrderedTexture1DArray": "image1DArray",
+            "RasterizerOrderedTexture2D": "image2D",
+            "RasterizerOrderedTexture2DArray": "image2DArray",
+            "RasterizerOrderedTexture3D": "image3D",
             # Buffer Types
             "Buffer": "samplerBuffer",
             "RWBuffer": "imageBuffer",
@@ -123,6 +130,7 @@ class HLSLToCrossGLConverter:
             "RWStructuredBuffer": "buffer",
             "ByteAddressBuffer": "buffer",
             "RWByteAddressBuffer": "buffer",
+            "RasterizerOrderedByteAddressBuffer": "RWByteAddressBuffer",
             "AppendStructuredBuffer": "buffer",
             "ConsumeStructuredBuffer": "buffer",
             "RaytracingAccelerationStructure": "accelerationStructure",
@@ -136,6 +144,7 @@ class HLSLToCrossGLConverter:
             "SamplerState": "sampler",
             "SamplerComparisonState": "sampler",
         }
+        self.type_map.update(self.minimum_precision_type_map())
         self.shadow_texture_type_map = {
             "Texture2D": "sampler2DShadow",
             "Texture2DArray": "sampler2DArrayShadow",
@@ -165,6 +174,7 @@ class HLSLToCrossGLConverter:
             "SampleCmpLevelZero": "textureCompare",
             "Load": "texelFetch",
             "Gather": "textureGather",
+            "GatherCmp": "textureGatherCompare",
             "GetDimensions": "texture_dimensions",
         }
         self.texture_gather_component_map = {
@@ -175,7 +185,13 @@ class HLSLToCrossGLConverter:
         }
         self.buffer_method_map = {
             "Load": "buffer_load",
+            "Load2": "buffer_load2",
+            "Load3": "buffer_load3",
+            "Load4": "buffer_load4",
             "Store": "buffer_store",
+            "Store2": "buffer_store2",
+            "Store3": "buffer_store3",
+            "Store4": "buffer_store4",
             "Append": "buffer_append",
             "Consume": "buffer_consume",
             "GetDimensions": "buffer_dimensions",
@@ -298,8 +314,85 @@ class HLSLToCrossGLConverter:
         self.current_resource_array_dims = {}
         self.suppress_storage_image_index_lowering = False
 
-    def texture_method_descriptor(self, member, arg_count=None):
-        if member in {"Load", "GetDimensions"}:
+    @staticmethod
+    def minimum_precision_type_map():
+        type_map = {}
+        vector_aliases = {
+            "min16float": "f16vec",
+            "min10float": "f16vec",
+            "min16int": "i16vec",
+            "min12int": "i16vec",
+            "min16uint": "u16vec",
+        }
+        for hlsl_prefix, crossgl_prefix in vector_aliases.items():
+            for width in range(2, 5):
+                type_map[f"{hlsl_prefix}{width}"] = f"{crossgl_prefix}{width}"
+
+        for hlsl_prefix in ("min16float", "min10float"):
+            for columns in range(2, 5):
+                for rows in range(2, 5):
+                    suffix = str(columns) if columns == rows else f"{columns}x{rows}"
+                    type_map[f"{hlsl_prefix}{columns}x{rows}"] = f"f16mat{suffix}"
+
+        return type_map
+
+    def texture_method_descriptor(self, member, arg_count=None, resource_type=None):
+        def with_dropped_parameters(descriptor, parameters):
+            if parameters:
+                descriptor["drop_trailing_args"] = len(parameters)
+                descriptor["dropped_parameters"] = list(parameters)
+            return descriptor
+
+        cube_family_resource = self.raw_type_base(resource_type) in {
+            "TextureCube",
+            "TextureCubeArray",
+        }
+
+        if member == "Load":
+            texture_function = self.texture_method_map[member]
+            buffer_function = self.buffer_method_map[member]
+            resource_base = self.raw_type_base(resource_type)
+            dropped_parameters = []
+            is_multisample = resource_base in {
+                "Texture2DMS",
+                "Texture2DMSArray",
+                "RWTexture2DMS",
+                "RWTexture2DMSArray",
+                "RasterizerOrderedTexture2DMS",
+                "RasterizerOrderedTexture2DMSArray",
+            }
+            if self.is_rw_texture_type(resource_type):
+                function = "imageLoad"
+                if arg_count == (3 if is_multisample else 2):
+                    dropped_parameters.append("status output")
+            elif resource_base.startswith(("Texture", "FeedbackTexture")):
+                has_offset = arg_count is not None and arg_count >= (
+                    3 if is_multisample else 2
+                )
+                function = "texelFetchOffset" if has_offset else texture_function
+                if arg_count == (4 if is_multisample else 3):
+                    dropped_parameters.append("status output")
+            else:
+                function = (
+                    buffer_function
+                    if arg_count is not None and arg_count <= 1
+                    else texture_function
+                )
+            return with_dropped_parameters(
+                {
+                    "member": member,
+                    "function": function,
+                    "texture_function": texture_function,
+                    "buffer_function": buffer_function,
+                    "component": None,
+                    "usage": "regular",
+                    "buffer_when_max_args": 1,
+                    "resource_type": resource_type,
+                    "diagnostic_kind": "tiled_resource_status",
+                },
+                dropped_parameters,
+            )
+        if member == "GetDimensions":
             texture_function = self.texture_method_map[member]
             buffer_function = self.buffer_method_map[member]
             use_buffer = arg_count is not None and arg_count <= 1
@@ -313,41 +406,172 @@ class HLSLToCrossGLConverter:
                 "buffer_when_max_args": 1,
             }
         if member in self.texture_gather_component_map:
-            return {
-                "member": member,
-                "function": self.texture_method_map["Gather"],
-                "texture_function": self.texture_method_map["Gather"],
-                "buffer_function": None,
-                "component": self.texture_gather_component_map[member],
-                "usage": "regular",
-                "buffer_when_max_args": None,
-            }
+            dropped_parameters = []
+            if cube_family_resource and arg_count == 3:
+                texture_function = "textureGather"
+                dropped_parameters.append("status output")
+            elif arg_count in {3, 4}:
+                texture_function = "textureGatherOffset"
+                if arg_count == 4:
+                    dropped_parameters.append("status output")
+            elif arg_count in {6, 7}:
+                texture_function = "textureGatherOffsets"
+                if arg_count == 7:
+                    dropped_parameters.append("status output")
+            else:
+                texture_function = "textureGather"
+            return with_dropped_parameters(
+                {
+                    "member": member,
+                    "function": texture_function,
+                    "texture_function": texture_function,
+                    "buffer_function": None,
+                    "component": self.texture_gather_component_map[member],
+                    "usage": "regular",
+                    "buffer_when_max_args": None,
+                },
+                dropped_parameters,
+            )
         if member in self.texture_method_map:
+            texture_function = self.texture_method_map[member]
+            dropped_parameters = []
+            if member == "Sample" and cube_family_resource and arg_count in {3, 4}:
+                texture_function = "texture"
+                if arg_count == 3:
+                    dropped_parameters.append("LOD clamp")
+                else:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif member == "Sample" and arg_count in {3, 4, 5}:
+                texture_function = "textureOffset"
+                if arg_count == 4:
+                    dropped_parameters.append("LOD clamp")
+                elif arg_count == 5:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif member == "SampleLevel" and cube_family_resource and arg_count == 4:
+                texture_function = "textureLod"
+                dropped_parameters.append("status output")
+            elif member == "SampleLevel" and arg_count in {4, 5}:
+                texture_function = "textureLodOffset"
+                if arg_count == 5:
+                    dropped_parameters.append("status output")
+            elif (
+                member == "SampleGrad"
+                and cube_family_resource
+                and arg_count
+                in {
+                    5,
+                    6,
+                }
+            ):
+                texture_function = "textureGrad"
+                if arg_count == 5:
+                    dropped_parameters.append("LOD clamp")
+                else:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif member == "SampleGrad" and arg_count in {5, 6, 7}:
+                texture_function = "textureGradOffset"
+                if arg_count == 6:
+                    dropped_parameters.append("LOD clamp")
+                elif arg_count == 7:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif (
+                member == "SampleBias"
+                and cube_family_resource
+                and arg_count
+                in {
+                    4,
+                    5,
+                }
+            ):
+                texture_function = "texture"
+                if arg_count == 4:
+                    dropped_parameters.append("LOD clamp")
+                else:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif member == "SampleBias" and arg_count in {4, 5, 6}:
+                texture_function = "textureOffset"
+                if arg_count == 5:
+                    dropped_parameters.append("LOD clamp")
+                elif arg_count == 6:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif (
+                member == "SampleCmp"
+                and cube_family_resource
+                and arg_count
+                in {
+                    4,
+                    5,
+                }
+            ):
+                texture_function = "textureCompare"
+                if arg_count == 4:
+                    dropped_parameters.append("LOD clamp")
+                else:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif member == "SampleCmp" and arg_count in {4, 5, 6}:
+                texture_function = "textureCompareOffset"
+                if arg_count == 5:
+                    dropped_parameters.append("LOD clamp")
+                elif arg_count == 6:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif (
+                member == "SampleCmpLevelZero"
+                and cube_family_resource
+                and arg_count == 4
+            ):
+                texture_function = "textureCompare"
+                dropped_parameters.append("status output")
+            elif member == "SampleCmpLevelZero" and arg_count in {4, 5}:
+                texture_function = "textureCompareOffset"
+                if arg_count == 5:
+                    dropped_parameters.append("status output")
+            elif member == "Gather" and cube_family_resource and arg_count == 3:
+                texture_function = "textureGather"
+                dropped_parameters.append("status output")
+            elif member == "Gather" and arg_count in {3, 4}:
+                texture_function = "textureGatherOffset"
+                if arg_count == 4:
+                    dropped_parameters.append("status output")
+            elif member == "GatherCmp" and cube_family_resource and arg_count == 4:
+                texture_function = "textureGatherCompare"
+                dropped_parameters.append("status output")
+            elif member == "GatherCmp" and arg_count in {4, 5}:
+                texture_function = "textureGatherCompareOffset"
+                if arg_count == 5:
+                    dropped_parameters.append("status output")
             usage = (
                 "comparison"
-                if member in {"SampleCmp", "SampleCmpLevelZero"}
+                if member in {"SampleCmp", "SampleCmpLevelZero", "GatherCmp"}
                 else "regular"
             )
-            return {
-                "member": member,
-                "function": self.texture_method_map[member],
-                "texture_function": self.texture_method_map[member],
-                "buffer_function": None,
-                "component": None,
-                "usage": usage,
-                "buffer_when_max_args": None,
-            }
+            return with_dropped_parameters(
+                {
+                    "member": member,
+                    "function": texture_function,
+                    "texture_function": texture_function,
+                    "buffer_function": None,
+                    "component": None,
+                    "usage": usage,
+                    "buffer_when_max_args": None,
+                },
+                dropped_parameters,
+            )
         return None
 
-    def resource_method_descriptor(self, member, arg_count=None):
-        texture_descriptor = self.texture_method_descriptor(member, arg_count)
+    def resource_method_descriptor(self, member, arg_count=None, resource_type=None):
+        texture_descriptor = self.texture_method_descriptor(
+            member, arg_count, resource_type
+        )
         if texture_descriptor:
             descriptor = dict(texture_descriptor)
             uses_buffer = (
                 descriptor["buffer_function"] is not None
                 and descriptor["function"] == descriptor["buffer_function"]
             )
-            descriptor["resource"] = "buffer" if uses_buffer else "texture"
+            if descriptor["function"] == "imageLoad":
+                descriptor["resource"] = "image"
+            else:
+                descriptor["resource"] = "buffer" if uses_buffer else "texture"
             descriptor["operation"] = {
                 "Load": "load",
                 "GetDimensions": "dimensions",
@@ -362,6 +586,7 @@ class HLSLToCrossGLConverter:
                 "GatherGreen": "gather",
                 "GatherBlue": "gather",
                 "GatherAlpha": "gather",
+                "GatherCmp": "gather_compare",
             }.get(member)
             return descriptor
 
@@ -387,6 +612,113 @@ class HLSLToCrossGLConverter:
             }
         return None
 
+    def resource_method_arguments(
+        self, obj, member, rendered_args, descriptor, raw_args=None, is_main=False
+    ):
+        drop_trailing_args = descriptor.get("drop_trailing_args", 0)
+        if drop_trailing_args:
+            rendered_args = rendered_args[:-drop_trailing_args]
+            if raw_args is not None:
+                raw_args = raw_args[:-drop_trailing_args]
+
+        if member == "Load" and descriptor["function"] in {
+            "texelFetch",
+            "texelFetchOffset",
+        }:
+            return self.texture_load_method_arguments(
+                obj, rendered_args, descriptor, raw_args or [], is_main
+            )
+
+        if (
+            member == "SampleBias"
+            and descriptor["function"] == "textureOffset"
+            and len(rendered_args) >= 4
+        ):
+            sampler, coords, bias, offset = rendered_args[:4]
+            method_args = [obj, sampler, coords, offset, bias]
+        else:
+            method_args = [obj, *rendered_args]
+
+        if descriptor["component"] is not None:
+            method_args.append(descriptor["component"])
+        return method_args
+
+    def texture_load_method_arguments(
+        self, obj, rendered_args, descriptor, raw_args, is_main=False
+    ):
+        resource_base = self.raw_type_base(descriptor.get("resource_type"))
+        is_multisample = resource_base in {"Texture2DMS", "Texture2DMSArray"}
+        if is_multisample:
+            return [obj, *rendered_args]
+
+        split_location = None
+        if raw_args:
+            split_location = self.split_texture_load_location(
+                raw_args[0], resource_base, is_main
+            )
+
+        if split_location:
+            coord, lod = split_location
+            if descriptor["function"] == "texelFetchOffset" and len(rendered_args) >= 2:
+                return [obj, coord, lod, rendered_args[1]]
+            return [obj, coord, lod]
+
+        if descriptor["function"] == "texelFetchOffset":
+            descriptor["function"] = "texelFetch"
+        if descriptor["function"] == "texelFetch" and len(rendered_args) == 1:
+            return [obj, rendered_args[0], "0"]
+        return [obj, *rendered_args]
+
+    def split_texture_load_location(self, location_arg, resource_base, is_main=False):
+        coord_components = {
+            "Texture1D": 1,
+            "Texture1DArray": 2,
+            "Texture2D": 2,
+            "Texture2DArray": 3,
+            "Texture3D": 3,
+        }.get(resource_base)
+        if coord_components is None:
+            return None
+
+        if not isinstance(location_arg, VectorConstructorNode):
+            return None
+
+        ctor_args = getattr(location_arg, "args", None)
+        if not ctor_args:
+            return None
+
+        if len(ctor_args) == 2 and coord_components > 1:
+            return (
+                self.generate_expression(ctor_args[0], is_main),
+                self.generate_expression(ctor_args[1], is_main),
+            )
+
+        if len(ctor_args) != coord_components + 1:
+            return None
+
+        lod = self.generate_expression(ctor_args[-1], is_main)
+        coord_args = [self.generate_expression(arg, is_main) for arg in ctor_args[:-1]]
+        if coord_components == 1:
+            coord = coord_args[0]
+        else:
+            coord = f"ivec{coord_components}({', '.join(coord_args)})"
+        return coord, lod
+
+    def resource_method_diagnostic(self, member, descriptor):
+        dropped_parameters = descriptor.get("dropped_parameters")
+        if not dropped_parameters:
+            return None
+        parameters = ", ".join(dropped_parameters)
+        if descriptor.get("diagnostic_kind") == "tiled_resource_status":
+            return (
+                f"/* unsupported DirectX tiled-resource status for {member}: "
+                f"dropped {parameters} */"
+            )
+        return (
+            f"/* unsupported DirectX texture overload extras for {member}: "
+            f"dropped {parameters} */"
+        )
+
     def get_indent(self):
         return "    " * self.indentation
 
@@ -402,17 +734,21 @@ class HLSLToCrossGLConverter:
                 parts.append(f"[{self.generate_expression(size, is_main)}]")
         return "".join(parts)
 
-    def format_attributes(self, attributes, indent):
+    def format_attributes(self, attributes, indent, skip_names=None):
         if not attributes:
             return ""
+        skip_names = {str(name).lower() for name in skip_names or ()}
         lines = ""
         for attr in attributes:
+            attr_name = str(getattr(attr, "name", ""))
+            if attr_name.lower() in skip_names:
+                continue
             args = getattr(attr, "args", getattr(attr, "arguments", []))
             if args:
                 rendered_args = ", ".join(self.generate_expression(arg) for arg in args)
-                lines += "    " * indent + f"@ {attr.name}({rendered_args})\n"
+                lines += "    " * indent + f"@ {attr_name}({rendered_args})\n"
             else:
-                lines += "    " * indent + f"@ {attr.name}\n"
+                lines += "    " * indent + f"@ {attr_name}\n"
         return lines
 
     def format_binding_attributes(self, node, indent):
@@ -433,7 +769,9 @@ class HLSLToCrossGLConverter:
         type_name = str(hlsl_type)
         if "<" in type_name:
             type_name = type_name.split("<", 1)[0]
-        return type_name.startswith(("RWTexture", "RWBuffer")) or type_name in {
+        return type_name.startswith(
+            ("RWTexture", "RWBuffer", "RasterizerOrdered")
+        ) or type_name in {
             "RWStructuredBuffer",
             "AppendStructuredBuffer",
             "ConsumeStructuredBuffer",
@@ -443,10 +781,14 @@ class HLSLToCrossGLConverter:
         if not self.is_uav_resource_type(getattr(node, "vtype", None)):
             return ""
 
+        lines = ""
+        if self.is_rasterizer_ordered_resource_type(getattr(node, "vtype", None)):
+            lines += "    " * indent + "@ rasterizer_ordered\n"
+
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         if "globallycoherent" in qualifiers:
-            return "    " * indent + "@ globallycoherent\n"
-        return ""
+            lines += "    " * indent + "@ globallycoherent\n"
+        return lines
 
     def record_variable_type(self, node, type_map=None, array_dim_map=None):
         name = getattr(node, "name", None)
@@ -495,8 +837,21 @@ class HLSLToCrossGLConverter:
             base = base.split("<", 1)[0]
         return base
 
+    def is_rasterizer_ordered_resource_type(self, type_name):
+        return self.raw_type_base(type_name).startswith("RasterizerOrdered")
+
     def is_rw_texture_type(self, type_name):
-        return self.raw_type_base(type_name).startswith("RWTexture")
+        return self.raw_type_base(type_name).startswith(
+            ("RWTexture", "RasterizerOrderedTexture")
+        )
+
+    def is_rw_typed_buffer_type(self, type_name):
+        return self.raw_type_base(type_name) in {
+            "RWBuffer",
+            "RWStructuredBuffer",
+            "RasterizerOrderedBuffer",
+            "RasterizerOrderedStructuredBuffer",
+        }
 
     def array_access_depth(self, expr):
         depth = 0
@@ -551,6 +906,153 @@ class HLSLToCrossGLConverter:
             current_value = self.generate_storage_image_load(access, is_main)
             rendered_value = f"{current_value} {binary_op} {rendered_value}"
         return f"imageStore({image}, {coord}, {rendered_value})"
+
+    def storage_image_component_type(self, access):
+        raw_type = self.expression_raw_type(access)
+        if raw_type is None:
+            return None
+        type_name = str(raw_type)
+        if "<" not in type_name or ">" not in type_name:
+            return None
+        return type_name.split("<", 1)[1].rsplit(">", 1)[0].strip()
+
+    def generate_storage_image_atomic_value(self, arg, component_type, is_main):
+        if (
+            component_type == "uint"
+            and isinstance(arg, int)
+            and not isinstance(arg, bool)
+            and arg >= 0
+        ):
+            return f"{arg}u"
+        return self.generate_expression(arg, is_main)
+
+    def typed_buffer_component_type(self, access):
+        raw_type = self.expression_raw_type(access)
+        if raw_type is None:
+            return None
+        type_name = str(raw_type)
+        if "<" not in type_name or ">" not in type_name:
+            return None
+        return type_name.split("<", 1)[1].rsplit(">", 1)[0].strip()
+
+    def is_typed_buffer_element_access(self, expr):
+        if not isinstance(expr, ArrayAccessNode):
+            return False
+        if not self.is_rw_typed_buffer_type(self.expression_raw_type(expr)):
+            return False
+        return self.array_access_depth(expr) > self.expression_resource_array_dims(expr)
+
+    def generate_typed_buffer_atomic_value(self, arg, component_type, is_main):
+        if (
+            component_type == "uint"
+            and isinstance(arg, int)
+            and not isinstance(arg, bool)
+            and arg >= 0
+        ):
+            return f"{arg}u"
+        return self.generate_expression(arg, is_main)
+
+    def interlocked_storage_image_atomic_expression(self, func_name, args, is_main):
+        operation_map = {
+            "InterlockedAdd": "imageAtomicAdd",
+            "InterlockedAnd": "imageAtomicAnd",
+            "InterlockedOr": "imageAtomicOr",
+            "InterlockedXor": "imageAtomicXor",
+            "InterlockedMin": "imageAtomicMin",
+            "InterlockedMax": "imageAtomicMax",
+            "InterlockedExchange": "imageAtomicExchange",
+            "InterlockedCompareExchange": "imageAtomicCompSwap",
+        }
+        operation = operation_map.get(func_name)
+        if (
+            operation is None
+            or not args
+            or not self.is_storage_image_texel_access(args[0])
+        ):
+            return None
+
+        expected_min_args = 3 if func_name == "InterlockedCompareExchange" else 2
+        if len(args) < expected_min_args:
+            return None
+
+        image, coord = self.generate_storage_image_access_parts(args[0], is_main)
+        component_type = self.storage_image_component_type(args[0])
+        if func_name == "InterlockedCompareExchange":
+            value_args = [
+                self.generate_storage_image_atomic_value(
+                    args[1], component_type, is_main
+                ),
+                self.generate_storage_image_atomic_value(
+                    args[2], component_type, is_main
+                ),
+            ]
+            original_index = 3
+        else:
+            value_args = [
+                self.generate_storage_image_atomic_value(
+                    args[1], component_type, is_main
+                )
+            ]
+            original_index = 2
+
+        atomic_call = f"{operation}({image}, {coord}, {', '.join(value_args)})"
+        if len(args) > original_index:
+            original = self.generate_without_storage_index_lowering(
+                args[original_index], is_main
+            )
+            return f"{original} = {atomic_call}"
+        return atomic_call
+
+    def interlocked_typed_buffer_atomic_expression(self, func_name, args, is_main):
+        operation_map = {
+            "InterlockedAdd": "atomicAdd",
+            "InterlockedAnd": "atomicAnd",
+            "InterlockedOr": "atomicOr",
+            "InterlockedXor": "atomicXor",
+            "InterlockedMin": "atomicMin",
+            "InterlockedMax": "atomicMax",
+            "InterlockedExchange": "atomicExchange",
+            "InterlockedCompareExchange": "atomicCompareExchange",
+        }
+        operation = operation_map.get(func_name)
+        if (
+            operation is None
+            or not args
+            or not self.is_typed_buffer_element_access(args[0])
+        ):
+            return None
+
+        expected_min_args = 3 if func_name == "InterlockedCompareExchange" else 2
+        if len(args) < expected_min_args:
+            return None
+
+        target = self.generate_without_storage_index_lowering(args[0], is_main)
+        component_type = self.typed_buffer_component_type(args[0])
+        if func_name == "InterlockedCompareExchange":
+            value_args = [
+                self.generate_typed_buffer_atomic_value(
+                    args[1], component_type, is_main
+                ),
+                self.generate_typed_buffer_atomic_value(
+                    args[2], component_type, is_main
+                ),
+            ]
+            original_index = 3
+        else:
+            value_args = [
+                self.generate_typed_buffer_atomic_value(
+                    args[1], component_type, is_main
+                )
+            ]
+            original_index = 2
+
+        atomic_call = f"{operation}({target}, {', '.join(value_args)})"
+        if len(args) > original_index:
+            original = self.generate_without_storage_index_lowering(
+                args[original_index], is_main
+            )
+            return f"{original} = {atomic_call}"
+        return atomic_call
 
     def iter_ast_children(self, node):
         if node is None or isinstance(node, (str, int, float, bool)):
@@ -842,7 +1344,7 @@ class HLSLToCrossGLConverter:
             if stage_name:
                 code += f"    // {stage_name} Shader\n"
                 code += f"    {stage_name} {{\n"
-                code += self.generate_function(func)
+                code += self.generate_function(func, skip_attribute_names={"shader"})
                 code += "    }\n\n"
             else:
                 code += self.generate_function(func)
@@ -865,9 +1367,11 @@ class HLSLToCrossGLConverter:
                 code += "    }\n"
         return code
 
-    def generate_function(self, func, indent=1):
+    def generate_function(self, func, indent=1, skip_attribute_names=None):
         """Render one HLSL function node as a CrossGL function block."""
-        code = self.format_attributes(getattr(func, "attributes", []), indent)
+        code = self.format_attributes(
+            getattr(func, "attributes", []), indent, skip_attribute_names
+        )
         code += "    " * indent
         previous_variable_types = self.current_variable_types
         previous_resource_array_dims = self.current_resource_array_dims
@@ -1072,12 +1576,24 @@ class HLSLToCrossGLConverter:
                     self.generate_expression(arg, is_main) for arg in expr.args
                 ]
                 args = ", ".join(rendered_args)
-                descriptor = self.resource_method_descriptor(member, len(expr.args))
+                resource_type = self.expression_raw_type(expr.name.object)
+                descriptor = self.resource_method_descriptor(
+                    member, len(expr.args), resource_type
+                )
                 if descriptor:
-                    method_args = [obj, *rendered_args]
-                    if descriptor["component"] is not None:
-                        method_args.append(descriptor["component"])
-                    return f"{descriptor['function']}({', '.join(method_args)})"
+                    method_args = self.resource_method_arguments(
+                        obj,
+                        member,
+                        rendered_args,
+                        descriptor,
+                        expr.args,
+                        is_main,
+                    )
+                    call = f"{descriptor['function']}({', '.join(method_args)})"
+                    diagnostic = self.resource_method_diagnostic(member, descriptor)
+                    if diagnostic:
+                        return f"{diagnostic} {call}"
+                    return call
                 return f"{obj}.{member}({args})"
 
             func_name = (
@@ -1085,6 +1601,21 @@ class HLSLToCrossGLConverter:
                 if isinstance(expr.name, str)
                 else self.generate_expression(expr.name, is_main)
             )
+            if func_name == "CheckAccessFullyMapped":
+                return (
+                    "/* unsupported DirectX tiled-resource status check: "
+                    "CheckAccessFullyMapped assumed fully mapped */ true"
+                )
+            interlocked_image_atomic = self.interlocked_storage_image_atomic_expression(
+                func_name, expr.args, is_main
+            )
+            if interlocked_image_atomic is not None:
+                return interlocked_image_atomic
+            interlocked_buffer_atomic = self.interlocked_typed_buffer_atomic_expression(
+                func_name, expr.args, is_main
+            )
+            if interlocked_buffer_atomic is not None:
+                return interlocked_buffer_atomic
             if func_name in self.interlocked_map:
                 rendered_args = [
                     self.generate_without_storage_index_lowering(arg, is_main)
@@ -1151,15 +1682,28 @@ class HLSLToCrossGLConverter:
         type_name = str(hlsl_type)
         if "<" in type_name and type_name.endswith(">"):
             base, generic_args = type_name.split("<", 1)
+            generic_type = generic_args[:-1].strip()
+            rasterizer_buffer_type = self.map_rasterizer_ordered_buffer_type(
+                base, generic_type
+            )
+            if rasterizer_buffer_type:
+                return rasterizer_buffer_type
             if base in self.structured_buffer_types:
                 return type_name
-            storage_image_type = self.map_rw_texture_type(
-                base, generic_args[:-1].strip()
-            )
+            storage_image_type = self.map_rw_texture_type(base, generic_type)
             if storage_image_type:
                 return storage_image_type
             type_name = base
         return self.type_map.get(type_name, type_name)
+
+    def map_rasterizer_ordered_buffer_type(self, base_type, element_type):
+        buffer_type = {
+            "RasterizerOrderedBuffer": "RWBuffer",
+            "RasterizerOrderedStructuredBuffer": "RWStructuredBuffer",
+        }.get(base_type)
+        if buffer_type is None:
+            return None
+        return f"{buffer_type}<{element_type}>"
 
     def map_rw_texture_type(self, base_type, element_type):
         image_type = {
@@ -1172,6 +1716,11 @@ class HLSLToCrossGLConverter:
             "RWTexture3D": "image3D",
             "RWTextureCube": "imageCube",
             "RWTextureCubeArray": "imageCubeArray",
+            "RasterizerOrderedTexture1D": "image1D",
+            "RasterizerOrderedTexture1DArray": "image1DArray",
+            "RasterizerOrderedTexture2D": "image2D",
+            "RasterizerOrderedTexture2DArray": "image2DArray",
+            "RasterizerOrderedTexture3D": "image3D",
         }.get(base_type)
         if image_type is None:
             return None

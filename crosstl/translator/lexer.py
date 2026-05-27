@@ -56,7 +56,6 @@ TOKENS = OrderedDict(
         ("UNIFORM", r"\buniform\b"),
         ("CBUFFER", r"\bcbuffer\b"),
         ("BUFFER", r"\bbuffer\b"),
-        ("BUFFER", r"\bbuffer\b"),
         # Visibility/Access
         ("PUBLIC", r"\bpub\b"),
         ("PRIVATE", r"\bpriv\b"),
@@ -212,11 +211,11 @@ TOKENS = OrderedDict(
         ("ASSIGN_SHIFT_LEFT", r"<<="),
         ("ASSIGN_SHIFT_RIGHT", r">>="),
         # Operators - Comparison
+        ("SPACESHIP", r"<=>"),
         ("EQUAL", r"=="),
         ("NOT_EQUAL", r"!="),
         ("LESS_EQUAL", r"<="),
         ("GREATER_EQUAL", r">="),
-        ("SPACESHIP", r"<=>"),
         # Operators - Logical
         ("LOGICAL_AND", r"&&"),
         ("LOGICAL_OR", r"\|\|"),
@@ -231,14 +230,14 @@ TOKENS = OrderedDict(
         # Operators - Arithmetic
         ("INCREMENT", r"\+\+"),
         ("DECREMENT", r"--"),
+        ("ARROW", r"->"),
+        ("POWER", r"\*\*"),
         ("PLUS", r"\+"),
         ("MINUS", r"-"),
         ("MULTIPLY", r"\*"),
         ("DIVIDE", r"/"),
         ("MOD", r"%"),
-        ("POWER", r"\*\*"),
         # Operators - Other
-        ("ARROW", r"->"),
         ("FAT_ARROW", r"=>"),
         ("DOUBLE_COLON", r"::"),
         ("RANGE_INCLUSIVE", r"\.\.="),
@@ -270,6 +269,8 @@ TOKENS = OrderedDict(
         ("WHITESPACE", r"\s+"),
     ]
 )
+
+SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
 KEYWORDS = {
     # Core Language
@@ -506,7 +507,7 @@ class Lexer:
                 if token_type == "IDENTIFIER" and text in KEYWORDS:
                     token_type = KEYWORDS[text]
 
-                if token_type != "WHITESPACE":
+                if token_type not in SKIP_TOKENS:
                     token = self._get_cached_token(text, token_type)
                     self.tokens.append(token)
 

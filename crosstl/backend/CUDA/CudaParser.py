@@ -54,6 +54,11 @@ class CudaParser:
         "ATOMICMIN",
         "ATOMICEXCH",
         "ATOMICCAS",
+        "ATOMICAND",
+        "ATOMICOR",
+        "ATOMICXOR",
+        "ATOMICINC",
+        "ATOMICDEC",
     }
     ATOMIC_FUNCTION_NAMES = {
         "atomicAdd",
@@ -62,6 +67,11 @@ class CudaParser:
         "atomicMin",
         "atomicExch",
         "atomicCAS",
+        "atomicAnd",
+        "atomicOr",
+        "atomicXor",
+        "atomicInc",
+        "atomicDec",
     }
     FUNCTION_NAME_TOKENS = {"IDENTIFIER", *ATOMIC_FUNCTION_TOKENS}
     LAMBDA_SPECIFIER_TOKENS = {
@@ -147,7 +157,15 @@ class CudaParser:
         "ULONGLONG3",
         "ULONGLONG4",
         "SIZE_T",
+        "TEXTURE",
+        "SURFACE",
+        "CUDAARRAY",
+        "CUDAARRAYT",
         "IDENTIFIER",
+    }
+    CUDA_IDENTIFIER_TYPE_NAMES = {
+        "cudaTextureObject_t",
+        "cudaSurfaceObject_t",
     }
 
     def __init__(self, tokens):
@@ -156,7 +174,15 @@ class CudaParser:
         self.current_index = 0
         self.current_token = tokens[0] if tokens else None
         self.type_aliases = set()
+        self.struct_names = self.collect_struct_names()
         self.user_function_names = self.collect_user_function_names()
+
+    def collect_struct_names(self):
+        names = set()
+        for index, token in enumerate(self.tokens[:-1]):
+            if token[0] == "STRUCT" and self.tokens[index + 1][0] == "IDENTIFIER":
+                names.add(self.tokens[index + 1][1])
+        return names
 
     def collect_user_function_names(self):
         names = set()
@@ -347,7 +373,7 @@ class CudaParser:
             type_token != "IDENTIFIER"
             or has_qualified_suffix
             or type_value == "auto"
-            or type_value in self.type_aliases
+            or self.is_identifier_type_name(type_value)
         )
         while (
             can_have_pointer_suffix
@@ -428,6 +454,13 @@ class CudaParser:
         token = token or self.current_token
         return bool(token and token[0] in self.FUNCTION_NAME_TOKENS)
 
+    def is_identifier_type_name(self, name):
+        return (
+            name in self.type_aliases
+            or name in self.struct_names
+            or name in self.CUDA_IDENTIFIER_TYPE_NAMES
+        )
+
     def consume_function_name(self):
         if not self.is_function_name_token():
             token_type = self.current_token[0] if self.current_token else "EOF"
@@ -507,6 +540,7 @@ class CudaParser:
         """Parse struct declaration"""
         self.eat("STRUCT")
         name = self.eat("IDENTIFIER")[1]
+        self.struct_names.add(name)
         self.eat("LBRACE")
 
         members = []
@@ -2019,7 +2053,7 @@ class CudaParser:
 
             if self.current_token[0] not in self.TYPE_TOKENS or (
                 self.current_token[0] == "IDENTIFIER"
-                and self.current_token[1] not in self.type_aliases
+                and not self.is_identifier_type_name(self.current_token[1])
             ):
                 return False
 

@@ -133,6 +133,12 @@ def count_unsupported_markers(paths):
 
 
 def unsupported_marker_samples(paths, limit=20):
+    """Return stable sample markers without line numbers.
+
+    These samples are intended to identify unsupported-code hotspots in the
+    generated matrix. Omitting line numbers keeps generated artifacts stable
+    when backend agents add unrelated lines above an existing marker.
+    """
     samples = []
     for entry in paths:
         path = ROOT / entry
@@ -147,13 +153,12 @@ def unsupported_marker_samples(paths, limit=20):
         else:
             files = []
         for file_path in files:
-            for line_number, line in enumerate(read_text(file_path).splitlines(), 1):
+            for line in read_text(file_path).splitlines():
                 if not UNSUPPORTED_PATTERN.search(line):
                     continue
                 samples.append(
                     {
                         "path": relpath(file_path),
-                        "line": line_number,
                         "text": line.strip()[:180],
                     }
                 )
@@ -166,13 +171,12 @@ def path_exists(entry):
     return (ROOT / entry).exists()
 
 
-def backend_paths(backend):
+def backend_signal_paths(backend):
     paths = []
     for key in ("translator_codegen", "native_backend"):
         value = backend.get(key)
         if value:
             paths.append(value)
-    paths.extend(backend.get("tests", []))
     return paths
 
 
@@ -343,7 +347,7 @@ def validate_catalogs(backends_data, features_data):
 
 def backend_inventory(backend):
     tests = backend.get("tests", [])
-    scanned_paths = backend_paths(backend)
+    scanned_paths = backend_signal_paths(backend)
     return {
         "id": backend["id"],
         "name": backend["name"],

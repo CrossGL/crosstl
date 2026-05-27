@@ -92,7 +92,10 @@ class TestCudaLexer:
 
     def test_atomic_operations(self):
         """Test atomic operation tokenization"""
-        code = "atomicAdd atomicSub atomicMax atomicMin"
+        code = (
+            "atomicAdd atomicSub atomicMax atomicMin atomicExch atomicCAS "
+            "atomicAnd atomicOr atomicXor atomicInc atomicDec"
+        )
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
 
@@ -101,6 +104,13 @@ class TestCudaLexer:
             ("ATOMICSUB", "atomicSub"),
             ("ATOMICMAX", "atomicMax"),
             ("ATOMICMIN", "atomicMin"),
+            ("ATOMICEXCH", "atomicExch"),
+            ("ATOMICCAS", "atomicCAS"),
+            ("ATOMICAND", "atomicAnd"),
+            ("ATOMICOR", "atomicOr"),
+            ("ATOMICXOR", "atomicXor"),
+            ("ATOMICINC", "atomicInc"),
+            ("ATOMICDEC", "atomicDec"),
             ("EOF", ""),
         ]
 
@@ -108,13 +118,19 @@ class TestCudaLexer:
 
     def test_sync_functions(self):
         """Test synchronization function tokenization"""
-        code = "__syncthreads __syncwarp"
+        code = (
+            "__syncthreads __syncwarp __threadfence "
+            "__threadfence_block __threadfence_system"
+        )
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
 
         expected_tokens = [
             ("SYNCTHREADS", "__syncthreads"),
             ("SYNCWARP", "__syncwarp"),
+            ("IDENTIFIER", "__threadfence"),
+            ("IDENTIFIER", "__threadfence_block"),
+            ("IDENTIFIER", "__threadfence_system"),
             ("EOF", ""),
         ]
 

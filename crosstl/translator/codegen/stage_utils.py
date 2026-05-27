@@ -1,37 +1,6 @@
 """Utilities for normalizing and matching shader stage qualifiers."""
 
-STAGE_QUALIFIER_NAMES = frozenset(
-    {
-        "vertex",
-        "fragment",
-        "compute",
-        "geometry",
-        "tessellation_control",
-        "tessellation_evaluation",
-        "mesh",
-        "task",
-        "amplification",
-        "object",
-        "ray_generation",
-        "ray_intersection",
-        "ray_any_hit",
-        "ray_closest_hit",
-        "ray_miss",
-        "ray_callable",
-        "intersection",
-        "anyhit",
-        "closesthit",
-        "miss",
-        "callable",
-    }
-)
-
-
-def normalize_stage_name(stage):
-    """Normalize a shader stage enum or string into a lowercase name."""
-    if stage is None:
-        return None
-    return str(stage).split(".")[-1].lower()
+from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 
 def stage_matches(target_stage, stage):
@@ -118,6 +87,188 @@ def collect_stage_entry_reserved_function_names(
                 names.add(name)
 
     return names
+
+
+def collect_stage_local_variables(ast, target_stage=None, predicate=None):
+    """Return stage-local variable declarations for matching stages."""
+    variables = []
+    for stage_type, stage in getattr(ast, "stages", {}).items():
+        stage_name = normalize_stage_name(stage_type)
+        if not stage_matches(target_stage, stage_name):
+            continue
+        for variable in getattr(stage, "local_variables", []) or []:
+            if predicate is not None and not predicate(variable):
+                continue
+            variables.append(variable)
+    return variables
+
+
+def collect_stage_local_structs(ast, target_stage=None):
+    """Return stage-local struct declarations for matching stages."""
+    structs = []
+    for stage_type, stage in getattr(ast, "stages", {}).items():
+        stage_name = normalize_stage_name(stage_type)
+        if not stage_matches(target_stage, stage_name):
+            continue
+        structs.extend(getattr(stage, "local_structs", []) or [])
+    return structs
+
+
+def collect_stage_local_cbuffers(ast, target_stage=None):
+    """Return stage-local cbuffer declarations for matching stages."""
+    cbuffers = []
+    for stage_type, stage in getattr(ast, "stages", {}).items():
+        stage_name = normalize_stage_name(stage_type)
+        if not stage_matches(target_stage, stage_name):
+            continue
+        cbuffers.extend(getattr(stage, "local_cbuffers", []) or [])
+    return cbuffers
+
+
+def stage_layout_qualifiers(stage, direction=None):
+    """Return stage-level layout qualifiers, optionally filtered by direction."""
+    layouts = list(getattr(stage, "layout_qualifiers", []) or [])
+    if direction is None:
+        return layouts
+
+    direction = normalize_layout_direction(direction)
+    return [
+        layout
+        for layout in layouts
+        if normalize_layout_direction(getattr(layout, "direction", None)) == direction
+    ]
+
+
+def stage_layout_entries(stage, direction=None):
+    """Return all entries from matching stage-level layout qualifiers."""
+    entries = []
+    for layout in stage_layout_qualifiers(stage, direction):
+        entries.extend(getattr(layout, "entries", []) or [])
+    return entries
+
+
+def stage_layout_entry(stage, name, direction=None):
+    """Return the first matching stage layout entry by name."""
+    target_name = normalize_layout_entry_name(name)
+    for entry in stage_layout_entries(stage, direction):
+        if normalize_layout_entry_name(getattr(entry, "name", None)) == target_name:
+            return entry
+    return None
+
+
+def stage_layout_entry_arguments(stage, name, direction=None):
+    """Return arguments for the first matching stage layout entry."""
+    entry = stage_layout_entry(stage, name, direction)
+    return list(getattr(entry, "arguments", []) or []) if entry is not None else []
+
+
+def stage_layout_entry_value(stage, name, direction=None, default=None):
+    """Return the first argument value for a named stage layout entry."""
+    arguments = stage_layout_entry_arguments(stage, name, direction)
+    if not arguments:
+        return default
+    return layout_argument_value(arguments[0])
+
+
+def normalize_layout_direction(direction):
+    """Normalize a layout direction token."""
+    if direction is None:
+        return None
+    return str(direction).split(".")[-1].lower()
+
+
+def normalize_layout_entry_name(name):
+    """Normalize a layout entry name for lookup."""
+    if name is None:
+        return None
+    return str(name).lower()
+
+
+def layout_argument_value(argument):
+    """Return a simple value from a layout argument expression."""
+    op = getattr(argument, "op", None)
+    if op is not None and hasattr(argument, "left") and hasattr(argument, "right"):
+        left = layout_argument_value(argument.left)
+        right = layout_argument_value(argument.right)
+        return f"{left} {op} {right}"
+    if op is not None and hasattr(argument, "operand"):
+        operand = layout_argument_value(argument.operand)
+        if getattr(argument, "is_postfix", False):
+            return f"{operand}{op}"
+        return f"{op}{operand}"
+    value = getattr(argument, "value", None)
+    if value is not None:
+        return str(value)
+    name = getattr(argument, "name", None)
+    if name is not None:
+        return str(name)
+    return str(argument)
+
+
+def deduplicate_named_declarations(nodes, kind):
+    """Deduplicate named declarations and reject conflicting same-name entries."""
+    declarations = []
+    declarations_by_name = {}
+
+    for node in nodes:
+        name = getattr(node, "name", getattr(node, "variable_name", None))
+        if not name:
+            declarations.append(node)
+            continue
+
+        signature = declaration_signature(node)
+        existing = declarations_by_name.get(name)
+        if existing is None:
+            declarations_by_name[name] = signature
+            declarations.append(node)
+            continue
+
+        if existing != signature:
+            raise ValueError(f"Conflicting {kind} declaration for '{name}'")
+
+    return declarations
+
+
+def declaration_signature(node):
+    """Build a small structural signature for named declaration deduplication."""
+    node_type = node.__class__.__name__
+    declared_type = getattr(
+        node,
+        "var_type",
+        getattr(node, "vtype", getattr(node, "param_type", None)),
+    )
+    members = getattr(node, "members", None)
+    attributes = getattr(node, "attributes", None)
+
+    if members is not None:
+        member_signature = tuple(
+            (
+                getattr(member, "name", None),
+                repr(
+                    getattr(
+                        member,
+                        "member_type",
+                        getattr(
+                            member,
+                            "vtype",
+                            getattr(member, "element_type", None),
+                        ),
+                    )
+                ),
+                repr(getattr(member, "attributes", None)),
+                repr(getattr(member, "semantic", None)),
+            )
+            for member in members
+        )
+    else:
+        member_signature = None
+
+    return (
+        node_type,
+        repr(declared_type),
+        repr(attributes),
+        member_signature,
+    )
 
 
 def assign_stage_entry_names(

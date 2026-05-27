@@ -4,7 +4,6 @@ from .OpenglAst import (
     ShaderNode,
     VariableNode,
     AssignmentNode,
-    FunctionNode,
     BinaryOpNode,
     UnaryOpNode,
     ReturnNode,
@@ -15,14 +14,10 @@ from .OpenglAst import (
     DoWhileNode,
     LayoutNode,
     VectorConstructorNode,
-    ConstantNode,
     MemberAccessNode,
     TernaryOpNode,
     ArrayAccessNode,
-    StructNode,
-    UniformNode,
     SwitchNode,
-    CaseNode,
     BlockNode,
     NumberNode,
     PostfixOpNode,
@@ -34,6 +29,157 @@ from .OpenglAst import (
 
 class GLSLToCrossGLConverter:
     """Serialize OpenGL backend AST nodes back into CrossGL source."""
+
+    BUFFER_BLOCK_LAYOUT_QUALIFIERS = {"std140", "std430", "scalar"}
+    RAY_STORAGE_QUALIFIERS = {
+        "raypayloadext": "rayPayloadEXT",
+        "raypayloadinext": "rayPayloadInEXT",
+        "hitattributeext": "hitAttributeEXT",
+        "callabledataext": "callableDataEXT",
+        "callabledatainext": "callableDataInEXT",
+    }
+    STORAGE_QUALIFIER_ATTRIBUTES = {
+        **RAY_STORAGE_QUALIFIERS,
+        "taskpayloadsharedext": "taskPayloadSharedEXT",
+    }
+    INTERFACE_QUALIFIER_NAMES = {
+        "in": "in",
+        "out": "out",
+        "inout": "inout",
+        "patch": "patch",
+        "flat": "flat",
+        "smooth": "smooth",
+        "noperspective": "noperspective",
+        "centroid": "centroid",
+        "sample": "sample",
+        "perprimitive": "perprimitive",
+        "perprimitiveext": "perprimitive",
+        "pervertex": "pervertex",
+        "perview": "perview",
+    }
+    VARIABLE_QUALIFIER_ATTRIBUTES = {
+        "invariant": "invariant",
+        "precise": "precise",
+        "lowp": "lowp",
+        "mediump": "mediump",
+        "highp": "highp",
+    }
+    LAYOUT_ATTRIBUTE_NAMES = (
+        "location",
+        "component",
+        "index",
+        "stream",
+        "xfb_buffer",
+        "xfb_offset",
+        "xfb_stride",
+    )
+    BLEND_SUPPORT_LAYOUT_ATTRIBUTE_NAMES = (
+        "blend_support_multiply",
+        "blend_support_screen",
+        "blend_support_overlay",
+        "blend_support_darken",
+        "blend_support_lighten",
+        "blend_support_colordodge",
+        "blend_support_colorburn",
+        "blend_support_hardlight",
+        "blend_support_softlight",
+        "blend_support_difference",
+        "blend_support_exclusion",
+        "blend_support_hsl_hue",
+        "blend_support_hsl_saturation",
+        "blend_support_hsl_color",
+        "blend_support_hsl_luminosity",
+        "blend_support_all_equations",
+    )
+    BARE_LAYOUT_ATTRIBUTE_NAMES = (
+        "depth_any",
+        "depth_greater",
+        "depth_less",
+        "depth_unchanged",
+        *BLEND_SUPPORT_LAYOUT_ATTRIBUTE_NAMES,
+    )
+    NON_STRUCT_STAGE_TYPES = {
+        "compute",
+        "geometry",
+        "tessellation_control",
+        "tessellation_evaluation",
+        "mesh",
+        "task",
+        "ray_generation",
+        "ray_intersection",
+        "ray_any_hit",
+        "ray_closest_hit",
+        "ray_miss",
+        "ray_callable",
+    }
+    RAY_QUERY_SIMPLE_METHODS = {
+        "rayQueryInitializeEXT": "Initialize",
+        "rayQueryProceedEXT": "Proceed",
+        "rayQueryTerminateEXT": "Abort",
+        "rayQueryGenerateIntersectionEXT": "GenerateIntersection",
+        "rayQueryConfirmIntersectionEXT": "ConfirmIntersection",
+        "rayQueryGetRayTMinEXT": "RayTMin",
+        "rayQueryGetRayFlagsEXT": "RayFlags",
+        "rayQueryGetWorldRayOriginEXT": "WorldRayOrigin",
+        "rayQueryGetWorldRayDirectionEXT": "WorldRayDirection",
+        "rayQueryGetIntersectionCandidateAABBOpaqueEXT": "CandidateAABBOpaque",
+    }
+    RAY_QUERY_COMMITTED_METHODS = {
+        "rayQueryGetIntersectionTypeEXT": ("CandidateType", "CommittedType"),
+        "rayQueryGetIntersectionPrimitiveIndexEXT": (
+            "CandidatePrimitiveIndex",
+            "CommittedPrimitiveIndex",
+        ),
+        "rayQueryGetIntersectionInstanceIdEXT": (
+            "CandidateInstanceID",
+            "CommittedInstanceID",
+        ),
+        "rayQueryGetIntersectionGeometryIndexEXT": (
+            "CandidateGeometryIndex",
+            "CommittedGeometryIndex",
+        ),
+        "rayQueryGetIntersectionInstanceCustomIndexEXT": (
+            "CandidateInstanceCustomIndex",
+            "CommittedInstanceCustomIndex",
+        ),
+        "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT": (
+            "CandidateInstanceShaderBindingTableRecordOffset",
+            "CommittedInstanceShaderBindingTableRecordOffset",
+        ),
+        "rayQueryGetIntersectionObjectRayOriginEXT": (
+            "CandidateObjectRayOrigin",
+            "CommittedObjectRayOrigin",
+        ),
+        "rayQueryGetIntersectionObjectRayDirectionEXT": (
+            "CandidateObjectRayDirection",
+            "CommittedObjectRayDirection",
+        ),
+        "rayQueryGetIntersectionTEXT": ("CandidateRayT", "CommittedRayT"),
+        "rayQueryGetIntersectionBarycentricsEXT": (
+            "CandidateTriangleBarycentrics",
+            "CommittedTriangleBarycentrics",
+        ),
+        "rayQueryGetIntersectionFrontFaceEXT": (
+            "CandidateTriangleFrontFace",
+            "CommittedTriangleFrontFace",
+        ),
+        "rayQueryGetIntersectionTriangleVertexPositionsEXT": (
+            "CandidateTriangleVertexPositions",
+            "CommittedTriangleVertexPositions",
+        ),
+        "rayQueryGetIntersectionObjectToWorldEXT": (
+            "CandidateObjectToWorld",
+            "CommittedObjectToWorld",
+        ),
+        "rayQueryGetIntersectionWorldToObjectEXT": (
+            "CandidateWorldToObject",
+            "CommittedWorldToObject",
+        ),
+    }
+    RAY_QUERY_TRANSFORM_FUNCTIONS = {
+        "rayQueryGetIntersectionObjectToWorldEXT",
+        "rayQueryGetIntersectionWorldToObjectEXT",
+    }
 
     def __init__(self, shader_type="vertex"):
         """Initialize GLSL-to-CrossGL mappings for a shader stage."""
@@ -72,6 +218,13 @@ class GLSLToCrossGLConverter:
             "distance": "distance",
             "reflect": "reflect",
             "refract": "refract",
+            "traceRayEXT": "TraceRay",
+            "reportIntersectionEXT": "ReportHit",
+            "executeCallableEXT": "CallShader",
+            "terminateRayEXT": "AcceptHitAndEndSearch",
+            "ignoreIntersectionEXT": "IgnoreHit",
+            "SetMeshOutputsEXT": "SetMeshOutputCounts",
+            "EmitMeshTasksEXT": "DispatchMesh",
         }
         self.texture_function_operations = {
             "texture": "sample",
@@ -222,6 +375,8 @@ class GLSLToCrossGLConverter:
             "uimageBuffer": "uimageBuffer",
             "uimage2DMS": "uimage2DMS",
             "uimage2DMSArray": "uimage2DMSArray",
+            "accelerationStructureEXT": "accelerationStructureEXT",
+            "rayQueryEXT": "rayQueryEXT",
             "void": "void",
         }
 
@@ -264,6 +419,9 @@ class GLSLToCrossGLConverter:
         self.structured_buffer_names = set()
         self.structured_buffer_instance_members = {}
         self.converted_ssbo_struct_names = set()
+        self.interface_block_struct_names = set()
+        self.task_payload_shared_names = set()
+        self.variable_type_scopes = []
 
     def indent(self):
         return self.indent_str * self.indent_level
@@ -295,7 +453,7 @@ class GLSLToCrossGLConverter:
         if not type_name:
             return False
         name = str(type_name)
-        return name.startswith(
+        return name == "accelerationStructureEXT" or name.startswith(
             ("sampler", "isampler", "usampler", "image", "iimage", "uimage")
         )
 
@@ -316,6 +474,57 @@ class GLSLToCrossGLConverter:
             }
         return None
 
+    def push_variable_type_scope(self):
+        self.variable_type_scopes.append({})
+
+    def pop_variable_type_scope(self):
+        self.variable_type_scopes.pop()
+
+    def register_variable_type(self, var):
+        if not self.variable_type_scopes:
+            return
+        name = getattr(var, "name", None)
+        vtype = getattr(var, "vtype", None)
+        if name and vtype:
+            self.variable_type_scopes[-1][name] = vtype
+
+    def register_parameter_type(self, param):
+        if isinstance(param, VariableNode):
+            self.register_variable_type(param)
+            return
+        if isinstance(param, tuple) and len(param) == 2:
+            param_type, param_name = param
+            if self.variable_type_scopes:
+                self.variable_type_scopes[-1][param_name] = param_type
+
+    def lookup_variable_type(self, name):
+        for scope in reversed(self.variable_type_scopes):
+            if name in scope:
+                return scope[name]
+        return None
+
+    def expression_resource_type(self, expr):
+        if isinstance(expr, VariableNode):
+            return self.lookup_variable_type(expr.name)
+        if isinstance(expr, ArrayAccessNode):
+            return self.expression_resource_type(expr.array)
+        return None
+
+    def expression_is_shadow_sampler(self, expr):
+        resource_type = self.expression_resource_type(expr)
+        return bool(resource_type and str(resource_type).endswith("Shadow"))
+
+    def shadow_gather_import_name(self, name, args):
+        if not args or not self.expression_is_shadow_sampler(args[0]):
+            return name
+        if name == "textureGather" and len(args) >= 3:
+            return "textureGatherCompare"
+        if name == "textureGatherOffset" and len(args) >= 4:
+            return "textureGatherCompareOffset"
+        if name == "textureGatherOffsets" and len(args) >= 4:
+            return "textureGatherCompareOffsets"
+        return name
+
     def _is_image_resource_type(self, type_name):
         if not type_name:
             return False
@@ -330,17 +539,12 @@ class GLSLToCrossGLConverter:
         return f" @binding({binding})" if binding is not None else ""
 
     def ssbo_block_attribute_suffix(self, var):
-        layout = getattr(var, "layout", None) or {}
-        layout_name = next(
-            (
-                str(name)
-                for name, value in layout.items()
-                if value is None and str(name).lower() in {"std140", "std430", "scalar"}
-            ),
-            "std430",
-        )
-        attributes = [f"@glsl_buffer_block({layout_name})"]
-        binding = layout.get("binding")
+        layout_names = self.ssbo_block_layout_names(var)
+        attributes = [f"@glsl_buffer_block({', '.join(layout_names)})"]
+        if self.is_shader_record_buffer_block(var):
+            self.validate_shader_record_layout(var)
+
+        binding = self.ssbo_binding(var)
         if binding is not None:
             attributes.append(f"@binding({binding})")
 
@@ -351,8 +555,40 @@ class GLSLToCrossGLConverter:
 
         return " " + " ".join(attributes)
 
+    def ssbo_binding(self, var):
+        layout = getattr(var, "layout", None) or {}
+        return layout.get("binding")
+
+    def ssbo_block_layout_names(self, var):
+        layout = getattr(var, "layout", None) or {}
+        layout_names = []
+        for name, value in layout.items():
+            normalized = str(name).lower()
+            if value is not None:
+                continue
+            if normalized in self.BUFFER_BLOCK_LAYOUT_QUALIFIERS:
+                layout_names.append(normalized)
+            elif normalized == "shaderrecordext":
+                layout_names.append("shaderRecordEXT")
+        return layout_names or ["std430"]
+
+    def is_shader_record_buffer_block(self, var):
+        return any(
+            str(layout_name).lower() == "shaderrecordext"
+            for layout_name in self.ssbo_block_layout_names(var)
+        )
+
+    def validate_shader_record_layout(self, var):
+        if self.ssbo_binding(var) is not None:
+            raise ValueError(
+                "GLSL shaderRecordEXT buffer blocks cannot declare binding layout "
+                "qualifiers"
+            )
+
     def ssbo_element_member(self, var):
         if not self._is_buffer_qualified(var):
+            return None
+        if self.is_shader_record_buffer_block(var):
             return None
 
         struct = self.structs_by_name.get(getattr(var, "vtype", None))
@@ -370,26 +606,17 @@ class GLSLToCrossGLConverter:
 
         return None
 
-    def unsupported_runtime_array_ssbo_diagnostic(self, var):
+    def ssbo_block_declaration(self, var):
         if not self._is_buffer_qualified(var):
-            return ""
-
+            return None
+        if self.ssbo_element_member(var) is not None:
+            return None
         struct = self.structs_by_name.get(getattr(var, "vtype", None))
         if struct is None:
-            return ""
-
-        members = getattr(struct, "members", None) or getattr(struct, "fields", [])
-        has_runtime_array = any(
-            getattr(member, "is_array", False) for member in members
-        )
-        if not has_runtime_array or self.ssbo_element_member(var) is not None:
-            return ""
-
-        return (
-            f"// unsupported GLSL SSBO block {struct.name}: mixed metadata and "
-            "runtime-array members require explicit layout handling; preserved as "
-            "attributed block struct"
-        )
+            return None
+        return self.generate_variable_declaration(
+            var
+        ) + self.ssbo_block_attribute_suffix(var)
 
     def structured_buffer_type(self, var, member):
         base = (
@@ -401,10 +628,22 @@ class GLSLToCrossGLConverter:
 
     def prepare_structured_buffers(self, node):
         self.structs_by_name = {struct.name: struct for struct in node.structs}
+        self.interface_block_struct_names = {
+            struct.name
+            for struct in node.structs
+            if self.is_graphics_interface_block_struct(struct)
+        }
         self.structured_buffer_names = set()
         self.structured_buffer_instance_members = {}
         self.converted_ssbo_struct_names = set()
+        self.variable_type_scopes = [{}]
 
+        for var in getattr(node, "uniforms", []) or []:
+            self.register_variable_type(var)
+        for var in getattr(node, "global_variables", []) or []:
+            self.register_variable_type(var)
+        for var in getattr(node, "io_variables", []) or []:
+            self.register_variable_type(var)
         for var in getattr(node, "global_variables", []) or []:
             member = self.ssbo_element_member(var)
             if member is None:
@@ -471,7 +710,8 @@ class GLSLToCrossGLConverter:
 
     def image_resource_attribute_suffix(self, var):
         var_type = getattr(var, "vtype", None)
-        if not self._is_image_resource_type(var_type):
+        storage_attributes = self.storage_qualifier_attributes(var)
+        if not self._is_resource_type(var_type) and not storage_attributes:
             return ""
 
         attributes = []
@@ -480,19 +720,167 @@ class GLSLToCrossGLConverter:
         if binding is not None:
             attributes.append(f"@binding({binding})")
 
-        supported_formats = self.supported_image_formats()
-        for key in layout:
-            format_name = str(key).lower()
-            if format_name in supported_formats:
-                attributes.append(f"@{format_name}")
-                break
+        if self._is_image_resource_type(var_type):
+            supported_formats = self.supported_image_formats()
+            for key in layout:
+                format_name = str(key).lower()
+                if format_name in supported_formats:
+                    attributes.append(f"@{format_name}")
+                    break
 
         qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
         for qualifier in ("coherent", "volatile", "restrict", "readonly", "writeonly"):
             if qualifier in qualifiers:
                 attributes.append(f"@{qualifier}")
 
+        attributes.extend(storage_attributes)
+
         return f" {' '.join(attributes)}" if attributes else ""
+
+    def variable_layout_attribute_suffix(self, var):
+        layout = getattr(var, "layout", None) or {}
+        attributes = []
+        for name in self.LAYOUT_ATTRIBUTE_NAMES:
+            value = layout.get(name)
+            if value is not None:
+                attributes.append(f"@{name}({value})")
+        for name in self.BARE_LAYOUT_ATTRIBUTE_NAMES:
+            if name in layout and layout.get(name) is None:
+                attributes.append(f"@{name}")
+        return f" {' '.join(attributes)}" if attributes else ""
+
+    def storage_qualifier_attributes(self, var):
+        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
+        return [
+            f"@{attribute}"
+            for qualifier, attribute in self.STORAGE_QUALIFIER_ATTRIBUTES.items()
+            if qualifier in qualifiers
+        ]
+
+    def is_task_payload_shared_variable(self, var):
+        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
+        return "taskpayloadsharedext" in qualifiers
+
+    def variable_qualifier_attribute_suffix(self, var):
+        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
+        attributes = [
+            f"@{attribute}"
+            for qualifier, attribute in self.VARIABLE_QUALIFIER_ATTRIBUTES.items()
+            if qualifier in qualifiers
+        ]
+        return f" {' '.join(attributes)}" if attributes else ""
+
+    def interface_qualifier_attribute_suffix(self, var):
+        block_qualifiers = {"in", "out", "inout"}
+        qualifiers = [str(q).lower() for q in getattr(var, "qualifiers", []) or []]
+        attributes = []
+        for qualifier in qualifiers:
+            if qualifier in block_qualifiers:
+                continue
+            mapped = self.INTERFACE_QUALIFIER_NAMES.get(qualifier)
+            if mapped is not None and mapped not in attributes:
+                attributes.append(mapped)
+        return (
+            f" {' '.join(f'@{attribute}' for attribute in attributes)}"
+            if attributes
+            else ""
+        )
+
+    def stage_struct_member_attribute_suffix(self, var):
+        return self.variable_layout_attribute_suffix(
+            var
+        ) + self.variable_qualifier_attribute_suffix(var)
+
+    def fragment_return_attribute_suffix(self, var):
+        return (
+            self.variable_layout_attribute_suffix(var)
+            + self.interface_qualifier_attribute_suffix(var)
+            + self.variable_qualifier_attribute_suffix(var)
+        )
+
+    def fragment_uses_direct_output_declarations(self, fragment_writes_depth=False):
+        return self.shader_type == "fragment" and (
+            len(self.outputs) > 1 or fragment_writes_depth
+        )
+
+    def fragment_main_writes_name(self, node, name):
+        if self.shader_type != "fragment":
+            return False
+        for function in getattr(node, "functions", []) or []:
+            if getattr(function, "name", None) != "main":
+                continue
+            return self.statements_write_name(getattr(function, "body", []) or [], name)
+        return False
+
+    def statements_write_name(self, statements, name):
+        return any(
+            self.statement_writes_name(statement, name) for statement in statements
+        )
+
+    def statement_writes_name(self, statement, name):
+        if isinstance(statement, AssignmentNode):
+            return self.expression_base_name(getattr(statement, "left", None)) == name
+
+        for child_name in (
+            "then_branch",
+            "if_body",
+            "else_branch",
+            "else_body",
+            "else_if_chain",
+            "else_if_bodies",
+            "body",
+            "statements",
+            "cases",
+            "default_case",
+            "default",
+        ):
+            child = getattr(statement, child_name, None)
+            if child is None:
+                continue
+            if self.child_writes_name(child, name):
+                return True
+        return False
+
+    def child_writes_name(self, child, name):
+        if isinstance(child, list):
+            return any(self.child_writes_name(item, name) for item in child)
+        if isinstance(child, tuple):
+            return any(self.child_writes_name(item, name) for item in child)
+        return self.statement_writes_name(child, name)
+
+    def generate_stage_struct_member(self, var):
+        var_type = self.convert_type(var.vtype)
+        var_name = var.name
+        qualifier_prefix = self.interface_member_qualifier_prefix(var)
+        if qualifier_prefix:
+            qualifier_prefix += " "
+        semantic = ""
+        if getattr(var, "semantic", None):
+            semantic = f" @ {var.semantic}"
+        array_suffix = self.array_suffix(var)
+        attributes = self.stage_struct_member_attribute_suffix(var)
+        return f"{qualifier_prefix}{var_type} {var_name}{array_suffix}{attributes}{semantic};\n"
+
+    def interface_member_qualifier_prefix(self, var):
+        block_qualifiers = {"in", "out", "inout", "patch"}
+        qualifiers = [str(q).lower() for q in getattr(var, "qualifiers", []) or []]
+        emitted = []
+        for qualifier in qualifiers:
+            if qualifier in block_qualifiers:
+                continue
+            mapped = self.INTERFACE_QUALIFIER_NAMES.get(qualifier)
+            if mapped is not None and mapped not in emitted:
+                emitted.append(mapped)
+        return " ".join(emitted)
+
+    def interface_qualifier_prefix(self, var):
+        qualifiers = [str(q).lower() for q in getattr(var, "qualifiers", []) or []]
+        emitted = []
+        for qualifier in qualifiers:
+            mapped = self.INTERFACE_QUALIFIER_NAMES.get(qualifier)
+            if mapped is not None and mapped not in emitted:
+                emitted.append(mapped)
+        return " ".join(emitted)
 
     def format_layout(self, layout_entry):
         layout = (
@@ -512,6 +900,51 @@ class GLSLToCrossGLConverter:
             layout_str += " " + " ".join(qualifiers)
         return layout_str.strip()
 
+    def is_graphics_interface_block_struct(self, node):
+        if not getattr(node, "interface_block", False):
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "interface_qualifiers", []) or []
+        }
+        return bool(qualifiers & {"in", "out", "inout", "patch"})
+
+    def is_graphics_interface_block_variable(self, var):
+        block_name = getattr(var, "interface_block", None)
+        return bool(block_name and block_name in self.interface_block_struct_names)
+
+    def interface_block_attribute_prefix(self, node):
+        if not self.is_graphics_interface_block_struct(node):
+            return ""
+
+        attributes = []
+        qualifiers = [
+            str(qualifier)
+            for qualifier in getattr(node, "interface_qualifiers", []) or []
+        ]
+        if qualifiers:
+            attributes.append(f"@glsl_interface_block({', '.join(qualifiers)})")
+
+        layout = getattr(node, "interface_layout", None) or {}
+        for key in self.LAYOUT_ATTRIBUTE_NAMES:
+            value = layout.get(key)
+            if value is not None:
+                attributes.append(f"@{key}({value})")
+
+        instance_name = getattr(node, "interface_instance_name", None)
+        if instance_name:
+            attributes.append(f"@glsl_interface_instance({instance_name})")
+            if getattr(node, "interface_instance_is_array", False):
+                array_size = getattr(node, "interface_array_size", None)
+                if array_size is None:
+                    attributes.append("@glsl_interface_array")
+                else:
+                    attributes.append(
+                        f"@glsl_interface_array({self.generate_expression(array_size)})"
+                    )
+
+        return f"{' '.join(attributes)} " if attributes else ""
+
     def generate(self, ast):
         """Generate a complete CrossGL shader from a parsed GLSL AST."""
         if ast is None:
@@ -527,6 +960,11 @@ class GLSLToCrossGLConverter:
         self.inputs = []
         self.outputs = []
         self.local_vars = []
+        self.task_payload_shared_names = {
+            var.name
+            for var in getattr(node, "global_variables", []) or []
+            if self.is_task_payload_shared_variable(var)
+        }
         self.prepare_structured_buffers(node)
 
         for var in node.io_variables:
@@ -536,13 +974,10 @@ class GLSLToCrossGLConverter:
                 if self._is_output_var(var):
                     self.outputs.append(var)
 
-        # Ensure vertex-like stages include gl_Position
-        if self.shader_type in (
-            "vertex",
-            "geometry",
-            "tessellation_control",
-            "tessellation_evaluation",
-        ):
+        fragment_writes_depth = self.fragment_main_writes_name(node, "gl_FragDepth")
+
+        # Ensure vertex stages include gl_Position
+        if self.shader_type == "vertex":
             has_position = any(
                 isinstance(var, VariableNode) and var.name == "gl_Position"
                 for var in self.outputs
@@ -554,11 +989,18 @@ class GLSLToCrossGLConverter:
                 self.outputs.append(builtin)
 
         # Ensure fragment outputs include gl_FragColor if no outputs declared
-        if self.shader_type == "fragment" and not self.outputs:
+        if (
+            self.shader_type == "fragment"
+            and not self.outputs
+            and not fragment_writes_depth
+        ):
             builtin = VariableNode(
                 "vec4", "gl_FragColor", qualifiers=["out"], semantic="gl_FragColor"
             )
             self.outputs.append(builtin)
+        fragment_uses_direct_outputs = self.fragment_uses_direct_output_declarations(
+            fragment_writes_depth
+        )
 
         for uniform in node.uniforms:
             self.uniform_vars.append(uniform)
@@ -571,12 +1013,6 @@ class GLSLToCrossGLConverter:
             result += "\n"
         result += "shader main {\n"
 
-        layouts = getattr(node, "layouts", []) or []
-        if layouts:
-            for layout in layouts:
-                result += self.indent_str + f"// {self.format_layout(layout)}\n"
-            result += "\n"
-
         # Generate struct definitions
         for struct in node.structs:
             if struct.name in self.converted_ssbo_struct_names:
@@ -587,38 +1023,20 @@ class GLSLToCrossGLConverter:
         if self.inputs and self.shader_type in (
             "vertex",
             "fragment",
-            "geometry",
-            "tessellation_control",
-            "tessellation_evaluation",
         ):
             result += self.indent_str + f"struct {self.stage_struct_name()}Input {{\n"
             self.increase_indent()
             for input_var in self.inputs:
-                var_type = self.convert_type(input_var.vtype)
-                var_name = input_var.name
-                semantic = ""
-                if getattr(input_var, "semantic", None):
-                    semantic = f" @ {input_var.semantic}"
-                result += self.indent() + f"{var_type} {var_name}{semantic};\n"
+                result += self.indent() + self.generate_stage_struct_member(input_var)
             self.decrease_indent()
             result += self.indent_str + "};\n\n"
 
         # Generate output struct for vertex-like stages
-        if self.outputs and self.shader_type in (
-            "vertex",
-            "geometry",
-            "tessellation_control",
-            "tessellation_evaluation",
-        ):
+        if self.outputs and self.shader_type == "vertex":
             result += self.indent_str + f"struct {self.stage_struct_name()}Output {{\n"
             self.increase_indent()
             for output_var in self.outputs:
-                var_type = self.convert_type(output_var.vtype)
-                var_name = output_var.name
-                semantic = ""
-                if getattr(output_var, "semantic", None):
-                    semantic = f" @ {output_var.semantic}"
-                result += self.indent() + f"{var_type} {var_name}{semantic};\n"
+                result += self.indent() + self.generate_stage_struct_member(output_var)
             self.decrease_indent()
             result += self.indent_str + "};\n\n"
 
@@ -674,13 +1092,9 @@ class GLSLToCrossGLConverter:
             if structured_buffer_decl is not None:
                 result += self.indent_str + structured_buffer_decl + ";\n"
                 continue
-            diagnostic = self.unsupported_runtime_array_ssbo_diagnostic(global_var)
-            if diagnostic:
-                result += self.indent_str + diagnostic + "\n"
-                declaration = self.generate_variable_declaration(
-                    global_var
-                ) + self.ssbo_block_attribute_suffix(global_var)
-                result += self.indent_str + declaration + ";\n"
+            ssbo_block_decl = self.ssbo_block_declaration(global_var)
+            if ssbo_block_decl is not None:
+                result += self.indent_str + ssbo_block_decl + ";\n"
                 continue
             result += (
                 self.indent_str + self.generate_variable_declaration(global_var) + ";\n"
@@ -688,8 +1102,38 @@ class GLSLToCrossGLConverter:
         if getattr(node, "global_variables", []):
             result += "\n"
 
+        if fragment_uses_direct_outputs and self.outputs:
+            for output_var in self.outputs:
+                result += (
+                    self.indent_str
+                    + self.generate_variable_declaration(output_var)
+                    + ";\n"
+                )
+            result += "\n"
+
+        if self.shader_type in self.NON_STRUCT_STAGE_TYPES and (
+            self.inputs or self.outputs
+        ):
+            for interface_var in [*self.inputs, *self.outputs]:
+                if self.is_graphics_interface_block_variable(interface_var):
+                    continue
+                result += (
+                    self.indent_str
+                    + self.generate_variable_declaration(interface_var)
+                    + ";\n"
+                )
+            result += "\n"
+
         # Generate shader function
         result += self.indent_str + f"{self.shader_type} {{\n"
+
+        layouts = getattr(node, "layouts", []) or []
+        if layouts:
+            self.increase_indent()
+            for layout in layouts:
+                result += self.indent() + f"{self.format_layout(layout)};\n"
+            result += "\n"
+            self.decrease_indent()
 
         main_function = None
         other_functions = []
@@ -717,16 +1161,28 @@ class GLSLToCrossGLConverter:
                     + f"{self.stage_struct_name()}Output main({self.stage_struct_name()}Input input)"
                 )
             elif self.shader_type == "fragment":
-                output_type = "vec4"
-                output_name = "gl_FragColor"
-                if self.outputs:
-                    output_type = self.convert_type(self.outputs[0].vtype)
-                    output_name = self.outputs[0].name
-                result += (
-                    self.indent()
-                    + f"{output_type} main({self.stage_struct_name()}Input input) @ {output_name}"
-                )
-            elif self.shader_type == "compute":
+                if fragment_uses_direct_outputs:
+                    result += (
+                        self.indent()
+                        + f"void main({self.stage_struct_name()}Input input)"
+                    )
+                else:
+                    output_type = "vec4"
+                    output_name = "gl_FragColor"
+                    output_attributes = ""
+                    if self.outputs:
+                        output_var = self.outputs[0]
+                        output_type = self.convert_type(output_var.vtype)
+                        output_name = output_var.name
+                        output_attributes = self.fragment_return_attribute_suffix(
+                            output_var
+                        )
+                    result += (
+                        self.indent()
+                        + f"{output_type} main({self.stage_struct_name()}Input input)"
+                        + f"{output_attributes} @ {output_name}"
+                    )
+            elif self.shader_type in self.NON_STRUCT_STAGE_TYPES:
                 result += self.indent() + "void main()"
             else:
                 result += (
@@ -743,27 +1199,30 @@ class GLSLToCrossGLConverter:
                 result += self.indent() + f"{self.stage_struct_name()}Output output;\n"
 
             # For fragment shaders, declare a local output if assignments are used
-            if self.shader_type == "fragment" and self.outputs:
+            if (
+                self.shader_type == "fragment"
+                and self.outputs
+                and not fragment_uses_direct_outputs
+            ):
                 output_type = self.convert_type(self.outputs[0].vtype)
                 output_name = self.outputs[0].name
                 result += self.indent() + f"{output_type} {output_name};\n"
 
             # Generate statements for the main function
-            for statement in main_function.body:
-                result += self.indent() + self.generate_statement(statement) + "\n"
+            for statement in self.generate_statement_sequence(main_function.body):
+                result += self.indent() + statement + "\n"
 
             # Add implicit return for stages with output struct if not present
-            if self.shader_type in (
-                "vertex",
-                "geometry",
-                "tessellation_control",
-                "tessellation_evaluation",
-            ) and not any(isinstance(stmt, ReturnNode) for stmt in main_function.body):
+            if self.shader_type in ("vertex",) and not any(
+                isinstance(stmt, ReturnNode) for stmt in main_function.body
+            ):
                 result += self.indent() + "return output;\n"
 
             # Add implicit return for fragment shaders if not present
-            if self.shader_type == "fragment" and not any(
-                isinstance(stmt, ReturnNode) for stmt in main_function.body
+            if (
+                self.shader_type == "fragment"
+                and not fragment_uses_direct_outputs
+                and not any(isinstance(stmt, ReturnNode) for stmt in main_function.body)
             ):
                 output_name = self.outputs[0].name if self.outputs else "gl_FragColor"
                 result += self.indent() + f"return {output_name};\n"
@@ -779,11 +1238,12 @@ class GLSLToCrossGLConverter:
         return result
 
     def generate_struct(self, node):
-        result = f"struct {node.name} {{\n"
+        result = f"{self.interface_block_attribute_prefix(node)}struct {node.name} {{\n"
 
         self.increase_indent()
         members = getattr(node, "members", None) or getattr(node, "fields", [])
         for field in members:
+            qualifier_prefix = ""
             if isinstance(field, dict):
                 var_type = self.convert_type(field.get("type"))
                 var_name = field.get("name")
@@ -796,8 +1256,15 @@ class GLSLToCrossGLConverter:
                 if getattr(field, "semantic", None):
                     semantic = f" @ {field.semantic}"
                 array_suffix = self.array_suffix(field)
+                qualifier_prefix = ""
+                if self.is_graphics_interface_block_struct(node):
+                    qualifier_prefix = self.interface_member_qualifier_prefix(field)
+                    if qualifier_prefix:
+                        qualifier_prefix += " "
+                    semantic += self.variable_qualifier_attribute_suffix(field)
             result += (
-                self.indent() + f"{var_type} {var_name}{array_suffix}{semantic};\n"
+                self.indent()
+                + f"{qualifier_prefix}{var_type} {var_name}{array_suffix}{semantic};\n"
             )
         self.decrease_indent()
 
@@ -811,30 +1278,106 @@ class GLSLToCrossGLConverter:
             return "[]"
         return ""
 
+    def generate_function_parameter(self, param):
+        if isinstance(param, tuple):  # (type, name)
+            param_type, param_name = param
+            return f"{self.convert_type(param_type)} {param_name}"
+        if isinstance(param, VariableNode):
+            return self.generate_variable_declaration(
+                param, array_before_attributes=True
+            )
+        return None
+
     def generate_function(self, node):
         """Render one GLSL function node as a CrossGL function block."""
-        return_type = self.convert_type(node.return_type)
-        name = node.name
-
-        params = []
+        self.push_variable_type_scope()
         for param in node.params:
-            if isinstance(param, tuple):  # (type, name)
-                param_type, param_name = param
-                params.append(f"{self.convert_type(param_type)} {param_name}")
-            elif isinstance(param, VariableNode):
-                params.append(f"{self.convert_type(param.vtype)} {param.name}")
+            self.register_parameter_type(param)
 
-        params_str = ", ".join(params)
+        try:
+            return_type = self.convert_type(node.return_type)
+            name = node.name
 
-        result = f"{return_type} {name}({params_str}) {{\n"
+            params = []
+            for param in node.params:
+                param_decl = self.generate_function_parameter(param)
+                if param_decl is not None:
+                    params.append(param_decl)
 
-        self.increase_indent()
-        for statement in node.body:
-            result += self.indent() + self.generate_statement(statement) + "\n"
-        self.decrease_indent()
+            params_str = ", ".join(params)
 
-        result += self.indent() + "}"
-        return result
+            result = f"{return_type} {name}({params_str}) {{\n"
+
+            self.increase_indent()
+            for statement in self.generate_statement_sequence(node.body):
+                result += self.indent() + statement + "\n"
+            self.decrease_indent()
+
+            result += self.indent() + "}"
+            return result
+        finally:
+            self.pop_variable_type_scope()
+
+    def generate_statement_sequence(self, statements):
+        generated = []
+        index = 0
+        while index < len(statements):
+            folded = self.generate_task_payload_dispatch_statement(statements, index)
+            if folded is not None:
+                generated.append(folded)
+                index += 2
+                continue
+            generated.append(self.generate_statement(statements[index]))
+            index += 1
+        return generated
+
+    def generate_task_payload_dispatch_statement(self, statements, index):
+        if self.shader_type not in {"task", "amplification", "object"}:
+            return None
+        if index + 1 >= len(statements):
+            return None
+
+        assignment = statements[index]
+        dispatch = statements[index + 1]
+        payload_expr = self.task_payload_assignment_expression(assignment)
+        if payload_expr is None:
+            return None
+        if not self.is_emit_mesh_tasks_call(dispatch):
+            return None
+
+        dispatch_args = [
+            self.generate_expression(arg) for arg in getattr(dispatch, "args", [])[:3]
+        ]
+        payload = self.generate_expression(payload_expr)
+        return f"DispatchMesh({', '.join(dispatch_args + [payload])});"
+
+    def task_payload_assignment_expression(self, statement):
+        if not isinstance(statement, AssignmentNode):
+            return None
+        if getattr(statement, "operator", "=") != "=":
+            return None
+        if not self.task_payload_shared_names:
+            return None
+
+        target = self.expression_base_name(getattr(statement, "left", None))
+        if target not in self.task_payload_shared_names:
+            return None
+        return getattr(statement, "right", None)
+
+    def is_emit_mesh_tasks_call(self, statement):
+        if not isinstance(statement, FunctionCallNode):
+            return False
+        if len(getattr(statement, "args", []) or []) != 3:
+            return False
+        return self.function_call_name(statement) == "EmitMeshTasksEXT"
+
+    def function_call_name(self, node):
+        name = getattr(node, "name", None)
+        if isinstance(name, VariableNode):
+            return name.name
+        if isinstance(name, MemberAccessNode):
+            return self.generate_member_access(name)
+        return name
 
     def generate_statement(self, node):
         """Render a GLSL statement node as CrossGL source."""
@@ -851,6 +1394,10 @@ class GLSLToCrossGLConverter:
         elif isinstance(node, ReturnNode):
             return self.generate_return(node) + ";"
         elif isinstance(node, VariableNode):
+            ray_control = self.ray_control_statement(node)
+            if ray_control is not None:
+                return ray_control + ";"
+            self.register_variable_type(node)
             return self.generate_variable_declaration(node) + ";"
         elif isinstance(node, FunctionCallNode):
             return self.generate_function_call(node) + ";"
@@ -915,6 +1462,17 @@ class GLSLToCrossGLConverter:
             return f"{left_expr} {op} {right_expr}"
 
         return self.generate_expression(node)
+
+    def ray_control_statement(self, node):
+        if getattr(node, "vtype", None):
+            return None
+
+        name = getattr(node, "name", None)
+        mapped_name = self.function_map.get(name)
+        if mapped_name not in {"AcceptHitAndEndSearch", "IgnoreHit"}:
+            return None
+
+        return f"{mapped_name}()"
 
     def generate_if(self, node):
         condition_node = getattr(node, "condition", None)
@@ -1030,17 +1588,11 @@ class GLSLToCrossGLConverter:
             if self.shader_type in (
                 "vertex",
                 "fragment",
-                "geometry",
-                "tessellation_control",
-                "tessellation_evaluation",
             ) and any(var.name == node.name for var in self.inputs):
                 return f"input.{node.name}"
-            if self.shader_type in (
-                "vertex",
-                "geometry",
-                "tessellation_control",
-                "tessellation_evaluation",
-            ) and any(var.name == node.name for var in self.outputs):
+            if self.shader_type in ("vertex",) and any(
+                var.name == node.name for var in self.outputs
+            ):
                 return f"output.{node.name}"
             return node.name
         elif isinstance(node, BinaryOpNode):
@@ -1085,6 +1637,12 @@ class GLSLToCrossGLConverter:
         elif isinstance(name, VariableNode):
             name = name.name
 
+        ray_query_call = self.generate_ray_query_method_call(name, node.args)
+        if ray_query_call is not None:
+            return ray_query_call
+
+        name = self.shadow_gather_import_name(name, node.args)
+
         if name in [
             "vec2",
             "vec3",
@@ -1128,6 +1686,42 @@ class GLSLToCrossGLConverter:
 
         return f"{mapped_name}({args})"
 
+    def generate_ray_query_method_call(self, name, args):
+        if name in self.RAY_QUERY_SIMPLE_METHODS and args:
+            query = self.generate_expression(args[0])
+            method = self.RAY_QUERY_SIMPLE_METHODS[name]
+            method_args = ", ".join(self.generate_expression(arg) for arg in args[1:])
+            return f"{query}.{method}({method_args})"
+
+        if name not in self.RAY_QUERY_COMMITTED_METHODS or len(args) < 2:
+            return None
+
+        committed = self.ray_query_committed_argument(args[1])
+        if committed is None:
+            return None
+
+        query = self.generate_expression(args[0])
+        candidate_method, committed_method = self.RAY_QUERY_COMMITTED_METHODS[name]
+        method = committed_method if committed else candidate_method
+        method_args = ", ".join(self.generate_expression(arg) for arg in args[2:])
+        return f"{query}.{method}({method_args})"
+
+    def ray_query_committed_argument(self, arg):
+        if isinstance(arg, str):
+            value = arg.lower()
+        elif isinstance(arg, VariableNode):
+            value = str(arg.name).lower()
+        elif isinstance(arg, NumberNode):
+            value = str(arg.value).lower()
+        else:
+            value = str(arg).lower()
+
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+        return None
+
     def generate_member_access(self, node):
         object_name = ""
         if isinstance(node.object, VariableNode):
@@ -1139,12 +1733,9 @@ class GLSLToCrossGLConverter:
                 "tessellation_evaluation",
             ) and any(var.name == node.object.name for var in self.inputs):
                 object_name = f"input.{node.object.name}"
-            elif self.shader_type in (
-                "vertex",
-                "geometry",
-                "tessellation_control",
-                "tessellation_evaluation",
-            ) and any(var.name == node.object.name for var in self.outputs):
+            elif self.shader_type in ("vertex",) and any(
+                var.name == node.object.name for var in self.outputs
+            ):
                 object_name = f"output.{node.object.name}"
             else:
                 object_name = node.object.name
@@ -1249,7 +1840,24 @@ class GLSLToCrossGLConverter:
         """
         return self.type_map.get(type_name, type_name)
 
-    def generate_variable_declaration(self, node):
+    def variable_declaration_type(self, node):
+        """Return CrossGL type text for a GLSL variable declaration."""
+        var_type = self.convert_type(node.vtype)
+        if var_type == "mat4x3" and self.is_ray_query_transform_call(
+            getattr(node, "value", None)
+        ):
+            return "mat3x4"
+        return var_type
+
+    def is_ray_query_transform_call(self, node):
+        if not isinstance(node, FunctionCallNode):
+            return False
+        name = node.name
+        if isinstance(name, VariableNode):
+            name = name.name
+        return name in self.RAY_QUERY_TRANSFORM_FUNCTIONS
+
+    def generate_variable_declaration(self, node, array_before_attributes=False):
         """Generate CrossGL code for a variable declaration
 
         Args:
@@ -1258,22 +1866,35 @@ class GLSLToCrossGLConverter:
         Returns:
             str: The CrossGL variable declaration
         """
-        var_type = self.convert_type(node.vtype)
+        var_type = self.variable_declaration_type(node)
         var_name = node.name
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", None) or []}
-        prefix = (
-            "const "
-            if getattr(node, "is_const", False) or "const" in qualifiers
-            else ""
-        )
+        prefix_parts = []
+        if "shared" in qualifiers:
+            prefix_parts.append("shared")
+        if getattr(node, "is_const", False) or "const" in qualifiers:
+            prefix_parts.append("const")
+        interface_prefix = self.interface_qualifier_prefix(node)
+        if interface_prefix:
+            prefix_parts.append(interface_prefix)
+        prefix = f"{' '.join(prefix_parts)} " if prefix_parts else ""
         array_suffix = self.array_suffix(node)
-        attributes = self.image_resource_attribute_suffix(node)
+        attributes = (
+            self.variable_layout_attribute_suffix(node)
+            + self.image_resource_attribute_suffix(node)
+            + self.variable_qualifier_attribute_suffix(node)
+        )
+        declarator = (
+            f"{var_name}{array_suffix}{attributes}"
+            if array_before_attributes
+            else f"{var_name}{attributes}{array_suffix}"
+        )
 
         if getattr(node, "value", None) is not None:
             value = self.generate_expression(node.value)
-            return f"{prefix}{var_type} {var_name}{attributes}{array_suffix} = {value}"
+            return f"{prefix}{var_type} {declarator} = {value}"
 
-        return f"{prefix}{var_type} {var_name}{attributes}{array_suffix}"
+        return f"{prefix}{var_type} {declarator}"
 
     def generate_switch_statement(self, node):
         """Generate CrossGL code for a switch statement

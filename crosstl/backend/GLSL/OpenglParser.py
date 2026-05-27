@@ -141,6 +141,21 @@ QUALIFIER_TOKENS = {
     "HIGHP",
 }
 
+RAY_STORAGE_QUALIFIERS = {
+    "rayPayloadEXT",
+    "rayPayloadInEXT",
+    "hitAttributeEXT",
+    "callableDataEXT",
+    "callableDataInEXT",
+}
+
+MESH_STORAGE_QUALIFIERS = {
+    "perprimitiveEXT",
+    "taskPayloadSharedEXT",
+}
+
+IDENTIFIER_QUALIFIERS = RAY_STORAGE_QUALIFIERS | MESH_STORAGE_QUALIFIERS
+
 ASSIGNMENT_TOKENS = {
     "EQUALS": "=",
     "PLUS_EQUALS": "+=",
@@ -384,7 +399,10 @@ class GLSLParser:
 
     def parse_qualifiers(self):
         qualifiers = []
-        while self.current_token[0] in QUALIFIER_TOKENS:
+        while self.current_token[0] in QUALIFIER_TOKENS or (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in IDENTIFIER_QUALIFIERS
+        ):
             if self.current_token[0] == "SUBROUTINE":
                 self.advance()
                 if self.current_token[0] == "LPAREN":
@@ -433,7 +451,9 @@ class GLSLParser:
             self.eat("IDENTIFIER")
 
             array_size = None
+            is_array = False
             if self.current_token[0] == "LBRACKET":
+                is_array = True
                 self.eat("LBRACKET")
                 if self.current_token[0] != "RBRACKET":
                     array_size = self.parse_expression()
@@ -451,6 +471,7 @@ class GLSLParser:
                 qualifiers=qualifiers or [],
                 array_size=array_size,
                 layout=layout,
+                is_array=is_array,
             )
 
             lowered = {q.lower() for q in qualifiers or []}
@@ -588,6 +609,12 @@ class GLSLParser:
         self.eat("SEMICOLON")
 
         struct_node = StructNode(block_name, members)
+        struct_node.interface_block = True
+        struct_node.interface_qualifiers = list(qualifiers or [])
+        struct_node.interface_layout = layout
+        struct_node.interface_instance_name = instance_name
+        struct_node.interface_instance_is_array = instance_is_array
+        struct_node.interface_array_size = array_size
         block_vars = []
 
         if instance_name:

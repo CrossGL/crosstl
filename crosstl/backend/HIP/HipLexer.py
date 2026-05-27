@@ -40,6 +40,7 @@ TOKENS = tuple(
         ("__MANAGED__", r"\b__managed__\b"),
         ("__NOINLINE__", r"\b__noinline__\b"),
         ("__FORCEINLINE__", r"\b__forceinline__\b"),
+        ("__LAUNCH_BOUNDS__", r"\b__launch_bounds__\b"),
         # HIP built-in variables
         ("THREADIDX", r"\bthreadIdx\b"),
         ("BLOCKIDX", r"\bblockIdx\b"),
@@ -59,6 +60,9 @@ TOKENS = tuple(
         ("ATOMICMIN", r"\batomicMin\b|hipAtomicMin\b"),
         ("ATOMICEXCH", r"\batomicExch\b|hipAtomicExch\b"),
         ("ATOMICCAS", r"\batomicCAS\b|hipAtomicCAS\b"),
+        ("ATOMICAND", r"\batomicAnd\b|hipAtomicAnd\b"),
+        ("ATOMICOR", r"\batomicOr\b|hipAtomicOr\b"),
+        ("ATOMICXOR", r"\batomicXor\b|hipAtomicXor\b"),
         # HIP error handling
         ("HIPERROR", r"\bhipError_t\b"),
         ("HIPSUCCESS", r"\bhipSuccess\b"),
@@ -157,7 +161,7 @@ TOKENS = tuple(
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         (
             "FLOAT",
-            r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFdDlL]*|\d+[eE][+-]?\d+[fFdDlL]*|\d+[fFdDlL]",
+            r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFdDlL]*|\d+[eE][+-]?\d+[fFdDlL]*|\d+[fFdD]",
         ),
         ("INTEGER", r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[lLuU]*"),
         ("STRING", r'"([^"\\]|\\.)*"'),
@@ -230,6 +234,7 @@ KEYWORDS = {
     "__managed__": "__MANAGED__",
     "__noinline__": "__NOINLINE__",
     "__forceinline__": "__FORCEINLINE__",
+    "__launch_bounds__": "__LAUNCH_BOUNDS__",
     "threadIdx": "THREADIDX",
     "blockIdx": "BLOCKIDX",
     "gridDim": "GRIDDIM",

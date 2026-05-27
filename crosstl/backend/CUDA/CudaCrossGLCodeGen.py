@@ -2,6 +2,7 @@
 
 from .CudaAst import (
     AssignmentNode,
+    ArrayAccessNode,
     CastNode,
     FunctionCallNode,
     InitializerListNode,
@@ -57,6 +58,71 @@ class CudaToCrossGLConverter:
         **VECTOR_TYPE_MAPPING,
         **{f"make_{name}": mapped for name, mapped in VECTOR_TYPE_MAPPING.items()},
     }
+    CUDA_TEXTURE_TYPE_MAPPING = {
+        "1": "sampler1D",
+        "2": "sampler2D",
+        "3": "sampler3D",
+        "cudaTextureType1D": "sampler1D",
+        "cudaTextureType1DLayered": "sampler1DArray",
+        "cudaTextureType2D": "sampler2D",
+        "cudaTextureType2DLayered": "sampler2DArray",
+        "cudaTextureType3D": "sampler3D",
+        "cudaTextureTypeCubemap": "samplerCube",
+        "cudaTextureTypeCubemapLayered": "samplerCubeArray",
+    }
+    CUDA_SURFACE_TYPE_MAPPING = {
+        "1": "image1D",
+        "2": "image2D",
+        "3": "image3D",
+        "cudaSurfaceType1D": "image1D",
+        "cudaSurfaceType1DLayered": "image1DArray",
+        "cudaSurfaceType2D": "image2D",
+        "cudaSurfaceType2DLayered": "image2DArray",
+        "cudaSurfaceType3D": "image3D",
+        "cudaSurfaceTypeCubemap": "imageCube",
+        "cudaSurfaceTypeCubemapLayered": "imageCubeArray",
+    }
+    CUDA_TEXTURE_CALL_TYPE_HINTS = {
+        "tex1D": "sampler1D",
+        "tex1Dfetch": "sampler1D",
+        "tex1DLod": "sampler1D",
+        "tex1DGrad": "sampler1D",
+        "tex2D": "sampler2D",
+        "tex2DLod": "sampler2D",
+        "tex2DGrad": "sampler2D",
+        "tex2Dgather": "sampler2D",
+        "tex3D": "sampler3D",
+        "tex3DLod": "sampler3D",
+        "tex3DGrad": "sampler3D",
+        "texCubemap": "samplerCube",
+        "texCubemapLod": "samplerCube",
+        "texCubemapGrad": "samplerCube",
+        "tex1DLayered": "sampler1DArray",
+        "tex1DLayeredLod": "sampler1DArray",
+        "tex1DLayeredGrad": "sampler1DArray",
+        "tex2DLayered": "sampler2DArray",
+        "tex2DLayeredLod": "sampler2DArray",
+        "tex2DLayeredGrad": "sampler2DArray",
+        "texCubemapLayered": "samplerCubeArray",
+        "texCubemapLayeredLod": "samplerCubeArray",
+        "texCubemapLayeredGrad": "samplerCubeArray",
+    }
+    CUDA_SURFACE_CALL_TYPE_HINTS = {
+        "surf1Dread": "image1D",
+        "surf1Dwrite": "image1D",
+        "surf1DLayeredread": "image1DArray",
+        "surf1DLayeredwrite": "image1DArray",
+        "surf2Dread": "image2D",
+        "surf2Dwrite": "image2D",
+        "surf3Dread": "image3D",
+        "surf3Dwrite": "image3D",
+        "surf2DLayeredread": "image2DArray",
+        "surf2DLayeredwrite": "image2DArray",
+        "surfCubemapread": "imageCube",
+        "surfCubemapwrite": "imageCube",
+        "surfCubemapLayeredread": "imageCubeArray",
+        "surfCubemapLayeredwrite": "imageCubeArray",
+    }
 
     def __init__(self):
         """Initialize CUDA-to-CrossGL visitor state."""
@@ -66,6 +132,11 @@ class CudaToCrossGLConverter:
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
         self.user_function_names = set()
+        self.global_resource_object_type_hints = {}
+        self.struct_resource_member_hints = {}
+        self.resource_object_hint_scopes = []
+        self.cooperative_group_scopes = [{}]
+        self.cuda_async_sync_scopes = [{}]
 
     def generate(self, ast_node):
         """Generate complete CrossGL source from a parsed CUDA AST."""
@@ -75,6 +146,15 @@ class CudaToCrossGLConverter:
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
         self.user_function_names = self.collect_user_function_names(ast_node)
+        self.global_resource_object_type_hints = (
+            self.collect_global_resource_object_type_hints(ast_node)
+        )
+        self.struct_resource_member_hints = self.collect_struct_resource_member_hints(
+            ast_node
+        )
+        self.resource_object_hint_scopes = []
+        self.cooperative_group_scopes = [{}]
+        self.cuda_async_sync_scopes = [{}]
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -125,8 +205,353 @@ class CudaToCrossGLConverter:
         names.discard(None)
         return names
 
+    def add_resource_object_type_hint(self, hints, name, resource_type):
+        if not name or not resource_type:
+            return
+        if name in hints and hints[name] != resource_type:
+            hints[name] = None
+            return
+        hints[name] = resource_type
+
+    def collect_resource_object_type_hints(self, node, declared_names=None):
+        hints = {}
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, (list, tuple)):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, dict):
+                for item in current.values():
+                    collect(item)
+                return
+            if isinstance(current, (str, int, float, bool)):
+                return
+            if not hasattr(current, "__dict__"):
+                return
+
+            if isinstance(current, FunctionCallNode):
+                hint = self.get_resource_object_call_hint(current.name)
+                if hint is not None:
+                    arg_index, resource_type = hint
+                    if len(current.args) > arg_index:
+                        self.add_resource_object_type_hint(
+                            hints,
+                            self.get_resource_object_expression_name(
+                                current.args[arg_index]
+                            ),
+                            resource_type,
+                        )
+
+            for value in vars(current).values():
+                collect(value)
+
+        collect(node)
+        for name in declared_names or []:
+            hints.setdefault(name, None)
+        return hints
+
+    def collect_global_resource_object_type_hints(self, node):
+        hints = {}
+        global_names = self.collect_global_declared_variable_names(node)
+        for function in getattr(node, "functions", []):
+            self.collect_global_resource_object_type_hints_from_function(
+                function, global_names, hints
+            )
+        for kernel in getattr(node, "kernels", []):
+            self.collect_global_resource_object_type_hints_from_function(
+                kernel, global_names, hints
+            )
+        return hints
+
+    def collect_global_resource_object_type_hints_from_function(
+        self, node, global_names, hints
+    ):
+        local_names = self.collect_declared_variable_names(node)
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, (list, tuple)):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, dict):
+                for item in current.values():
+                    collect(item)
+                return
+            if isinstance(current, (str, int, float, bool)):
+                return
+            if not hasattr(current, "__dict__"):
+                return
+
+            if isinstance(current, FunctionCallNode):
+                hint = self.get_resource_object_call_hint(current.name)
+                if hint is not None:
+                    arg_index, resource_type = hint
+                    if len(current.args) > arg_index:
+                        name = self.get_resource_object_expression_name(
+                            current.args[arg_index]
+                        )
+                        if name in global_names and name not in local_names:
+                            self.add_resource_object_type_hint(
+                                hints, name, resource_type
+                            )
+
+            for value in vars(current).values():
+                collect(value)
+
+        collect(getattr(node, "body", []))
+
+    def collect_global_declared_variable_names(self, node):
+        return {
+            var.name
+            for var in getattr(node, "global_variables", [])
+            if isinstance(var, VariableNode)
+        }
+
+    def collect_global_declared_variable_types(self, node):
+        return {
+            var.name: var.vtype
+            for var in getattr(node, "global_variables", [])
+            if isinstance(var, VariableNode)
+        }
+
+    def collect_struct_member_types(self, node):
+        return {
+            struct.name: {
+                member.name: member.vtype
+                for member in getattr(struct, "members", [])
+                if isinstance(member, VariableNode)
+            }
+            for struct in getattr(node, "structs", [])
+            if struct.name
+        }
+
+    def collect_declared_variable_names(self, node):
+        names = {
+            param.name
+            for param in getattr(node, "params", [])
+            if isinstance(param, VariableNode)
+        }
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, (list, tuple)):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, dict):
+                for item in current.values():
+                    collect(item)
+                return
+            if isinstance(current, (str, int, float, bool)):
+                return
+            if not hasattr(current, "__dict__"):
+                return
+
+            if isinstance(current, VariableNode):
+                names.add(current.name)
+
+            for value in vars(current).values():
+                collect(value)
+
+        collect(getattr(node, "body", []))
+        return names
+
+    def collect_declared_variable_types(self, node):
+        types = {
+            param.name: param.vtype
+            for param in getattr(node, "params", [])
+            if isinstance(param, VariableNode)
+        }
+
+        for current in self.walk_ast_values(getattr(node, "body", [])):
+            if isinstance(current, VariableNode):
+                types[current.name] = current.vtype
+        return types
+
+    def walk_ast_values(self, root):
+        visited = set()
+
+        def walk(current):
+            if current is None:
+                return
+            if isinstance(current, (list, tuple)):
+                for item in current:
+                    yield from walk(item)
+                return
+            if isinstance(current, dict):
+                for item in current.values():
+                    yield from walk(item)
+                return
+            if isinstance(current, (str, int, float, bool)):
+                return
+            if not hasattr(current, "__dict__"):
+                return
+
+            current_id = id(current)
+            if current_id in visited:
+                return
+            visited.add(current_id)
+            yield current
+
+            for value in vars(current).values():
+                yield from walk(value)
+
+        yield from walk(root)
+
+    def collect_struct_resource_member_hints(self, node):
+        struct_member_types = self.collect_struct_member_types(node)
+        struct_names = set(struct_member_types)
+        if not struct_names:
+            return {}
+
+        hints = {}
+        global_variable_types = self.collect_global_declared_variable_types(node)
+        for function in [
+            *getattr(node, "functions", []),
+            *getattr(node, "kernels", []),
+        ]:
+            variable_types = dict(global_variable_types)
+            variable_types.update(self.collect_declared_variable_types(function))
+            for current in self.walk_ast_values(getattr(function, "body", [])):
+                if not isinstance(current, FunctionCallNode):
+                    continue
+                call_hint = self.get_resource_object_call_hint(current.name)
+                if call_hint is None:
+                    continue
+                arg_index, resource_type = call_hint
+                if len(current.args) <= arg_index:
+                    continue
+
+                member_access = self.resource_member_access_target(
+                    current.args[arg_index]
+                )
+                if member_access is None:
+                    continue
+
+                struct_name = self.struct_type_for_resource_member_object(
+                    member_access.object,
+                    variable_types,
+                    struct_names,
+                    struct_member_types,
+                )
+                if struct_name is None:
+                    continue
+                self.add_struct_resource_member_hint(
+                    hints, struct_name, member_access.member, resource_type
+                )
+
+        return hints
+
+    def add_struct_resource_member_hint(
+        self, hints, struct_name, member_name, resource_type
+    ):
+        key = (struct_name, member_name)
+        if key in hints and hints[key] != resource_type:
+            hints[key] = None
+            return
+        hints[key] = resource_type
+
+    def resource_member_access_target(self, expression):
+        if isinstance(expression, MemberAccessNode):
+            return expression
+        if isinstance(expression, ArrayAccessNode):
+            return self.resource_member_access_target(expression.array)
+        if isinstance(expression, CastNode):
+            return self.resource_member_access_target(expression.expression)
+        if isinstance(expression, UnaryOpNode):
+            return self.resource_member_access_target(expression.operand)
+        return None
+
+    def struct_type_for_resource_member_object(
+        self, expression, variable_types, struct_names, struct_member_types
+    ):
+        if isinstance(expression, str):
+            return self.normalized_struct_type_name(
+                variable_types.get(expression), struct_names
+            )
+        if isinstance(expression, ArrayAccessNode):
+            return self.struct_type_for_resource_member_object(
+                expression.array, variable_types, struct_names, struct_member_types
+            )
+        if isinstance(expression, CastNode):
+            cast_struct = self.normalized_struct_type_name(
+                expression.target_type, struct_names
+            )
+            if cast_struct is not None:
+                return cast_struct
+            return self.struct_type_for_resource_member_object(
+                expression.expression, variable_types, struct_names, struct_member_types
+            )
+        if isinstance(expression, UnaryOpNode):
+            return self.struct_type_for_resource_member_object(
+                expression.operand, variable_types, struct_names, struct_member_types
+            )
+        if isinstance(expression, MemberAccessNode):
+            owner_struct = self.struct_type_for_resource_member_object(
+                expression.object,
+                variable_types,
+                struct_names,
+                struct_member_types,
+            )
+            if owner_struct is None:
+                return None
+            member_type = struct_member_types.get(owner_struct, {}).get(
+                expression.member
+            )
+            return self.normalized_struct_type_name(member_type, struct_names)
+        return None
+
+    def normalized_struct_type_name(self, type_name, struct_names):
+        if not type_name:
+            return None
+        type_name = self.strip_type_qualifiers(type_name)
+        type_name = type_name.split("[", 1)[0].replace("*", "").strip()
+        return type_name if type_name in struct_names else None
+
+    def get_resource_object_call_hint(self, function_name):
+        base_name, _ = self.parse_cpp_template(function_name)
+        if self.is_user_defined_function(base_name):
+            return None
+        if base_name in self.CUDA_TEXTURE_CALL_TYPE_HINTS:
+            return 0, self.CUDA_TEXTURE_CALL_TYPE_HINTS[base_name]
+        if base_name in self.CUDA_SURFACE_CALL_TYPE_HINTS:
+            if base_name.endswith("write"):
+                return 1, self.CUDA_SURFACE_CALL_TYPE_HINTS[base_name]
+            return 0, self.CUDA_SURFACE_CALL_TYPE_HINTS[base_name]
+        return None
+
+    def get_resource_object_expression_name(self, expression):
+        if isinstance(expression, str):
+            return expression
+        if isinstance(expression, ArrayAccessNode):
+            return self.get_resource_object_expression_name(expression.array)
+        if isinstance(expression, CastNode):
+            return self.get_resource_object_expression_name(expression.expression)
+        if isinstance(expression, UnaryOpNode):
+            return self.get_resource_object_expression_name(expression.operand)
+        return None
+
     def is_user_defined_function(self, func_name):
         return isinstance(func_name, str) and func_name in self.user_function_names
+
+    def push_resource_object_hint_scope(self, hints):
+        self.resource_object_hint_scopes.append(hints)
+
+    def pop_resource_object_hint_scope(self):
+        if self.resource_object_hint_scopes:
+            self.resource_object_hint_scopes.pop()
+
+    def lookup_resource_object_type_hint(self, name):
+        for scope in reversed(self.resource_object_hint_scopes):
+            if name in scope:
+                return scope[name]
+        return self.global_resource_object_type_hints.get(name)
 
     def emit_statement(self, stmt):
         """Render and append one converted statement."""
@@ -267,6 +692,78 @@ class CudaToCrossGLConverter:
             return ["// CUDA get last error"]
         elif name == "cudaPeekAtLastError":
             return ["// CUDA peek at last error"]
+        elif name in {
+            "cudaGetTextureObjectResourceDesc",
+            "cudaGetTextureObjectTextureDesc",
+            "cudaGetTextureObjectResourceViewDesc",
+        }:
+            if len(node.args) >= 2:
+                descriptor_kind = {
+                    "cudaGetTextureObjectResourceDesc": "resource",
+                    "cudaGetTextureObjectTextureDesc": "texture",
+                    "cudaGetTextureObjectResourceViewDesc": "resource view",
+                }[name]
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA texture object {descriptor_kind} descriptor query: "
+                    f"{args[1]}, output: {output}"
+                ]
+        elif name == "cudaGetSurfaceObjectResourceDesc":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA surface object resource descriptor query: "
+                    f"{args[1]}, output: {output}"
+                ]
+        elif name == "cudaImportExternalMemory":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA external memory import: output: {output}, "
+                    f"handle: {args[1]}"
+                ]
+        elif name == "cudaExternalMemoryGetMappedBuffer":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA external memory mapped buffer: {args[1]}, "
+                    f"desc: {args[2]}, output: {output}"
+                ]
+        elif name == "cudaExternalMemoryGetMappedMipmappedArray":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA external memory mapped mipmapped array: "
+                    f"{args[1]}, desc: {args[2]}, output: {output}"
+                ]
+        elif name == "cudaDestroyExternalMemory":
+            if args:
+                return [f"// CUDA external memory destroy: {args[0]}"]
+        elif name == "cudaImportExternalSemaphore":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA external semaphore import: output: {output}, "
+                    f"handle: {args[1]}"
+                ]
+        elif name in {
+            "cudaSignalExternalSemaphoresAsync",
+            "cudaWaitExternalSemaphoresAsync",
+        }:
+            if len(args) >= 3:
+                operation = (
+                    "signal" if name == "cudaSignalExternalSemaphoresAsync" else "wait"
+                )
+                comment = (
+                    f"// CUDA external semaphore {operation}: "
+                    f"semaphores: {args[0]}, params: {args[1]}, count: {args[2]}"
+                )
+                if len(args) >= 4:
+                    comment += f", stream: {args[3]}"
+                return [comment]
+        elif name == "cudaDestroyExternalSemaphore":
+            if args:
+                return [f"// CUDA external semaphore destroy: {args[0]}"]
 
         return None
 
@@ -283,7 +780,7 @@ class CudaToCrossGLConverter:
         if isinstance(stmt, list):
             return ", ".join(self.format_statement_fragment(item) for item in stmt)
         if isinstance(stmt, VariableNode):
-            var_type = self.convert_cuda_type_to_crossgl(stmt.vtype)
+            var_type = self.convert_cuda_variable_type_to_crossgl(stmt.vtype, stmt.name)
             if stmt.value:
                 value = self.visit(stmt.value)
                 return f"var {stmt.name}: {var_type} = {value}"
@@ -348,7 +845,9 @@ class CudaToCrossGLConverter:
         self.indent_level += 1
 
         for member in node.members:
-            member_type = self.convert_cuda_type_to_crossgl(member.vtype)
+            member_type = self.convert_cuda_struct_member_type_to_crossgl(
+                node.name, member.vtype, member.name
+            )
             self.emit(f"{member_type} {member.name};")
 
         self.indent_level -= 1
@@ -359,27 +858,42 @@ class CudaToCrossGLConverter:
         return_type = self.convert_cuda_type_to_crossgl(node.return_type)
         params = []
 
-        for param in node.params:
-            param_type = self.convert_cuda_type_to_crossgl(param.vtype)
-            params.append(f"{param_type} {param.name}")
-
-        param_str = ", ".join(params)
-        self.emit(f"{return_type} {node.name}({param_str}) {{")
-
-        self.indent_level += 1
-        self.push_packed_argument_scope()
-        self.push_type_alias_scope()
-        self.push_unique_ptr_scope()
-        for param in node.params:
-            self.register_unique_ptr_name(param.name, param.vtype)
+        self.push_resource_object_hint_scope(
+            self.collect_resource_object_type_hints(
+                node, self.collect_declared_variable_names(node)
+            )
+        )
         try:
-            for stmt in node.body:
-                self.emit_statement(stmt)
+            for param in node.params:
+                param_type = self.convert_cuda_variable_type_to_crossgl(
+                    param.vtype, param.name
+                )
+                params.append(f"{param_type} {param.name}")
+
+            param_str = ", ".join(params)
+            self.emit(f"{return_type} {node.name}({param_str}) {{")
+
+            self.indent_level += 1
+            self.push_packed_argument_scope()
+            self.push_type_alias_scope()
+            self.push_unique_ptr_scope()
+            self.push_cooperative_group_scope()
+            self.push_cuda_async_sync_scope()
+            for param in node.params:
+                self.register_unique_ptr_name(param.name, param.vtype)
+                self.register_cuda_async_sync_parameter(param)
+            try:
+                for stmt in node.body:
+                    self.emit_statement(stmt)
+            finally:
+                self.pop_cuda_async_sync_scope()
+                self.pop_cooperative_group_scope()
+                self.pop_unique_ptr_scope()
+                self.pop_type_alias_scope()
+                self.pop_packed_argument_scope()
+                self.indent_level -= 1
         finally:
-            self.pop_unique_ptr_scope()
-            self.pop_type_alias_scope()
-            self.pop_packed_argument_scope()
-            self.indent_level -= 1
+            self.pop_resource_object_hint_scope()
 
         self.emit("}")
 
@@ -389,48 +903,63 @@ class CudaToCrossGLConverter:
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")
 
         params = []
-        for param in kernel.params:
-            # Add storage buffer qualifiers for pointer parameters
-            if "*" in param.vtype:
-                element_type = self.convert_cuda_pointer_element_type(param.vtype)
-                params.append(
-                    f"@group(0) @binding({len(params)}) var<storage, read_write> {param.name}: array<{element_type}>"
-                )
-            else:
-                param_type = self.convert_cuda_type_to_crossgl(param.vtype)
-                params.append(f"{param_type} {param.name}")
-
-        self.emit(f"fn {kernel.name}(")
-        self.indent_level += 1
-        for i, param in enumerate(params):
-            if i == len(params) - 1:
-                self.emit(f"{param}")
-            else:
-                self.emit(f"{param},")
-        self.indent_level -= 1
-        self.emit(") {")
-
-        self.indent_level += 1
-        self.emit("let thread_id = gl_GlobalInvocationID;")
-        self.emit("let block_id = gl_WorkGroupID;")
-        self.emit("let thread_local_id = gl_LocalInvocationID;")
-        self.emit("let block_dim = gl_WorkGroupSize;")
-        self.emit("")
-
-        self.push_packed_argument_scope()
-        self.push_type_alias_scope()
-        self.push_unique_ptr_scope()
-        for param in kernel.params:
-            self.register_unique_ptr_name(param.name, param.vtype)
+        self.push_resource_object_hint_scope(
+            self.collect_resource_object_type_hints(
+                kernel, self.collect_declared_variable_names(kernel)
+            )
+        )
         try:
-            for stmt in kernel.body:
-                self.emit_statement(stmt)
-        finally:
-            self.pop_unique_ptr_scope()
-            self.pop_type_alias_scope()
-            self.pop_packed_argument_scope()
+            for param in kernel.params:
+                # Add storage buffer qualifiers for pointer parameters
+                if "*" in param.vtype:
+                    element_type = self.convert_cuda_pointer_element_type(param.vtype)
+                    params.append(
+                        f"@group(0) @binding({len(params)}) var<storage, read_write> {param.name}: array<{element_type}>"
+                    )
+                else:
+                    param_type = self.convert_cuda_variable_type_to_crossgl(
+                        param.vtype, param.name
+                    )
+                    params.append(f"{param_type} {param.name}")
 
-        self.indent_level -= 1
+            self.emit(f"fn {kernel.name}(")
+            self.indent_level += 1
+            for i, param in enumerate(params):
+                if i == len(params) - 1:
+                    self.emit(f"{param}")
+                else:
+                    self.emit(f"{param},")
+            self.indent_level -= 1
+            self.emit(") {")
+
+            self.indent_level += 1
+            self.emit("let thread_id = gl_GlobalInvocationID;")
+            self.emit("let block_id = gl_WorkGroupID;")
+            self.emit("let thread_local_id = gl_LocalInvocationID;")
+            self.emit("let block_dim = gl_WorkGroupSize;")
+            self.emit("")
+
+            self.push_packed_argument_scope()
+            self.push_type_alias_scope()
+            self.push_unique_ptr_scope()
+            self.push_cooperative_group_scope()
+            self.push_cuda_async_sync_scope()
+            for param in kernel.params:
+                self.register_unique_ptr_name(param.name, param.vtype)
+                self.register_cuda_async_sync_parameter(param)
+            try:
+                for stmt in kernel.body:
+                    self.emit_statement(stmt)
+            finally:
+                self.pop_cuda_async_sync_scope()
+                self.pop_cooperative_group_scope()
+                self.pop_unique_ptr_scope()
+                self.pop_type_alias_scope()
+                self.pop_packed_argument_scope()
+                self.indent_level -= 1
+        finally:
+            self.pop_resource_object_hint_scope()
+
         self.emit("}")
 
     def visit_KernelLaunchNode(self, node):
@@ -448,7 +977,38 @@ class CudaToCrossGLConverter:
             self.emit(f"// Arguments: {args_str}")
 
     def visit_VariableNode(self, node):
-        var_type = self.convert_cuda_type_to_crossgl(node.vtype)
+        cuda_async_sync = self.cuda_async_sync_declaration_metadata(node)
+        if cuda_async_sync is not None:
+            self.register_cuda_async_sync_name(node.name, cuda_async_sync)
+            self.emit(
+                self.format_cuda_async_sync_declaration(node.name, cuda_async_sync)
+            )
+            return
+
+        cooperative_group = self.cooperative_group_declaration_metadata(node)
+        if cooperative_group is not None:
+            group_kind = cooperative_group["kind"]
+            self.register_cooperative_group_name(node.name, cooperative_group)
+            if group_kind == "thread_block":
+                self.emit(
+                    f"// cooperative_groups thread_block {node.name} maps to the current workgroup"
+                )
+            elif (
+                group_kind == "thread_block_tile"
+                and cooperative_group.get("tile_size")
+                and cooperative_group.get("parent_kind") == "thread_block"
+            ):
+                self.emit(
+                    f"// cooperative_groups thread_block_tile<{cooperative_group['tile_size']}> "
+                    f"{node.name} maps to a tiled partition of the current workgroup"
+                )
+            else:
+                self.emit(
+                    f"// cooperative_groups {group_kind} for {node.name} not directly supported in CrossGL"
+                )
+            return
+
+        var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
 
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, node.vtype)
@@ -479,6 +1039,52 @@ class CudaToCrossGLConverter:
     def pop_unique_ptr_scope(self):
         if len(self.unique_ptr_scopes) > 1:
             self.unique_ptr_scopes.pop()
+
+    def push_cooperative_group_scope(self):
+        self.cooperative_group_scopes.append({})
+
+    def pop_cooperative_group_scope(self):
+        if len(self.cooperative_group_scopes) > 1:
+            self.cooperative_group_scopes.pop()
+
+    def push_cuda_async_sync_scope(self):
+        self.cuda_async_sync_scopes.append({})
+
+    def pop_cuda_async_sync_scope(self):
+        if len(self.cuda_async_sync_scopes) > 1:
+            self.cuda_async_sync_scopes.pop()
+
+    def register_cuda_async_sync_parameter(self, param):
+        metadata = self.cuda_async_sync_metadata_from_type(param.vtype)
+        if metadata is not None:
+            self.register_cuda_async_sync_name(param.name, metadata)
+
+    def register_cuda_async_sync_name(self, name, metadata):
+        if name:
+            self.cuda_async_sync_scopes[-1][name] = metadata
+
+    def lookup_cuda_async_sync_metadata(self, name):
+        for scope in reversed(self.cuda_async_sync_scopes):
+            if name in scope:
+                return scope[name]
+        return None
+
+    def register_cooperative_group_name(self, name, group_metadata):
+        if name:
+            self.cooperative_group_scopes[-1][name] = group_metadata
+
+    def lookup_cooperative_group_name(self, name):
+        metadata = self.lookup_cooperative_group_metadata(name)
+        return metadata["kind"] if metadata is not None else None
+
+    def lookup_cooperative_group_metadata(self, name):
+        for scope in reversed(self.cooperative_group_scopes):
+            if name in scope:
+                group_metadata = scope[name]
+                if isinstance(group_metadata, str):
+                    return {"kind": group_metadata}
+                return group_metadata
+        return None
 
     def push_type_alias_scope(self):
         self.type_alias_scopes.append({})
@@ -571,8 +1177,16 @@ class CudaToCrossGLConverter:
         return self.visit(arg)
 
     def visit_SharedMemoryNode(self, node):
+        cuda_async_sync = self.cuda_async_sync_metadata_from_type(node.vtype)
+        if cuda_async_sync is not None:
+            self.register_cuda_async_sync_name(node.name, cuda_async_sync)
+            self.emit(
+                self.format_cuda_async_sync_declaration(node.name, cuda_async_sync)
+            )
+            return
+
         # Convert to workgroup memory in CrossGL
-        var_type = self.convert_cuda_type_to_crossgl(node.vtype)
+        var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
         if node.size:
             size = self.visit(node.size)
             self.emit(f"var<workgroup> {node.name}: array<{var_type}, {size}>;")
@@ -581,7 +1195,7 @@ class CudaToCrossGLConverter:
 
     def visit_ConstantMemoryNode(self, node):
         # Convert to uniform buffer in CrossGL
-        var_type = self.convert_cuda_type_to_crossgl(node.vtype)
+        var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
         if node.value:
             value = self.visit(node.value)
             self.emit(
@@ -624,6 +1238,14 @@ class CudaToCrossGLConverter:
         if self.is_get_method_call(node):
             return self.visit(node.name.object)
 
+        cuda_async_sync_call = self.format_cuda_async_sync_call(node)
+        if cuda_async_sync_call is not None:
+            return cuda_async_sync_call
+
+        cooperative_call = self.format_cooperative_group_call(node)
+        if cooperative_call is not None:
+            return cooperative_call
+
         raw_name = node.name if isinstance(node.name, str) else self.visit(node.name)
         if raw_name == "lambda":
             return self.format_lambda_call(node.args)
@@ -641,8 +1263,553 @@ class CudaToCrossGLConverter:
         if self.is_user_defined_function(raw_name):
             return f"{raw_name}({args_str})"
 
+        resource_call = self.format_cuda_resource_call(raw_name, args)
+        if resource_call is not None:
+            return resource_call
+
         func_name = self.convert_cuda_builtin_function(raw_name)
         return f"{func_name}({args_str})"
+
+    def format_cooperative_group_call(self, node):
+        if isinstance(node.name, MemberAccessNode):
+            member = node.name.member
+            group_metadata = self.resolve_cooperative_group_metadata(node.name.object)
+            if group_metadata is None:
+                return None
+            return self.format_cooperative_group_member_call(
+                group_metadata, member, node.args
+            )
+
+        raw_name = node.name if isinstance(node.name, str) else self.visit(node.name)
+        base_call_name, _ = self.parse_cpp_template(raw_name)
+        base_name = self.cooperative_group_base_name(base_call_name)
+        if base_name in {"sync", "thread_rank", "size"} and len(node.args) == 1:
+            group_metadata = self.resolve_cooperative_group_metadata(node.args[0])
+            if group_metadata is not None:
+                return self.format_cooperative_group_member_call(
+                    group_metadata, base_name, []
+                )
+        if base_name in {"memcpy_async", "wait", "wait_prior"} and node.args:
+            group_metadata = self.resolve_cooperative_group_metadata(node.args[0])
+            if group_metadata is not None:
+                return self.format_cooperative_group_member_call(
+                    group_metadata, base_name, node.args[1:]
+                )
+        return None
+
+    def format_cooperative_group_member_call(self, group_metadata, member, args):
+        group_kind = group_metadata["kind"]
+        member_base_name, _ = self.parse_cpp_template(member)
+        member_name = self.cooperative_group_base_name(member_base_name) or member
+        if group_kind == "thread_block" and not args:
+            if member_name == "sync":
+                return "workgroupBarrier()"
+            if member_name == "thread_rank":
+                return "gl_LocalInvocationIndex"
+            if member_name in {"size", "num_threads"}:
+                return self.format_thread_block_size_expression()
+            if member_name == "thread_index":
+                return "gl_LocalInvocationID"
+            if member_name == "dim_threads":
+                return "gl_WorkGroupSize"
+
+        if group_kind == "thread_block_tile" and not args:
+            tile_size = group_metadata.get("tile_size")
+            if member_name in {"size", "num_threads"} and tile_size:
+                return tile_size
+            if (
+                member_name == "thread_rank"
+                and tile_size
+                and group_metadata.get("parent_kind") == "thread_block"
+            ):
+                return f"(gl_LocalInvocationIndex % {tile_size})"
+
+        if member_name in {"memcpy_async", "wait", "wait_prior"}:
+            return self.format_unsupported_cooperative_group_statement(
+                group_kind, member_name, args
+            )
+        if member_name in {"thread_rank", "size", "num_threads"}:
+            return self.format_unsupported_cooperative_group_expression(
+                group_kind, member_name
+            )
+        if member_name in {"thread_index", "dim_threads"}:
+            return self.format_unsupported_cooperative_group_expression(
+                group_kind, member_name, "vec3<u32>(0, 0, 0)"
+            )
+        return (
+            f"// cooperative_groups {group_kind}.{member_name} "
+            "not directly supported in CrossGL"
+        )
+
+    def format_thread_block_size_expression(self):
+        return "((gl_WorkGroupSize.x * gl_WorkGroupSize.y) * gl_WorkGroupSize.z)"
+
+    def format_unsupported_cooperative_group_statement(
+        self, group_kind, member, args=None
+    ):
+        args = args or []
+        formatted_args = ", ".join(self.visit(arg) for arg in args)
+        arg_suffix = f": {formatted_args}" if formatted_args else ""
+        return (
+            f"// cooperative_groups {group_kind}.{member} "
+            f"not directly supported in CrossGL{arg_suffix}"
+        )
+
+    def format_unsupported_cooperative_group_expression(
+        self, group_kind, member, fallback="0"
+    ):
+        return (
+            f"(/* cooperative_groups {group_kind}.{member} "
+            f"not directly supported in CrossGL */ {fallback})"
+        )
+
+    def format_cuda_async_sync_call(self, node):
+        if isinstance(node.name, MemberAccessNode):
+            metadata = self.resolve_cuda_async_sync_metadata(node.name.object)
+            if metadata is None:
+                return None
+            return self.format_cuda_async_sync_member_call(
+                metadata, node.name.member, node.args
+            )
+
+        raw_name = node.name if isinstance(node.name, str) else self.visit(node.name)
+        base_call_name, _ = self.parse_cpp_template(raw_name)
+        base_name = self.cooperative_group_base_name(base_call_name)
+        if self.is_user_defined_function(base_name) or self.is_user_defined_function(
+            raw_name
+        ):
+            return None
+
+        if base_name == "memcpy_async":
+            metadata = self.resolve_cuda_async_sync_metadata_from_args(node.args)
+            if metadata is not None:
+                return self.format_unsupported_cuda_async_statement(
+                    metadata["kind"], base_name, node.args
+                )
+
+        if base_name == "init" and node.args:
+            metadata = self.resolve_cuda_async_sync_metadata(
+                self.unwrap_cuda_async_sync_target(node.args[0])
+            )
+            if metadata is not None and metadata["kind"] == "barrier":
+                return self.format_unsupported_cuda_async_statement(
+                    metadata["kind"], base_name, node.args
+                )
+
+        if base_name == "make_pipeline":
+            return self.format_unsupported_cuda_async_expression("pipeline", base_name)
+
+        primitive_member = self.cuda_pipeline_primitive_member_name(base_name)
+        if primitive_member is not None:
+            return self.format_unsupported_cuda_async_statement(
+                "pipeline", primitive_member, node.args
+            )
+
+        return None
+
+    def cuda_pipeline_primitive_member_name(self, base_name):
+        primitive_mapping = {
+            "__pipeline_memcpy_async": "memcpy_async",
+            "__pipeline_commit": "commit",
+            "__pipeline_wait_prior": "wait_prior",
+            "__pipeline_arrive_on": "arrive_on",
+        }
+        return primitive_mapping.get(base_name)
+
+    def format_cuda_async_sync_member_call(self, metadata, member, args):
+        kind = metadata["kind"]
+        member_base_name, _ = self.parse_cpp_template(member)
+        member_name = self.cooperative_group_base_name(member_base_name) or member
+
+        if kind == "barrier":
+            if member_name in {"arrive", "arrival_token"}:
+                return self.format_unsupported_cuda_async_expression(kind, member_name)
+            if member_name in {"try_wait", "try_wait_parity"}:
+                return self.format_unsupported_cuda_async_expression(
+                    kind, member_name, "false"
+                )
+            return self.format_unsupported_cuda_async_statement(kind, member_name, args)
+
+        if kind == "pipeline":
+            return self.format_unsupported_cuda_async_statement(kind, member_name, args)
+
+        return self.format_unsupported_cuda_async_statement(kind, member_name, args)
+
+    def format_unsupported_cuda_async_statement(self, kind, member, args=None):
+        args = args or []
+        formatted_args = ", ".join(self.visit(arg) for arg in args)
+        arg_suffix = f": {formatted_args}" if formatted_args else ""
+        return f"// cuda {kind}.{member} not directly supported in CrossGL{arg_suffix}"
+
+    def format_unsupported_cuda_async_expression(self, kind, member, fallback="0"):
+        return (
+            f"(/* cuda {kind}.{member} not directly supported in CrossGL */ {fallback})"
+        )
+
+    def format_cuda_async_sync_declaration(self, name, metadata):
+        return f"// cuda {metadata['kind']} {name} not directly supported in CrossGL"
+
+    def cuda_async_sync_declaration_metadata(self, node):
+        declared_metadata = self.cuda_async_sync_metadata_from_type(node.vtype)
+        factory_metadata = self.cuda_async_sync_factory_metadata(node.value)
+        return factory_metadata or declared_metadata
+
+    def cuda_async_sync_metadata_from_type(self, type_name):
+        type_name = self.strip_cuda_async_sync_declarator(type_name)
+        base_type, template_args = self.parse_cpp_template(type_name)
+        base_name = self.cooperative_group_base_name(base_type)
+        if base_name in {"barrier", "pipeline", "pipeline_shared_state"}:
+            metadata = {"kind": base_name}
+            if template_args:
+                metadata["scope"] = template_args[0]
+            return metadata
+        return None
+
+    def cuda_async_sync_factory_metadata(self, value):
+        if not isinstance(value, FunctionCallNode):
+            return None
+        raw_name = value.name if isinstance(value.name, str) else self.visit(value.name)
+        base_call_name, _ = self.parse_cpp_template(raw_name)
+        base_name = self.cooperative_group_base_name(base_call_name)
+        if base_name == "make_pipeline":
+            return {"kind": "pipeline"}
+        return None
+
+    def resolve_cuda_async_sync_metadata_from_args(self, args):
+        for arg in reversed(args):
+            metadata = self.resolve_cuda_async_sync_metadata(arg)
+            if metadata is not None and metadata["kind"] in {"barrier", "pipeline"}:
+                return metadata
+        return None
+
+    def resolve_cuda_async_sync_metadata(self, expression):
+        name = self.simple_identifier(expression)
+        if name is None:
+            return None
+        return self.lookup_cuda_async_sync_metadata(name)
+
+    def unwrap_cuda_async_sync_target(self, expression):
+        if isinstance(expression, UnaryOpNode) and expression.op == "&":
+            return expression.operand
+        if isinstance(expression, CastNode):
+            return self.unwrap_cuda_async_sync_target(expression.expression)
+        return expression
+
+    def strip_cuda_async_sync_declarator(self, type_name):
+        type_name = self.strip_type_qualifiers(type_name).strip()
+        if "[" in type_name:
+            type_name = type_name.split("[", 1)[0].strip()
+
+        while True:
+            stripped = type_name.strip()
+            for suffix in ("&&", "&", "*"):
+                if stripped.endswith(suffix):
+                    type_name = stripped[: -len(suffix)].strip()
+                    break
+            else:
+                return stripped
+
+    def cooperative_group_declaration_metadata(self, node):
+        declared_metadata = self.cooperative_group_metadata_from_type(node.vtype)
+        factory_metadata = self.cooperative_group_factory_metadata(node.value)
+        return factory_metadata or declared_metadata
+
+    def cooperative_group_kind_from_type(self, type_name):
+        metadata = self.cooperative_group_metadata_from_type(type_name)
+        return metadata["kind"] if metadata is not None else None
+
+    def cooperative_group_metadata_from_type(self, type_name):
+        base_type, template_args = self.parse_cpp_template(type_name)
+        base_name = self.cooperative_group_base_name(type_name)
+        if base_name in {
+            "thread_block",
+            "grid_group",
+            "multi_grid_group",
+            "coalesced_group",
+        }:
+            return {"kind": base_name}
+        base_name = self.cooperative_group_base_name(base_type)
+        if base_name and base_name.startswith("thread_block_tile"):
+            metadata = {"kind": "thread_block_tile"}
+            if template_args:
+                metadata["tile_size"] = template_args[0]
+            return metadata
+        return None
+
+    def cooperative_group_factory_kind(self, value):
+        metadata = self.cooperative_group_factory_metadata(value)
+        return metadata["kind"] if metadata is not None else None
+
+    def cooperative_group_factory_metadata(self, value):
+        if not isinstance(value, FunctionCallNode):
+            return None
+        raw_name = value.name if isinstance(value.name, str) else self.visit(value.name)
+        base_call_name, template_args = self.parse_cpp_template(raw_name)
+        base_name = self.cooperative_group_base_name(base_call_name)
+        factory_mapping = {
+            "this_thread_block": "thread_block",
+            "this_grid": "grid_group",
+            "this_multi_grid": "multi_grid_group",
+            "coalesced_threads": "coalesced_group",
+            "tiled_partition": "thread_block_tile",
+        }
+        group_kind = factory_mapping.get(base_name)
+        if group_kind is None:
+            return None
+
+        metadata = {"kind": group_kind}
+        if group_kind == "thread_block_tile":
+            if template_args:
+                metadata["tile_size"] = template_args[0]
+            if value.args:
+                parent = self.resolve_cooperative_group_metadata(value.args[0])
+                if parent is not None:
+                    metadata["parent_kind"] = parent["kind"]
+        return metadata
+
+    def resolve_cooperative_group_expression(self, expression):
+        metadata = self.resolve_cooperative_group_metadata(expression)
+        return metadata["kind"] if metadata is not None else None
+
+    def resolve_cooperative_group_metadata(self, expression):
+        name = self.simple_identifier(expression)
+        group_metadata = self.lookup_cooperative_group_metadata(name)
+        if group_metadata is not None:
+            return group_metadata
+        return self.cooperative_group_factory_metadata(expression)
+
+    def simple_identifier(self, expression):
+        if isinstance(expression, str):
+            return expression
+        return None
+
+    def cooperative_group_base_name(self, name):
+        if not isinstance(name, str):
+            return None
+        return name.rsplit("::", 1)[-1].split("<", 1)[0]
+
+    def format_cuda_resource_call(self, function_name, args):
+        base_name, template_args = self.parse_cpp_template(function_name)
+        if self.is_user_defined_function(base_name):
+            return None
+
+        value_type = template_args[0] if template_args else None
+        if base_name == "tex1Dfetch":
+            return self.format_cuda_texture_fetch_call(args)
+        if base_name in {"tex1D", "tex1DLod", "tex1DGrad"}:
+            return self.format_cuda_texture_call(base_name, args, "vec1", 1)
+        if base_name in {"tex2D", "tex2DLod", "tex2DGrad"}:
+            return self.format_cuda_texture_call(base_name, args, "vec2", 2)
+        if base_name == "tex2Dgather":
+            return self.format_cuda_texture_gather_call(args)
+        if base_name in {"tex3D", "tex3DLod", "tex3DGrad"}:
+            return self.format_cuda_texture_call(base_name, args, "vec3", 3)
+        if base_name in {"texCubemap", "texCubemapLod", "texCubemapGrad"}:
+            return self.format_cuda_texture_call(base_name, args, "vec3", 3)
+        if base_name in {
+            "tex1DLayered",
+            "tex1DLayeredLod",
+            "tex1DLayeredGrad",
+        }:
+            return self.format_cuda_texture_call(base_name, args, "vec2", 2)
+        if base_name in {
+            "tex2DLayered",
+            "tex2DLayeredLod",
+            "tex2DLayeredGrad",
+        }:
+            return self.format_cuda_texture_call(base_name, args, "vec3", 3)
+        if base_name in {
+            "texCubemapLayered",
+            "texCubemapLayeredLod",
+            "texCubemapLayeredGrad",
+        }:
+            return self.format_cuda_texture_call(base_name, args, "vec4", 4)
+
+        if base_name in {
+            "surf1Dread",
+            "surf1DLayeredread",
+            "surf2Dread",
+            "surf3Dread",
+            "surf2DLayeredread",
+            "surfCubemapread",
+            "surfCubemapLayeredread",
+        }:
+            dimensions = {
+                "surf1Dread": 1,
+                "surf1DLayeredread": 2,
+                "surf2Dread": 2,
+                "surf3Dread": 3,
+                "surf2DLayeredread": 3,
+                "surfCubemapread": 3,
+                "surfCubemapLayeredread": 3,
+            }[base_name]
+            return self.format_cuda_surface_read(args, dimensions, value_type)
+
+        if base_name in {
+            "surf1Dwrite",
+            "surf1DLayeredwrite",
+            "surf2Dwrite",
+            "surf3Dwrite",
+            "surf2DLayeredwrite",
+            "surfCubemapwrite",
+            "surfCubemapLayeredwrite",
+        }:
+            dimensions = {
+                "surf1Dwrite": 1,
+                "surf1DLayeredwrite": 2,
+                "surf2Dwrite": 2,
+                "surf3Dwrite": 3,
+                "surf2DLayeredwrite": 3,
+                "surfCubemapwrite": 3,
+                "surfCubemapLayeredwrite": 3,
+            }[base_name]
+            return self.format_cuda_surface_write(args, dimensions, value_type)
+
+        return None
+
+    def format_cuda_texture_call(self, function_name, args, vector_name, dimensions):
+        if len(args) < 2:
+            return None
+
+        if self.is_sparse_cuda_texture_call(function_name, args):
+            return self.format_unsupported_cuda_texture_sparse_residency_call(
+                function_name
+            )
+
+        extra_count = (
+            2 if "Grad" in function_name else 1 if "Lod" in function_name else 0
+        )
+        coordinate_count = len(args) - 1 - extra_count
+        if coordinate_count <= 0:
+            return None
+
+        texture_name = args[0]
+        coordinate_args = args[1 : 1 + coordinate_count]
+        if coordinate_count == 1:
+            coordinate = coordinate_args[0]
+            consumed = 2
+        elif coordinate_count == dimensions:
+            coordinate = self.format_vector_constructor(vector_name, coordinate_args)
+            consumed = 1 + dimensions
+        else:
+            return None
+
+        remaining = args[consumed:]
+        if "Grad" in function_name:
+            if len(remaining) < 2:
+                return None
+            return f"textureGrad({texture_name}, {coordinate}, {remaining[0]}, {remaining[1]})"
+        if "Lod" in function_name:
+            if not remaining:
+                return None
+            return f"textureLod({texture_name}, {coordinate}, {remaining[0]})"
+        return f"texture({texture_name}, {coordinate})"
+
+    def is_sparse_cuda_texture_call(self, function_name, args):
+        sparse_arg_counts = {
+            "tex1D": 3,
+            "tex1DLod": 4,
+            "tex1DGrad": 5,
+            "tex2D": 4,
+            "tex2DLod": 5,
+            "tex2DGrad": 6,
+            "tex3D": 5,
+            "tex3DLod": 6,
+            "tex3DGrad": 7,
+            "texCubemap": 5,
+            "texCubemapLod": 6,
+            "texCubemapGrad": 7,
+            "tex1DLayered": 4,
+            "tex1DLayeredLod": 5,
+            "tex1DLayeredGrad": 6,
+            "tex2DLayered": 5,
+            "tex2DLayeredLod": 6,
+            "tex2DLayeredGrad": 7,
+            "texCubemapLayered": 6,
+            "texCubemapLayeredLod": 7,
+            "texCubemapLayeredGrad": 8,
+        }
+        return len(args) == sparse_arg_counts.get(function_name)
+
+    def format_unsupported_cuda_texture_sparse_residency_call(self, function_name):
+        return self.format_unsupported_cuda_resource_expression(
+            "texture",
+            f"{function_name} sparse residency",
+            "vec4<f32>(0.0, 0.0, 0.0, 0.0)",
+        )
+
+    def format_cuda_texture_gather_call(self, args):
+        if len(args) == 2:
+            texture_name, coordinate = args
+            component = None
+        elif len(args) in {3, 4}:
+            texture_name = args[0]
+            coordinate = self.format_vector_constructor("vec2", args[1:3])
+            component = args[3] if len(args) == 4 else None
+        else:
+            return self.format_unsupported_cuda_resource_expression(
+                "texture",
+                "tex2Dgather sparse residency",
+                "vec4<f32>(0.0, 0.0, 0.0, 0.0)",
+            )
+
+        if component is not None:
+            return f"textureGather({texture_name}, {coordinate}, {component})"
+        return f"textureGather({texture_name}, {coordinate})"
+
+    def format_cuda_texture_fetch_call(self, args):
+        if len(args) == 2:
+            texture_name, coordinate = args
+            return f"texelFetch({texture_name}, {coordinate}, 0)"
+        return self.format_unsupported_cuda_resource_expression(
+            "texture",
+            "tex1Dfetch sparse residency",
+            "vec4<f32>(0.0, 0.0, 0.0, 0.0)",
+        )
+
+    def format_cuda_surface_read(self, args, dimensions, value_type):
+        if len(args) < dimensions + 1:
+            return None
+        surface_name = args[0]
+        coord_args = [self.strip_surface_byte_offset(args[1], value_type)]
+        coord_args.extend(args[2 : dimensions + 1])
+        return f"imageLoad({surface_name}, {self.format_vector_constructor(f'vec{dimensions}', coord_args, 'i32')})"
+
+    def format_cuda_surface_write(self, args, dimensions, value_type):
+        if len(args) < dimensions + 2:
+            return None
+        value = args[0]
+        surface_name = args[1]
+        coord_args = [self.strip_surface_byte_offset(args[2], value_type)]
+        coord_args.extend(args[3 : dimensions + 2])
+        coord = self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
+        return f"imageStore({surface_name}, {coord}, {value})"
+
+    def strip_surface_byte_offset(self, expression, value_type):
+        text = str(expression).strip()
+        if text.startswith("(") and text.endswith(")"):
+            text = text[1:-1].strip()
+
+        if value_type:
+            suffix = f" * sizeof({value_type})"
+            if text.endswith(suffix):
+                return text[: -len(suffix)].strip()
+
+        marker = " * sizeof("
+        if marker in text and text.endswith(")"):
+            return text.split(marker, 1)[0].strip()
+
+        return expression
+
+    def format_unsupported_cuda_resource_expression(self, kind, member, fallback):
+        return (
+            f"(/* cuda {kind}.{member} not directly supported in CrossGL */ {fallback})"
+        )
+
+    def format_vector_constructor(self, vector_name, args, element_type="f32"):
+        if vector_name == "vec1":
+            return args[0]
+        return f"{vector_name}<{element_type}>({', '.join(args)})"
 
     def format_lambda_call(self, args):
         if not args:
@@ -656,7 +1823,9 @@ class CudaToCrossGLConverter:
     def format_lambda_parameter(self, arg):
         if isinstance(arg, VariableNode):
             if arg.vtype:
-                param_type = self.convert_cuda_type_to_crossgl(arg.vtype)
+                param_type = self.convert_cuda_variable_type_to_crossgl(
+                    arg.vtype, arg.name
+                )
                 return f"{param_type} {arg.name}"
             return arg.name
         return self.format_lambda_body(arg)
@@ -718,8 +1887,13 @@ class CudaToCrossGLConverter:
         alias_type = self.convert_cuda_type_to_crossgl(node.alias_type)
         self.emit(f"typedef {alias_type} {node.name};")
 
+    def format_atomic_argument(self, arg, index):
+        if index == 0 and isinstance(arg, UnaryOpNode) and arg.op == "&":
+            return self.visit(arg.operand)
+        return self.visit(arg)
+
     def visit_AtomicOperationNode(self, node):
-        args = [self.visit(arg) for arg in node.args]
+        args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node.args)]
         args_str = ", ".join(args)
 
         atomic_map = {
@@ -729,6 +1903,11 @@ class CudaToCrossGLConverter:
             "atomicMin": "atomicMin",
             "atomicExch": "atomicExchange",
             "atomicCAS": "atomicCompareExchange",
+            "atomicAnd": "atomicAnd",
+            "atomicOr": "atomicOr",
+            "atomicXor": "atomicXor",
+            "atomicInc": "atomicInc",
+            "atomicDec": "atomicDec",
         }
 
         crossgl_func = atomic_map.get(node.operation, node.operation)
@@ -738,7 +1917,8 @@ class CudaToCrossGLConverter:
         if node.sync_type == "__syncthreads":
             self.emit("workgroupBarrier();")
         elif node.sync_type == "__syncwarp":
-            self.emit("// Warp sync not directly supported in CrossGL")
+            args = ", ".join(self.visit(arg) for arg in node.args)
+            self.emit(f"// __syncwarp({args}) not directly supported in CrossGL")
         else:
             self.emit(f"// {node.sync_type}();")
 
@@ -939,6 +2119,82 @@ class CudaToCrossGLConverter:
         expression = self.visit(node.expression)
         return f"{target_type}({expression})"
 
+    def convert_cuda_variable_type_to_crossgl(self, cuda_type, name):
+        """Convert CUDA variable types, using call-site hints for resource handles."""
+        resource_type = self.convert_cuda_resource_object_type(cuda_type, name)
+        if resource_type is not None:
+            return resource_type
+        return self.convert_cuda_type_to_crossgl(cuda_type)
+
+    def convert_cuda_struct_member_type_to_crossgl(self, struct_name, cuda_type, name):
+        """Convert struct members, using CUDA resource call-site hints."""
+        hint = self.struct_resource_member_hints.get((struct_name, name))
+        if hint is not None:
+            resource_type = self.convert_cuda_resource_object_type_with_hint(
+                cuda_type, hint
+            )
+            if resource_type is not None:
+                return resource_type
+        return self.convert_cuda_type_to_crossgl(cuda_type)
+
+    def convert_cuda_resource_object_type(self, cuda_type, name):
+        hint = self.lookup_resource_object_type_hint(name)
+        if hint is None:
+            return None
+        return self.convert_cuda_resource_object_type_with_hint(cuda_type, hint)
+
+    def convert_cuda_resource_object_type_with_hint(self, cuda_type, hint):
+        cuda_type = self.strip_type_qualifiers(cuda_type)
+
+        if self.has_array_suffix(cuda_type):
+            base_type = cuda_type.split("[", 1)[0].strip()
+            mapped_type = self.convert_cuda_resource_object_type_with_hint(
+                base_type, hint
+            )
+            if mapped_type is None:
+                return None
+            return self.wrap_mapped_cuda_array_type(cuda_type, mapped_type)
+
+        if "*" in cuda_type:
+            pointer_depth = cuda_type.count("*")
+            base_type = cuda_type.replace("*", "").strip()
+            mapped_type = self.convert_cuda_resource_object_base_type(base_type, hint)
+            if mapped_type is None:
+                return None
+            for _ in range(pointer_depth):
+                mapped_type = f"ptr<{mapped_type}>"
+            return mapped_type
+
+        return self.convert_cuda_resource_object_base_type(cuda_type, hint)
+
+    def convert_cuda_resource_object_base_type(self, cuda_type, hint):
+        cuda_type = self.strip_type_qualifiers(cuda_type)
+        if cuda_type == "cudaTextureObject_t" and hint.startswith("sampler"):
+            return hint
+        if cuda_type == "cudaSurfaceObject_t" and "image" in hint:
+            return hint
+        return None
+
+    def wrap_mapped_cuda_array_type(self, cuda_type, mapped_type):
+        base_type = cuda_type.split("[", 1)[0].strip()
+        dimensions = []
+        remainder = cuda_type[len(base_type) :].strip()
+
+        while remainder.startswith("["):
+            close_index = remainder.find("]")
+            if close_index == -1:
+                break
+            dimensions.append(remainder[1:close_index].strip())
+            remainder = remainder[close_index + 1 :].strip()
+
+        for size in reversed(dimensions):
+            if size:
+                mapped_type = f"array<{mapped_type}, {size}>"
+            else:
+                mapped_type = f"array<{mapped_type}>"
+
+        return mapped_type
+
     def convert_cuda_type_to_crossgl(self, cuda_type):
         """Convert CUDA types to CrossGL equivalents"""
         cuda_type = self.strip_type_qualifiers(cuda_type)
@@ -966,6 +2222,10 @@ class CudaToCrossGLConverter:
             "dim3": "vec3<u32>",
         }
 
+        resource_type = self.convert_cuda_resource_type(cuda_type)
+        if resource_type is not None:
+            return resource_type
+
         unique_ptr_type = self.convert_unique_ptr_type(cuda_type)
         if unique_ptr_type is not None:
             return unique_ptr_type
@@ -979,6 +2239,14 @@ class CudaToCrossGLConverter:
             return self.convert_cuda_pointer_type(cuda_type)
 
         return type_mapping.get(cuda_type, cuda_type)
+
+    def convert_cuda_resource_type(self, cuda_type):
+        base_name, template_args = self.parse_cpp_template(cuda_type)
+        if base_name == "texture" and len(template_args) >= 2:
+            return self.CUDA_TEXTURE_TYPE_MAPPING.get(template_args[1])
+        if base_name == "surface" and len(template_args) >= 2:
+            return self.CUDA_SURFACE_TYPE_MAPPING.get(template_args[1])
+        return None
 
     def convert_unique_ptr_type(self, cuda_type):
         base_name, template_args = self.parse_cpp_template(cuda_type)
@@ -1143,6 +2411,8 @@ class CudaToCrossGLConverter:
             "fmin": "min",
             "fmax": "max",
             "__threadfence": "memoryBarrier",
+            "__threadfence_block": "memoryBarrier",
+            "__threadfence_system": "memoryBarrier",
             "floor": "floor",
             "ceil": "ceil",
             "bool": "bool",

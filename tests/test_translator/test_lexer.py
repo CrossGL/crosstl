@@ -180,6 +180,30 @@ shader main {
         pytest.fail("Function call tokenization not implemented.")
 
 
+def test_comment_tokens_are_skipped_as_trivia():
+    code = """
+    // leading comment should not become parser input
+    shader Comments {
+        /* block comment
+           with stage-like words: vertex fragment compute */
+        compute {
+            void main() { return; } // trailing comment
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    token_types = [token[0] for token in tokens]
+    token_values = [str(token[1]) for token in tokens]
+
+    assert "COMMENT_SINGLE" not in token_types
+    assert "COMMENT_MULTI" not in token_types
+    assert "COMMENT_SINGLE" not in token_values
+    assert "COMMENT_MULTI" not in token_values
+    assert ("SHADER", "shader") in tokens
+    assert ("COMPUTE", "compute") in tokens
+
+
 def test_stage_and_ray_keywords_tokenization():
     code = """
     object { }
@@ -293,6 +317,25 @@ def test_assignment_shift_operators():
         assert any(t[0] == "ASSIGN_SHIFT_LEFT" for t in tokens), "Missing '<<=' token"
     except SyntaxError:
         pytest.fail("Shift operators tokenization failed.")
+
+
+def test_longest_operator_tokenization():
+    code = """
+    float power = 2.0 ** exponent;
+    int ordering = a <=> b;
+    bool le = a <= b;
+    bool ge = a >= b;
+    """
+
+    tokens = tokenize_code(code)
+
+    assert ("POWER", "**") in tokens
+    assert ("SPACESHIP", "<=>") in tokens
+    assert ("LESS_EQUAL", "<=") in tokens
+    assert ("GREATER_EQUAL", ">=") in tokens
+    assert tokens.count(("MULTIPLY", "*")) == 0
+    spaceship_index = tokens.index(("SPACESHIP", "<=>"))
+    assert ("LESS_EQUAL", "<=") not in tokens[:spaceship_index]
 
 
 def test_assignment_operators_tokenization():

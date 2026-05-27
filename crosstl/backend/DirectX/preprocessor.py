@@ -65,7 +65,7 @@ class HLSLPreprocessor:
         output: List[str] = []
         conditional_stack: List[Dict[str, bool]] = []
         current_line = 1
-        line_override: Optional[int] = None
+        current_file = file_path
 
         def is_active() -> bool:
             return all(frame["active"] for frame in conditional_stack)
@@ -78,7 +78,9 @@ class HLSLPreprocessor:
             if stripped.startswith("#"):
                 directive, rest = self._parse_directive(stripped)
                 if directive in ("if", "ifdef", "ifndef"):
-                    condition = self._evaluate_condition(directive, rest, current_line)
+                    condition = self._evaluate_condition(
+                        directive, rest, current_line, current_file
+                    )
                     parent_active = active
                     active_now = parent_active and condition
                     conditional_stack.append(
@@ -94,7 +96,7 @@ class HLSLPreprocessor:
                     frame = conditional_stack[-1]
                     if frame["parent_active"] and not frame["branch_taken"]:
                         condition = self._evaluate_expression(
-                            self._expand_macros(rest, current_line, True)
+                            self._expand_macros(rest, current_line, True, current_file)
                         )
                         frame["active"] = condition
                         frame["branch_taken"] = condition
@@ -121,14 +123,22 @@ class HLSLPreprocessor:
                     if name in self.macros:
                         del self.macros[name]
                 elif directive == "include":
-                    included_text = self._handle_include(rest, file_path)
-                    if included_text is not None:
+                    included = self._handle_include(rest, file_path)
+                    if included is not None:
+                        if isinstance(included, tuple):
+                            included_text, included_path = included
+                        else:
+                            included_text = included
+                            included_path = file_path
                         nested_lines = self._split_logical_lines(included_text)
-                        output.extend(self._process_lines(nested_lines, file_path))
+                        output.extend(self._process_lines(nested_lines, included_path))
                 elif directive == "line":
-                    line_override = self._handle_line_directive(rest)
-                    if line_override is not None:
-                        current_line = line_override
+                    line_info = self._handle_line_directive(rest)
+                    if line_info is not None:
+                        line_number, line_file = line_info
+                        current_line = line_number - 1
+                        if line_file is not None:
+                            current_file = line_file
                 elif directive in ("error", "warning"):
                     if directive == "error" or self.strict:
                         raise SyntaxError(f"#{directive}: {rest.strip()}")
@@ -137,7 +147,9 @@ class HLSLPreprocessor:
                         output.append(line)
             else:
                 if active:
-                    expanded = self._expand_macros(line, current_line, False)
+                    expanded = self._expand_macros(
+                        line, current_line, False, current_file
+                    )
                     output.append(expanded)
             current_line += 1
 
@@ -152,7 +164,13 @@ class HLSLPreprocessor:
             return "", ""
         return match.group(1), match.group(2)
 
-    def _evaluate_condition(self, directive: str, rest: str, line_num: int) -> bool:
+    def _evaluate_condition(
+        self,
+        directive: str,
+        rest: str,
+        line_num: int,
+        file_path: Optional[str],
+    ) -> bool:
         if directive == "ifdef":
             name = rest.strip()
             return name in self.macros
@@ -160,7 +178,9 @@ class HLSLPreprocessor:
             name = rest.strip()
             return name not in self.macros
         return bool(
-            self._evaluate_expression(self._expand_macros(rest, line_num, True))
+            self._evaluate_expression(
+                self._expand_macros(rest, line_num, True, file_path)
+            )
         )
 
     def _evaluate_expression(self, expr: str) -> int:
@@ -219,7 +239,9 @@ class HLSLPreprocessor:
             is_variadic = True
         return params, remainder, is_variadic
 
-    def _handle_include(self, rest: str, file_path: Optional[str]) -> Optional[str]:
+    def _handle_include(
+        self, rest: str, file_path: Optional[str]
+    ) -> Optional[Tuple[str, str]]:
         match = re.match(r"\s*([<\"])([^>\"]+)[>\"]", rest)
         if not match:
             return None
@@ -235,22 +257,33 @@ class HLSLPreprocessor:
             candidate = os.path.join(base, target)
             if os.path.isfile(candidate):
                 with open(candidate, "r", encoding="utf-8") as handle:
-                    return handle.read()
+                    return handle.read(), candidate
 
         if self.strict:
             raise FileNotFoundError(f"Include not found: {target}")
         return None
 
-    def _handle_line_directive(self, rest: str) -> Optional[int]:
+    def _handle_line_directive(self, rest: str) -> Optional[Tuple[int, Optional[str]]]:
         parts = rest.strip().split()
         if not parts:
             return None
         try:
-            return int(parts[0])
+            line_number = int(parts[0])
         except ValueError:
             return None
+        filename = None
+        match = re.search(r'"([^"\\]*(?:\\.[^"\\]*)*)"', rest)
+        if match:
+            filename = match.group(1).replace(r"\\", "\\").replace(r"\"", '"')
+        return line_number, filename
 
-    def _expand_macros(self, text: str, line_num: int, in_expression: bool) -> str:
+    def _expand_macros(
+        self,
+        text: str,
+        line_num: int,
+        in_expression: bool,
+        file_path: Optional[str] = None,
+    ) -> str:
         result = ""
         i = 0
         depth = 0
@@ -276,6 +309,12 @@ class HLSLPreprocessor:
             if ch.isalpha() or ch == "_":
                 ident, consumed = self._read_identifier(text, i)
                 i += consumed
+                if ident == "__LINE__":
+                    result += str(line_num)
+                    continue
+                if ident == "__FILE__":
+                    result += self._stringize(file_path or "")
+                    continue
                 if in_expression and ident == "defined":
                     value, consumed_def = self._parse_defined(text, i)
                     result += "1" if value else "0"
@@ -295,13 +334,17 @@ class HLSLPreprocessor:
                         args, consumed_args = self._parse_macro_args(text, j)
                         i = j + consumed_args
                         replaced = self._expand_function_macro(macro, args)
-                        result += self._expand_macros(replaced, line_num, in_expression)
+                        result += self._expand_macros(
+                            replaced, line_num, in_expression, file_path
+                        )
                         continue
                     result += ident
                     continue
 
                 replaced = macro.replacement if macro.replacement is not None else ""
-                result += self._expand_macros(replaced, line_num, in_expression)
+                result += self._expand_macros(
+                    replaced, line_num, in_expression, file_path
+                )
                 continue
 
             result += ch

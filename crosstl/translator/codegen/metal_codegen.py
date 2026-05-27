@@ -1,5 +1,7 @@
 """CrossGL-to-Metal code generator."""
 
+from hashlib import sha1
+
 from ..ast import (
     AssignmentNode,
     ArrayNode,
@@ -8,21 +10,24 @@ from ..ast import (
     BlockNode,
     BreakNode,
     ContinueNode,
+    ConstructorNode,
     DoWhileNode,
     ForInNode,
     ForNode,
     FunctionCallNode,
     IfNode,
-    LiteralPatternNode,
     LoopNode,
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
     PreprocessorNode,
+    PointerAccessNode,
     RayQueryOpNode,
     RayTracingOpNode,
     RangeNode,
     ReturnNode,
+    PointerType,
+    ReferenceType,
     StructNode,
     SwitchNode,
     TernaryOpNode,
@@ -30,11 +35,9 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
     WhileNode,
-    WildcardPatternNode,
 )
 from .array_utils import (
     parse_array_type,
-    format_array_type,
     format_c_style_array_declaration,
     split_array_type_suffix,
     get_array_size_from_node,
@@ -65,13 +68,61 @@ from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
     collect_stage_entry_reserved_function_names,
+    collect_stage_local_structs,
+    collect_stage_local_variables,
+    compute_local_size,
+    deduplicate_named_declarations,
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
     stage_matches,
 )
 from .resource_arrays import collect_resource_array_size_hints
+from .enum_utils import (
+    collect_enum_type_names,
+    collect_enum_struct_variant_fields,
+    collect_enum_variant_constructor_fields,
+    collect_enum_variant_constructors,
+    collect_enum_variant_constants,
+    collect_generic_enum_specialization_member_types,
+    collect_generic_enum_specializations,
+    collect_generic_enum_struct_definitions,
+    collect_generic_enum_variant_constants,
+    collect_plain_enums,
+    collect_struct_payload_enums,
+    enum_value_expression,
+    generate_enum_constructor_expression,
+    generate_generic_enum_constructor_functions,
+    generate_generic_enum_constants,
+    generate_generic_enum_structs,
+    generate_enum_constructor_call,
+    generate_enum_constructor_functions,
+    generate_enum_constants,
+    generate_enum_structs,
+    generic_enum_specialized_type_name,
+    infer_enum_constructor_type,
+)
+from .generic_struct_utils import (
+    collect_generic_struct_definitions,
+    collect_generic_struct_specialization_member_types,
+    collect_generic_struct_specializations,
+    format_struct_constructor_expression,
+    generate_generic_structs,
+    generate_struct_constructor_expression,
+    generic_struct_specialized_type_name,
+    infer_struct_constructor_type,
+)
+from .generic_function_utils import (
+    generate_numeric_trait_method_call,
+    generate_static_generic_numeric_call,
+    generic_function_call_name,
+    generic_function_emission_list,
+    generic_function_parameters,
+    numeric_trait_method_result_type,
+    prepare_generic_function_specializations,
+)
 from .glsl_buffer_layout import (
+    byte_offset_add,
     byte_offset_expression,
     collect_lowered_glsl_buffer_blocks,
     glsl_buffer_compound_binary_operator,
@@ -80,8 +131,6 @@ from .glsl_buffer_layout import (
     vector_component_offsets,
 )
 from .image_access_contracts import (
-    TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES,
-    TEXTURE_GATHER_INTRINSIC_NAMES,
     collect_function_image_access_requirements,
     collect_function_parameter_names,
     default_storage_image_channel_count,
@@ -102,7 +151,6 @@ from .image_access_contracts import (
     image_format_component_kind,
     image_format_result_type,
     image_format_component_type,
-    image_format_vector_type,
     image_access_requirement_label,
     image_access_satisfies_requirement,
     image_atomic_helper_descriptor_fields,
@@ -141,7 +189,6 @@ from .image_access_contracts import (
     is_storage_image_texture_operation,
     is_texel_fetch_basic_operation,
     is_texel_fetch_offset_operation,
-    is_texture_compare_any_offset_operation,
     is_texture_compare_operation,
     is_texture_compare_basic_operation,
     is_texture_compare_grad_offset_operation,
@@ -150,11 +197,9 @@ from .image_access_contracts import (
     is_texture_compare_lod_operation,
     is_texture_compare_offset_operation,
     is_texture_gather_compare_operation,
-    is_texture_gather_compare_offset_operation,
     is_texture_gather_basic_operation,
     is_texture_gather_operation,
     is_texture_gather_multi_offset_operation,
-    is_texture_gather_offset_operation,
     is_texture_gather_single_offset_operation,
     is_texture_query_lod_operation,
     is_texture_query_levels_operation,
@@ -166,7 +211,6 @@ from .image_access_contracts import (
     is_texture_sample_lod_operation,
     is_texture_sample_operation,
     is_texture_sampling_operation,
-    is_texture_sampling_offset_operation,
     is_texture_sample_offset_operation,
     is_two_component_image_format,
     metal_storage_image_access_agnostic_type,
@@ -243,6 +287,13 @@ from .image_access_contracts import (
     unsupported_texture_query_lod_expression,
     unsupported_texture_samples_query_call_expression,
 )
+from .match_utils import (
+    generate_match_expression_assignment,
+    generate_ordered_conditional_match,
+    generate_switch_match,
+    infer_match_expression_result_type,
+    is_switch_lowerable_match,
+)
 
 
 class CharTypeMapper:
@@ -275,8 +326,14 @@ class MetalCodeGen:
         self.gl_position = False
         self.char_mapper = CharTypeMapper()
         self.texture_variables = []
+        self.acceleration_structure_variables = []
+        self.visible_function_table_variables = []
+        self.intersection_function_table_variables = []
+        self.unsupported_metal_ray_function_table_array_variables = {}
         self.sampler_variables = []
         self.structured_buffer_variables = []
+        self.structured_buffer_length_variables = []
+        self.structured_buffer_counter_variables = []
         self.cbuffer_variables = []
         self.cbuffer_binding_indices = {}
         self.cbuffer_parameter_names = {}
@@ -285,16 +342,24 @@ class MetalCodeGen:
         self.cbuffers_by_name = {}
         self.user_function_names = set()
         self.function_parameter_names = {}
+        self.function_parameter_infos = {}
+        self.function_parameter_nodes = {}
+        self.function_return_types = {}
         self.function_image_access_requirements = {}
         self.function_cbuffer_dependencies = {}
         self.function_global_resource_dependencies = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.current_sampler_parameters = set()
+        self.current_sampler_parameter_array_sizes = {}
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
+        self.current_structured_buffer_length_parameters = {}
+        self.current_structured_buffer_counter_parameters = {}
+        self.function_structured_buffer_length_dependencies = {}
+        self.global_structured_buffer_length_dependencies = set()
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
         self.literal_int_constants = {}
@@ -302,18 +367,46 @@ class MetalCodeGen:
         self.current_function_return_type = None
         self.current_function_return_wrapper = None
         self.current_expression_expected_type = None
+        self.current_generic_function_substitutions = {}
         self.local_variable_types = {}
+        self.current_address_space_variables = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
+        self.generic_struct_definitions = {}
+        self.generic_struct_specializations = {}
+        self.generic_function_definitions = {}
+        self.generic_function_specializations = {}
+        self.generic_function_specialized_names = {}
+        self.current_generic_function_substitutions = {}
+        self.struct_constructor_uses_braces = True
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
+        self.required_buffer_atomic_compare_helpers = set()
+        self.required_glsl_buffer_aggregate_load_helpers = {}
         self.unsupported_glsl_buffer_block_variables = set()
         self.unsupported_glsl_buffer_block_variable_types = {}
         self.current_glsl_buffer_block_parameters = {}
+        self.current_structured_buffer_length_parameters = {}
+        self.current_structured_buffer_counter_parameters = {}
         self.current_unsupported_glsl_buffer_block_parameters = set()
         self.current_unsupported_glsl_buffer_block_local_variables = set()
         self.current_glsl_buffer_block_parameter_failures = {}
         self.current_glsl_buffer_block_parameter_struct_failures = {}
+        self.current_metal_mesh_output_config = None
+        self.current_metal_mesh_output_parameter = None
+        self.current_metal_mesh_grid_properties_parameter = None
+        self.current_metal_mesh_payload_parameter = None
+        self.current_metal_mesh_payload_type = None
+        self.current_metal_mesh_output_accumulators = {}
+        self.current_metal_non_thread_payload_parameters = set()
+        self.current_readonly_metal_mesh_payload_parameters = set()
+        self.current_readonly_metal_mesh_payload_reasons = {}
+        self.current_readonly_raw_buffer_parameters = set()
+        self.current_readonly_metal_parameters = set()
+        self.current_readonly_metal_parameter_reasons = {}
+        self.metal_program_mesh_payload_type = None
+        self.function_metal_mesh_dispatch_contexts = {}
+        self.function_metal_mesh_dispatch_contexts_by_id = {}
         self.lowered_glsl_buffer_block_struct_names = set()
         self.glsl_buffer_block_lowering_failures = {}
         self.glsl_buffer_block_struct_lowering_failures = {}
@@ -338,6 +431,7 @@ class MetalCodeGen:
             "float16": "half",
             "min16float": "half",
             "min10float": "half",
+            "str": "int",
             "char": "int",
             "signed char": "int",
             "int8": "int",
@@ -466,6 +560,16 @@ class MetalCodeGen:
             "sampler2DArrayShadow": "depth2d_array<float>",
             "samplerCubeShadow": "depthcube<float>",
             "samplerCubeArrayShadow": "depthcube_array<float>",
+            "accelerationStructureEXT": "instance_acceleration_structure",
+            "RaytracingAccelerationStructure": "instance_acceleration_structure",
+            "AccelerationStructure": "instance_acceleration_structure",
+            "acceleration_structure": "instance_acceleration_structure",
+            "instance_acceleration_structure": "instance_acceleration_structure",
+            "primitive_acceleration_structure": "primitive_acceleration_structure",
+            "visible_function_table": "visible_function_table",
+            "visibleFunctionTable": "visible_function_table",
+            "intersection_function_table": "intersection_function_table",
+            "intersectionFunctionTable": "intersection_function_table",
             "iimage1D": "texture1d<int, access::read_write>",
             "iimage1DArray": "texture1d_array<int, access::read_write>",
             "iimage2D": "texture2d<int, access::read_write>",
@@ -598,6 +702,10 @@ class MetalCodeGen:
             "gl_NumWorkGroups": "threadgroups_per_grid",
             # Ray tracing / payload semantics
             "payload": "payload",
+            "mesh_payload": "payload",
+            "hlsl_mesh_payload": "payload",
+            "task_payload": "payload",
+            "taskPayloadSharedEXT": "payload",
             "hit_attribute": "hit_attribute",
             "callable_data": "callable_data",
             "shader_record": "shader_record",
@@ -617,8 +725,14 @@ class MetalCodeGen:
         self.validate_supported_stage_types(ast, target_stage)
 
         self.texture_variables = []
+        self.acceleration_structure_variables = []
+        self.visible_function_table_variables = []
+        self.intersection_function_table_variables = []
+        self.unsupported_metal_ray_function_table_array_variables = {}
         self.sampler_variables = []
         self.structured_buffer_variables = []
+        self.structured_buffer_length_variables = []
+        self.structured_buffer_counter_variables = []
         self.glsl_buffer_block_variables = []
         self.lowered_glsl_buffer_blocks = {}
         self.lowered_glsl_buffer_block_struct_names = set()
@@ -636,6 +750,17 @@ class MetalCodeGen:
         all_functions = self.all_functions(ast)
         self.user_function_names = {
             func.name for func in all_functions if getattr(func, "name", None)
+        }
+        self.function_parameter_infos = self.collect_function_parameter_infos(
+            all_functions
+        )
+        self.function_parameter_nodes = self.collect_function_parameter_nodes(
+            all_functions
+        )
+        self.function_return_types = {
+            func.name: self.type_name_string(getattr(func, "return_type", "void"))
+            for func in all_functions
+            if getattr(func, "name", None)
         }
         self.function_parameter_names = collect_function_parameter_names(all_functions)
         self.function_image_access_requirements = (
@@ -659,14 +784,20 @@ class MetalCodeGen:
         if not self.cbuffer_variables:
             self.ambiguous_cbuffer_members = set()
         self.current_sampler_parameters = set()
+        self.current_sampler_parameter_array_sizes = {}
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
+        self.current_structured_buffer_length_parameters = {}
+        self.current_structured_buffer_counter_parameters = {}
+        self.function_structured_buffer_length_dependencies = {}
+        self.global_structured_buffer_length_dependencies = set()
         self.function_global_resource_dependencies = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.required_image_atomic_compare_helpers = set()
+        self.required_glsl_buffer_aggregate_load_helpers = {}
         self.current_glsl_buffer_block_parameters = {}
         self.unsupported_glsl_buffer_block_variables = set()
         self.unsupported_glsl_buffer_block_variable_types = {}
@@ -674,15 +805,81 @@ class MetalCodeGen:
         self.current_unsupported_glsl_buffer_block_local_variables = set()
         self.current_glsl_buffer_block_parameter_failures = {}
         self.current_glsl_buffer_block_parameter_struct_failures = {}
+        self.current_metal_mesh_output_config = None
+        self.current_metal_mesh_output_parameter = None
+        self.current_metal_mesh_grid_properties_parameter = None
+        self.current_metal_mesh_payload_parameter = None
+        self.current_metal_mesh_payload_type = None
+        self.current_metal_mesh_output_accumulators = {}
+        self.current_metal_non_thread_payload_parameters = set()
+        self.function_metal_mesh_dispatch_contexts = {}
+        self.function_metal_mesh_dispatch_contexts_by_id = {}
+        self.metal_program_mesh_payload_type = self.metal_mesh_payload_type_for_program(
+            ast
+        )
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
+        structs = deduplicate_named_declarations(
+            list(getattr(ast, "structs", []) or [])
+            + collect_stage_local_structs(ast, target_stage),
+            "struct",
+        )
         self.structs_by_name = {
-            node.name: node
-            for node in getattr(ast, "structs", [])
-            if isinstance(node, StructNode)
+            node.name: node for node in structs if isinstance(node, StructNode)
         }
-        global_vars = getattr(ast, "global_variables", [])
+        self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
+            structs
+        )
+        self.generic_struct_definitions = collect_generic_struct_definitions(
+            structs,
+            excluded_names=set(self.generic_enum_struct_definitions),
+        )
+        self.generic_enum_specializations = collect_generic_enum_specializations(
+            ast,
+            self.generic_enum_struct_definitions,
+            self.type_name_string,
+        )
+        self.generic_struct_specializations = collect_generic_struct_specializations(
+            ast,
+            self.generic_struct_definitions,
+            self.type_name_string,
+        )
+        self.plain_enums = collect_plain_enums(structs)
+        self.struct_payload_enums = collect_struct_payload_enums(structs)
+        self.enum_type_names = collect_enum_type_names(self.plain_enums)
+        self.enum_struct_type_names = (
+            collect_enum_type_names(self.struct_payload_enums)
+            | set(self.generic_enum_struct_definitions)
+            | {
+                specialization["struct_name"]
+                for specialization in self.generic_enum_specializations.values()
+            }
+        )
+        self.enum_struct_variant_fields = collect_enum_struct_variant_fields(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constructors = collect_enum_variant_constructors(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constructor_fields = collect_enum_variant_constructor_fields(
+            self.struct_payload_enums
+        )
+        self.enum_variant_constants = {
+            **collect_enum_variant_constants(
+                self.plain_enums + self.struct_payload_enums
+            ),
+            **collect_generic_enum_variant_constants(
+                self.generic_enum_struct_definitions
+            ),
+        }
+        global_vars = deduplicate_named_declarations(
+            list(getattr(ast, "global_variables", []) or [])
+            + collect_stage_local_variables(
+                ast, target_stage, self.is_stage_local_resource_variable
+            ),
+            "Metal resource",
+        )
         self.glsl_buffer_block_struct_names = (
             self.collect_glsl_buffer_block_struct_names(
                 list(global_vars) + self.collect_function_parameters(all_functions)
@@ -692,11 +889,20 @@ class MetalCodeGen:
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
         ) = self.collect_resource_array_size_hints(ast)
+        self.function_structured_buffer_length_dependencies = (
+            self.collect_function_structured_buffer_length_dependencies(all_functions)
+        )
+        self.global_structured_buffer_length_dependencies = (
+            self.collect_global_structured_buffer_length_dependencies(
+                all_functions, global_vars
+            )
+        )
         self.validate_global_resource_shadows(ast)
         self.current_function_name = None
         self.current_function_return_type = None
         self.current_function_return_wrapper = None
         self.current_expression_expected_type = None
+        self.required_buffer_atomic_compare_helpers = set()
         self.local_variable_types = {}
         (
             self.lowered_glsl_buffer_blocks,
@@ -736,16 +942,54 @@ class MetalCodeGen:
             self.collect_unsupported_glsl_buffer_block_functions(all_functions)
         )
         self.struct_member_types = collect_struct_member_types(
-            getattr(ast, "structs", []), self.type_name_string
+            structs, self.type_name_string
+        )
+        self.struct_member_types.update(
+            collect_generic_enum_specialization_member_types(
+                self,
+                self.generic_enum_specializations,
+            )
+        )
+        self.struct_member_types.update(
+            collect_generic_struct_specialization_member_types(
+                self,
+                self.generic_struct_specializations,
+            )
+        )
+        generic_function_specializations = prepare_generic_function_specializations(
+            self,
+            all_functions,
+        )
+        self.function_return_types.update(
+            {
+                func.name: self.type_name_string(getattr(func, "return_type", "void"))
+                for func in generic_function_specializations.values()
+            }
+        )
+        self.user_function_names.update(
+            func.name for func in generic_function_specializations.values()
+        )
+        if generic_function_specializations:
+            self.function_parameter_names.update(
+                collect_function_parameter_names(
+                    generic_function_specializations.values()
+                )
+            )
+            self.function_parameter_nodes.update(
+                self.collect_function_parameter_nodes(
+                    generic_function_specializations.values()
+                )
+            )
+        self.function_metal_mesh_dispatch_contexts = (
+            self.collect_function_metal_mesh_dispatch_contexts(
+                list(all_functions) + list(generic_function_specializations.values())
+            )
         )
         code = "\n"
         preprocessors = getattr(ast, "preprocessors", []) or []
         pre_lines = []
         for directive in preprocessors:
-            if isinstance(directive, PreprocessorNode):
-                line = f"#{directive.directive} {directive.content}".strip()
-            else:
-                line = str(directive).strip()
+            line = self.generate_preprocessor_directive(directive)
             if line:
                 pre_lines.append(line)
         if pre_lines:
@@ -753,12 +997,32 @@ class MetalCodeGen:
         if not any("metal_stdlib" in line for line in pre_lines):
             code += "#include <metal_stdlib>\n"
         code += "using namespace metal;\n"
+        if self.uses_metal_raytracing_namespace(ast, global_vars, all_functions):
+            code += "using namespace metal::raytracing;\n"
         code += "\n"
+        code += generate_enum_constants(
+            self, self.plain_enums + self.struct_payload_enums
+        )
+        code += generate_generic_enum_constants(
+            self,
+            self.generic_enum_struct_definitions,
+        )
         code += self.generate_constants(ast)
+        code += generate_generic_structs(self, self.generic_struct_specializations)
+        code += generate_enum_structs(self, self.struct_payload_enums)
+        code += generate_generic_enum_structs(self, self.generic_enum_specializations)
+        code += generate_enum_constructor_functions(self, self.struct_payload_enums)
+        code += generate_generic_enum_constructor_functions(
+            self,
+            self.generic_enum_specializations,
+        )
 
-        structs = getattr(ast, "structs", [])
         for node in structs:
             if isinstance(node, StructNode):
+                if node.name in self.generic_enum_struct_definitions:
+                    continue
+                if node.name in self.generic_struct_definitions:
+                    continue
                 if node.name in self.lowered_glsl_buffer_block_struct_names:
                     continue
                 if node.name in self.glsl_buffer_block_struct_names:
@@ -908,6 +1172,102 @@ class MetalCodeGen:
                 )
                 continue
 
+            if self.is_acceleration_structure_type(vtype):
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "buffer"}, ("b", "u", "t")
+                )
+                if binding is None:
+                    binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "buffer",
+                        buffer_register,
+                        resource_count,
+                    )
+                self.reserve_resource_binding_range(
+                    used_resource_bindings,
+                    "Metal",
+                    "buffer",
+                    binding,
+                    resource_count,
+                    var_name,
+                )
+                mapped_type = self.map_resource_type_with_format(vtype, node)
+                self.acceleration_structure_variables.append(
+                    (node, binding, mapped_type, array_size)
+                )
+                buffer_register = max(buffer_register, binding + resource_count)
+                continue
+
+            if self.is_visible_function_table_type(vtype):
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "buffer"}, ("b", "u", "t")
+                )
+                if binding is None:
+                    binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "buffer",
+                        buffer_register,
+                        resource_count,
+                    )
+                self.reserve_resource_binding_range(
+                    used_resource_bindings,
+                    "Metal",
+                    "buffer",
+                    binding,
+                    resource_count,
+                    var_name,
+                )
+                if array_size is not None:
+                    self.unsupported_metal_ray_function_table_array_variables[
+                        var_name
+                    ] = "visible_function_table"
+                    code += self.unsupported_metal_ray_function_table_array_diagnostic(
+                        "visible_function_table", var_name
+                    )
+                    buffer_register = max(buffer_register, binding + resource_count)
+                    continue
+                mapped_type = self.map_visible_function_table_type(vtype)
+                self.visible_function_table_variables.append(
+                    (node, binding, mapped_type, array_size)
+                )
+                buffer_register = max(buffer_register, binding + resource_count)
+                continue
+
+            if self.is_intersection_function_table_type(vtype):
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "buffer"}, ("b", "u", "t")
+                )
+                if binding is None:
+                    binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "buffer",
+                        buffer_register,
+                        resource_count,
+                    )
+                self.reserve_resource_binding_range(
+                    used_resource_bindings,
+                    "Metal",
+                    "buffer",
+                    binding,
+                    resource_count,
+                    var_name,
+                )
+                if array_size is not None:
+                    self.unsupported_metal_ray_function_table_array_variables[
+                        var_name
+                    ] = "intersection_function_table"
+                    code += self.unsupported_metal_ray_function_table_array_diagnostic(
+                        "intersection_function_table", var_name
+                    )
+                    buffer_register = max(buffer_register, binding + resource_count)
+                    continue
+                mapped_type = self.map_intersection_function_table_type(vtype)
+                self.intersection_function_table_variables.append(
+                    (node, binding, mapped_type, array_size)
+                )
+                buffer_register = max(buffer_register, binding + resource_count)
+                continue
+
             if self.is_structured_buffer_type(vtype):
                 binding = self.explicit_resource_binding_index(
                     node, {"binding", "buffer"}, ("b", "u", "t")
@@ -931,6 +1291,52 @@ class MetalCodeGen:
                     (node, binding, vtype, array_size)
                 )
                 buffer_register = max(buffer_register, binding + resource_count)
+                if self.structured_buffer_requires_length(var_name):
+                    length_binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "buffer",
+                        buffer_register,
+                        resource_count,
+                    )
+                    length_name = self.structured_buffer_length_resource_name(var_name)
+                    self.reserve_resource_binding_range(
+                        used_resource_bindings,
+                        "Metal",
+                        "buffer",
+                        length_binding,
+                        resource_count,
+                        length_name,
+                    )
+                    self.structured_buffer_length_variables.append(
+                        (node, length_binding, vtype, array_size)
+                    )
+                    buffer_register = max(
+                        buffer_register, length_binding + resource_count
+                    )
+                if self.structured_buffer_requires_counter(vtype):
+                    counter_binding = self.next_available_resource_binding(
+                        used_resource_bindings,
+                        "buffer",
+                        buffer_register,
+                        resource_count,
+                    )
+                    counter_name = self.structured_buffer_counter_resource_name(
+                        var_name
+                    )
+                    self.reserve_resource_binding_range(
+                        used_resource_bindings,
+                        "Metal",
+                        "buffer",
+                        counter_binding,
+                        resource_count,
+                        counter_name,
+                    )
+                    self.structured_buffer_counter_variables.append(
+                        (node, counter_binding, vtype, array_size)
+                    )
+                    buffer_register = max(
+                        buffer_register, counter_binding + resource_count
+                    )
             elif vtype in [
                 "sampler1D",
                 "sampler1DArray",
@@ -1044,6 +1450,11 @@ class MetalCodeGen:
             if not should_emit_qualified_function(target_stage, qualifier_name):
                 continue
 
+            if generic_function_parameters(func):
+                for specialized_func in generic_function_emission_list(self, func):
+                    functions_code += self.generate_function(specialized_func)
+                continue
+
             if qualifier_name == "vertex":
                 functions_code += "// Vertex Shader\n"
                 functions_code += self.generate_function(
@@ -1081,19 +1492,46 @@ class MetalCodeGen:
                     self.function_call_name,
                     FunctionCallNode,
                 ):
-                    functions_code += self.generate_function(func)
+                    if generic_function_parameters(func):
+                        for specialized_func in generic_function_emission_list(
+                            self,
+                            func,
+                        ):
+                            functions_code += self.generate_function(specialized_func)
+                    else:
+                        functions_code += self.generate_function(func)
 
                 if hasattr(stage, "entry_point"):
                     functions_code += f"// {stage_name.title()} Shader\n"
                     functions_code += self.generate_function(
                         stage.entry_point,
                         shader_type=stage_name,
+                        execution_config=getattr(stage, "execution_config", None),
                         entry_name=stage_entry_names.get(id(stage.entry_point)),
                     )
 
         code += self.generate_image_atomic_compare_helpers()
+        code += self.generate_buffer_atomic_compare_helpers()
+        code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += functions_code
         return code
+
+    def generate_preprocessor_directive(self, directive):
+        if isinstance(directive, PreprocessorNode):
+            directive_name = (directive.directive or "").strip()
+            if directive_name.lower() in {"version", "extension", "precision"}:
+                return None
+            return f"#{directive_name} {directive.content}".strip()
+
+        line = str(directive).strip()
+        lowered = line.lower()
+        if (
+            lowered.startswith("#version")
+            or lowered.startswith("#extension")
+            or lowered.startswith("precision ")
+        ):
+            return None
+        return line
 
     def generate_constants(self, ast):
         code = ""
@@ -1129,8 +1567,7 @@ class MetalCodeGen:
         if declaration_conflicts:
             names = ", ".join(sorted(declaration_conflicts))
             raise ValueError(
-                "Cbuffer name(s) conflict with existing Metal declaration(s): "
-                f"{names}"
+                f"Cbuffer name(s) conflict with existing Metal declaration(s): {names}"
             )
 
         global_member_conflicts = collect_cbuffer_member_global_conflicts(ast)
@@ -1198,7 +1635,14 @@ class MetalCodeGen:
 
         return code
 
-    def generate_function(self, func, indent=0, shader_type=None, entry_name=None):
+    def generate_function(
+        self,
+        func,
+        indent=0,
+        shader_type=None,
+        execution_config=None,
+        entry_name=None,
+    ):
         """Render a function or stage entry point with Metal attributes."""
         code = ""
         code += "  " * indent
@@ -1211,12 +1655,17 @@ class MetalCodeGen:
             if getattr(parameter, "name", None)
         }
         sampler_parameters = set()
+        sampler_parameter_array_sizes = {}
         texture_parameters = {}
         image_format_parameters = {}
         previous_function_name = self.current_function_name
         previous_function_return_type = self.current_function_return_type
         previous_function_return_wrapper = self.current_function_return_wrapper
         previous_local_variable_types = self.local_variable_types
+        previous_address_space_variables = self.current_address_space_variables
+        previous_generic_function_substitutions = (
+            self.current_generic_function_substitutions
+        )
         previous_cbuffer_parameter_names = self.cbuffer_parameter_names
         previous_cbuffer_member_references = self.cbuffer_member_references
         previous_ambiguous_cbuffer_members = self.ambiguous_cbuffer_members
@@ -1235,14 +1684,54 @@ class MetalCodeGen:
         previous_glsl_buffer_block_parameter_struct_failures = (
             self.current_glsl_buffer_block_parameter_struct_failures
         )
+        previous_unsupported_metal_ray_function_table_array_variables = dict(
+            self.unsupported_metal_ray_function_table_array_variables
+        )
+        previous_structured_buffer_length_parameters = (
+            self.current_structured_buffer_length_parameters
+        )
+        previous_structured_buffer_counter_parameters = (
+            self.current_structured_buffer_counter_parameters
+        )
+        previous_metal_mesh_output_config = self.current_metal_mesh_output_config
+        previous_metal_mesh_output_parameter = self.current_metal_mesh_output_parameter
+        previous_metal_mesh_grid_properties_parameter = (
+            self.current_metal_mesh_grid_properties_parameter
+        )
+        previous_metal_mesh_payload_parameter = (
+            self.current_metal_mesh_payload_parameter
+        )
+        previous_metal_mesh_payload_type = self.current_metal_mesh_payload_type
+        previous_metal_mesh_output_accumulators = (
+            self.current_metal_mesh_output_accumulators
+        )
+        previous_metal_non_thread_payload_parameters = (
+            self.current_metal_non_thread_payload_parameters
+        )
+        previous_readonly_metal_mesh_payload_parameters = (
+            self.current_readonly_metal_mesh_payload_parameters
+        )
+        previous_readonly_metal_mesh_payload_reasons = (
+            self.current_readonly_metal_mesh_payload_reasons
+        )
+        previous_readonly_raw_buffer_parameters = (
+            self.current_readonly_raw_buffer_parameters
+        )
+        previous_readonly_metal_parameters = self.current_readonly_metal_parameters
+        previous_readonly_metal_parameter_reasons = (
+            self.current_readonly_metal_parameter_reasons
+        )
         self.current_function_name = getattr(func, "name", None)
         self.current_function_return_wrapper = None
+        self.current_generic_function_substitutions = (
+            getattr(func, "_generic_substitutions", {}) or {}
+        )
         (
             self.current_glsl_buffer_block_parameters,
             self.current_glsl_buffer_block_parameter_failures,
             self.current_glsl_buffer_block_parameter_struct_failures,
         ) = self.collect_lowered_glsl_buffer_block_parameters(param_list)
-        if shader_type in {"vertex", "fragment", "compute"}:
+        if shader_type in {"vertex", "fragment", "compute", "ray_generation"}:
             self.validate_stage_parameter_resource_bindings(
                 param_list, self.current_function_name
             )
@@ -1254,7 +1743,20 @@ class MetalCodeGen:
             self.collect_unsupported_glsl_buffer_block_parameter_names(param_list)
         )
         self.current_unsupported_glsl_buffer_block_local_variables = set()
+        unsupported_metal_ray_function_table_parameter_diagnostics = []
+        self.current_structured_buffer_length_parameters = {}
+        self.current_structured_buffer_counter_parameters = {}
+        self.current_metal_mesh_payload_parameter = None
+        self.current_metal_mesh_payload_type = None
+        self.current_metal_mesh_output_accumulators = {}
+        self.current_metal_non_thread_payload_parameters = set()
+        self.current_readonly_metal_mesh_payload_parameters = set()
+        self.current_readonly_metal_mesh_payload_reasons = {}
+        self.current_readonly_raw_buffer_parameters = set()
+        self.current_readonly_metal_parameters = set()
+        self.current_readonly_metal_parameter_reasons = {}
         self.local_variable_types = {}
+        self.current_address_space_variables = {}
         for p in param_list:
             if hasattr(p, "param_type"):
                 raw_param_type = (
@@ -1267,9 +1769,45 @@ class MetalCodeGen:
             else:
                 raw_param_type = "float"
             self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
+            address_space = self.parameter_variable_address_space(
+                raw_param_type, p, shader_type
+            )
+            if address_space is not None:
+                self.current_address_space_variables[p.name] = address_space
+            if self.is_readonly_raw_buffer_parameter(raw_param_type, p, shader_type):
+                self.current_readonly_raw_buffer_parameters.add(p.name)
+            readonly_parameter_reason = self.readonly_metal_parameter_reason(
+                raw_param_type, p, shader_type
+            )
+            if readonly_parameter_reason is not None:
+                self.current_readonly_metal_parameters.add(p.name)
+                self.current_readonly_metal_parameter_reasons[p.name] = (
+                    readonly_parameter_reason
+                )
+
+            if self.is_metal_mesh_output_parameter(shader_type, p):
+                continue
+
+            table_array_kind = self.metal_ray_function_table_array_parameter_kind(
+                raw_param_type, p
+            )
+            if table_array_kind is not None:
+                self.unsupported_metal_ray_function_table_array_variables[p.name] = (
+                    table_array_kind
+                )
+                unsupported_metal_ray_function_table_parameter_diagnostics.append(
+                    self.unsupported_metal_ray_function_table_array_diagnostic(
+                        table_array_kind, p.name
+                    ).rstrip()
+                )
+                continue
 
             if self.is_sampler_type(raw_param_type):
                 sampler_parameters.add(p.name)
+                resource_array = self.resource_array_parameter(raw_param_type, p)
+                if resource_array is not None:
+                    _, array_size = resource_array
+                    sampler_parameter_array_sizes[p.name] = array_size
             elif self.is_texture_or_image_resource_type(raw_param_type):
                 texture_parameters[p.name] = self.map_resource_type_with_format(
                     self.resource_base_type(raw_param_type), p
@@ -1283,14 +1821,53 @@ class MetalCodeGen:
             param_type = self.map_resource_type_with_format(raw_param_type, p)
 
             semantic = self.semantic_from_node(p)
+            if self.is_metal_mesh_payload_parameter(shader_type, p):
+                self.current_metal_mesh_payload_parameter = p.name
+                self.current_metal_mesh_payload_type = self.map_type(raw_param_type)
+                self.current_address_space_variables[p.name] = "object_data"
+                readonly_reason = self.readonly_metal_mesh_payload_parameter_reason(
+                    shader_type, p
+                )
+                if readonly_reason is not None:
+                    self.current_readonly_metal_mesh_payload_parameters.add(p.name)
+                    self.current_readonly_metal_mesh_payload_reasons[p.name] = (
+                        readonly_reason
+                    )
+            if (
+                self.metal_ray_payload_parameter_declaration(
+                    param_type, p.name, p, shader_type
+                )
+                is not None
+            ):
+                self.current_metal_non_thread_payload_parameters.add(p.name)
 
             param_attr = self.parameter_attribute(
                 raw_param_type, semantic, shader_type, p
             )
             declaration = self.format_parameter_declaration(
-                raw_param_type, param_type, p.name, p
+                raw_param_type, param_type, p.name, p, shader_type
             )
             params.append(f"{declaration}{param_attr}")
+            if self.structured_buffer_parameter_requires_length(
+                self.current_function_name, p.name
+            ):
+                length_name = self.structured_buffer_length_parameter_name(p.name)
+                self.current_structured_buffer_length_parameters[p.name] = length_name
+                array_size = self.structured_buffer_parameter_array_size(
+                    raw_param_type, p
+                )
+                params.append(
+                    self.format_structured_buffer_length_parameter(p.name, array_size)
+                )
+            if self.structured_buffer_requires_counter(raw_param_type):
+                counter_name = self.structured_buffer_counter_parameter_name(p.name)
+                self.current_structured_buffer_counter_parameters[p.name] = counter_name
+                array_size = self.structured_buffer_parameter_array_size(
+                    raw_param_type, p
+                )
+                params.append(
+                    self.format_structured_buffer_counter_parameter(p.name, array_size)
+                )
 
         if shader_type == "compute":
             existing_param_names = {getattr(p, "name", None) for p in param_list}
@@ -1316,6 +1893,11 @@ class MetalCodeGen:
             )
             params_str = self.append_required_global_resource_parameters(
                 params_str, self.current_function_name
+            )
+            params_str = self.append_metal_mesh_dispatch_context_parameters(
+                params_str,
+                func,
+                reserved_parameter_names,
             )
 
         if hasattr(func, "return_type"):
@@ -1351,6 +1933,10 @@ class MetalCodeGen:
             self.current_function_return_type = previous_function_return_type
             self.current_function_return_wrapper = previous_function_return_wrapper
             self.local_variable_types = previous_local_variable_types
+            self.current_address_space_variables = previous_address_space_variables
+            self.current_generic_function_substitutions = (
+                previous_generic_function_substitutions
+            )
             self.cbuffer_parameter_names = previous_cbuffer_parameter_names
             self.cbuffer_member_references = previous_cbuffer_member_references
             self.ambiguous_cbuffer_members = previous_ambiguous_cbuffer_members
@@ -1363,11 +1949,50 @@ class MetalCodeGen:
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_glsl_buffer_block_local_variables
             )
+            self.unsupported_metal_ray_function_table_array_variables = (
+                previous_unsupported_metal_ray_function_table_array_variables
+            )
             self.current_glsl_buffer_block_parameter_failures = (
                 previous_glsl_buffer_block_parameter_failures
             )
             self.current_glsl_buffer_block_parameter_struct_failures = (
                 previous_glsl_buffer_block_parameter_struct_failures
+            )
+            self.current_structured_buffer_length_parameters = (
+                previous_structured_buffer_length_parameters
+            )
+            self.current_structured_buffer_counter_parameters = (
+                previous_structured_buffer_counter_parameters
+            )
+            self.current_metal_mesh_output_config = previous_metal_mesh_output_config
+            self.current_metal_mesh_output_parameter = (
+                previous_metal_mesh_output_parameter
+            )
+            self.current_metal_mesh_grid_properties_parameter = (
+                previous_metal_mesh_grid_properties_parameter
+            )
+            self.current_metal_mesh_payload_parameter = (
+                previous_metal_mesh_payload_parameter
+            )
+            self.current_metal_mesh_payload_type = previous_metal_mesh_payload_type
+            self.current_metal_mesh_output_accumulators = (
+                previous_metal_mesh_output_accumulators
+            )
+            self.current_metal_non_thread_payload_parameters = (
+                previous_metal_non_thread_payload_parameters
+            )
+            self.current_readonly_metal_mesh_payload_parameters = (
+                previous_readonly_metal_mesh_payload_parameters
+            )
+            self.current_readonly_metal_mesh_payload_reasons = (
+                previous_readonly_metal_mesh_payload_reasons
+            )
+            self.current_readonly_raw_buffer_parameters = (
+                previous_readonly_raw_buffer_parameters
+            )
+            self.current_readonly_metal_parameters = previous_readonly_metal_parameters
+            self.current_readonly_metal_parameter_reasons = (
+                previous_readonly_metal_parameter_reasons
             )
             return code
 
@@ -1406,26 +2031,65 @@ class MetalCodeGen:
         elif shader_type in ["mesh", "object", "task", "amplification"]:
             stage_keyword = "mesh" if shader_type == "mesh" else "object"
             function_name = entry_name or f"{stage_keyword}_{func.name}"
-            code += f"{stage_keyword} {return_type} {function_name}({params_str}) {{\n"
+            stage_attribute = self.metal_mesh_stage_attribute(
+                shader_type, func, execution_config
+            )
+            generated_mesh_payload_parameter = (
+                self.generated_metal_mesh_payload_parameter(
+                    shader_type, func, reserved_parameter_names
+                )
+            )
+            if generated_mesh_payload_parameter is not None:
+                payload_type, payload_name = generated_mesh_payload_parameter
+                params_str = self.append_parameter_declaration(
+                    params_str,
+                    f"object_data {payload_type}& {payload_name} [[payload]]",
+                )
+                self.current_metal_mesh_payload_parameter = payload_name
+                self.current_metal_mesh_payload_type = payload_type
+                self.current_address_space_variables[payload_name] = "object_data"
+            mesh_grid_properties_parameter = self.metal_mesh_grid_properties_parameter(
+                shader_type, func, reserved_parameter_names
+            )
+            if mesh_grid_properties_parameter is not None:
+                params_str = self.append_parameter_declaration(
+                    params_str,
+                    f"mesh_grid_properties {mesh_grid_properties_parameter}",
+                )
+                self.current_metal_mesh_grid_properties_parameter = (
+                    mesh_grid_properties_parameter
+                )
+            mesh_output = self.metal_mesh_stage_output_config(
+                shader_type, func, function_name, reserved_parameter_names
+            )
+            if mesh_output is not None:
+                if mesh_output.get("generated_vertex_struct", False):
+                    code += self.generate_metal_mesh_vertex_output_struct(mesh_output)
+                params_str = self.append_parameter_declaration(
+                    params_str,
+                    self.metal_mesh_stage_output_parameter_declaration(mesh_output),
+                )
+                self.current_metal_mesh_output_parameter = mesh_output["parameter_name"]
+                self.current_metal_mesh_output_config = mesh_output
+                self.validate_metal_mesh_output_usage(func)
+            code += (
+                f"{stage_attribute} {return_type} {function_name}({params_str}) {{\n"
+            )
         elif shader_type in [
-            "ray_intersection",
             "ray_any_hit",
             "ray_closest_hit",
             "ray_miss",
             "ray_callable",
-            "intersection",
             "anyhit",
             "closesthit",
             "miss",
             "callable",
         ]:
             rt_stage_map = {
-                "ray_intersection": "intersection",
                 "ray_any_hit": "anyhit",
                 "ray_closest_hit": "closesthit",
                 "ray_miss": "miss",
                 "ray_callable": "callable",
-                "intersection": "intersection",
                 "anyhit": "anyhit",
                 "closesthit": "closesthit",
                 "miss": "miss",
@@ -1433,18 +2097,40 @@ class MetalCodeGen:
             }
             stage_keyword = rt_stage_map.get(shader_type, shader_type)
             function_name = entry_name or f"{stage_keyword}_{func.name}"
-            code += f"{stage_keyword} {return_type} {function_name}({params_str}) {{\n"
+            code += f"[[visible]] {return_type} {function_name}({params_str}) {{\n"
+        elif shader_type in ["ray_intersection", "intersection"]:
+            function_name = entry_name or f"intersection_{func.name}"
+            stage_attribute = self.metal_ray_intersection_stage_attribute(
+                func, raw_return_type
+            )
+            code += (
+                f"{stage_attribute} {return_type} "
+                f"{function_name}({params_str}) {{\n"
+            )
         else:
             semantic = self.semantic_from_node(func)
             function_name = entry_name or func.name
             code += f"{return_type} {function_name}({params_str}) {self.map_semantic(semantic)} {{\n"
 
         previous_sampler_parameters = self.current_sampler_parameters
+        previous_sampler_parameter_array_sizes = (
+            self.current_sampler_parameter_array_sizes
+        )
         previous_texture_parameters = self.current_texture_parameters
         previous_image_format_parameters = self.current_image_format_parameters
         self.current_sampler_parameters = sampler_parameters
+        self.current_sampler_parameter_array_sizes = sampler_parameter_array_sizes
         self.current_texture_parameters = texture_parameters
         self.current_image_format_parameters = image_format_parameters
+        if shader_type == "mesh" and self.current_metal_mesh_output_config is not None:
+            self.current_metal_mesh_output_accumulators = (
+                self.collect_metal_mesh_output_accumulators(
+                    func, reserved_parameter_names
+                )
+            )
+            code += self.generate_metal_mesh_output_accumulator_declarations()
+        for diagnostic in unsupported_metal_ray_function_table_parameter_diagnostics:
+            code += f"    {diagnostic}\n"
         body = getattr(func, "body", [])
         if hasattr(body, "statements"):
             for stmt in body.statements:
@@ -1453,12 +2139,53 @@ class MetalCodeGen:
             for stmt in body:
                 code += self.generate_statement(stmt, 1)
         self.current_sampler_parameters = previous_sampler_parameters
+        self.current_sampler_parameter_array_sizes = (
+            previous_sampler_parameter_array_sizes
+        )
         self.current_texture_parameters = previous_texture_parameters
         self.current_image_format_parameters = previous_image_format_parameters
+        self.current_structured_buffer_length_parameters = (
+            previous_structured_buffer_length_parameters
+        )
+        self.current_structured_buffer_counter_parameters = (
+            previous_structured_buffer_counter_parameters
+        )
+        self.current_metal_mesh_output_config = previous_metal_mesh_output_config
+        self.current_metal_mesh_output_parameter = previous_metal_mesh_output_parameter
+        self.current_metal_mesh_grid_properties_parameter = (
+            previous_metal_mesh_grid_properties_parameter
+        )
+        self.current_metal_mesh_payload_parameter = (
+            previous_metal_mesh_payload_parameter
+        )
+        self.current_metal_mesh_payload_type = previous_metal_mesh_payload_type
+        self.current_metal_mesh_output_accumulators = (
+            previous_metal_mesh_output_accumulators
+        )
+        self.current_metal_non_thread_payload_parameters = (
+            previous_metal_non_thread_payload_parameters
+        )
+        self.current_readonly_metal_mesh_payload_parameters = (
+            previous_readonly_metal_mesh_payload_parameters
+        )
+        self.current_readonly_metal_mesh_payload_reasons = (
+            previous_readonly_metal_mesh_payload_reasons
+        )
+        self.current_readonly_raw_buffer_parameters = (
+            previous_readonly_raw_buffer_parameters
+        )
+        self.current_readonly_metal_parameters = previous_readonly_metal_parameters
+        self.current_readonly_metal_parameter_reasons = (
+            previous_readonly_metal_parameter_reasons
+        )
         self.current_function_name = previous_function_name
         self.current_function_return_type = previous_function_return_type
         self.current_function_return_wrapper = previous_function_return_wrapper
         self.local_variable_types = previous_local_variable_types
+        self.current_address_space_variables = previous_address_space_variables
+        self.current_generic_function_substitutions = (
+            previous_generic_function_substitutions
+        )
         self.cbuffer_parameter_names = previous_cbuffer_parameter_names
         self.cbuffer_member_references = previous_cbuffer_member_references
         self.ambiguous_cbuffer_members = previous_ambiguous_cbuffer_members
@@ -1470,6 +2197,9 @@ class MetalCodeGen:
         )
         self.current_unsupported_glsl_buffer_block_local_variables = (
             previous_unsupported_glsl_buffer_block_local_variables
+        )
+        self.unsupported_metal_ray_function_table_array_variables = (
+            previous_unsupported_metal_ray_function_table_array_variables
         )
         self.current_glsl_buffer_block_parameter_failures = (
             previous_glsl_buffer_block_parameter_failures
@@ -1797,6 +2527,45 @@ class MetalCodeGen:
                     texture_type, texture_variable.name, array_size
                 )
                 resource_params.append(f"{declaration} [[texture({i})]]")
+        if self.acceleration_structure_variables:
+            for (
+                acceleration_structure_variable,
+                i,
+                acceleration_structure_type,
+                array_size,
+            ) in self.acceleration_structure_variables:
+                declaration = self.format_resource_parameter(
+                    acceleration_structure_type,
+                    acceleration_structure_variable.name,
+                    array_size,
+                )
+                resource_params.append(f"{declaration} [[buffer({i})]]")
+        if self.visible_function_table_variables:
+            for (
+                visible_function_table_variable,
+                i,
+                visible_function_table_type,
+                array_size,
+            ) in self.visible_function_table_variables:
+                declaration = self.format_visible_function_table_parameter(
+                    visible_function_table_type,
+                    visible_function_table_variable.name,
+                    array_size,
+                )
+                resource_params.append(f"{declaration} [[buffer({i})]]")
+        if self.intersection_function_table_variables:
+            for (
+                intersection_function_table_variable,
+                i,
+                intersection_function_table_type,
+                array_size,
+            ) in self.intersection_function_table_variables:
+                declaration = self.format_intersection_function_table_parameter(
+                    intersection_function_table_type,
+                    intersection_function_table_variable.name,
+                    array_size,
+                )
+                resource_params.append(f"{declaration} [[buffer({i})]]")
         if self.structured_buffer_variables:
             for (
                 buffer_variable,
@@ -1807,6 +2576,30 @@ class MetalCodeGen:
                 buffer_name = getattr(buffer_variable, "name", None)
                 declaration = self.format_structured_buffer_parameter(
                     buffer_type, buffer_name, array_size
+                )
+                resource_params.append(f"{declaration} [[buffer({i})]]")
+        if self.structured_buffer_length_variables:
+            for (
+                buffer_variable,
+                i,
+                _buffer_type,
+                array_size,
+            ) in self.structured_buffer_length_variables:
+                buffer_name = getattr(buffer_variable, "name", None)
+                declaration = self.format_structured_buffer_length_parameter(
+                    buffer_name, array_size
+                )
+                resource_params.append(f"{declaration} [[buffer({i})]]")
+        if self.structured_buffer_counter_variables:
+            for (
+                buffer_variable,
+                i,
+                _buffer_type,
+                array_size,
+            ) in self.structured_buffer_counter_variables:
+                buffer_name = getattr(buffer_variable, "name", None)
+                declaration = self.format_structured_buffer_counter_parameter(
+                    buffer_name, array_size
                 )
                 resource_params.append(f"{declaration} [[buffer({i})]]")
         if self.glsl_buffer_block_variables:
@@ -1841,9 +2634,43 @@ class MetalCodeGen:
         for texture_variable, _, _, _ in self.texture_variables:
             if getattr(texture_variable, "name", None):
                 names.add(texture_variable.name)
+        for (
+            acceleration_structure_variable,
+            _,
+            _,
+            _,
+        ) in self.acceleration_structure_variables:
+            if getattr(acceleration_structure_variable, "name", None):
+                names.add(acceleration_structure_variable.name)
+        for (
+            visible_function_table_variable,
+            _,
+            _,
+            _,
+        ) in self.visible_function_table_variables:
+            if getattr(visible_function_table_variable, "name", None):
+                names.add(visible_function_table_variable.name)
+        for (
+            intersection_function_table_variable,
+            _,
+            _,
+            _,
+        ) in self.intersection_function_table_variables:
+            if getattr(intersection_function_table_variable, "name", None):
+                names.add(intersection_function_table_variable.name)
         for buffer_variable, _, _, _ in self.structured_buffer_variables:
             if getattr(buffer_variable, "name", None):
                 names.add(buffer_variable.name)
+        for buffer_variable, _, _, _ in self.structured_buffer_length_variables:
+            if getattr(buffer_variable, "name", None):
+                names.add(
+                    self.structured_buffer_length_parameter_name(buffer_variable.name)
+                )
+        for buffer_variable, _, _, _ in self.structured_buffer_counter_variables:
+            if getattr(buffer_variable, "name", None):
+                names.add(
+                    self.structured_buffer_counter_parameter_name(buffer_variable.name)
+                )
         for buffer_variable, _, _, _ in self.glsl_buffer_block_variables:
             if getattr(buffer_variable, "name", None):
                 names.add(buffer_variable.name)
@@ -1878,6 +2705,54 @@ class MetalCodeGen:
                     )
                 )
         for (
+            acceleration_structure_variable,
+            acceleration_structure_type,
+            array_size,
+        ) in self.required_function_acceleration_structures(func_name):
+            acceleration_structure_name = getattr(
+                acceleration_structure_variable, "name", None
+            )
+            if acceleration_structure_name:
+                resource_params.append(
+                    self.format_resource_parameter(
+                        acceleration_structure_type,
+                        acceleration_structure_name,
+                        array_size,
+                    )
+                )
+        for (
+            visible_function_table_variable,
+            visible_function_table_type,
+            array_size,
+        ) in self.required_function_visible_function_tables(func_name):
+            visible_function_table_name = getattr(
+                visible_function_table_variable, "name", None
+            )
+            if visible_function_table_name:
+                resource_params.append(
+                    self.format_visible_function_table_parameter(
+                        visible_function_table_type,
+                        visible_function_table_name,
+                        array_size,
+                    )
+                )
+        for (
+            intersection_function_table_variable,
+            intersection_function_table_type,
+            array_size,
+        ) in self.required_function_intersection_function_tables(func_name):
+            intersection_function_table_name = getattr(
+                intersection_function_table_variable, "name", None
+            )
+            if intersection_function_table_name:
+                resource_params.append(
+                    self.format_intersection_function_table_parameter(
+                        intersection_function_table_type,
+                        intersection_function_table_name,
+                        array_size,
+                    )
+                )
+        for (
             buffer_variable,
             buffer_type,
             array_size,
@@ -1889,6 +2764,18 @@ class MetalCodeGen:
                         buffer_type, buffer_name, array_size
                     )
                 )
+                if self.structured_buffer_requires_length(buffer_name):
+                    resource_params.append(
+                        self.format_structured_buffer_length_parameter(
+                            buffer_name, array_size
+                        )
+                    )
+                if self.structured_buffer_requires_counter(buffer_type):
+                    resource_params.append(
+                        self.format_structured_buffer_counter_parameter(
+                            buffer_name, array_size
+                        )
+                    )
         for (
             buffer_variable,
             block,
@@ -1956,13 +2843,13 @@ class MetalCodeGen:
         """Render a single CrossGL AST statement as Metal source."""
         indent_str = "    " * indent
         if isinstance(stmt, VariableNode):
-            if hasattr(stmt, "var_type"):
-                var_type = self.convert_type_node_to_string(stmt.var_type)
-            elif hasattr(stmt, "vtype"):
-                var_type = stmt.vtype
-            else:
-                var_type = "float"
+            var_type = self.local_variable_declared_type(stmt)
             self.local_variable_types[stmt.name] = var_type
+            self.current_address_space_variables[stmt.name] = (
+                self.local_variable_address_space(stmt)
+            )
+            self.record_readonly_metal_mesh_payload_local_alias(stmt)
+            is_atomic_local = self.is_metal_atomic_value_type(var_type)
             if self.is_unsupported_glsl_buffer_block_struct_type(var_type):
                 self.current_unsupported_glsl_buffer_block_local_variables.add(
                     stmt.name
@@ -1976,11 +2863,39 @@ class MetalCodeGen:
                 self.map_type(var_type), stmt.name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
-            if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
-                init_expr = self.generate_expression_with_expected(
-                    stmt.initial_value, var_type
+            initial_value = getattr(stmt, "initial_value", None)
+            if isinstance(initial_value, MatchNode):
+                code = f"{indent_str}{declaration};\n"
+                code += generate_match_expression_assignment(
+                    self,
+                    initial_value,
+                    stmt.name,
+                    var_type,
+                    indent,
+                    "Metal",
                 )
-                return f"{indent_str}{declaration} = {init_expr};\n"
+                return code
+            if initial_value is not None:
+                init_expr = self.generate_expression_with_expected(
+                    initial_value, var_type
+                )
+                if self.local_pointer_initializer_needs_address(stmt, initial_value):
+                    init_expr = f"&{init_expr}"
+                address_space_mismatch = (
+                    self.local_variable_address_space_mismatch_diagnostic(stmt)
+                )
+                if is_atomic_local:
+                    return (
+                        f"{indent_str}{declaration};\n"
+                        f"{indent_str}atomic_store_explicit(&{stmt.name}, {init_expr}, "
+                        "memory_order_relaxed);\n"
+                    )
+                diagnostic_prefix = (
+                    f"{indent_str}{address_space_mismatch}\n"
+                    if address_space_mismatch is not None
+                    else ""
+                )
+                return f"{diagnostic_prefix}{indent_str}{declaration} = {init_expr};\n"
             else:
                 return f"{indent_str}{declaration};\n"
         elif isinstance(stmt, ArrayNode):
@@ -2047,10 +2962,32 @@ class MetalCodeGen:
             type(stmt)
         ):
             # Handle ExpressionStatementNode
+            tail_return = self.generate_tail_expression_statement(stmt, indent)
+            if tail_return is not None:
+                return tail_return
             expr_code = self.generate_expression_statement(stmt)
             return self.generate_statement_code(expr_code, indent)
         else:
             return f"{indent_str}{self.generate_expression(stmt)};\n"
+
+    def generate_tail_expression_statement(self, stmt, indent=0):
+        if not getattr(stmt, "is_tail_expression", False):
+            return None
+        return_type = self.type_name_string(self.current_function_return_type)
+        if not return_type or return_type == "void":
+            return None
+
+        indent_str = "    " * indent
+        return_wrapper = self.current_function_return_wrapper
+        if return_wrapper is not None:
+            value = self.generate_expression_with_expected(
+                stmt.expression,
+                return_wrapper["source_type"],
+            )
+            return f"{indent_str}return {return_wrapper['struct_name']}{{{value}}};\n"
+
+        value = self.generate_expression_with_expected(stmt.expression, return_type)
+        return f"{indent_str}return {value};\n"
 
     def generate_statement_code(self, code, indent=0):
         indent_str = "    " * indent
@@ -2064,13 +3001,165 @@ class MetalCodeGen:
             result += f"{indent_str}{line}{terminator}\n"
         return result
 
+    def local_variable_declared_type(self, stmt):
+        var_type = getattr(stmt, "var_type", None)
+        if var_type is None:
+            var_type = getattr(stmt, "vtype", None)
+        if var_type is None:
+            var_type = self.expression_result_type(getattr(stmt, "initial_value", None))
+        return self.type_name_string(var_type) or "float"
+
+    def local_variable_type_node(self, stmt):
+        return getattr(stmt, "var_type", None) or getattr(stmt, "vtype", None)
+
+    def local_variable_is_address_space_alias(self, node):
+        return isinstance(
+            self.local_variable_type_node(node), (PointerType, ReferenceType)
+        )
+
+    def local_pointer_initializer_needs_address(self, node, initial_value):
+        if not isinstance(self.local_variable_type_node(node), PointerType):
+            return False
+        if initial_value is None:
+            return False
+        if (
+            isinstance(initial_value, UnaryOpNode)
+            and getattr(initial_value, "operator", getattr(initial_value, "op", None))
+            == "&"
+        ):
+            return False
+        if self.metal_type_is_pointer_like(self.expression_result_type(initial_value)):
+            return False
+        return self.assignment_target_root_name(initial_value) is not None
+
     def local_variable_qualifier(self, node):
-        return "const " if "const" in getattr(node, "qualifiers", []) else ""
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        attributes = {
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(node, "attributes", []) or []
+        }
+        if self.local_variable_is_address_space_alias(node):
+            address_space = self.local_variable_address_space(node)
+            if address_space is not None:
+                const_prefix = ""
+                if address_space != "constant" and (
+                    "const" in qualifiers
+                    or self.local_variable_inherits_readonly_mesh_payload(node)
+                    or self.local_variable_address_space_mismatch_diagnostic(node)
+                    is not None
+                ):
+                    const_prefix = "const "
+                return f"{const_prefix}{address_space} "
+        if (qualifiers | attributes) & {"shared", "groupshared", "threadgroup"}:
+            return "threadgroup "
+        if self.is_metal_atomic_value_type(self.local_variable_declared_type(node)):
+            return "threadgroup "
+        if "const" in qualifiers:
+            return "const "
+        return ""
+
+    def local_variable_address_space(self, node):
+        explicit_address_space = self.normalized_address_space(
+            self.parameter_address_space(node)
+        )
+        initializer_address_space = self.local_variable_initializer_address_space(node)
+        if (
+            self.local_variable_is_address_space_alias(node)
+            and explicit_address_space is not None
+            and initializer_address_space is not None
+            and explicit_address_space != initializer_address_space
+        ):
+            return initializer_address_space
+        if explicit_address_space is not None:
+            return explicit_address_space
+        if (
+            self.local_variable_is_address_space_alias(node)
+            and initializer_address_space is not None
+        ):
+            return initializer_address_space
+        if self.is_metal_atomic_value_type(self.local_variable_declared_type(node)):
+            return "threadgroup"
+        return "thread"
+
+    def local_variable_initializer_address_space(self, node):
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is None:
+            return None
+        return self.argument_address_space(initial_value)
+
+    def local_variable_inherits_readonly_mesh_payload(self, node):
+        if not self.local_variable_is_address_space_alias(node):
+            return False
+        initial_value = getattr(node, "initial_value", None)
+        root_name = self.assignment_target_root_name(initial_value)
+        return root_name in self.current_readonly_metal_mesh_payload_parameters
+
+    def local_variable_address_space_mismatch_diagnostic(self, node):
+        if not self.local_variable_is_address_space_alias(node):
+            return None
+        explicit_address_space = self.normalized_address_space(
+            self.parameter_address_space(node)
+        )
+        initializer_address_space = self.local_variable_initializer_address_space(node)
+        if (
+            explicit_address_space is None
+            or initializer_address_space is None
+            or explicit_address_space == initializer_address_space
+        ):
+            return None
+        initial_value = getattr(node, "initial_value", None)
+        initializer_name = self.assignment_target_root_name(initial_value) or "<expr>"
+        return (
+            "/* unsupported Metal address-space local alias: initializer "
+            f"'{initializer_name}' uses {initializer_address_space} address space "
+            f"but local '{node.name}' was declared {explicit_address_space}; "
+            f"using read-only {initializer_address_space} alias */"
+        )
+
+    def record_readonly_metal_mesh_payload_local_alias(self, node):
+        if self.local_variable_address_space(node) != "object_data":
+            return
+        if not self.local_variable_is_address_space_alias(node):
+            return
+
+        qualifiers = self.parameter_qualifier_names(node)
+        reason = None
+        if self.local_variable_address_space_mismatch_diagnostic(node) is not None:
+            reason = "address-space mismatch alias"
+        elif qualifiers & {"const", "constant"}:
+            reason = "const-qualified payload parameter"
+        else:
+            initial_value = getattr(node, "initial_value", None)
+            root_name = self.assignment_target_root_name(initial_value)
+            reason = self.current_readonly_metal_mesh_payload_reasons.get(root_name)
+
+        if reason is None:
+            return
+        self.current_readonly_metal_mesh_payload_parameters.add(node.name)
+        self.current_readonly_metal_mesh_payload_reasons[node.name] = reason
+
+    def is_metal_atomic_value_type(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if type_name is None:
+            return False
+        type_name = type_name.split("[", 1)[0].strip()
+        return type_name in {
+            "atomic_bool",
+            "atomic_int",
+            "atomic_uint",
+        }
 
     def type_name_string(self, vtype):
         if vtype is None:
             return None
-        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+        if (
+            hasattr(vtype, "name")
+            or hasattr(vtype, "element_type")
+            or isinstance(vtype, (PointerType, ReferenceType))
+        ):
             return self.convert_type_node_to_string(vtype)
         return str(vtype)
 
@@ -2180,11 +3269,18 @@ class MetalCodeGen:
             if array_type and "[" in array_type and "]" in array_type:
                 base_type, _ = split_array_type_suffix(array_type)
                 return base_type
+            pointee_type = self.pointer_pointee_type_name(array_type)
+            if pointee_type is not None:
+                return pointee_type
             return array_type
         if isinstance(expr, MemberAccessNode):
+            block_access = self.glsl_buffer_block_member_access(expr)
+            if block_access is not None:
+                return block_access["type"]
             object_type = self.expression_result_type(
                 expr.object
             ) or self.unsupported_glsl_buffer_block_expression_type(expr.object)
+            object_type = self.pointer_pointee_type_name(object_type) or object_type
             member = str(expr.member)
             if object_type and all(ch in "xyzwrgba" for ch in member):
                 component_type = self.vector_component_type(object_type)
@@ -2206,10 +3302,46 @@ class MetalCodeGen:
             if len(member_types) == 1:
                 return next(iter(member_types))
             return None
+        if isinstance(expr, PointerAccessNode):
+            object_type = self.expression_result_type(
+                expr.pointer_expr
+            ) or self.unsupported_glsl_buffer_block_expression_type(expr.pointer_expr)
+            object_type = self.pointer_pointee_type_name(object_type) or object_type
+            member = str(expr.member)
+            if object_type:
+                member_type = self.struct_member_types.get(
+                    self.type_name_string(object_type), {}
+                ).get(member)
+                if member_type:
+                    return member_type
+            return None
+        if isinstance(expr, ConstructorNode):
+            return infer_enum_constructor_type(
+                self, expr
+            ) or infer_struct_constructor_type(self, expr)
+        if isinstance(expr, MatchNode):
+            return infer_match_expression_result_type(self, expr)
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            numeric_result_type = numeric_trait_method_result_type(self, expr)
+            if numeric_result_type:
+                return numeric_result_type
+            if func_name in {"normalize", "reflect"} and args:
+                return self.expression_result_type(args[0])
+            if func_name == "dot" and args:
+                return (
+                    self.vector_component_type(self.expression_result_type(args[0]))
+                    or "float"
+                )
+            if func_name == "cross" and args:
+                return self.expression_result_type(args[0])
+            specialized_func_name = generic_function_call_name(self, func_name, args)
+            if specialized_func_name in getattr(self, "function_return_types", {}):
+                return self.function_return_types[specialized_func_name]
+            if func_name in getattr(self, "function_return_types", {}):
+                return self.function_return_types[func_name]
             unsupported_functions = getattr(
                 self, "unsupported_glsl_buffer_block_functions", {}
             )
@@ -2429,6 +3561,12 @@ class MetalCodeGen:
             )
             op = getattr(node, "operator", "=")
 
+        mesh_output_store = self.generate_metal_mesh_output_assignment(
+            target, rhs, op, getattr(node, "value", getattr(node, "right", None))
+        )
+        if mesh_output_store is not None:
+            return mesh_output_store
+
         block_store = self.generate_glsl_buffer_block_store(target, rhs, op)
         if block_store is not None:
             return block_store
@@ -2437,6 +3575,21 @@ class MetalCodeGen:
         )
         if unsupported_store is not None:
             return unsupported_store
+        readonly_mesh_payload_store = (
+            self.readonly_metal_mesh_payload_assignment_diagnostic(target)
+        )
+        if readonly_mesh_payload_store is not None:
+            return readonly_mesh_payload_store
+        readonly_raw_buffer_store = self.readonly_raw_buffer_assignment_diagnostic(
+            target
+        )
+        if readonly_raw_buffer_store is not None:
+            return readonly_raw_buffer_store
+        readonly_parameter_store = self.readonly_metal_parameter_assignment_diagnostic(
+            target
+        )
+        if readonly_parameter_store is not None:
+            return readonly_parameter_store
 
         lhs = self.generate_expression(target)
         return f"{lhs} {op} {rhs}"
@@ -2661,33 +3814,9 @@ class MetalCodeGen:
         return code
 
     def generate_match(self, node, indent):
-        indent_str = "    " * indent
-        expression = self.generate_expression(getattr(node, "expression", ""))
-
-        code = f"{indent_str}switch ({expression}) {{\n"
-        for arm in getattr(node, "arms", []) or []:
-            pattern = getattr(arm, "pattern", None)
-            if not self.is_supported_switch_match_arm(arm):
-                raise ValueError(
-                    "Unsupported match arm for Metal codegen; only unguarded "
-                    "literal and wildcard patterns can be lowered to switch"
-                )
-
-            if isinstance(pattern, WildcardPatternNode):
-                label = "default"
-            else:
-                label = f"case {self.generate_expression(pattern.literal)}"
-            body = getattr(arm, "body", [])
-            code += self.generate_switch_case(label, body, indent + 1, auto_break=True)
-
-        code += f"{indent_str}}}\n"
-        return code
-
-    def is_supported_switch_match_arm(self, arm):
-        if getattr(arm, "guard", None) is not None:
-            return False
-        pattern = getattr(arm, "pattern", None)
-        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
+        if is_switch_lowerable_match(node):
+            return generate_switch_match(self, node, indent)
+        return generate_ordered_conditional_match(self, node, indent, "Metal")
 
     def statement_body_terminates(self, body):
         if hasattr(body, "statements"):
@@ -2761,12 +3890,12 @@ class MetalCodeGen:
             if unsupported_value is not None:
                 return unsupported_value
             if hasattr(expr, "name"):
-                return expr.name
+                return enum_value_expression(self, expr.name)
             else:
                 return str(expr)
         elif isinstance(expr, BinaryOpNode):
-            left = self.generate_expression(expr.left)
-            right = self.generate_expression(expr.right)
+            left = self.generate_binary_operand(expr.left)
+            right = self.generate_binary_operand(expr.right)
             return f"{left} {self.map_operator(expr.op)} {right}"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
@@ -2777,9 +3906,11 @@ class MetalCodeGen:
             args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
             return f"{expr.operation}({args})"
         elif isinstance(expr, RayTracingOpNode):
-            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
-            return f"{expr.operation}({args})"
+            return self.generate_ray_tracing_op_expression(expr)
         elif isinstance(expr, MeshOpNode):
+            mesh_call = self.generate_mesh_op_expression(expr)
+            if mesh_call is not None:
+                return mesh_call
             args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
             return f"{expr.operation}({args})"
         elif isinstance(expr, RayQueryOpNode):
@@ -2790,6 +3921,11 @@ class MetalCodeGen:
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
+            unsupported_value = (
+                self.unsupported_metal_ray_function_table_array_expression(expr)
+            )
+            if unsupported_value is not None:
+                return unsupported_value
             block_load = self.generate_glsl_buffer_block_array_load(expr)
             if block_load is not None:
                 return block_load
@@ -2797,11 +3933,27 @@ class MetalCodeGen:
             array = self.generate_expression(expr.array)
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
+        elif isinstance(expr, ConstructorNode):
+            enum_constructor = generate_enum_constructor_expression(self, expr)
+            if enum_constructor is not None:
+                return enum_constructor
+            constructor = generate_struct_constructor_expression(self, expr)
+            if constructor is not None:
+                return constructor
+            return str(expr)
         elif isinstance(expr, FunctionCallNode):
             # Resolve callee expression (can be Identifier/Member/Array access)
             func_expr = getattr(expr, "function", None)
             if func_expr is None:
                 func_expr = expr.name
+            numeric_trait_call = generate_numeric_trait_method_call(
+                self,
+                func_expr,
+                expr.args,
+            )
+            if numeric_trait_call is not None:
+                return numeric_trait_call
+
             func_name = None
             if hasattr(func_expr, "name") and isinstance(func_expr.name, str):
                 func_name = func_expr.name
@@ -2812,11 +3964,49 @@ class MetalCodeGen:
             else:
                 callee = self.generate_expression(func_expr)
 
+            unsupported_table_call = (
+                self.unsupported_metal_ray_function_table_array_member_call(func_expr)
+            )
+            if unsupported_table_call is not None:
+                return unsupported_table_call
+
+            static_generic_call = generate_static_generic_numeric_call(self, func_name)
+            if static_generic_call is not None:
+                return static_generic_call
+
             unsupported_call = self.unsupported_glsl_buffer_block_function_call(
                 func_name
             )
             if unsupported_call is not None:
                 return unsupported_call
+
+            enum_constructor = generate_enum_constructor_call(
+                self, func_name, expr.args
+            )
+            if enum_constructor is not None:
+                return enum_constructor
+
+            glsl_block_atomic_call = self.generate_glsl_buffer_block_atomic_call(
+                func_name, expr.args
+            )
+            if glsl_block_atomic_call is not None:
+                return glsl_block_atomic_call
+
+            synchronization_call = self.synchronization_function_call(
+                func_name, expr.args
+            )
+            if synchronization_call is not None:
+                return synchronization_call
+
+            atomic_call = self.generate_atomic_function_call(func_name, expr.args)
+            if atomic_call is not None:
+                return atomic_call
+
+            mesh_output_call = self.generate_metal_mesh_output_call(
+                func_name, expr.args
+            )
+            if mesh_output_call is not None:
+                return mesh_output_call
 
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:
@@ -2825,16 +4015,25 @@ class MetalCodeGen:
             buffer_call = self.generate_buffer_call(func_name, expr.args)
             if buffer_call is not None:
                 return buffer_call
+            specialized_func_name = generic_function_call_name(
+                self,
+                func_name,
+                expr.args,
+            )
+            argument_func_name = func_name
+            if specialized_func_name is not None:
+                callee = specialized_func_name
+                func_name = specialized_func_name
             # Special handling for common GLSL functions
-            elif func_name == "normalize":
+            if func_name == "normalize":
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"normalize({args})"
-            elif func_name in ["mix", "clamp", "smoothstep", "step", "dot", "cross"]:
+            if func_name in ["mix", "clamp", "smoothstep", "step", "dot", "cross"]:
                 # These function names are the same in GLSL and Metal
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 return f"{func_name}({args})"
             # Vector constructors
-            elif func_name in [
+            if func_name in [
                 "float",
                 "half",
                 "float16",
@@ -3000,29 +4199,59 @@ class MetalCodeGen:
                     for arg in expr.args
                 )
                 return f"{metal_type}({args})"
-            else:
-                # Standard function call
-                self.validate_function_image_access_arguments(func_name, expr.args)
-                args = [self.generate_expression(arg) for arg in expr.args]
-                if func_name in self.user_function_names:
-                    args.extend(
-                        self.cbuffer_parameter_name(cbuffer)
-                        for cbuffer in self.required_function_cbuffers(func_name)
-                    )
-                    args.extend(
-                        self.required_function_resource_argument_names(func_name)
-                    )
-                args = ", ".join(args)
-                return f"{callee}({args})"
+            # Standard function call
+            readonly_raw_buffer_call = self.readonly_raw_buffer_call_diagnostic(
+                argument_func_name, expr.args
+            )
+            if readonly_raw_buffer_call is not None:
+                return readonly_raw_buffer_call
+            readonly_parameter_call = self.readonly_metal_parameter_call_diagnostic(
+                argument_func_name, expr.args
+            )
+            if readonly_parameter_call is not None:
+                return readonly_parameter_call
+            mesh_context_call = self.metal_mesh_dispatch_context_call_diagnostic(
+                func_name
+            )
+            if mesh_context_call is not None:
+                return mesh_context_call
+            address_space_call = self.address_space_call_diagnostic(
+                argument_func_name, expr.args
+            )
+            if address_space_call is not None:
+                return address_space_call
+            self.validate_function_image_access_arguments(func_name, expr.args)
+            args = self.generate_function_call_arguments(argument_func_name, expr.args)
+            if func_name in self.user_function_names:
+                args.extend(
+                    self.cbuffer_parameter_name(cbuffer)
+                    for cbuffer in self.required_function_cbuffers(func_name)
+                )
+                args.extend(self.required_function_resource_argument_names(func_name))
+                args.extend(
+                    self.required_metal_mesh_dispatch_context_arguments(func_name)
+                )
+            args = ", ".join(args)
+            return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
+            if unsupported_value is not None:
+                return unsupported_value
+            unsupported_value = (
+                self.unsupported_metal_ray_function_table_array_expression(expr)
+            )
             if unsupported_value is not None:
                 return unsupported_value
             block_load = self.generate_glsl_buffer_block_member_load(expr)
             if block_load is not None:
                 return block_load
             obj = self.generate_expression_with_expected(expr.object, None)
+            if self.member_access_uses_pointer_operator(expr):
+                return f"{obj}->{expr.member}"
             return f"{obj}.{expr.member}"
+        elif isinstance(expr, PointerAccessNode):
+            pointer = self.generate_expression_with_expected(expr.pointer_expr, None)
+            return f"{pointer}->{expr.member}"
         elif isinstance(expr, TernaryOpNode):
             return f"{self.generate_expression(expr.condition)} ? {self.generate_expression(expr.true_expr)} : {self.generate_expression(expr.false_expr)}"
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
@@ -3052,6 +4281,8 @@ class MetalCodeGen:
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
+            if name in getattr(self, "enum_variant_constants", {}):
+                return enum_value_expression(self, name)
             if (
                 name not in self.local_variable_types
                 and name in self.ambiguous_cbuffer_members
@@ -3068,6 +4299,831 @@ class MetalCodeGen:
         else:
             return str(expr)
 
+    def generate_binary_operand(self, expr):
+        rendered = self.generate_expression(expr)
+        if isinstance(expr, TernaryOpNode):
+            return f"({rendered})"
+        return rendered
+
+    def synchronization_function_call(self, func_name, args):
+        if args or func_name in self.user_function_names:
+            return None
+        return {
+            "barrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
+            "workgroupBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
+            "groupMemoryBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
+            "memoryBarrierShared": "threadgroup_barrier(mem_flags::mem_threadgroup)",
+            "memoryBarrierBuffer": "threadgroup_barrier(mem_flags::mem_device)",
+            "deviceMemoryBarrier": "threadgroup_barrier(mem_flags::mem_device)",
+            "memoryBarrierImage": "threadgroup_barrier(mem_flags::mem_texture)",
+            "memoryBarrier": "threadgroup_barrier(mem_flags::mem_device)",
+            "allMemoryBarrier": (
+                "threadgroup_barrier(mem_flags::mem_device | "
+                "mem_flags::mem_threadgroup | mem_flags::mem_texture)"
+            ),
+        }.get(func_name)
+
+    def generate_ray_tracing_op_expression(self, expr):
+        rendered_args = [self.generate_expression(arg) for arg in expr.arguments]
+        if expr.operation == "TraceRay":
+            trace_ray = self.generate_metal_trace_ray(expr.arguments, rendered_args)
+            if trace_ray is not None:
+                return trace_ray
+            return self.unsupported_metal_ray_tracing_intrinsic(
+                "TraceRay",
+                "expected acceleration structure, flags, mask, SBT offsets, "
+                "origin, tmin, direction, tmax, and payload location",
+            )
+
+        if expr.operation == "CallShader":
+            call_shader = self.generate_metal_call_shader(expr.arguments, rendered_args)
+            if call_shader is not None:
+                return call_shader
+            return self.unsupported_metal_ray_tracing_intrinsic(
+                "CallShader",
+                "requires one visible_function_table resource, or an explicit "
+                "visible_function_table argument",
+            )
+
+        unsupported_reasons = {
+            "ReportHit": (
+                "intersection acceptance is expressed through the Metal intersection return value"
+            ),
+            "AcceptHitAndEndSearch": (
+                "Metal hit acceptance is controlled by intersection results"
+            ),
+            "IgnoreHit": "Metal does not expose a direct ignore-intersection intrinsic",
+        }
+        reason = unsupported_reasons.get(expr.operation)
+        if reason is not None:
+            return self.unsupported_metal_ray_tracing_intrinsic(expr.operation, reason)
+
+        return f"{expr.operation}({', '.join(rendered_args)})"
+
+    def generate_metal_trace_ray(self, raw_args, rendered_args):
+        if len(rendered_args) != 11:
+            return None
+
+        acceleration_structure = rendered_args[0]
+        instance_mask = rendered_args[2]
+        origin = rendered_args[6]
+        min_distance = rendered_args[7]
+        direction = rendered_args[8]
+        max_distance = rendered_args[9]
+        acceleration_structure_type = self.metal_acceleration_structure_argument_type(
+            raw_args[0]
+        )
+        intersection_function_table = self.default_intersection_function_table(
+            acceleration_structure_type
+        )
+        intersector_tags = (
+            intersection_function_table["tags"]
+            if intersection_function_table is not None
+            else self.default_metal_intersector_tags(acceleration_structure_type)
+        )
+        ray_name = self.next_metal_temp_variable("ray")
+        intersector_name = self.next_metal_temp_variable("intersector")
+        intersection_name = self.next_metal_temp_variable("intersection")
+        intersect_args = [ray_name, acceleration_structure]
+        if acceleration_structure_type != "primitive_acceleration_structure":
+            intersect_args.append(instance_mask)
+        if intersection_function_table is not None:
+            intersect_args.append(intersection_function_table["name"])
+        payload_diagnostic = None
+        payload_argument = self.metal_trace_ray_payload_argument(
+            raw_args[10], rendered_args[10], intersection_function_table
+        )
+        if payload_argument["argument"] is not None:
+            intersect_args.append(payload_argument["argument"])
+        elif payload_argument["reason"] is not None:
+            payload_diagnostic = self.unsupported_metal_ray_tracing_intrinsic(
+                "TraceRay payload", payload_argument["reason"]
+            )
+        intersector_type = f"intersector<{intersector_tags}>"
+        intersection_type = f"intersection_result<{intersector_tags}>"
+
+        lines = [
+            f"ray {ray_name}",
+            f"{ray_name}.origin = {origin}",
+            f"{ray_name}.direction = {direction}",
+            f"{ray_name}.min_distance = {min_distance}",
+            f"{ray_name}.max_distance = {max_distance}",
+            f"{intersector_type} {intersector_name}",
+            (
+                f"{intersection_type} {intersection_name} = "
+                f"{intersector_name}.intersect({', '.join(intersect_args)})"
+            ),
+        ]
+        if payload_diagnostic is not None:
+            lines.append(payload_diagnostic)
+        lines.append(f"(void){intersection_name}")
+        return "\n".join(lines)
+
+    def metal_trace_ray_payload_argument(
+        self, raw_payload_arg, rendered_payload_arg, intersection_function_table
+    ):
+        if self.is_metal_trace_ray_null_payload(raw_payload_arg):
+            return {"argument": None, "reason": None}
+        if intersection_function_table is None:
+            return {
+                "argument": None,
+                "reason": (
+                    "payload forwarding requires a compatible "
+                    "intersection_function_table"
+                ),
+            }
+        payload_name = self.expression_name(raw_payload_arg)
+        if not payload_name or payload_name not in self.local_variable_types:
+            return {
+                "argument": None,
+                "reason": "payload forwarding requires a thread-local payload lvalue",
+            }
+        if payload_name in self.current_metal_non_thread_payload_parameters:
+            return {
+                "argument": None,
+                "reason": (
+                    "payload forwarding requires a thread-local payload lvalue; "
+                    "ray payload parameters use a non-thread address space"
+                ),
+            }
+        payload_type = self.expression_result_type(raw_payload_arg)
+        if not self.is_metal_trace_ray_payload_struct_type(payload_type):
+            return {
+                "argument": None,
+                "reason": (
+                    "payload forwarding requires a thread-local struct payload "
+                    "lvalue"
+                ),
+            }
+        return {"argument": rendered_payload_arg, "reason": None}
+
+    def is_metal_trace_ray_null_payload(self, payload_arg):
+        literal_value = self.literal_int_value(payload_arg, self.literal_int_constants)
+        return literal_value == 0
+
+    def is_metal_trace_ray_payload_struct_type(self, payload_type):
+        if not payload_type:
+            return False
+        type_name = self.type_name_string(payload_type)
+        if "[" in type_name and "]" in type_name:
+            type_name, _ = split_array_type_suffix(type_name)
+        return type_name in self.structs_by_name
+
+    def metal_acceleration_structure_argument_type(self, expr):
+        name = self.expression_name(expr)
+        local_type = self.local_variable_types.get(name)
+        if local_type and self.is_acceleration_structure_type(local_type):
+            return self.map_resource_type_with_format(local_type)
+        for (
+            acceleration_structure_variable,
+            _,
+            mapped_type,
+            _,
+        ) in self.acceleration_structure_variables:
+            if getattr(acceleration_structure_variable, "name", None) == name:
+                return mapped_type
+        return "instance_acceleration_structure"
+
+    def default_metal_intersector_tags(self, acceleration_structure_type):
+        if acceleration_structure_type == "primitive_acceleration_structure":
+            return "triangle_data"
+        return "triangle_data, instancing"
+
+    def default_intersection_function_table(self, acceleration_structure_type):
+        candidates = []
+        for (
+            intersection_function_table_variable,
+            _,
+            intersection_function_table_type,
+            _,
+        ) in self.intersection_function_table_variables:
+            name = getattr(intersection_function_table_variable, "name", None)
+            tags = self.intersection_function_table_tags(
+                intersection_function_table_type
+            )
+            if (
+                name
+                and tags
+                and self.intersection_function_table_tags_match_acceleration_structure(
+                    tags, acceleration_structure_type
+                )
+            ):
+                candidates.append({"name": name, "tags": ", ".join(tags)})
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
+    def intersection_function_table_tags(self, table_type):
+        type_name = str(table_type)
+        if "<" not in type_name or not type_name.endswith(">"):
+            return []
+        tags = type_name.split("<", 1)[1][:-1].strip()
+        if not tags:
+            return []
+        return [tag.strip() for tag in tags.split(",") if tag.strip()]
+
+    def intersection_function_table_tags_match_acceleration_structure(
+        self, tags, acceleration_structure_type
+    ):
+        has_instancing = "instancing" in tags
+        if acceleration_structure_type == "primitive_acceleration_structure":
+            return not has_instancing
+        return has_instancing
+
+    def generate_metal_call_shader(self, raw_args, rendered_args):
+        if len(raw_args) == 2:
+            table_name = self.default_visible_function_table_name()
+            if table_name is None:
+                return None
+            shader_index, callable_data = rendered_args
+        elif len(raw_args) == 3:
+            unsupported_array = self.unsupported_metal_ray_function_table_array_reason(
+                raw_args[0]
+            )
+            if unsupported_array is not None:
+                return self.unsupported_metal_ray_tracing_intrinsic(
+                    "CallShader", unsupported_array
+                )
+            table_name = rendered_args[0]
+            shader_index = rendered_args[1]
+            callable_data = rendered_args[2]
+        else:
+            return None
+
+        return f"{table_name}[{shader_index}]({callable_data})"
+
+    def default_visible_function_table_name(self):
+        names = [
+            getattr(visible_function_table_variable, "name", None)
+            for visible_function_table_variable, _, _, _ in (
+                self.visible_function_table_variables
+            )
+            if getattr(visible_function_table_variable, "name", None)
+        ]
+        if len(names) == 1:
+            return names[0]
+        return None
+
+    def unsupported_metal_ray_tracing_intrinsic(self, operation, reason):
+        return f"/* unsupported Metal ray tracing intrinsic: {operation} - {reason} */"
+
+    def unsupported_metal_ray_function_table_array_diagnostic(self, table_kind, name):
+        return (
+            f"/* unsupported Metal ray tracing resource: arrays of {table_kind} "
+            f"are not valid Metal buffer parameters ({name}) */\n"
+        )
+
+    def metal_ray_function_table_kind(self, vtype):
+        if self.is_visible_function_table_type(vtype):
+            return "visible_function_table"
+        if self.is_intersection_function_table_type(vtype):
+            return "intersection_function_table"
+        return None
+
+    def metal_ray_function_table_array_parameter_kind(self, vtype, node=None):
+        table_kind = self.metal_ray_function_table_kind(vtype)
+        if table_kind is None:
+            return None
+        if self.resource_array_parameter(vtype, node) is None:
+            return None
+        return table_kind
+
+    def unsupported_metal_ray_function_table_array_reason(self, expr):
+        table_name = self.expression_name(expr)
+        table_kind = self.unsupported_metal_ray_function_table_array_variables.get(
+            table_name
+        )
+        if table_kind is None:
+            return None
+        return (
+            f"arrays of {table_kind} are not valid Metal buffer parameters "
+            f"({table_name})"
+        )
+
+    def unsupported_metal_ray_function_table_array_expression(self, expr):
+        reason = self.unsupported_metal_ray_function_table_array_reason(expr)
+        if reason is None:
+            return None
+        return f"0 /* unsupported Metal ray tracing resource: {reason} */"
+
+    def unsupported_metal_ray_function_table_array_member_call(self, func_expr):
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+        object_expr = getattr(
+            func_expr, "object_expr", getattr(func_expr, "object", None)
+        )
+        return self.unsupported_metal_ray_function_table_array_expression(object_expr)
+
+    def generate_atomic_function_call(self, func_name, args):
+        if func_name in self.user_function_names:
+            return None
+        if not self.is_metal_atomic_function_name(func_name) or not args:
+            return None
+
+        rendered_args = [self.generate_expression(arg) for arg in args]
+        if self.metal_atomic_target_needs_address(args[0], rendered_args[0]):
+            rendered_args[0] = f"&{rendered_args[0]}"
+        if self.is_metal_atomic_compare_exchange_name(func_name) and len(args) >= 2:
+            expected_diagnostic = (
+                self.metal_compare_exchange_expected_address_space_diagnostic(args[1])
+            )
+            if expected_diagnostic is not None:
+                return expected_diagnostic
+            if self.metal_compare_exchange_expected_needs_address(
+                args[1], rendered_args[1]
+            ):
+                rendered_args[1] = f"&{rendered_args[1]}"
+        return (
+            f"{self.metal_atomic_intrinsic_name(func_name)}({', '.join(rendered_args)})"
+        )
+
+    def metal_atomic_target_needs_address(self, arg, rendered_arg):
+        if self.is_metal_address_expression(arg, rendered_arg):
+            return False
+        target_type = self.expression_result_type(arg)
+        if self.metal_type_is_pointer_like(target_type):
+            return False
+        return self.is_metal_atomic_value_type(target_type)
+
+    def metal_compare_exchange_expected_needs_address(self, arg, rendered_arg):
+        if self.is_metal_address_expression(arg, rendered_arg):
+            return False
+        expected_type = self.expression_result_type(arg)
+        if self.metal_type_is_pointer_like(expected_type):
+            return False
+        if isinstance(arg, (ArrayAccessNode, MemberAccessNode)):
+            return True
+        return self.expression_name(arg) is not None
+
+    def metal_compare_exchange_expected_address_space_diagnostic(self, arg):
+        root_name = self.atomic_expected_storage_root_name(arg)
+        if root_name is None:
+            return None
+        address_space = self.current_address_space_variables.get(root_name)
+        if address_space is None and root_name in self.local_variable_types:
+            address_space = "thread"
+        if address_space in {None, "thread"}:
+            return None
+        return (
+            "false /* unsupported Metal atomic compare-exchange expected pointer: "
+            f"expected storage '{root_name}' uses {address_space} address space; "
+            "Metal requires thread storage */"
+        )
+
+    def atomic_expected_storage_root_name(self, arg):
+        if isinstance(arg, UnaryOpNode) and getattr(arg, "operator", None) == "&":
+            return self.atomic_expected_storage_root_name(arg.operand)
+        if isinstance(arg, BinaryOpNode) and getattr(arg, "operator", None) in {
+            "+",
+            "-",
+        }:
+            return self.atomic_expected_storage_root_name(
+                getattr(arg, "left", None)
+            ) or self.atomic_expected_storage_root_name(getattr(arg, "right", None))
+        return self.assignment_target_root_name(arg)
+
+    def is_metal_address_expression(self, arg, rendered_arg):
+        if isinstance(arg, UnaryOpNode) and getattr(arg, "operator", None) == "&":
+            return True
+        return str(rendered_arg).lstrip().startswith("&")
+
+    def metal_type_is_pointer_like(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return False
+        type_name = str(type_name).strip()
+        return type_name.endswith("*") or "[" in type_name
+
+    def is_metal_atomic_compare_exchange_name(self, func_name):
+        return func_name in {
+            "atomic_compare_exchange_weak_explicit",
+            "atomic_compare_exchange_strong_explicit",
+        }
+
+    def metal_atomic_intrinsic_name(self, func_name):
+        if func_name == "atomic_compare_exchange_strong_explicit":
+            return "atomic_compare_exchange_weak_explicit"
+        return func_name
+
+    def is_metal_atomic_function_name(self, func_name):
+        return func_name in {
+            "atomic_fetch_add_explicit",
+            "atomic_fetch_sub_explicit",
+            "atomic_fetch_min_explicit",
+            "atomic_fetch_max_explicit",
+            "atomic_fetch_and_explicit",
+            "atomic_fetch_or_explicit",
+            "atomic_fetch_xor_explicit",
+            "atomic_load_explicit",
+            "atomic_store_explicit",
+            "atomic_exchange_explicit",
+            "atomic_compare_exchange_weak_explicit",
+            "atomic_compare_exchange_strong_explicit",
+        }
+
+    def generate_metal_mesh_output_call(self, func_name, args):
+        mesh_output = self.current_metal_mesh_output_config
+        output_parameter = self.current_metal_mesh_output_parameter
+        if not mesh_output or not output_parameter:
+            return None
+
+        if func_name == "SetVertex" and len(args) == 2:
+            index = self.generate_expression(args[0])
+            value = self.metal_mesh_vertex_output_value(args[1], mesh_output)
+            return f"{output_parameter}.set_vertex({index}, {value})"
+
+        if func_name == "SetPrimitive" and len(args) == 2:
+            primitive_output = self.metal_mesh_primitive_output_call(
+                output_parameter, args[0], args[1], mesh_output
+            )
+            if primitive_output is not None:
+                return primitive_output
+            return self.metal_mesh_index_output_write(
+                output_parameter, func_name, args[0], args[1]
+            )
+
+        if func_name == "SetIndex" and len(args) == 2:
+            return self.metal_mesh_index_output_write(
+                output_parameter, func_name, args[0], args[1]
+            )
+
+        return None
+
+    def generate_metal_mesh_output_assignment(
+        self, target, rendered_value, operator, value_expr
+    ):
+        target_info = self.metal_mesh_output_assignment_target(target)
+        if target_info is None:
+            return None
+
+        if operator != "=":
+            return self.unsupported_metal_mesh_output_assignment_diagnostic(
+                target_info, "compound mesh output assignments are not supported"
+            )
+
+        role = target_info["role"]
+        index_expr = target_info["index"]
+        if role == "vertices":
+            if target_info["member"] is not None:
+                return self.generate_metal_mesh_single_member_output_assignment(
+                    target_info, rendered_value, "set_vertex"
+                )
+            value = self.metal_mesh_vertex_output_value_from_rendered(
+                value_expr, rendered_value, self.current_metal_mesh_output_config
+            )
+            index = self.generate_expression(index_expr)
+            return f"{self.current_metal_mesh_output_parameter}.set_vertex({index}, {value})"
+
+        if role == "indices":
+            if target_info["member"] is not None:
+                return self.unsupported_metal_mesh_output_assignment_diagnostic(
+                    target_info, "index vector components must be written as a whole"
+                )
+            return self.metal_mesh_index_output_write(
+                self.current_metal_mesh_output_parameter,
+                "SetPrimitive",
+                index_expr,
+                value_expr,
+            )
+
+        if role == "primitives":
+            if target_info["member"] is not None:
+                return self.generate_metal_mesh_single_member_output_assignment(
+                    target_info, rendered_value, "set_primitive"
+                )
+            index = self.generate_expression(index_expr)
+            return (
+                f"{self.current_metal_mesh_output_parameter}"
+                f".set_primitive({index}, {rendered_value})"
+            )
+
+        return None
+
+    def generate_metal_mesh_single_member_output_assignment(
+        self, target_info, rendered_value, setter
+    ):
+        output_info = target_info["output"]
+        member_name = target_info["member"]
+        element_type = output_info["element_type"]
+        member_types = self.struct_member_types.get(element_type, {})
+        if list(member_types) != [member_name]:
+            accumulator = self.metal_mesh_output_accumulator(target_info)
+            if accumulator is None:
+                return self.unsupported_metal_mesh_output_assignment_diagnostic(
+                    target_info,
+                    "partial member writes require an output accumulator",
+                )
+            index = self.generate_expression(target_info["index"])
+            temp_name = accumulator["name"]
+            return (
+                f"{temp_name}.{member_name} = {rendered_value}\n"
+                f"{self.current_metal_mesh_output_parameter}"
+                f".{setter}({index}, {temp_name})"
+            )
+
+        index = self.generate_expression(target_info["index"])
+        value = f"{element_type}{{{rendered_value}}}"
+        return (
+            f"{self.current_metal_mesh_output_parameter}" f".{setter}({index}, {value})"
+        )
+
+    def collect_metal_mesh_output_accumulators(self, func, reserved_parameter_names):
+        if not self.current_metal_mesh_output_config:
+            return {}
+
+        accumulators = {}
+        reserved_names = set(reserved_parameter_names or ())
+        reserved_names.add(self.current_metal_mesh_output_parameter)
+        reserved_names.update(self.metal_function_local_variable_names(func))
+
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not isinstance(node, AssignmentNode):
+                continue
+            target = getattr(node, "target", getattr(node, "left", None))
+            target_info = self.metal_mesh_output_assignment_target(target)
+            if target_info is None or target_info["member"] is None:
+                continue
+            if target_info["role"] not in {"vertices", "primitives"}:
+                continue
+
+            element_type = target_info["output"]["element_type"]
+            member_types = self.struct_member_types.get(element_type, {})
+            if list(member_types) == [target_info["member"]]:
+                continue
+
+            key = self.metal_mesh_output_accumulator_key(target_info)
+            if key in accumulators:
+                continue
+
+            temp_base = (
+                f"_crossglMesh{target_info['role'].title()}"
+                f"_{target_info['name']}"
+                f"_{self.metal_identifier_suffix(key[2])}"
+            )
+            temp_name = self.unique_metal_generated_name(temp_base, reserved_names)
+            reserved_names.add(temp_name)
+            accumulators[key] = {
+                "name": temp_name,
+                "type": element_type,
+            }
+        return accumulators
+
+    def generate_metal_mesh_output_accumulator_declarations(self):
+        lines = []
+        for accumulator in self.current_metal_mesh_output_accumulators.values():
+            lines.append(f"    {accumulator['type']} {accumulator['name']} = {{}};\n")
+        return "".join(lines)
+
+    def metal_mesh_output_accumulator(self, target_info):
+        return self.current_metal_mesh_output_accumulators.get(
+            self.metal_mesh_output_accumulator_key(target_info)
+        )
+
+    def metal_mesh_output_accumulator_key(self, target_info):
+        index_expr = target_info.get("index")
+        index_text = self.safe_expression_to_string(index_expr) if index_expr else "0"
+        return (target_info["role"], target_info["name"], index_text)
+
+    def metal_identifier_suffix(self, value):
+        suffix = "".join(
+            ch if (ch.isalnum() or ch == "_") else "_" for ch in str(value)
+        ).strip("_")
+        if not suffix:
+            suffix = "value"
+        if suffix[0].isdigit():
+            suffix = f"i_{suffix}"
+        return suffix
+
+    def metal_mesh_output_assignment_target(self, target):
+        mesh_output = self.current_metal_mesh_output_config
+        if not mesh_output:
+            return None
+        outputs = mesh_output.get("output_parameters", {})
+
+        member = None
+        access = target
+        if isinstance(target, MemberAccessNode):
+            member = str(target.member)
+            access = getattr(target, "object", None)
+
+        if not isinstance(access, ArrayAccessNode):
+            return None
+        array_expr = getattr(access, "array", None)
+        parameter_name = self.expression_name(array_expr)
+        output = outputs.get(parameter_name)
+        if output is None:
+            return None
+
+        return {
+            "name": parameter_name,
+            "role": output["role"],
+            "output": output,
+            "index": getattr(access, "index", None),
+            "member": member,
+        }
+
+    def unsupported_metal_mesh_output_assignment_diagnostic(self, target_info, reason):
+        name = target_info.get("name", "<unknown>")
+        role = target_info.get("role", "output")
+        return (
+            "/* unsupported Metal mesh output assignment: "
+            f"{role} output '{name}' - {reason} */"
+        )
+
+    def metal_mesh_vertex_output_value(self, expr, mesh_output):
+        value = self.generate_expression(expr)
+        return self.metal_mesh_vertex_output_value_from_rendered(
+            expr, value, mesh_output
+        )
+
+    def metal_mesh_vertex_output_value_from_rendered(self, expr, value, mesh_output):
+        value_type = self.expression_result_type(expr)
+        mapped_type = self.map_type(value_type) if value_type else None
+        vertex_type = mesh_output["vertex_type"]
+
+        if mapped_type == vertex_type:
+            return value
+        if mapped_type == "float3":
+            return f"{vertex_type}{{float4({value}, 1.0)}}"
+        return f"{vertex_type}{{{value}}}"
+
+    def metal_mesh_primitive_output_call(
+        self, output_parameter, index_expr, value_expr, mesh_output
+    ):
+        primitive_type = mesh_output.get("primitive_type")
+        if not primitive_type or primitive_type == "void":
+            return None
+
+        value_type = self.expression_result_type(value_expr)
+        mapped_type = self.map_type(value_type) if value_type else None
+        if mapped_type != primitive_type:
+            return None
+
+        index = self.generate_expression(index_expr)
+        value = self.generate_expression(value_expr)
+        return f"{output_parameter}.set_primitive({index}, {value})"
+
+    def metal_mesh_index_output_write(
+        self, output_parameter, func_name, index_expr, value_expr
+    ):
+        index = self.generate_expression(index_expr)
+        value = self.generate_expression(value_expr)
+        vector_width = self.metal_mesh_index_vector_width(value_expr)
+        if vector_width is None:
+            return f"{output_parameter}.set_index({index}, {value})"
+
+        base_index = index
+        if func_name == "SetPrimitive":
+            base_index = f"({index}) * {vector_width}"
+
+        if vector_width in {2, 4}:
+            return (
+                f"{output_parameter}.set_indices("
+                f"{base_index}, uchar{vector_width}({value}))"
+            )
+
+        if vector_width == 3:
+            return "\n".join(
+                f"{output_parameter}.set_index("
+                f"{self.metal_mesh_index_component_expression(base_index, offset)}, "
+                f"{value}.{component})"
+                for offset, component in enumerate(("x", "y", "z"))
+            )
+
+        return f"{output_parameter}.set_index({index}, {value})"
+
+    def metal_mesh_index_vector_width(self, expr):
+        value_type = self.expression_result_type(expr)
+        if not value_type:
+            return None
+        mapped_type = self.map_type(value_type)
+        if (
+            len(mapped_type) < 2
+            or mapped_type[-1] not in {"2", "3", "4"}
+            or mapped_type[:-1] not in {"bool", "int", "uint"}
+        ):
+            return None
+        return int(mapped_type[-1])
+
+    def metal_mesh_index_component_expression(self, base_index, offset):
+        if offset == 0:
+            return base_index
+        return f"({base_index}) + {offset}"
+
+    def generate_mesh_op_expression(self, expr):
+        if (
+            expr.operation == "SetMeshOutputCounts"
+            and self.current_metal_mesh_output_parameter
+            and len(expr.arguments) >= 2
+        ):
+            primitive_count = self.generate_expression(expr.arguments[1])
+            return (
+                f"{self.current_metal_mesh_output_parameter}"
+                f".set_primitive_count({primitive_count})"
+            )
+        if expr.operation == "DispatchMesh":
+            if (
+                len(expr.arguments) == 4
+                and self.current_metal_mesh_payload_parameter is None
+            ):
+                return (
+                    "/* unsupported Metal mesh dispatch: DispatchMesh payload "
+                    "argument requires an object_data payload context */"
+                )
+            if self.current_metal_mesh_grid_properties_parameter is None:
+                return (
+                    "/* unsupported Metal mesh dispatch: DispatchMesh requires "
+                    "mesh_grid_properties context */"
+                )
+        if (
+            expr.operation == "DispatchMesh"
+            and self.current_metal_mesh_grid_properties_parameter
+            and len(expr.arguments) == 4
+        ):
+            payload_assignment = self.metal_dispatch_mesh_payload_assignment(
+                expr.arguments[3]
+            )
+            grid = ", ".join(
+                self.generate_expression(argument) for argument in expr.arguments[:3]
+            )
+            grid_assignment = (
+                f"{self.current_metal_mesh_grid_properties_parameter}"
+                f".set_threadgroups_per_grid(uint3({grid}))"
+            )
+            return "\n".join([payload_assignment, grid_assignment])
+        if (
+            expr.operation == "DispatchMesh"
+            and self.current_metal_mesh_grid_properties_parameter
+            and len(expr.arguments) == 3
+        ):
+            grid = ", ".join(
+                self.generate_expression(argument) for argument in expr.arguments
+            )
+            return (
+                f"{self.current_metal_mesh_grid_properties_parameter}"
+                f".set_threadgroups_per_grid(uint3({grid}))"
+            )
+        if (
+            expr.operation == "DispatchMesh"
+            and self.current_metal_mesh_grid_properties_parameter
+            and len(expr.arguments) == 1
+        ):
+            grid = self.generate_expression(expr.arguments[0])
+            return (
+                f"{self.current_metal_mesh_grid_properties_parameter}"
+                f".set_threadgroups_per_grid({grid})"
+            )
+        return None
+
+    def metal_dispatch_mesh_payload_assignment(self, payload_expr):
+        if self.current_metal_mesh_payload_parameter is None:
+            return (
+                "/* unsupported Metal mesh payload dispatch: "
+                "DispatchMesh payload argument requires an object_data payload "
+                "parameter */"
+            )
+
+        payload_type = self.expression_result_type(payload_expr)
+        if payload_type is not None:
+            mapped_payload_type = self.metal_mesh_payload_value_type(payload_type)
+            if (
+                self.current_metal_mesh_payload_type is not None
+                and mapped_payload_type != self.current_metal_mesh_payload_type
+            ):
+                return (
+                    "/* unsupported Metal mesh payload dispatch: "
+                    f"payload argument type {mapped_payload_type} does not match "
+                    f"{self.current_metal_mesh_payload_type} */"
+                )
+
+        payload_source_diagnostic = self.metal_dispatch_mesh_payload_source_diagnostic(
+            payload_expr
+        )
+        if payload_source_diagnostic is not None:
+            return payload_source_diagnostic
+
+        payload_value = self.generate_expression(payload_expr)
+        return f"{self.current_metal_mesh_payload_parameter} = {payload_value}"
+
+    def metal_dispatch_mesh_payload_source_diagnostic(self, payload_expr):
+        payload_name = self.assignment_target_root_name(payload_expr)
+        if not payload_name:
+            return (
+                "/* unsupported Metal mesh payload dispatch: "
+                "payload argument must be a threadgroup lvalue */"
+            )
+
+        address_space = self.argument_address_space(payload_expr)
+        if address_space == "threadgroup":
+            return None
+
+        source_address_space = address_space or "unknown"
+        return (
+            "/* unsupported Metal mesh payload dispatch: payload argument "
+            f"'{payload_name}' uses {source_address_space} address space; "
+            "DispatchMesh payload requires a threadgroup lvalue */"
+        )
+
     def generate_buffer_call(self, func_name, args):
         if func_name == "buffer_load" and len(args) >= 2:
             buffer = self.generate_expression(args[0])
@@ -3079,24 +5135,110 @@ class MetalCodeGen:
             value = self.generate_expression(args[2])
             return f"{buffer}[{index}] = {value}"
         if func_name == "buffer_append" and len(args) >= 2:
-            return (
-                "/* unsupported Metal buffer append: requires explicit "
-                "counter buffer */"
-            )
+            buffer = self.generate_expression(args[0])
+            value = self.generate_expression(args[1])
+            counter = self.structured_buffer_counter_reference(args[0])
+            if counter is None:
+                return (
+                    "/* unsupported Metal buffer append: requires append/consume "
+                    "counter buffer */"
+                )
+            index = f"atomic_fetch_add_explicit({counter}, 1u, memory_order_relaxed)"
+            return f"{buffer}[{index}] = {value}"
         if func_name == "buffer_consume" and args:
-            return (
-                "0 /* unsupported Metal buffer consume: requires explicit "
-                "counter buffer */"
+            buffer = self.generate_expression(args[0])
+            counter = self.structured_buffer_counter_reference(args[0])
+            if counter is None:
+                return (
+                    "0 /* unsupported Metal buffer consume: requires append/consume "
+                    "counter buffer */"
+                )
+            index = (
+                f"(atomic_fetch_sub_explicit({counter}, 1u, "
+                "memory_order_relaxed) - 1u)"
             )
+            return f"{buffer}[{index}]"
         if func_name == "buffer_dimensions" and args:
-            diagnostic = (
-                "0 /* unsupported Metal buffer dimensions: device buffers do not "
-                "carry length */"
-            )
+            length_expr = self.structured_buffer_length_reference(args[0])
+            if length_expr is None:
+                length_expr = (
+                    "0 /* unsupported Metal buffer dimensions: requires explicit "
+                    "length sidecar buffer */"
+                )
             if len(args) >= 2:
                 target = self.generate_expression(args[1])
-                return f"{target} = {diagnostic}"
-            return diagnostic
+                return f"{target} = {length_expr}"
+            return length_expr
+        return None
+
+    def structured_buffer_length_reference(self, buffer_arg):
+        length = self.structured_buffer_length_data_argument(buffer_arg)
+        if length is None:
+            return None
+        return f"{length}[0]"
+
+    def structured_buffer_length_data_argument(self, arg):
+        if isinstance(arg, ArrayAccessNode) or (
+            hasattr(arg, "__class__") and "ArrayAccess" in str(arg.__class__)
+        ):
+            array_expr = getattr(arg, "array", getattr(arg, "array_expr", None))
+            index_expr = getattr(arg, "index", getattr(arg, "index_expr", None))
+            array_name = self.expression_name(array_expr)
+            length_parameter = self.current_structured_buffer_length_parameters.get(
+                array_name
+            )
+            if length_parameter is not None:
+                index = self.generate_expression(index_expr)
+                return f"{length_parameter}[{index}]"
+            if self.structured_buffer_requires_length(array_name):
+                index = self.generate_expression(index_expr)
+                length_name = self.structured_buffer_length_parameter_name(array_name)
+                return f"{length_name}[{index}]"
+
+        arg_name = self.expression_name(arg)
+        length_parameter = self.current_structured_buffer_length_parameters.get(
+            arg_name
+        )
+        if length_parameter is not None:
+            return length_parameter
+
+        if self.structured_buffer_requires_length(arg_name):
+            return self.structured_buffer_length_parameter_name(arg_name)
+        return None
+
+    def structured_buffer_counter_reference(self, buffer_arg):
+        counter = self.structured_buffer_counter_data_argument(buffer_arg)
+        if counter is None:
+            return None
+        return counter
+
+    def structured_buffer_counter_data_argument(self, arg):
+        if isinstance(arg, ArrayAccessNode) or (
+            hasattr(arg, "__class__") and "ArrayAccess" in str(arg.__class__)
+        ):
+            array_expr = getattr(arg, "array", getattr(arg, "array_expr", None))
+            index_expr = getattr(arg, "index", getattr(arg, "index_expr", None))
+            array_name = self.expression_name(array_expr)
+            counter_parameter = self.current_structured_buffer_counter_parameters.get(
+                array_name
+            )
+            if counter_parameter is not None:
+                index = self.generate_expression(index_expr)
+                return f"{counter_parameter}[{index}]"
+            if self.global_structured_buffer_requires_counter(array_name):
+                index = self.generate_expression(index_expr)
+                counter_name = self.structured_buffer_counter_parameter_name(array_name)
+                return f"{counter_name}[{index}]"
+
+        arg_name = self.expression_name(arg)
+        counter_parameter = self.current_structured_buffer_counter_parameters.get(
+            arg_name
+        )
+        if counter_parameter is not None:
+            return counter_parameter
+
+        if self.global_structured_buffer_requires_counter(arg_name):
+            return self.structured_buffer_counter_parameter_name(arg_name)
         return None
 
     def default_sampler_expression(self):
@@ -3114,6 +5256,12 @@ class MetalCodeGen:
         return self.structured_buffer_type_name(vtype) in {
             "StructuredBuffer",
             "RWStructuredBuffer",
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+        }
+
+    def structured_buffer_requires_counter(self, vtype):
+        return self.structured_buffer_type_name(vtype) in {
             "AppendStructuredBuffer",
             "ConsumeStructuredBuffer",
         }
@@ -3139,6 +5287,34 @@ class MetalCodeGen:
             return f"array<{pointer_type}, {array_size}> {name}"
         return f"{pointer_type} {name}"
 
+    def structured_buffer_length_resource_name(self, name):
+        return f"{name}Length"
+
+    def structured_buffer_length_parameter_name(self, name):
+        return f"{name}Length"
+
+    def format_structured_buffer_length_parameter(self, name, array_size=None):
+        length_name = self.structured_buffer_length_parameter_name(name)
+        pointer_type = "constant uint*"
+        if array_size is not None:
+            array_size = array_size or "1"
+            return f"array<{pointer_type}, {array_size}> {length_name}"
+        return f"{pointer_type} {length_name}"
+
+    def structured_buffer_counter_resource_name(self, name):
+        return f"{name}Counter"
+
+    def structured_buffer_counter_parameter_name(self, name):
+        return f"{name}Counter"
+
+    def format_structured_buffer_counter_parameter(self, name, array_size=None):
+        counter_name = self.structured_buffer_counter_parameter_name(name)
+        pointer_type = "device atomic_uint*"
+        if array_size is not None:
+            array_size = array_size or "1"
+            return f"array<{pointer_type}, {array_size}> {counter_name}"
+        return f"{pointer_type} {counter_name}"
+
     def format_glsl_buffer_block_parameter(self, block, name, array_size=None):
         address_space = "const device" if block.get("readonly") else "device"
         pointer_type = f"{address_space} uchar*"
@@ -3147,56 +5323,138 @@ class MetalCodeGen:
             return f"array<{pointer_type}, {array_size}> {name}"
         return f"{pointer_type} {name}"
 
+    def visible_function_table_type_name(self, vtype):
+        return str(self.resource_base_type(vtype)).split("<", 1)[0]
+
+    def is_visible_function_table_type(self, vtype):
+        return self.visible_function_table_type_name(vtype) in {
+            "visible_function_table",
+            "visibleFunctionTable",
+        }
+
+    def visible_function_table_signature(self, vtype):
+        type_name = str(self.resource_base_type(vtype))
+        if "<" not in type_name or not type_name.endswith(">"):
+            return "void()"
+
+        payload_type = type_name.split("<", 1)[1][:-1].strip()
+        if not payload_type or payload_type == "void":
+            return "void()"
+        return f"void(thread {self.map_type(payload_type)}&)"
+
+    def map_visible_function_table_type(self, vtype):
+        return f"visible_function_table<{self.visible_function_table_signature(vtype)}>"
+
+    def format_visible_function_table_parameter(self, vtype, name, array_size=None):
+        table_type = self.visible_function_table_parameter_type(vtype)
+        if array_size is not None:
+            array_size = array_size or "1"
+            return f"array<{table_type}, {array_size}> {name}"
+        return f"{table_type} {name}"
+
+    def visible_function_table_parameter_type(self, vtype):
+        type_name = str(vtype)
+        if type_name.startswith("visible_function_table<"):
+            signature = type_name.split("<", 1)[1][:-1].strip()
+            if signature.startswith("void"):
+                return type_name
+        return self.map_visible_function_table_type(vtype)
+
+    def intersection_function_table_type_name(self, vtype):
+        return str(self.resource_base_type(vtype)).split("<", 1)[0]
+
+    def is_intersection_function_table_type(self, vtype):
+        return self.intersection_function_table_type_name(vtype) in {
+            "intersection_function_table",
+            "intersectionFunctionTable",
+        }
+
+    def map_intersection_function_table_type(self, vtype):
+        type_name = str(self.resource_base_type(vtype))
+        if "<" in type_name and type_name.endswith(">"):
+            tags = type_name.split("<", 1)[1][:-1].strip()
+            return f"intersection_function_table<{tags}>"
+        return "intersection_function_table<>"
+
+    def format_intersection_function_table_parameter(
+        self, vtype, name, array_size=None
+    ):
+        table_type = (
+            vtype
+            if str(vtype).startswith("intersection_function_table<")
+            else self.map_intersection_function_table_type(vtype)
+        )
+        if array_size is not None:
+            array_size = array_size or "1"
+            return f"array<{table_type}, {array_size}> {name}"
+        return f"{table_type} {name}"
+
     def is_sampler_type(self, vtype):
         return self.resource_base_type(vtype) == "sampler"
 
-    def is_resource_parameter_type(self, vtype):
-        return self.is_structured_buffer_type(vtype) or self.resource_base_type(
-            vtype
-        ) in {
-            "sampler",
-            "sampler1D",
-            "sampler1DArray",
-            "sampler2D",
-            "sampler3D",
-            "samplerCube",
-            "sampler2DArray",
-            "samplerCubeArray",
-            "sampler2DMS",
-            "sampler2DMSArray",
-            "sampler2DShadow",
-            "sampler2DArrayShadow",
-            "samplerCubeShadow",
-            "samplerCubeArrayShadow",
-            "iimage1D",
-            "iimage1DArray",
-            "iimage2D",
-            "iimage3D",
-            "iimage2DArray",
-            "iimage2DMS",
-            "iimage2DMSArray",
-            "uimage1D",
-            "uimage1DArray",
-            "uimage2D",
-            "uimage3D",
-            "uimage2DArray",
-            "uimage2DMS",
-            "uimage2DMSArray",
-            "image1D",
-            "image1DArray",
-            "image2D",
-            "image3D",
-            "imageCube",
-            "image2DArray",
-            "image2DMS",
-            "image2DMSArray",
+    def is_acceleration_structure_type(self, vtype):
+        return self.resource_base_type(vtype) in {
+            "accelerationStructureEXT",
+            "RaytracingAccelerationStructure",
+            "AccelerationStructure",
+            "acceleration_structure",
+            "instance_acceleration_structure",
+            "primitive_acceleration_structure",
         }
+
+    def is_resource_parameter_type(self, vtype):
+        return (
+            self.is_structured_buffer_type(vtype)
+            or self.is_acceleration_structure_type(vtype)
+            or self.is_visible_function_table_type(vtype)
+            or self.is_intersection_function_table_type(vtype)
+            or self.resource_base_type(vtype)
+            in {
+                "sampler",
+                "sampler1D",
+                "sampler1DArray",
+                "sampler2D",
+                "sampler3D",
+                "samplerCube",
+                "sampler2DArray",
+                "samplerCubeArray",
+                "sampler2DMS",
+                "sampler2DMSArray",
+                "sampler2DShadow",
+                "sampler2DArrayShadow",
+                "samplerCubeShadow",
+                "samplerCubeArrayShadow",
+                "iimage1D",
+                "iimage1DArray",
+                "iimage2D",
+                "iimage3D",
+                "iimage2DArray",
+                "iimage2DMS",
+                "iimage2DMSArray",
+                "uimage1D",
+                "uimage1DArray",
+                "uimage2D",
+                "uimage3D",
+                "uimage2DArray",
+                "uimage2DMS",
+                "uimage2DMSArray",
+                "image1D",
+                "image1DArray",
+                "image2D",
+                "image3D",
+                "imageCube",
+                "image2DArray",
+                "image2DMS",
+                "image2DMSArray",
+            }
+        )
 
     def is_texture_or_image_resource_type(self, vtype):
         return (
             self.is_resource_parameter_type(vtype)
             and not self.is_sampler_type(vtype)
             and not self.is_structured_buffer_type(vtype)
+            and not self.is_acceleration_structure_type(vtype)
         )
 
     def is_integer_coordinate_type(self, vtype):
@@ -3250,6 +5508,8 @@ class MetalCodeGen:
             sample_offset_dimension = 2
         elif texture_type.startswith("texture2d<"):
             sample_offset_dimension = 2
+        elif texture_type.startswith("texture3d<"):
+            sample_offset_dimension = 3
         if not sampling["sample_offset"]:
             sample_offset_dimension = None
 
@@ -3268,11 +5528,7 @@ class MetalCodeGen:
 
         query_lod_coordinate_dimension = None
         if texture_type and not is_storage_image and not is_multisample:
-            if texture_type.startswith("texture1d_array<"):
-                query_lod_coordinate_dimension = 2
-            elif texture_type.startswith("texture1d<"):
-                query_lod_coordinate_dimension = 1
-            elif texture_type.startswith(("texture2d_array<", "depth2d_array<")):
+            if texture_type.startswith(("texture2d_array<", "depth2d_array<")):
                 query_lod_coordinate_dimension = 3
             elif texture_type.startswith(("texture2d<", "depth2d<")):
                 query_lod_coordinate_dimension = 2
@@ -3314,9 +5570,30 @@ class MetalCodeGen:
         ]
 
     def parameter_attribute(self, raw_param_type, semantic, shader_type, node=None):
+        if shader_type == "ray_generation" and semantic == "payload":
+            return ""
+        if (
+            shader_type
+            in {
+                "ray_intersection",
+                "ray_any_hit",
+                "ray_closest_hit",
+                "ray_miss",
+                "ray_callable",
+                "intersection",
+                "anyhit",
+                "closesthit",
+                "miss",
+                "callable",
+            }
+            and semantic == "hit_attribute"
+        ):
+            return ""
+        if shader_type in {"ray_callable", "callable"} and semantic == "callable_data":
+            return ""
         if semantic:
             return self.map_semantic(semantic)
-        if shader_type in {"vertex", "fragment", "compute"}:
+        if shader_type in {"vertex", "fragment", "compute", "ray_generation"}:
             resource_attr = self.resource_parameter_attribute(raw_param_type, node)
             if resource_attr:
                 return resource_attr
@@ -3333,6 +5610,18 @@ class MetalCodeGen:
             namespace = "sampler"
             attribute_names = {"binding", "sampler"}
             prefixes = ("s",)
+        elif self.is_visible_function_table_type(raw_param_type):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
+        elif self.is_intersection_function_table_type(raw_param_type):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
+        elif self.is_acceleration_structure_type(raw_param_type):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
         elif self.is_structured_buffer_type(raw_param_type):
             namespace = "buffer"
             attribute_names = {"binding", "buffer"}
@@ -3341,6 +5630,10 @@ class MetalCodeGen:
             namespace = "texture"
             attribute_names = {"binding", "texture"}
             prefixes = ("t", "u")
+        elif self.is_raw_buffer_parameter_type(raw_param_type, node):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
         else:
             return None
 
@@ -3420,6 +5713,48 @@ class MetalCodeGen:
                 self.global_resource_shape(texture_variable)[1],
                 getattr(texture_variable, "name", "<anonymous>"),
             )
+        for (
+            acceleration_structure_variable,
+            binding,
+            _,
+            _,
+        ) in self.acceleration_structure_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                self.global_resource_shape(acceleration_structure_variable)[1],
+                getattr(acceleration_structure_variable, "name", "<anonymous>"),
+            )
+        for (
+            visible_function_table_variable,
+            binding,
+            _,
+            _,
+        ) in self.visible_function_table_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                self.global_resource_shape(visible_function_table_variable)[1],
+                getattr(visible_function_table_variable, "name", "<anonymous>"),
+            )
+        for (
+            intersection_function_table_variable,
+            binding,
+            _,
+            _,
+        ) in self.intersection_function_table_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                self.global_resource_shape(intersection_function_table_variable)[1],
+                getattr(intersection_function_table_variable, "name", "<anonymous>"),
+            )
         for buffer_variable, binding, _, _ in self.structured_buffer_variables:
             self.reserve_resource_binding_range(
                 used_bindings,
@@ -3428,6 +5763,28 @@ class MetalCodeGen:
                 binding,
                 self.global_resource_shape(buffer_variable)[1],
                 getattr(buffer_variable, "name", "<anonymous>"),
+            )
+        for buffer_variable, binding, _, _ in self.structured_buffer_length_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                self.global_resource_shape(buffer_variable)[1],
+                self.structured_buffer_length_resource_name(
+                    getattr(buffer_variable, "name", "<anonymous>")
+                ),
+            )
+        for buffer_variable, binding, _, _ in self.structured_buffer_counter_variables:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                "buffer",
+                binding,
+                self.global_resource_shape(buffer_variable)[1],
+                self.structured_buffer_counter_resource_name(
+                    getattr(buffer_variable, "name", "<anonymous>")
+                ),
             )
         for buffer_variable, binding, _, _ in self.glsl_buffer_block_variables:
             self.reserve_resource_binding_range(
@@ -3459,6 +5816,21 @@ class MetalCodeGen:
                 node, {"binding", "sampler"}, ("s",)
             )
             return f" [[sampler({binding})]]" if binding is not None else ""
+        if self.is_visible_function_table_type(raw_param_type):
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer"}, ("b", "u", "t")
+            )
+            return f" [[buffer({binding})]]" if binding is not None else ""
+        if self.is_intersection_function_table_type(raw_param_type):
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer"}, ("b", "u", "t")
+            )
+            return f" [[buffer({binding})]]" if binding is not None else ""
+        if self.is_acceleration_structure_type(raw_param_type):
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer"}, ("b", "u", "t")
+            )
+            return f" [[buffer({binding})]]" if binding is not None else ""
         if self.is_structured_buffer_type(raw_param_type):
             binding = self.explicit_resource_binding_index(
                 node, {"binding", "buffer"}, ("b", "u", "t")
@@ -3469,11 +5841,28 @@ class MetalCodeGen:
                 node, {"binding", "texture"}, ("t", "u")
             )
             return f" [[texture({binding})]]" if binding is not None else ""
+        if self.is_raw_buffer_parameter_type(raw_param_type, node):
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer"}, ("b", "u", "t")
+            )
+            return f" [[buffer({binding})]]" if binding is not None else ""
         return ""
 
     def format_parameter_declaration(
-        self, raw_param_type, mapped_type, name, node=None
+        self, raw_param_type, mapped_type, name, node=None, shader_type=None
     ):
+        ray_payload_declaration = self.metal_ray_payload_parameter_declaration(
+            mapped_type, name, node, shader_type
+        )
+        if ray_payload_declaration is not None:
+            return ray_payload_declaration
+
+        mesh_payload_declaration = self.metal_mesh_payload_parameter_declaration(
+            mapped_type, name, node, shader_type
+        )
+        if mesh_payload_declaration is not None:
+            return mesh_payload_declaration
+
         lowered_block = self.current_glsl_buffer_block_parameters.get(name)
         if lowered_block is not None:
             array_size = self.glsl_buffer_block_parameter_array_size(
@@ -3489,11 +5878,473 @@ class MetalCodeGen:
             return self.format_structured_buffer_parameter(
                 raw_param_type, name, array_size
             )
+        if self.is_visible_function_table_type(raw_param_type):
+            return self.format_visible_function_table_parameter(raw_param_type, name)
+        if self.is_intersection_function_table_type(raw_param_type):
+            return self.format_intersection_function_table_parameter(
+                raw_param_type, name
+            )
+        address_space_declaration = self.format_address_space_parameter_declaration(
+            raw_param_type, mapped_type, name, node, shader_type
+        )
+        if address_space_declaration is not None:
+            return address_space_declaration
         array_type = self.resource_array_parameter(raw_param_type, node)
         if array_type is not None:
             resource_type, array_size = array_type
             return self.format_resource_parameter(resource_type, name, array_size)
         return format_c_style_array_declaration(mapped_type, name)
+
+    def format_address_space_parameter_declaration(
+        self, raw_param_type, mapped_type, name, node=None, shader_type=None
+    ):
+        if isinstance(raw_param_type, PointerType):
+            address_space = self.effective_parameter_address_space(
+                raw_param_type, node, shader_type
+            )
+            address_space = self.readonly_qualified_address_space(address_space, node)
+            pointee_type = self.map_resource_type_with_format(
+                raw_param_type.pointee_type, node
+            )
+            return f"{address_space} {pointee_type}* {name}"
+
+        if isinstance(raw_param_type, ReferenceType):
+            address_space = self.effective_parameter_address_space(
+                raw_param_type, node, shader_type
+            )
+            address_space = self.readonly_qualified_address_space(address_space, node)
+            referenced_type = self.map_resource_type_with_format(
+                raw_param_type.referenced_type, node
+            )
+            return f"{address_space} {referenced_type}& {name}"
+
+        if self.is_array_type_node(raw_param_type):
+            binding = self.explicit_buffer_binding_index(node)
+            qualifiers = self.parameter_qualifier_names(node)
+            address_space = self.effective_parameter_address_space(
+                raw_param_type,
+                node,
+                shader_type,
+                default_for_stage_binding=binding is not None
+                or bool(qualifiers & {"const", "readonly"}),
+            )
+            if address_space is None:
+                return None
+            address_space = self.readonly_qualified_address_space(address_space, node)
+            if binding is not None and shader_type in {
+                "vertex",
+                "fragment",
+                "compute",
+                "ray_generation",
+            }:
+                element_type = self.map_resource_type_with_format(
+                    raw_param_type.element_type, node
+                )
+                return f"{address_space} {element_type}* {name}"
+            declaration = format_c_style_array_declaration(mapped_type, name)
+            return f"{address_space} {declaration}"
+
+        return None
+
+    def effective_parameter_address_space(
+        self,
+        raw_param_type,
+        node=None,
+        shader_type=None,
+        default_for_stage_binding=True,
+    ):
+        default_space = None
+        if default_for_stage_binding or isinstance(
+            raw_param_type, (PointerType, ReferenceType)
+        ):
+            default_space = self.default_parameter_address_space(
+                raw_param_type, node, shader_type
+            )
+        return self.parameter_address_space(node, default=default_space)
+
+    def default_parameter_address_space(
+        self, raw_param_type, node=None, shader_type=None
+    ):
+        if shader_type in {"vertex", "fragment", "compute", "ray_generation"}:
+            binding = self.explicit_buffer_binding_index(node)
+            if binding is not None:
+                if isinstance(raw_param_type, ReferenceType):
+                    return "constant"
+                return "device"
+        return "thread"
+
+    def explicit_buffer_binding_index(self, node):
+        return self.explicit_resource_binding_index(
+            node, {"binding", "buffer"}, ("b", "u", "t")
+        )
+
+    def parameter_address_space(self, node=None, default=None):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        address_spaces = []
+        if "constant" in qualifiers:
+            address_spaces.append("constant")
+        if qualifiers & {"device", "global", "storage"}:
+            address_spaces.append("device")
+        if qualifiers & {"threadgroup", "workgroup", "shared", "groupshared"}:
+            address_spaces.append("threadgroup")
+        if qualifiers & {"thread", "function", "local", "private"}:
+            address_spaces.append("thread")
+
+        address_spaces = list(dict.fromkeys(address_spaces))
+        if len(address_spaces) > 1:
+            name = getattr(node, "name", "<anonymous>")
+            raise ValueError(
+                f"Metal parameter '{name}' has conflicting address-space qualifiers: "
+                f"{', '.join(sorted(qualifiers))}"
+            )
+        if address_spaces:
+            return address_spaces[0]
+        return default
+
+    def parameter_qualifier_names(self, node=None):
+        return {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+
+    def normalized_address_space(self, address_space):
+        if address_space is None:
+            return None
+        address_space = str(address_space).strip()
+        if address_space.startswith("const "):
+            address_space = address_space[len("const ") :].strip()
+        return address_space or None
+
+    def readonly_qualified_address_space(self, address_space, node=None):
+        qualifiers = self.parameter_qualifier_names(node)
+        if address_space == "device" and "readonly" in qualifiers:
+            return "const device"
+        if "const" in qualifiers and address_space not in {None, "constant"}:
+            return f"const {address_space}"
+        return address_space
+
+    def parameter_variable_address_space(
+        self, raw_param_type, node=None, shader_type=None
+    ):
+        if not (
+            isinstance(raw_param_type, (PointerType, ReferenceType))
+            or self.is_array_type_node(raw_param_type)
+        ):
+            return None
+        return self.normalized_address_space(
+            self.effective_parameter_address_space(
+                raw_param_type,
+                node,
+                shader_type,
+                default_for_stage_binding=self.explicit_buffer_binding_index(node)
+                is not None,
+            )
+        )
+
+    def readonly_metal_parameter_reason(
+        self, raw_param_type, node=None, shader_type=None
+    ):
+        if self.is_metal_mesh_payload_parameter(shader_type, node):
+            return None
+        if not (
+            isinstance(raw_param_type, (PointerType, ReferenceType))
+            or self.is_array_type_node(raw_param_type)
+        ):
+            return None
+        qualifiers = self.parameter_qualifier_names(node)
+        if "const" in qualifiers:
+            return "const-qualified"
+        if "constant" in qualifiers:
+            return "constant address space"
+        if "readonly" in qualifiers and not self.is_raw_buffer_parameter_type(
+            raw_param_type, node
+        ):
+            return "readonly"
+        return None
+
+    def is_mutable_metal_parameter(self, raw_param_type, node=None):
+        if not (
+            isinstance(raw_param_type, (PointerType, ReferenceType))
+            or self.is_array_type_node(raw_param_type)
+        ):
+            return False
+        return self.readonly_metal_parameter_reason(raw_param_type, node) is None
+
+    def is_readonly_raw_buffer_parameter(
+        self, raw_param_type, node=None, shader_type=None
+    ):
+        if not (
+            isinstance(raw_param_type, (PointerType, ReferenceType))
+            or self.is_array_type_node(raw_param_type)
+        ):
+            return False
+        qualifiers = self.parameter_qualifier_names(node)
+        if "readonly" in qualifiers:
+            return True
+        address_space = self.effective_parameter_address_space(
+            raw_param_type,
+            node,
+            shader_type,
+            default_for_stage_binding=self.explicit_buffer_binding_index(node)
+            is not None,
+        )
+        return address_space == "constant"
+
+    def is_array_type_node(self, vtype):
+        return (
+            hasattr(vtype, "element_type") and str(type(vtype)).find("ArrayType") != -1
+        )
+
+    def is_raw_buffer_parameter_type(self, raw_param_type, node=None):
+        if isinstance(
+            raw_param_type, (PointerType, ReferenceType)
+        ) or self.is_array_type_node(raw_param_type):
+            address_space = self.parameter_address_space(node)
+            return address_space in {"device", "constant"} or (
+                address_space is None
+                and self.explicit_buffer_binding_index(node) is not None
+            )
+        return False
+
+    def is_mutable_raw_buffer_parameter(self, raw_param_type, node=None):
+        if not self.is_raw_buffer_parameter_type(raw_param_type, node):
+            return False
+        return not self.is_readonly_raw_buffer_parameter(raw_param_type, node)
+
+    def readonly_raw_buffer_call_diagnostic(self, func_name, call_args):
+        if func_name not in self.user_function_names:
+            return None
+        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        for index, arg in enumerate(call_args):
+            if index >= len(parameter_nodes):
+                continue
+            arg_name = self.assignment_target_root_name(arg)
+            if arg_name not in self.current_readonly_raw_buffer_parameters:
+                continue
+            parameter = parameter_nodes[index]
+            raw_param_type = getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            if not self.is_mutable_raw_buffer_parameter(raw_param_type, parameter):
+                continue
+            parameter_name = getattr(parameter, "name", f"arg{index}")
+            return (
+                "/* unsupported Metal raw buffer call: readonly buffer "
+                f"'{arg_name}' cannot be passed to mutable parameter "
+                f"'{parameter_name}' of '{func_name}' */"
+            )
+        return None
+
+    def readonly_metal_parameter_call_diagnostic(self, func_name, call_args):
+        if func_name not in self.user_function_names:
+            return None
+        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        for index, arg in enumerate(call_args):
+            if index >= len(parameter_nodes):
+                continue
+            arg_name = self.assignment_target_root_name(arg)
+            if arg_name not in self.current_readonly_metal_parameters:
+                continue
+            parameter = parameter_nodes[index]
+            raw_param_type = getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            if not self.is_mutable_metal_parameter(raw_param_type, parameter):
+                continue
+            parameter_name = getattr(parameter, "name", f"arg{index}")
+            return (
+                "/* unsupported Metal parameter call: readonly parameter "
+                f"'{arg_name}' cannot be passed to mutable parameter "
+                f"'{parameter_name}' of '{func_name}' */"
+            )
+        return None
+
+    def argument_address_space(self, arg):
+        arg_name = self.assignment_target_root_name(arg)
+        if arg_name in self.current_address_space_variables:
+            return self.current_address_space_variables[arg_name]
+        if arg_name in self.local_variable_types:
+            return "thread"
+        return None
+
+    def address_space_call_diagnostic(self, func_name, call_args):
+        if func_name not in self.user_function_names:
+            return None
+        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        for index, arg in enumerate(call_args):
+            if index >= len(parameter_nodes):
+                continue
+            parameter = parameter_nodes[index]
+            raw_param_type = getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            expected_address_space = self.parameter_variable_address_space(
+                raw_param_type, parameter
+            )
+            if expected_address_space is None:
+                continue
+            actual_address_space = self.argument_address_space(arg)
+            if (
+                actual_address_space is None
+                or actual_address_space == expected_address_space
+            ):
+                continue
+            arg_name = self.assignment_target_root_name(arg)
+            parameter_name = getattr(parameter, "name", f"arg{index}")
+            return (
+                "/* unsupported Metal address-space call: argument "
+                f"'{arg_name}' uses {actual_address_space} address space but "
+                f"parameter '{parameter_name}' of '{func_name}' requires "
+                f"{expected_address_space} */"
+            )
+        return None
+
+    def pointer_pointee_type_name(self, vtype):
+        if isinstance(vtype, PointerType):
+            return self.type_name_string(vtype.pointee_type)
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return None
+        type_name = str(type_name).strip()
+        return type_name[:-1].strip() if type_name.endswith("*") else None
+
+    def member_access_uses_pointer_operator(self, expr):
+        if not isinstance(expr, MemberAccessNode):
+            return False
+        object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
+        object_type = self.expression_result_type(object_expr)
+        return self.pointer_pointee_type_name(object_type) is not None
+
+    def assignment_target_root_name(self, target):
+        if isinstance(target, UnaryOpNode) and getattr(target, "operator", None) == "&":
+            return self.assignment_target_root_name(getattr(target, "operand", None))
+        if isinstance(target, MemberAccessNode):
+            return self.assignment_target_root_name(
+                getattr(target, "object", getattr(target, "object_expr", None))
+            )
+        if isinstance(target, PointerAccessNode):
+            return self.assignment_target_root_name(
+                getattr(target, "pointer_expr", None)
+            )
+        if isinstance(target, ArrayAccessNode):
+            return self.assignment_target_root_name(
+                getattr(target, "array", getattr(target, "array_expr", None))
+            )
+        return self.expression_name(target)
+
+    def readonly_raw_buffer_assignment_diagnostic(self, target):
+        root_name = self.assignment_target_root_name(target)
+        if root_name not in self.current_readonly_raw_buffer_parameters:
+            return None
+        return (
+            "/* unsupported Metal raw buffer store: readonly buffer "
+            f"'{root_name}' cannot be written */"
+        )
+
+    def readonly_metal_parameter_assignment_diagnostic(self, target):
+        root_name = self.assignment_target_root_name(target)
+        if root_name not in self.current_readonly_metal_parameters:
+            return None
+        reason = self.current_readonly_metal_parameter_reasons.get(
+            root_name, "readonly"
+        )
+        return (
+            "/* unsupported Metal parameter store: parameter "
+            f"'{root_name}' is {reason} */"
+        )
+
+    def readonly_metal_mesh_payload_assignment_diagnostic(self, target):
+        root_name = self.assignment_target_root_name(target)
+        if root_name not in self.current_readonly_metal_mesh_payload_parameters:
+            return None
+        reason = self.current_readonly_metal_mesh_payload_reasons.get(
+            root_name, "const object_data"
+        )
+        if reason == "mesh stage payload":
+            reason_text = "const object_data in mesh stages"
+        elif reason == "const-qualified payload parameter":
+            reason_text = "const-qualified object_data"
+        elif reason == "address-space mismatch alias":
+            reason_text = "read-only object_data after address-space mismatch"
+        else:
+            reason_text = reason
+        return (
+            "/* unsupported Metal mesh payload store: mesh payload "
+            f"'{root_name}' is {reason_text} */"
+        )
+
+    def metal_mesh_payload_parameter_declaration(
+        self, mapped_type, name, node=None, shader_type=None
+    ):
+        if not self.is_metal_mesh_payload_parameter(shader_type, node):
+            return None
+
+        readonly_reason = self.readonly_metal_mesh_payload_parameter_reason(
+            shader_type, node
+        )
+        address_space = (
+            "const object_data" if readonly_reason is not None else "object_data"
+        )
+        payload_type = self.metal_mesh_payload_value_type(mapped_type) or mapped_type
+        return f"{address_space} {payload_type}& {name}"
+
+    def readonly_metal_mesh_payload_parameter_reason(self, shader_type, node):
+        if shader_type == "mesh":
+            return "mesh stage payload"
+        qualifiers = self.parameter_qualifier_names(node)
+        if qualifiers & {"const", "constant"}:
+            return "const-qualified payload parameter"
+        return None
+
+    def is_metal_mesh_payload_parameter(self, shader_type, node):
+        if shader_type not in {"object", "task", "amplification", "mesh"}:
+            return False
+        return self.is_metal_mesh_payload_semantic(self.semantic_from_node(node))
+
+    def is_metal_mesh_payload_semantic(self, semantic):
+        if semantic is None:
+            return False
+        normalized = str(semantic).strip().lower().replace("-", "_")
+        if normalized.startswith("metal_") or normalized.startswith("msl_"):
+            normalized = normalized.split("_", 1)[1]
+        return normalized in {
+            "payload",
+            "mesh_payload",
+            "hlsl_mesh_payload",
+            "task_payload",
+            "taskpayloadsharedext",
+        }
+
+    def metal_ray_payload_parameter_declaration(
+        self, mapped_type, name, node=None, shader_type=None
+    ):
+        if shader_type == "ray_generation":
+            address_space = "device"
+        elif shader_type in {
+            "ray_intersection",
+            "ray_any_hit",
+            "ray_closest_hit",
+            "ray_miss",
+            "ray_callable",
+            "intersection",
+            "anyhit",
+            "closesthit",
+            "miss",
+            "callable",
+        }:
+            address_space = "ray_data"
+        else:
+            return None
+        semantic = self.semantic_from_node(node)
+        if semantic != "payload" and not (
+            shader_type in {"ray_callable", "callable"} and semantic == "callable_data"
+        ):
+            return None
+
+        return f"{address_space} {mapped_type}& {name}"
 
     def structured_buffer_parameter_array_size(self, vtype, node=None):
         param_name = getattr(node, "name", None)
@@ -3753,6 +6604,1116 @@ class MetalCodeGen:
         )
         return assign_stage_entry_names(entries, used_names, self.stage_entry_base_name)
 
+    def uses_metal_raytracing_namespace(self, ast, global_vars, functions):
+        for stage_type in getattr(ast, "stages", {}) or {}:
+            if normalize_stage_name(stage_type) in {
+                "ray_generation",
+                "ray_intersection",
+                "ray_any_hit",
+                "ray_closest_hit",
+                "ray_miss",
+                "ray_callable",
+                "intersection",
+                "anyhit",
+                "closesthit",
+                "miss",
+                "callable",
+            }:
+                return True
+
+        for variable in global_vars:
+            vtype, _ = self.global_resource_shape(variable)
+            if (
+                self.is_acceleration_structure_type(vtype)
+                or self.is_visible_function_table_type(vtype)
+                or self.is_intersection_function_table_type(vtype)
+            ):
+                return True
+
+        for func in functions:
+            for node in self.iter_ast_nodes(getattr(func, "body", [])):
+                if isinstance(node, (RayTracingOpNode, RayQueryOpNode)):
+                    return True
+        return False
+
+    def metal_mesh_stage_attribute(self, shader_type, func, execution_config=None):
+        stage_keyword = "mesh" if shader_type == "mesh" else "object"
+        attributes = [stage_keyword]
+        threadgroup_limit = self.metal_stage_threadgroup_limit(
+            func, shader_type, execution_config
+        )
+        if threadgroup_limit:
+            attributes.append(f"max_total_threads_per_threadgroup({threadgroup_limit})")
+        return f"[[{', '.join(attributes)}]]"
+
+    def metal_ray_intersection_stage_attribute(self, func, raw_return_type):
+        primitive_type = self.metal_ray_intersection_primitive_type(
+            func, raw_return_type
+        )
+        return f"[[intersection({primitive_type})]]"
+
+    def metal_ray_intersection_primitive_type(self, func, raw_return_type):
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            normalized = str(attr_name).strip().lower().replace("-", "_")
+            arguments = getattr(attr, "arguments", []) or []
+            if normalized in {"bounding_box", "boundingbox"}:
+                return "bounding_box"
+            if normalized in {"triangle", "triangles"}:
+                return "triangle"
+            if normalized in {"intersection", "primitive_type"} and arguments:
+                requested_value = self.attribute_value_to_string(arguments[0])
+                if requested_value is None:
+                    continue
+                requested = str(requested_value).strip().lower().replace("-", "_")
+                if requested in {"bounding_box", "boundingbox"}:
+                    return "bounding_box"
+                if requested in {"triangle", "triangles"}:
+                    return "triangle"
+
+        return "triangle" if raw_return_type == "bool" else "bounding_box"
+
+    def metal_stage_threadgroup_limit(self, func, shader_type, execution_config=None):
+        if shader_type not in {"mesh", "object", "task", "amplification"}:
+            return None
+
+        arguments = self.metal_stage_attribute_arguments(
+            func, "max_total_threads_per_threadgroup"
+        )
+        if arguments:
+            if len(arguments) != 1:
+                raise ValueError(
+                    f"Metal {shader_type} stage max_total_threads_per_threadgroup "
+                    "requires exactly one argument"
+                )
+            return self.attribute_value_to_string(arguments[0])
+
+        if execution_config:
+            return self.metal_local_size_threadgroup_total(execution_config)
+        return None
+
+    def metal_stage_attribute_arguments(self, func, attribute_name):
+        for attr in getattr(func, "attributes", []) or []:
+            if self.metal_stage_control_attribute_name(attr) == attribute_name:
+                return getattr(attr, "arguments", []) or []
+        return []
+
+    def metal_local_size_threadgroup_total(self, execution_config):
+        values = [str(value).strip() for value in compute_local_size(execution_config)]
+        literal_product = 1
+        for value in values:
+            try:
+                literal_product *= int(value, 0)
+            except ValueError:
+                return " * ".join(f"({item})" for item in values)
+        return str(literal_product)
+
+    def metal_mesh_stage_output_config(
+        self, shader_type, func, function_name, reserved_parameter_names
+    ):
+        if shader_type != "mesh":
+            return None
+
+        role_parameters = self.metal_mesh_output_role_parameters(func)
+        if role_parameters:
+            return self.explicit_metal_mesh_stage_output_config(
+                func, function_name, reserved_parameter_names, role_parameters
+            )
+
+        max_vertices = self.metal_single_stage_attribute_argument(func, "max_vertices")
+        max_primitives = self.metal_single_stage_attribute_argument(
+            func, "max_primitives"
+        )
+        topology = self.metal_single_stage_attribute_argument(func, "outputtopology")
+        if not (max_vertices and max_primitives and topology):
+            return None
+
+        vertex_type = self.unique_metal_generated_name(
+            f"_CrossGLMetalMeshVertex_{function_name}",
+            set(getattr(self, "structs_by_name", {})),
+        )
+        parameter_name = self.unique_metal_generated_name(
+            "_crossglMeshOut", reserved_parameter_names
+        )
+        return {
+            "parameter_name": parameter_name,
+            "vertex_type": vertex_type,
+            "max_vertices": max_vertices,
+            "max_primitives": max_primitives,
+            "topology": self.metal_mesh_topology(topology),
+            "primitive_type": "void",
+            "output_parameters": {},
+            "generated_vertex_struct": True,
+        }
+
+    def explicit_metal_mesh_stage_output_config(
+        self, func, function_name, reserved_parameter_names, role_parameters
+    ):
+        missing_roles = {"vertices", "indices"} - set(role_parameters)
+        if missing_roles:
+            missing = ", ".join(sorted(missing_roles))
+            raise ValueError(
+                "Metal mesh output parameters require explicit "
+                f"{missing} output role(s)"
+            )
+
+        topology = self.metal_single_stage_attribute_argument(func, "outputtopology")
+        if not topology:
+            raise ValueError(
+                "Metal mesh output parameters require an outputtopology attribute"
+            )
+        topology = self.metal_mesh_topology(topology)
+
+        vertices = self.metal_mesh_output_array_parameter_info(
+            role_parameters["vertices"], "vertices"
+        )
+        indices = self.metal_mesh_output_array_parameter_info(
+            role_parameters["indices"], "indices"
+        )
+        primitives = None
+        if "primitives" in role_parameters:
+            primitives = self.metal_mesh_output_array_parameter_info(
+                role_parameters["primitives"], "primitives"
+            )
+            if primitives["count"] != indices["count"]:
+                raise ValueError(
+                    "Metal mesh primitives output count must match indices output count"
+                )
+
+        self.validate_metal_mesh_indices_output_type(indices, topology)
+        parameter_name = self.unique_metal_generated_name(
+            "_crossglMeshOut", reserved_parameter_names
+        )
+        output_parameters = {
+            vertices["name"]: {**vertices, "role": "vertices"},
+            indices["name"]: {**indices, "role": "indices"},
+        }
+        primitive_type = "void"
+        if primitives is not None:
+            primitive_type = primitives["element_type"]
+            output_parameters[primitives["name"]] = {
+                **primitives,
+                "role": "primitives",
+            }
+
+        return {
+            "parameter_name": parameter_name,
+            "vertex_type": vertices["element_type"],
+            "primitive_type": primitive_type,
+            "max_vertices": vertices["count"],
+            "max_primitives": indices["count"],
+            "topology": topology,
+            "output_parameters": output_parameters,
+            "generated_vertex_struct": False,
+            "function_name": function_name,
+        }
+
+    def metal_mesh_output_role_parameters(self, func):
+        role_parameters = {}
+        for parameter in getattr(func, "parameters", []) or []:
+            role = self.metal_mesh_output_parameter_role(parameter)
+            if role is None:
+                continue
+            if role in role_parameters:
+                raise ValueError(
+                    f"Metal mesh output role '{role}' can be used by only one parameter"
+                )
+            role_parameters[role] = parameter
+        return role_parameters
+
+    def is_metal_mesh_output_parameter(self, shader_type, parameter):
+        return (
+            shader_type == "mesh"
+            and self.metal_mesh_output_parameter_role(parameter) is not None
+        )
+
+    def metal_mesh_output_parameter_role(self, parameter):
+        for attr in getattr(parameter, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            normalized = str(attr_name).lower()
+            if normalized.startswith("metal_") or normalized.startswith("msl_"):
+                normalized = normalized.split("_", 1)[1]
+            if normalized in {"vertices", "indices", "primitives"}:
+                return normalized
+        return None
+
+    def metal_mesh_output_array_parameter_info(self, parameter, role):
+        raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        if hasattr(raw_type, "element_type") and hasattr(raw_type, "size"):
+            element_type = self.map_type(self.type_name_string(raw_type.element_type))
+            count = self.metal_mesh_output_array_size(raw_type.size)
+        else:
+            type_name = self.type_name_string(raw_type)
+            element_type, array_suffix = split_array_type_suffix(type_name)
+            element_type = self.map_type(element_type)
+            count = self.metal_mesh_output_array_suffix_size(array_suffix)
+
+        if not element_type or count is None:
+            raise ValueError(f"Metal mesh {role} output must be a fixed-size array")
+        return {
+            "name": parameter.name,
+            "element_type": element_type,
+            "count": count,
+        }
+
+    def metal_mesh_output_array_size(self, size):
+        if size is None:
+            return None
+        if isinstance(size, int):
+            return str(size)
+        return self.attribute_value_to_string(size)
+
+    def metal_mesh_output_array_suffix_size(self, array_suffix):
+        if not array_suffix:
+            return None
+        if not (array_suffix.startswith("[") and array_suffix.endswith("]")):
+            return None
+        size = array_suffix[1:-1].strip()
+        return size or None
+
+    def validate_metal_mesh_indices_output_type(self, indices, topology):
+        expected_width = {"point": 1, "line": 2, "triangle": 3}[topology]
+        expected_type = "uint" if expected_width == 1 else f"uint{expected_width}"
+        actual_type = indices["element_type"]
+        if actual_type != expected_type:
+            raise ValueError(
+                "Metal mesh indices output for "
+                f"{topology} topology requires {expected_type}, got {actual_type}"
+            )
+
+    def validate_metal_mesh_output_usage(self, func):
+        mesh_output = self.current_metal_mesh_output_config
+        if mesh_output is None:
+            return
+
+        body = getattr(func, "body", [])
+        statements = getattr(body, "statements", body if isinstance(body, list) else [])
+        self.validate_metal_mesh_output_statement_sequence(
+            statements,
+            self.metal_mesh_output_flow_state(),
+        )
+
+    def metal_mesh_output_flow_state(
+        self,
+        counts_seen=False,
+        counts=None,
+        falls_through=True,
+        terminator=None,
+        exits=None,
+    ):
+        normalized_counts = None
+        if counts is not None:
+            normalized_counts = {
+                "vertices": counts.get("vertices"),
+                "primitives": counts.get("primitives"),
+            }
+        return {
+            "counts_seen": counts_seen,
+            "counts": normalized_counts,
+            "falls_through": falls_through,
+            "terminator": None if falls_through else terminator,
+            "exits": list(exits or []),
+        }
+
+    def copy_metal_mesh_output_flow_state(
+        self, state, falls_through=None, terminator=None, exits=None
+    ):
+        copied_falls_through = (
+            state.get("falls_through", True) if falls_through is None else falls_through
+        )
+        return self.metal_mesh_output_flow_state(
+            counts_seen=state.get("counts_seen", False),
+            counts=state.get("counts"),
+            falls_through=copied_falls_through,
+            terminator=(
+                None
+                if copied_falls_through
+                else (state.get("terminator") if terminator is None else terminator)
+            ),
+            exits=(list(state.get("exits", [])) if exits is None else exits),
+        )
+
+    def metal_mesh_output_exit_state(self, state, terminator=None):
+        return self.metal_mesh_output_flow_state(
+            counts_seen=state.get("counts_seen", False),
+            counts=state.get("counts"),
+            falls_through=False,
+            terminator=(
+                terminator if terminator is not None else state.get("terminator")
+            ),
+        )
+
+    def merge_metal_mesh_output_flow_states(self, states, fallthrough_terminators=()):
+        fallthrough_states = []
+        propagated_exits = []
+        for state in states or []:
+            propagated_exits.extend(state.get("exits", []))
+            if (
+                state.get("falls_through", True)
+                or state.get("terminator") in fallthrough_terminators
+            ):
+                fallthrough_states.append(
+                    self.copy_metal_mesh_output_flow_state(
+                        state,
+                        falls_through=True,
+                        exits=[],
+                    )
+                )
+            elif state.get("terminator") is not None:
+                propagated_exits.append(self.metal_mesh_output_exit_state(state))
+        if not fallthrough_states:
+            return self.metal_mesh_output_flow_state(
+                falls_through=False,
+                exits=propagated_exits,
+            )
+
+        counts_seen = all(
+            state.get("counts_seen", False) for state in fallthrough_states
+        )
+        counts = None
+        if counts_seen:
+            counts = {}
+            for role in ("vertices", "primitives"):
+                role_values = []
+                role_has_unknown = False
+                for state in fallthrough_states:
+                    state_counts = state.get("counts")
+                    if state_counts is None or state_counts.get(role) is None:
+                        role_has_unknown = True
+                        break
+                    role_values.append(state_counts[role])
+                counts[role] = (
+                    None if role_has_unknown or not role_values else min(role_values)
+                )
+
+        return self.metal_mesh_output_flow_state(
+            counts_seen=counts_seen,
+            counts=counts,
+            falls_through=True,
+            exits=propagated_exits,
+        )
+
+    def metal_mesh_output_states_for_terminator(self, state, terminator):
+        states = [
+            exit_state
+            for exit_state in state.get("exits", [])
+            if exit_state.get("terminator") == terminator
+        ]
+        if (
+            not state.get("falls_through", True)
+            and state.get("terminator") == terminator
+        ):
+            states.append(self.metal_mesh_output_exit_state(state, terminator))
+        return states
+
+    def metal_mesh_statement_list(self, body):
+        if body is None:
+            return []
+        if hasattr(body, "statements"):
+            return body.statements
+        if isinstance(body, list):
+            return body
+        return [body]
+
+    def validate_metal_mesh_output_statement_sequence(self, statements, state):
+        current = self.copy_metal_mesh_output_flow_state(state)
+        for stmt in statements or []:
+            if not current.get("falls_through", True):
+                break
+            current = self.validate_metal_mesh_output_statement_flow(stmt, current)
+        return current
+
+    def validate_metal_mesh_output_statement_flow(self, stmt, state):
+        current = self.copy_metal_mesh_output_flow_state(state)
+        if isinstance(stmt, IfNode):
+            return self.validate_metal_mesh_if_output_flow(stmt, current)
+        if isinstance(stmt, BlockNode):
+            return self.validate_metal_mesh_output_statement_sequence(
+                self.metal_mesh_statement_list(stmt),
+                current,
+            )
+        if isinstance(stmt, SwitchNode):
+            return self.validate_metal_mesh_switch_output_flow(stmt, current)
+        if isinstance(stmt, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)):
+            return self.validate_metal_mesh_loop_output_flow(stmt, current)
+        if isinstance(stmt, ReturnNode):
+            return self.copy_metal_mesh_output_flow_state(
+                current, falls_through=False, terminator="return"
+            )
+        if isinstance(stmt, BreakNode):
+            return self.copy_metal_mesh_output_flow_state(
+                current, falls_through=False, terminator="break"
+            )
+        if isinstance(stmt, ContinueNode):
+            return self.copy_metal_mesh_output_flow_state(
+                current, falls_through=False, terminator="continue"
+            )
+
+        expr = getattr(stmt, "expression", stmt)
+        if isinstance(expr, IfNode):
+            return self.validate_metal_mesh_if_output_flow(expr, current)
+        if isinstance(expr, SwitchNode):
+            return self.validate_metal_mesh_switch_output_flow(expr, current)
+
+        mesh_counts = self.metal_mesh_set_output_counts(expr)
+        if mesh_counts is not None:
+            return self.metal_mesh_output_flow_state(
+                counts_seen=True,
+                counts=mesh_counts,
+                falls_through=current.get("falls_through", True),
+                exits=current.get("exits", []),
+            )
+
+        if isinstance(expr, AssignmentNode):
+            self.validate_metal_mesh_output_assignment_usage(
+                expr,
+                current.get("counts_seen", False),
+                current.get("counts"),
+            )
+            return current
+
+        nested_statements = self.metal_mesh_nested_statements(stmt)
+        for nested in nested_statements:
+            self.validate_metal_mesh_output_statement_sequence(nested, current)
+
+        return current
+
+    def validate_metal_mesh_if_output_flow(self, stmt, state):
+        then_state = self.validate_metal_mesh_output_statement_sequence(
+            self.metal_mesh_statement_list(getattr(stmt, "then_branch", None)),
+            state,
+        )
+        else_branch = getattr(stmt, "else_branch", None)
+        if else_branch is None:
+            else_state = self.copy_metal_mesh_output_flow_state(state)
+        else:
+            else_state = self.validate_metal_mesh_output_statement_sequence(
+                self.metal_mesh_statement_list(else_branch),
+                state,
+            )
+        return self.merge_metal_mesh_output_flow_states([then_state, else_state])
+
+    def validate_metal_mesh_switch_output_flow(self, stmt, state):
+        branch_states = []
+        has_default = False
+        for case in getattr(stmt, "cases", []) or []:
+            if getattr(case, "value", None) is None:
+                has_default = True
+            branch_states.append(
+                self.validate_metal_mesh_output_statement_sequence(
+                    self.metal_mesh_statement_list(getattr(case, "statements", [])),
+                    state,
+                )
+            )
+
+        default_case = getattr(stmt, "default_case", None)
+        if default_case is not None:
+            has_default = True
+            branch_states.append(
+                self.validate_metal_mesh_output_statement_sequence(
+                    self.metal_mesh_statement_list(default_case),
+                    state,
+                )
+            )
+
+        if not has_default:
+            branch_states.append(self.copy_metal_mesh_output_flow_state(state))
+        return self.merge_metal_mesh_output_flow_states(
+            branch_states,
+            fallthrough_terminators={"break"},
+        )
+
+    def validate_metal_mesh_loop_output_flow(self, stmt, state):
+        body_state = self.validate_metal_mesh_output_statement_sequence(
+            self.metal_mesh_statement_list(getattr(stmt, "body", [])),
+            state,
+        )
+        break_states = self.metal_mesh_output_states_for_terminator(body_state, "break")
+        continue_states = self.metal_mesh_output_states_for_terminator(
+            body_state, "continue"
+        )
+        return_states = self.metal_mesh_output_states_for_terminator(
+            body_state, "return"
+        )
+
+        loop_exits = list(return_states)
+        if isinstance(stmt, LoopNode) or self.metal_mesh_loop_condition_is_true(stmt):
+            fallthrough_states = break_states
+        elif isinstance(stmt, DoWhileNode):
+            fallthrough_states = list(break_states)
+            if body_state.get("falls_through", True):
+                fallthrough_states.append(
+                    self.copy_metal_mesh_output_flow_state(body_state, exits=[])
+                )
+            fallthrough_states.extend(continue_states)
+        else:
+            fallthrough_states = [self.copy_metal_mesh_output_flow_state(state)]
+            if body_state.get("falls_through", True):
+                fallthrough_states.append(
+                    self.copy_metal_mesh_output_flow_state(body_state, exits=[])
+                )
+            fallthrough_states.extend(break_states)
+            fallthrough_states.extend(continue_states)
+
+        if not fallthrough_states:
+            return self.metal_mesh_output_flow_state(
+                falls_through=False,
+                exits=loop_exits,
+            )
+
+        merged = self.merge_metal_mesh_output_flow_states(
+            fallthrough_states,
+            fallthrough_terminators={"break", "continue"},
+        )
+        return self.copy_metal_mesh_output_flow_state(
+            merged,
+            exits=loop_exits + merged.get("exits", []),
+        )
+
+    def metal_mesh_loop_condition_is_true(self, stmt):
+        if isinstance(stmt, LoopNode):
+            return True
+        if isinstance(stmt, ForNode) and getattr(stmt, "condition", None) is None:
+            return True
+
+        condition = getattr(stmt, "condition", None)
+        literal_value = self.metal_literal_bool_value(condition)
+        return literal_value is True
+
+    def metal_literal_bool_value(self, value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered == "true":
+                return True
+            if lowered == "false":
+                return False
+            return None
+        if hasattr(value, "value"):
+            return self.metal_literal_bool_value(getattr(value, "value"))
+        return None
+
+    def metal_mesh_set_output_counts(self, expr):
+        if not isinstance(expr, MeshOpNode) or expr.operation != "SetMeshOutputCounts":
+            return None
+        if len(expr.arguments) != 2:
+            raise ValueError(
+                "Metal mesh SetMeshOutputCounts requires exactly 2 arguments"
+            )
+
+        vertex_count = self.literal_int_value(
+            expr.arguments[0], self.literal_int_constants
+        )
+        primitive_count = self.literal_int_value(
+            expr.arguments[1], self.literal_int_constants
+        )
+        self.validate_metal_mesh_output_count_bound(
+            "numVertices",
+            vertex_count,
+            self.current_metal_mesh_output_config["max_vertices"],
+        )
+        self.validate_metal_mesh_output_count_bound(
+            "numPrimitives",
+            primitive_count,
+            self.current_metal_mesh_output_config["max_primitives"],
+        )
+        return {
+            "vertices": vertex_count,
+            "primitives": primitive_count,
+        }
+
+    def validate_metal_mesh_output_count_bound(self, label, value, declared_bound):
+        if value is None:
+            return
+        declared = self.metal_literal_int_text_value(declared_bound)
+        if declared is None:
+            return
+        if value > declared:
+            raise ValueError(
+                f"Metal mesh SetMeshOutputCounts {label} argument "
+                f"({value}) cannot exceed declared output count ({declared})"
+            )
+
+    def validate_metal_mesh_output_assignment_usage(
+        self, assignment, set_counts_seen, set_counts
+    ):
+        target = getattr(assignment, "target", getattr(assignment, "left", None))
+        target_info = self.metal_mesh_output_assignment_target(target)
+        if target_info is None:
+            return
+
+        role = target_info["role"]
+        name = target_info["name"]
+        if not set_counts_seen:
+            raise ValueError(
+                f"Metal mesh output array '{name}' must be written only after "
+                "SetMeshOutputCounts"
+            )
+
+        index_value = self.literal_int_value(
+            target_info.get("index"), self.literal_int_constants
+        )
+        if index_value is None:
+            return
+
+        declared_bound = self.metal_literal_int_text_value(
+            target_info["output"]["count"]
+        )
+        if declared_bound is not None and index_value >= declared_bound:
+            raise ValueError(
+                f"Metal mesh {role} output array '{name}' index ({index_value}) "
+                f"must be less than declared array size ({declared_bound})"
+            )
+
+        active_bound = None
+        if set_counts is not None:
+            active_bound = (
+                set_counts.get("vertices")
+                if role == "vertices"
+                else set_counts.get("primitives")
+            )
+        if active_bound is not None and index_value >= active_bound:
+            raise ValueError(
+                f"Metal mesh {role} output array '{name}' index ({index_value}) "
+                f"must be less than SetMeshOutputCounts "
+                f"{'numVertices' if role == 'vertices' else 'numPrimitives'} "
+                f"({active_bound})"
+            )
+
+    def metal_mesh_nested_statements(self, stmt):
+        nested = []
+        for attribute in (
+            "body",
+            "then_branch",
+            "if_body",
+            "else_branch",
+            "else_body",
+        ):
+            value = getattr(stmt, attribute, None)
+            if value is None:
+                continue
+            nested.append(
+                getattr(value, "statements", value if isinstance(value, list) else [])
+            )
+        return [statements for statements in nested if statements]
+
+    def metal_literal_int_text_value(self, value):
+        if value is None:
+            return None
+        try:
+            return int(str(value), 0)
+        except (TypeError, ValueError):
+            return None
+
+    def collect_function_metal_mesh_dispatch_contexts(self, functions):
+        functions = list(functions)
+        functions_by_name = {
+            func.name: func for func in functions if getattr(func, "name", None)
+        }
+        contexts_by_id = {
+            id(func): self.direct_metal_mesh_dispatch_context(func)
+            for func in functions
+        }
+
+        changed = True
+        while changed:
+            changed = False
+            for func in functions:
+                name = getattr(func, "name", None)
+                if not name:
+                    continue
+                context = contexts_by_id.setdefault(id(func), {})
+                for called_name in self.called_user_function_names(func):
+                    called_func = functions_by_name.get(called_name)
+                    called_context = (
+                        contexts_by_id.get(id(called_func))
+                        if called_func is not None
+                        else None
+                    )
+                    if not called_context:
+                        continue
+                    if self.merge_metal_mesh_dispatch_context(
+                        context, called_context, name, called_name
+                    ):
+                        changed = True
+
+        self.function_metal_mesh_dispatch_contexts_by_id = {
+            func_id: context for func_id, context in contexts_by_id.items() if context
+        }
+        return {
+            getattr(func, "name", None): context
+            for func in functions
+            for context in [contexts_by_id.get(id(func), {})]
+            if getattr(func, "name", None) and context
+        }
+
+    def direct_metal_mesh_dispatch_context(self, func):
+        context = {}
+        if self.function_contains_mesh_op(
+            func, "DispatchMesh", argument_counts={1, 3, 4}
+        ):
+            context["grid"] = True
+        if not self.function_contains_mesh_op(
+            func, "DispatchMesh", argument_counts={4}
+        ):
+            return context
+
+        dispatch_payload_type = self.metal_dispatch_mesh_payload_argument_type(func)
+        expected_payload_type = self.metal_program_mesh_payload_type
+        if (
+            dispatch_payload_type is not None
+            and expected_payload_type is not None
+            and dispatch_payload_type != expected_payload_type
+        ):
+            raise ValueError(
+                "Metal DispatchMesh payload type "
+                f"'{dispatch_payload_type}' must match mesh payload type "
+                f"'{expected_payload_type}'"
+            )
+
+        payload_type = expected_payload_type or dispatch_payload_type
+        if payload_type is None:
+            raise ValueError("Metal DispatchMesh payload argument type is unknown")
+        context["payload"] = True
+        context["payload_type"] = payload_type
+        return context
+
+    def merge_metal_mesh_dispatch_context(
+        self, context, called_context, func_name, called_name
+    ):
+        changed = False
+        if called_context.get("grid") and not context.get("grid"):
+            context["grid"] = True
+            changed = True
+        if called_context.get("payload"):
+            if not context.get("payload"):
+                context["payload"] = True
+                changed = True
+            payload_type = context.get("payload_type")
+            called_payload_type = called_context.get("payload_type")
+            if (
+                payload_type
+                and called_payload_type
+                and payload_type != called_payload_type
+            ):
+                raise ValueError(
+                    "Metal mesh dispatch helper payload type mismatch: "
+                    f"'{func_name}' calls '{called_name}' requiring "
+                    f"'{called_payload_type}' but already requires '{payload_type}'"
+                )
+            if called_payload_type and payload_type != called_payload_type:
+                context["payload_type"] = called_payload_type
+                changed = True
+        return changed
+
+    def metal_mesh_dispatch_context_for_function(self, func_or_name):
+        if not isinstance(func_or_name, str):
+            context = self.function_metal_mesh_dispatch_contexts_by_id.get(
+                id(func_or_name)
+            )
+            if context is not None:
+                return context
+        name = (
+            getattr(func_or_name, "name", None)
+            if not isinstance(func_or_name, str)
+            else func_or_name
+        )
+        if not name:
+            return {}
+        return self.function_metal_mesh_dispatch_contexts.get(name, {})
+
+    def append_metal_mesh_dispatch_context_parameters(
+        self, params_str, func, reserved_parameter_names
+    ):
+        context = self.metal_mesh_dispatch_context_for_function(func)
+        if not context:
+            return params_str
+
+        reserved_names = set(reserved_parameter_names or ())
+        reserved_names.update(self.metal_function_local_variable_names(func))
+        if context.get("payload"):
+            payload_type = (
+                context.get("payload_type") or self.metal_program_mesh_payload_type
+            )
+            payload_name = self.unique_metal_generated_name(
+                "_crossglMeshPayload", reserved_names
+            )
+            reserved_names.add(payload_name)
+            params_str = self.append_parameter_declaration(
+                params_str,
+                f"object_data {payload_type}& {payload_name}",
+            )
+            self.current_metal_mesh_payload_parameter = payload_name
+            self.current_metal_mesh_payload_type = payload_type
+            self.current_address_space_variables[payload_name] = "object_data"
+
+        if context.get("grid"):
+            grid_name = self.unique_metal_generated_name(
+                "_crossglMeshGrid", reserved_names
+            )
+            params_str = self.append_parameter_declaration(
+                params_str,
+                f"mesh_grid_properties {grid_name}",
+            )
+            self.current_metal_mesh_grid_properties_parameter = grid_name
+        return params_str
+
+    def required_metal_mesh_dispatch_context_arguments(self, func_name):
+        context = self.metal_mesh_dispatch_context_for_function(func_name)
+        if not context:
+            return []
+        args = []
+        if context.get("payload"):
+            args.append(self.current_metal_mesh_payload_parameter)
+        if context.get("grid"):
+            args.append(self.current_metal_mesh_grid_properties_parameter)
+        return [arg for arg in args if arg]
+
+    def metal_mesh_dispatch_context_call_diagnostic(self, func_name):
+        context = self.metal_mesh_dispatch_context_for_function(func_name)
+        if not context:
+            return None
+        if context.get("payload") and not self.current_metal_mesh_payload_parameter:
+            return (
+                "/* unsupported Metal mesh dispatch helper call: function "
+                f"'{func_name}' requires an object_data payload context */"
+            )
+        if (
+            context.get("grid")
+            and not self.current_metal_mesh_grid_properties_parameter
+        ):
+            return (
+                "/* unsupported Metal mesh dispatch helper call: function "
+                f"'{func_name}' requires mesh_grid_properties context */"
+            )
+        return None
+
+    def metal_mesh_payload_type_for_program(self, ast):
+        payload_types = set()
+        for stage_type, stage in (getattr(ast, "stages", {}) or {}).items():
+            if normalize_stage_name(stage_type) != "mesh":
+                continue
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is None:
+                continue
+            for parameter in getattr(entry_point, "parameters", []) or []:
+                if not self.is_metal_mesh_payload_parameter("mesh", parameter):
+                    continue
+                payload_types.add(self.metal_parameter_mapped_type(parameter))
+
+        if len(payload_types) > 1:
+            expected = ", ".join(sorted(payload_types))
+            raise ValueError(
+                "Metal mesh stages in one pipeline must use one mesh payload type; "
+                f"got {expected}"
+            )
+        return next(iter(payload_types), None)
+
+    def generated_metal_mesh_payload_parameter(
+        self, shader_type, func, reserved_parameter_names
+    ):
+        if shader_type not in {"object", "task", "amplification"}:
+            return None
+        if self.current_metal_mesh_payload_parameter is not None:
+            return None
+        context = self.metal_mesh_dispatch_context_for_function(func)
+        if not context.get("payload"):
+            return None
+
+        expected_payload_type = self.metal_program_mesh_payload_type
+        dispatch_payload_type = context.get("payload_type")
+        if (
+            dispatch_payload_type is not None
+            and expected_payload_type is not None
+            and dispatch_payload_type != expected_payload_type
+        ):
+            raise ValueError(
+                "Metal DispatchMesh payload type "
+                f"'{dispatch_payload_type}' must match mesh payload type "
+                f"'{expected_payload_type}'"
+            )
+
+        payload_type = expected_payload_type or dispatch_payload_type
+        if payload_type is None:
+            raise ValueError("Metal DispatchMesh payload argument type is unknown")
+
+        reserved_names = set(reserved_parameter_names or ())
+        reserved_names.update(self.metal_function_local_variable_names(func))
+        payload_name = self.unique_metal_generated_name(
+            "_crossglMeshPayload", reserved_names
+        )
+        return payload_type, payload_name
+
+    def metal_dispatch_mesh_payload_argument_type(self, func):
+        declared_types = self.metal_function_declared_value_types(func)
+        payload_types = set()
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not isinstance(node, MeshOpNode):
+                continue
+            if node.operation != "DispatchMesh" or len(node.arguments) != 4:
+                continue
+            payload_type = self.metal_dispatch_mesh_payload_type(
+                node.arguments[3], declared_types
+            )
+            if payload_type is not None:
+                payload_types.add(payload_type)
+
+        if len(payload_types) > 1:
+            expected = ", ".join(sorted(payload_types))
+            raise ValueError(
+                "Metal DispatchMesh payload arguments must use one type; "
+                f"got {expected}"
+            )
+        return next(iter(payload_types), None)
+
+    def metal_dispatch_mesh_payload_type(self, expr, declared_types):
+        if isinstance(expr, ArrayAccessNode):
+            payload_type = self.metal_dispatch_mesh_payload_type(
+                getattr(expr, "array", getattr(expr, "array_expr", None)),
+                declared_types,
+            )
+            return self.metal_mesh_payload_value_type(payload_type)
+        if isinstance(expr, MemberAccessNode):
+            object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
+            object_type = self.metal_dispatch_mesh_payload_type(
+                object_expr, declared_types
+            )
+            object_type = self.metal_mesh_payload_value_type(object_type)
+            member_type = self.struct_member_types.get(object_type, {}).get(expr.member)
+            if member_type is not None:
+                return self.metal_mesh_payload_value_type(member_type)
+        expr_name = self.expression_name(expr)
+        if expr_name in declared_types:
+            return self.metal_mesh_payload_value_type(declared_types[expr_name])
+        payload_type = self.expression_result_type(expr)
+        return self.metal_mesh_payload_value_type(payload_type)
+
+    def metal_mesh_payload_value_type(self, payload_type):
+        if not payload_type:
+            return None
+        payload_type = self.type_name_string(payload_type).strip()
+        while payload_type.endswith(("&", "*")):
+            payload_type = payload_type[:-1].strip()
+        if "[" in payload_type and "]" in payload_type:
+            payload_type, _ = split_array_type_suffix(payload_type)
+        return self.map_type(payload_type)
+
+    def metal_function_declared_value_types(self, func):
+        declared_types = {}
+        for parameter in getattr(func, "parameters", []) or []:
+            declared_types[parameter.name] = self.metal_parameter_raw_type(parameter)
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            name = getattr(node, "name", None)
+            if not name:
+                continue
+            raw_type = getattr(node, "var_type", getattr(node, "vtype", None))
+            if raw_type is not None:
+                declared_types[name] = self.type_name_string(raw_type)
+        return declared_types
+
+    def metal_function_local_variable_names(self, func):
+        names = set()
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if isinstance(node, VariableNode) and getattr(node, "name", None):
+                names.add(node.name)
+        return names
+
+    def metal_parameter_mapped_type(self, parameter):
+        return self.map_type(self.metal_parameter_raw_type(parameter))
+
+    def metal_parameter_raw_type(self, parameter):
+        if hasattr(parameter, "param_type"):
+            return self.type_name_string(parameter.param_type)
+        if hasattr(parameter, "vtype"):
+            return self.type_name_string(parameter.vtype)
+        return "float"
+
+    def metal_mesh_grid_properties_parameter(
+        self, shader_type, func, reserved_parameter_names
+    ):
+        if shader_type not in {"object", "task", "amplification"}:
+            return None
+        context = self.metal_mesh_dispatch_context_for_function(func)
+        if not context.get("grid"):
+            return None
+        return self.unique_metal_generated_name(
+            "_crossglMeshGrid", reserved_parameter_names
+        )
+
+    def function_contains_mesh_op(self, func, operation, argument_counts=None):
+        for node in self.iter_ast_nodes(getattr(func, "body", None)):
+            if not isinstance(node, MeshOpNode) or node.operation != operation:
+                continue
+            if (
+                argument_counts is not None
+                and len(node.arguments) not in argument_counts
+            ):
+                continue
+            return True
+        return False
+
+    def unique_metal_generated_name(self, base_name, reserved_names):
+        reserved_names = set(reserved_names or ())
+        if base_name not in reserved_names:
+            return base_name
+        index = 1
+        while f"{base_name}_{index}" in reserved_names:
+            index += 1
+        return f"{base_name}_{index}"
+
+    def metal_single_stage_attribute_argument(self, func, attribute_name):
+        arguments = self.metal_stage_attribute_arguments(func, attribute_name)
+        if not arguments:
+            return None
+        if len(arguments) != 1:
+            raise ValueError(
+                f"Metal stage attribute {attribute_name} requires exactly one argument"
+            )
+        return self.attribute_value_to_string(arguments[0])
+
+    def metal_mesh_topology(self, topology):
+        topology_name = str(topology).strip().strip('"').lower()
+        topology_map = {
+            "point": "point",
+            "points": "point",
+            "line": "line",
+            "lines": "line",
+            "triangle": "triangle",
+            "triangles": "triangle",
+        }
+        mapped = topology_map.get(topology_name)
+        if mapped is None:
+            raise ValueError(
+                f"Metal mesh output topology cannot be lowered: {topology}"
+            )
+        return mapped
+
+    def generate_metal_mesh_vertex_output_struct(self, mesh_output):
+        return (
+            f"struct {mesh_output['vertex_type']} {{\n"
+            "    float4 position [[position]];\n"
+            "};\n"
+        )
+
+    def metal_mesh_stage_output_parameter_declaration(self, mesh_output):
+        return (
+            f"mesh<{mesh_output['vertex_type']}, {mesh_output['primitive_type']}, "
+            f"{mesh_output['max_vertices']}, {mesh_output['max_primitives']}, "
+            f"topology::{mesh_output['topology']}> {mesh_output['parameter_name']}"
+        )
+
+    def append_parameter_declaration(self, params_str, declaration):
+        if not params_str:
+            return declaration
+        return f"{params_str}, {declaration}"
+
     def all_functions(self, ast):
         functions = list(getattr(ast, "functions", []) or [])
         for stage in getattr(ast, "stages", {}).values():
@@ -3768,6 +7729,158 @@ class MetalCodeGen:
             parameters.extend(getattr(func, "parameters", getattr(func, "params", [])))
         return parameters
 
+    def collect_function_parameter_infos(self, functions):
+        parameter_infos = {}
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            infos = []
+            for param in getattr(func, "parameters", getattr(func, "params", [])):
+                raw_type = getattr(param, "param_type", getattr(param, "vtype", None))
+                infos.append(
+                    (getattr(param, "name", None), self.type_name_string(raw_type))
+                )
+            parameter_infos[func_name] = infos
+        return parameter_infos
+
+    def collect_function_parameter_nodes(self, functions):
+        parameter_nodes = {}
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            parameter_nodes[func_name] = list(
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            )
+        return parameter_nodes
+
+    def structured_buffer_parameter_type_map(self, func):
+        parameter_types = {}
+        for param in getattr(func, "parameters", getattr(func, "params", [])):
+            name = getattr(param, "name", None)
+            raw_type = getattr(param, "param_type", getattr(param, "vtype", None))
+            type_name = self.type_name_string(raw_type)
+            if name and self.is_structured_buffer_type(type_name):
+                parameter_types[name] = type_name
+        return parameter_types
+
+    def function_call_arguments(self, call):
+        return getattr(call, "arguments", getattr(call, "args", []))
+
+    def collect_function_structured_buffer_length_dependencies(self, functions):
+        parameter_types = {
+            getattr(func, "name", None): self.structured_buffer_parameter_type_map(func)
+            for func in functions or []
+            if getattr(func, "name", None)
+        }
+        dependencies = {func_name: set() for func_name in parameter_types}
+
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            for node in self.iter_ast_nodes(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                if self.function_call_name(node) != "buffer_dimensions":
+                    continue
+                args = self.function_call_arguments(node)
+                if not args:
+                    continue
+                buffer_name = self.expression_name(args[0])
+                if buffer_name in parameter_types.get(func_name, {}):
+                    dependencies[func_name].add(buffer_name)
+
+        changed = True
+        while changed:
+            changed = False
+            for func in functions or []:
+                func_name = getattr(func, "name", None)
+                if not func_name:
+                    continue
+                current_dependencies = dependencies.setdefault(func_name, set())
+                before = set(current_dependencies)
+                for node in self.iter_ast_nodes(getattr(func, "body", [])):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    called_name = self.function_call_name(node)
+                    if called_name not in self.user_function_names:
+                        continue
+                    called_dependencies = dependencies.get(called_name, set())
+                    if not called_dependencies:
+                        continue
+                    called_parameters = self.function_parameter_infos.get(
+                        called_name, []
+                    )
+                    for index, arg in enumerate(self.function_call_arguments(node)):
+                        if index >= len(called_parameters):
+                            continue
+                        called_param_name, _called_param_type = called_parameters[index]
+                        if called_param_name not in called_dependencies:
+                            continue
+                        arg_name = self.expression_name(arg)
+                        if arg_name in parameter_types.get(func_name, {}):
+                            current_dependencies.add(arg_name)
+                if current_dependencies != before:
+                    changed = True
+        return dependencies
+
+    def collect_global_structured_buffer_length_dependencies(
+        self, functions, global_vars
+    ):
+        global_buffer_names = set()
+        for node in global_vars or []:
+            name = getattr(node, "name", getattr(node, "variable_name", None))
+            raw_type = getattr(node, "var_type", getattr(node, "vtype", None))
+            if name and self.is_structured_buffer_type(raw_type):
+                global_buffer_names.add(name)
+
+        dependencies = set()
+        for func in functions or []:
+            local_names = {
+                getattr(param, "name", None)
+                for param in getattr(func, "parameters", getattr(func, "params", []))
+                if getattr(param, "name", None)
+            }
+            for node in self.iter_ast_nodes(getattr(func, "body", [])):
+                if isinstance(node, VariableNode) and getattr(node, "name", None):
+                    local_names.add(node.name)
+
+            for node in self.iter_ast_nodes(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                func_name = self.function_call_name(node)
+                args = self.function_call_arguments(node)
+                if func_name == "buffer_dimensions" and args:
+                    buffer_name = self.expression_name(args[0])
+                    if (
+                        buffer_name in global_buffer_names
+                        and buffer_name not in local_names
+                    ):
+                        dependencies.add(buffer_name)
+                    continue
+                if func_name not in self.user_function_names:
+                    continue
+                called_dependencies = (
+                    self.function_structured_buffer_length_dependencies.get(
+                        func_name, set()
+                    )
+                )
+                if not called_dependencies:
+                    continue
+                called_parameters = self.function_parameter_infos.get(func_name, [])
+                for index, arg in enumerate(args):
+                    if index >= len(called_parameters):
+                        continue
+                    called_param_name, _called_param_type = called_parameters[index]
+                    if called_param_name not in called_dependencies:
+                        continue
+                    arg_name = self.expression_name(arg)
+                    if arg_name in global_buffer_names and arg_name not in local_names:
+                        dependencies.add(arg_name)
+        return dependencies
+
     def collect_global_resource_names(self, root):
         resource_names = set()
         for node in getattr(root, "global_variables", []) or []:
@@ -3779,6 +7892,14 @@ class MetalCodeGen:
             ):
                 resource_names.add(var_name)
         return resource_names
+
+    def is_stage_local_resource_variable(self, node):
+        vtype = self.type_name_string(
+            getattr(node, "var_type", getattr(node, "vtype", "float"))
+        )
+        return self.is_resource_parameter_type(
+            vtype
+        ) or self.is_glsl_buffer_block_variable(node, vtype)
 
     def validate_global_resource_shadows(self, ast):
         conflicts = collect_non_resource_global_resource_shadows(
@@ -3906,6 +8027,11 @@ class MetalCodeGen:
                 local_names.add(node.name)
 
         texture_names = self.global_texture_names()
+        acceleration_structure_names = self.global_acceleration_structure_names()
+        visible_function_table_names = self.global_visible_function_table_names()
+        intersection_function_table_names = (
+            self.global_intersection_function_table_names()
+        )
         buffer_names = (
             self.global_structured_buffer_names()
             | self.global_glsl_buffer_block_names()
@@ -3921,6 +8047,9 @@ class MetalCodeGen:
                     and name not in local_names
                     and (
                         name in texture_names
+                        or name in acceleration_structure_names
+                        or name in visible_function_table_names
+                        or name in intersection_function_table_names
                         or name in buffer_names
                         or name in sampler_names
                     )
@@ -3934,8 +8063,58 @@ class MetalCodeGen:
                 self.add_buffer_call_resource_dependencies(
                     node, local_names, buffer_names, dependencies
                 )
+            if isinstance(node, RayTracingOpNode):
+                self.add_ray_tracing_resource_dependencies(
+                    node,
+                    local_names,
+                    visible_function_table_names,
+                    intersection_function_table_names,
+                    dependencies,
+                )
 
         return dependencies
+
+    def add_ray_tracing_resource_dependencies(
+        self,
+        call,
+        local_names,
+        visible_function_table_names,
+        intersection_function_table_names,
+        dependencies,
+    ):
+        operation = getattr(call, "operation", None)
+        if operation == "TraceRay":
+            args = getattr(call, "arguments", [])
+            if not args:
+                return
+            table = self.default_intersection_function_table(
+                self.metal_acceleration_structure_argument_type(args[0])
+            )
+            if (
+                table is not None
+                and table["name"] in intersection_function_table_names
+                and table["name"] not in local_names
+            ):
+                dependencies.add(table["name"])
+            return
+
+        if operation != "CallShader":
+            return
+        args = getattr(call, "arguments", [])
+        if len(args) == 3:
+            table_name = self.expression_name(args[0])
+            if (
+                table_name in visible_function_table_names
+                and table_name not in local_names
+            ):
+                dependencies.add(table_name)
+            return
+        if len(args) == 2 and len(self.visible_function_table_variables) == 1:
+            table_name = getattr(
+                self.visible_function_table_variables[0][0], "name", None
+            )
+            if table_name and table_name not in local_names:
+                dependencies.add(table_name)
 
     def add_texture_call_resource_dependencies(
         self, call, local_names, texture_names, sampler_names, dependencies
@@ -4037,12 +8216,58 @@ class MetalCodeGen:
             if getattr(texture_variable, "name", None)
         }
 
+    def global_acceleration_structure_names(self):
+        return {
+            acceleration_structure_variable.name
+            for acceleration_structure_variable, _, _, _ in (
+                self.acceleration_structure_variables
+            )
+            if getattr(acceleration_structure_variable, "name", None)
+        }
+
+    def global_visible_function_table_names(self):
+        return {
+            visible_function_table_variable.name
+            for visible_function_table_variable, _, _, _ in (
+                self.visible_function_table_variables
+            )
+            if getattr(visible_function_table_variable, "name", None)
+        }
+
+    def global_intersection_function_table_names(self):
+        return {
+            intersection_function_table_variable.name
+            for intersection_function_table_variable, _, _, _ in (
+                self.intersection_function_table_variables
+            )
+            if getattr(intersection_function_table_variable, "name", None)
+        }
+
     def global_structured_buffer_names(self):
         return {
             buffer_variable.name
             for buffer_variable, _, _, _ in self.structured_buffer_variables
             if getattr(buffer_variable, "name", None)
         }
+
+    def structured_buffer_requires_length(self, name):
+        return bool(name and name in self.global_structured_buffer_length_dependencies)
+
+    def structured_buffer_parameter_requires_length(self, func_name, name):
+        return bool(
+            func_name
+            and name
+            and name
+            in self.function_structured_buffer_length_dependencies.get(func_name, set())
+        )
+
+    def global_structured_buffer_requires_counter(self, name):
+        if not name:
+            return False
+        for buffer_variable, _, buffer_type, _ in self.structured_buffer_variables:
+            if getattr(buffer_variable, "name", None) == name:
+                return self.structured_buffer_requires_counter(buffer_type)
+        return False
 
     def global_glsl_buffer_block_names(self):
         return {
@@ -4064,6 +8289,58 @@ class MetalCodeGen:
             (texture_variable, texture_type, array_size)
             for texture_variable, _, texture_type, array_size in self.texture_variables
             if getattr(texture_variable, "name", None) in dependencies
+        ]
+
+    def required_function_acceleration_structures(self, func_name):
+        dependencies = self.function_global_resource_dependencies.get(func_name, set())
+        return [
+            (
+                acceleration_structure_variable,
+                acceleration_structure_type,
+                array_size,
+            )
+            for (
+                acceleration_structure_variable,
+                _,
+                acceleration_structure_type,
+                array_size,
+            ) in self.acceleration_structure_variables
+            if getattr(acceleration_structure_variable, "name", None) in dependencies
+        ]
+
+    def required_function_visible_function_tables(self, func_name):
+        dependencies = self.function_global_resource_dependencies.get(func_name, set())
+        return [
+            (
+                visible_function_table_variable,
+                visible_function_table_type,
+                array_size,
+            )
+            for (
+                visible_function_table_variable,
+                _,
+                visible_function_table_type,
+                array_size,
+            ) in self.visible_function_table_variables
+            if getattr(visible_function_table_variable, "name", None) in dependencies
+        ]
+
+    def required_function_intersection_function_tables(self, func_name):
+        dependencies = self.function_global_resource_dependencies.get(func_name, set())
+        return [
+            (
+                intersection_function_table_variable,
+                intersection_function_table_type,
+                array_size,
+            )
+            for (
+                intersection_function_table_variable,
+                _,
+                intersection_function_table_type,
+                array_size,
+            ) in self.intersection_function_table_variables
+            if getattr(intersection_function_table_variable, "name", None)
+            in dependencies
         ]
 
     def required_function_samplers(self, func_name):
@@ -4100,29 +8377,73 @@ class MetalCodeGen:
             if getattr(buffer_variable, "name", None) in dependencies
         ]
 
+    def generate_function_call_arguments(self, func_name, call_args):
+        parameter_infos = self.function_parameter_infos.get(func_name, [])
+        args = []
+        for index, arg in enumerate(call_args):
+            param_name, param_type = (
+                parameter_infos[index] if index < len(parameter_infos) else (None, None)
+            )
+            args.append(self.generate_expression(arg))
+            if self.structured_buffer_parameter_requires_length(func_name, param_name):
+                length = self.structured_buffer_length_data_argument(arg)
+                if length is not None:
+                    args.append(length)
+            if param_type is not None and self.structured_buffer_requires_counter(
+                param_type
+            ):
+                counter = self.structured_buffer_counter_data_argument(arg)
+                if counter is not None:
+                    args.append(counter)
+        return args
+
     def required_function_resource_argument_names(self, func_name):
-        return (
-            [
-                texture_variable.name
-                for texture_variable, _, _ in self.required_function_textures(func_name)
-            ]
-            + [
-                buffer_variable.name
-                for buffer_variable, _, _ in self.required_function_structured_buffers(
-                    func_name
-                )
-            ]
-            + [
-                buffer_variable.name
-                for buffer_variable, _, _ in self.required_function_glsl_buffer_blocks(
-                    func_name
-                )
-            ]
-            + [
-                sampler_variable.name
-                for sampler_variable, _ in self.required_function_samplers(func_name)
-            ]
+        names = [
+            texture_variable.name
+            for texture_variable, _, _ in self.required_function_textures(func_name)
+        ]
+        names.extend(
+            acceleration_structure_variable.name
+            for acceleration_structure_variable, _, _ in (
+                self.required_function_acceleration_structures(func_name)
+            )
         )
+        names.extend(
+            visible_function_table_variable.name
+            for visible_function_table_variable, _, _ in (
+                self.required_function_visible_function_tables(func_name)
+            )
+        )
+        names.extend(
+            intersection_function_table_variable.name
+            for intersection_function_table_variable, _, _ in (
+                self.required_function_intersection_function_tables(func_name)
+            )
+        )
+        for (
+            buffer_variable,
+            buffer_type,
+            _array_size,
+        ) in self.required_function_structured_buffers(func_name):
+            buffer_name = getattr(buffer_variable, "name", None)
+            if not buffer_name:
+                continue
+            names.append(buffer_name)
+            if self.structured_buffer_requires_length(buffer_name):
+                names.append(self.structured_buffer_length_parameter_name(buffer_name))
+            if self.structured_buffer_requires_counter(buffer_type):
+                names.append(self.structured_buffer_counter_parameter_name(buffer_name))
+        names.extend(
+            buffer_variable.name
+            for buffer_variable, _, _ in self.required_function_glsl_buffer_blocks(
+                func_name
+            )
+        )
+        names.extend(
+            sampler_variable.name
+            for sampler_variable, _ in self.required_function_samplers(func_name)
+        )
+        return names
 
     def iter_ast_nodes(self, node):
         if node is None or isinstance(node, (str, int, float, bool)):
@@ -4201,8 +8522,9 @@ class MetalCodeGen:
             return None
         if isinstance(value, str):
             return value
-        if hasattr(value, "name"):
-            return str(value.name)
+        name = getattr(value, "name", None)
+        if name is not None:
+            return str(name)
         if hasattr(value, "value"):
             return str(value.value).strip('"')
         return str(value)
@@ -4303,6 +8625,7 @@ class MetalCodeGen:
             "local_size_x",
             "local_size_y",
             "local_size_z",
+            "max_primitives",
             "max_total_threads_per_threadgroup",
             "max_vertices",
             "maxvertexcount",
@@ -4347,6 +8670,9 @@ class MetalCodeGen:
 
     def map_resource_type_with_format(self, vtype, node=None):
         if vtype is None:
+            return self.map_type(vtype)
+
+        if isinstance(vtype, (PointerType, ReferenceType)):
             return self.map_type(vtype)
 
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
@@ -4430,7 +8756,11 @@ class MetalCodeGen:
     def resource_base_type(self, vtype):
         if vtype is None:
             return ""
-        if hasattr(vtype, "element_type") and str(type(vtype)).find("ArrayType") != -1:
+        if isinstance(vtype, PointerType):
+            return self.resource_base_type(vtype.pointee_type)
+        if isinstance(vtype, ReferenceType):
+            return self.resource_base_type(vtype.referenced_type)
+        if self.is_array_type_node(vtype):
             return self.resource_base_type(vtype.element_type)
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype = self.convert_type_node_to_string(vtype)
@@ -4591,23 +8921,37 @@ class MetalCodeGen:
             return None
         object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
         var_name = self.expression_name(object_expr)
-        if not var_name:
-            return None
-        block = self.current_glsl_buffer_block_parameters.get(
-            var_name
-        ) or self.lowered_glsl_buffer_blocks.get(var_name)
-        if block is None:
-            return None
-        buffer_expr = self.generate_expression(object_expr)
         member_name = getattr(expr, "member", None)
-        member = block["members"].get(member_name)
+        if var_name:
+            block = self.current_glsl_buffer_block_parameters.get(
+                var_name
+            ) or self.lowered_glsl_buffer_blocks.get(var_name)
+            if block is not None:
+                buffer_expr = self.generate_expression(object_expr)
+                member = block["members"].get(member_name)
+                if member is None:
+                    return None
+                return {
+                    "buffer": buffer_expr,
+                    "member": member_name,
+                    "readonly": block["readonly"],
+                    **member,
+                }
+
+        parent = self.glsl_buffer_block_array_access(
+            object_expr
+        ) or self.glsl_buffer_block_member_access(object_expr)
+        if parent is None or not parent.get("members"):
+            return None
+        member = parent["members"].get(member_name)
         if member is None:
             return None
         return {
-            "buffer": buffer_expr,
-            "member": member_name,
-            "readonly": block["readonly"],
+            "buffer": parent["buffer"],
+            "member": f"{parent['member']}.{member_name}",
+            "readonly": parent["readonly"],
             **member,
+            "offset": byte_offset_add(parent["offset"], member["offset"]),
         }
 
     def glsl_buffer_block_array_access(self, expr):
@@ -4620,15 +8964,25 @@ class MetalCodeGen:
         index_expr = getattr(expr, "index_expr", getattr(expr, "index", None))
         index = self.generate_expression(index_expr)
         offset = byte_offset_expression(member["offset"], index, member["stride"])
-        return {**member, "offset_expr": offset}
+        return {**member, "offset": offset, "offset_expr": offset}
 
     def metal_scalar_load(self, component_type, buffer_name, offset):
+        if component_type == "bool":
+            return (
+                f"((*reinterpret_cast<const device uint*>"
+                f"({buffer_name} + {offset})) != 0u)"
+            )
         return (
             f"(*reinterpret_cast<const device {component_type}*>"
             f"({buffer_name} + {offset}))"
         )
 
     def metal_scalar_store(self, component_type, buffer_name, offset, value):
+        if component_type == "bool":
+            return (
+                f"(*reinterpret_cast<device uint*>"
+                f"({buffer_name} + {offset})) = (({value}) ? 1u : 0u)"
+            )
         return (
             f"(*reinterpret_cast<device {component_type}*>"
             f"({buffer_name} + {offset})) = {value}"
@@ -4716,6 +9070,222 @@ class MetalCodeGen:
                 )
         return "\n".join(lines)
 
+    def metal_aggregate_has_array_member(self, access):
+        for member in access["members"].values():
+            if member.get("is_array"):
+                return True
+            if member.get("members") and self.metal_aggregate_has_array_member(member):
+                return True
+        return False
+
+    def metal_aggregate_helper_suffix(self, access):
+        return "".join(
+            char if char.isalnum() or char == "_" else "_"
+            for char in access["metal_type"]
+        )
+
+    def metal_aggregate_layout_signature(self, access):
+        parts = []
+
+        def visit(member_name, member):
+            fields = [
+                member_name,
+                str(member.get("type")),
+                str(member.get("layout_type")),
+                str(member.get("offset")),
+                str(member.get("size")),
+                str(member.get("align")),
+                str(member.get("components")),
+                str(member.get("component_type")),
+                str(member.get("matrix_columns")),
+                str(member.get("matrix_rows")),
+                str(member.get("column_stride")),
+                str(member.get("is_array")),
+                str(member.get("array_count")),
+                str(member.get("stride")),
+                str(member.get("runtime_array")),
+            ]
+            parts.append(":".join(fields))
+            for child_name, child in (member.get("members") or {}).items():
+                visit(f"{member_name}.{child_name}", child)
+
+        for field_name, member in access["members"].items():
+            visit(field_name, member)
+        return sha1("|".join(parts).encode("utf-8")).hexdigest()[:10]
+
+    def metal_aggregate_load_helper_name(self, access):
+        helper_name = (
+            f"__crossgl_load_glsl_buffer_"
+            f"{self.metal_aggregate_helper_suffix(access)}_"
+            f"{self.metal_aggregate_layout_signature(access)}"
+        )
+        self.required_glsl_buffer_aggregate_load_helpers[helper_name] = access
+        return helper_name
+
+    def metal_aggregate_load_assignments(
+        self, target_name, buffer_name, offset, access, indent=1
+    ):
+        indent_str = "    " * indent
+        lines = []
+        for field_name, member in access["members"].items():
+            member_offset = byte_offset_add(offset, member["offset"])
+            member_target = f"{target_name}.{field_name}"
+            field_access = {
+                **member,
+                "buffer": buffer_name,
+                "member": f"{access['member']}.{field_name}",
+                "readonly": access["readonly"],
+            }
+            if member.get("is_array"):
+                array_count = member.get("array_count")
+                if member.get("runtime_array") or array_count is None:
+                    return None
+                for index in range(array_count):
+                    element_offset = byte_offset_add(
+                        member_offset, index * member["stride"]
+                    )
+                    element_target = f"{member_target}[{index}]"
+                    if member.get("members"):
+                        nested_lines = self.metal_aggregate_load_assignments(
+                            element_target,
+                            buffer_name,
+                            element_offset,
+                            field_access,
+                            indent,
+                        )
+                        if nested_lines is None:
+                            return None
+                        lines.extend(nested_lines)
+                    else:
+                        value = self.metal_buffer_load(
+                            buffer_name, element_offset, field_access
+                        )
+                        lines.append(f"{indent_str}{element_target} = {value};")
+                continue
+            if member.get("members"):
+                nested_lines = self.metal_aggregate_load_assignments(
+                    member_target, buffer_name, member_offset, field_access, indent
+                )
+                if nested_lines is None:
+                    return None
+                lines.extend(nested_lines)
+            else:
+                value = self.metal_buffer_load(buffer_name, member_offset, field_access)
+                lines.append(f"{indent_str}{member_target} = {value};")
+        return lines
+
+    def generate_glsl_buffer_aggregate_load_helpers(self):
+        if not self.required_glsl_buffer_aggregate_load_helpers:
+            return ""
+
+        helpers = []
+        for helper_name, access in sorted(
+            self.required_glsl_buffer_aggregate_load_helpers.items()
+        ):
+            lines = [
+                f"{access['metal_type']} {helper_name}(const device uchar* buffer, uint offset) {{",
+                f"    {access['metal_type']} result;",
+            ]
+            assignments = self.metal_aggregate_load_assignments(
+                "result", "buffer", "offset", access
+            )
+            if assignments is None:
+                continue
+            lines.extend(assignments)
+            lines.extend(["    return result;", "}"])
+            helpers.append("\n".join(lines) + "\n\n")
+        return "".join(helpers)
+
+    def metal_aggregate_load(self, buffer_name, offset, access):
+        if self.metal_aggregate_has_array_member(access):
+            helper_name = self.metal_aggregate_load_helper_name(access)
+            return f"{helper_name}({buffer_name}, {offset})"
+
+        values = []
+        for field_name, member in access["members"].items():
+            if member.get("is_array"):
+                return None
+            member_offset = byte_offset_add(offset, member["offset"])
+            field_access = {
+                **member,
+                "buffer": buffer_name,
+                "member": f"{access['member']}.{field_name}",
+                "readonly": access["readonly"],
+            }
+            if member.get("members"):
+                value = self.metal_aggregate_load(
+                    buffer_name, member_offset, field_access
+                )
+            else:
+                value = self.metal_buffer_load(buffer_name, member_offset, field_access)
+            if value is None:
+                return None
+            values.append(value)
+        return format_struct_constructor_expression(self, access["metal_type"], values)
+
+    def metal_aggregate_store_members(self, buffer_name, offset, value, access):
+        lines = []
+        for field_name, member in access["members"].items():
+            member_offset = byte_offset_add(offset, member["offset"])
+            member_value = f"{value}.{field_name}"
+            field_access = {
+                **member,
+                "buffer": buffer_name,
+                "member": f"{access['member']}.{field_name}",
+                "readonly": access["readonly"],
+            }
+            if member.get("is_array"):
+                array_count = member.get("array_count")
+                if member.get("runtime_array") or array_count is None:
+                    return None
+                for index in range(array_count):
+                    element_offset = byte_offset_add(
+                        member_offset, index * member["stride"]
+                    )
+                    element_value = f"{member_value}[{index}]"
+                    if member.get("members"):
+                        nested_stores = self.metal_aggregate_store_members(
+                            buffer_name, element_offset, element_value, field_access
+                        )
+                        if nested_stores is None:
+                            return None
+                        lines.extend(nested_stores)
+                    else:
+                        store = self.metal_buffer_store(
+                            buffer_name, element_offset, element_value, field_access
+                        )
+                        if store is None:
+                            return None
+                        lines.extend(store.splitlines())
+                continue
+            if member.get("members"):
+                nested_stores = self.metal_aggregate_store_members(
+                    buffer_name, member_offset, member_value, field_access
+                )
+                if nested_stores is None:
+                    return None
+                lines.extend(nested_stores)
+            else:
+                store = self.metal_buffer_store(
+                    buffer_name, member_offset, member_value, field_access
+                )
+                if store is None:
+                    return None
+                lines.extend(store.splitlines())
+        return lines
+
+    def metal_aggregate_store(self, buffer_name, offset, value, access):
+        temp_name = self.next_metal_temp_variable("aggregate_store")
+        stores = self.metal_aggregate_store_members(
+            buffer_name, offset, temp_name, access
+        )
+        if stores is None:
+            return (
+                "/* unsupported Metal GLSL buffer block aggregate store: "
+                "array fields require element-wise stores */"
+            )
+        return "\n".join([f"{access['metal_type']} {temp_name} = {value}", *stores])
+
     def metal_matrix_compound_store(self, buffer_name, offset, value, op, access):
         compound_ops = {
             "+=": "+",
@@ -4745,12 +9315,18 @@ class MetalCodeGen:
         access = self.glsl_buffer_block_member_access(expr)
         if access is None or access.get("is_array"):
             return None
+        if access.get("members"):
+            return self.metal_aggregate_load(access["buffer"], access["offset"], access)
         return self.metal_buffer_load(access["buffer"], access["offset"], access)
 
     def generate_glsl_buffer_block_array_load(self, expr):
         access = self.glsl_buffer_block_array_access(expr)
         if access is None:
             return None
+        if access.get("members"):
+            return self.metal_aggregate_load(
+                access["buffer"], access["offset_expr"], access
+            )
         return self.metal_buffer_load(access["buffer"], access["offset_expr"], access)
 
     def generate_glsl_buffer_block_store(self, target, rhs, op):
@@ -4768,6 +9344,13 @@ class MetalCodeGen:
                 "/* unsupported Metal GLSL buffer block store: "
                 "readonly device buffer cannot be written */"
             )
+        if access.get("members"):
+            if op != "=":
+                return (
+                    "/* unsupported Metal GLSL buffer block aggregate compound "
+                    "store: assign a full aggregate value explicitly */"
+                )
+            return self.metal_aggregate_store(access["buffer"], offset, rhs, access)
 
         if access.get("matrix_columns"):
             if op != "=":
@@ -4786,6 +9369,100 @@ class MetalCodeGen:
             rhs = f"({current} {binary_op} {rhs})"
 
         return self.metal_buffer_store(access["buffer"], offset, rhs, access)
+
+    def buffer_atomic_operations(self):
+        return {
+            "atomicAdd": ("fetch_add", 2),
+            "atomicMin": ("fetch_min", 2),
+            "atomicMax": ("fetch_max", 2),
+            "atomicAnd": ("fetch_and", 2),
+            "atomicOr": ("fetch_or", 2),
+            "atomicXor": ("fetch_xor", 2),
+            "atomicExchange": ("exchange", 2),
+            "atomicCompSwap": ("compare_exchange", 3),
+        }
+
+    def glsl_buffer_block_atomic_access(self, target):
+        access = self.glsl_buffer_block_array_access(target)
+        if access is not None:
+            return access, access["offset_expr"]
+        access = self.glsl_buffer_block_member_access(target)
+        if access is None or access.get("is_array"):
+            return None, None
+        return access, access["offset"]
+
+    def unsupported_glsl_buffer_block_atomic_call(
+        self, target, operation, reason, access=None
+    ):
+        result_type = self.expression_result_type(target) or "uint"
+        component_type = access.get("component_type") if access else None
+        if component_type is not None:
+            zero_value = "0u" if component_type == "uint" else "0"
+        else:
+            zero_value = "0u" if self.type_name_string(result_type) == "uint" else "0"
+        return (
+            "/* unsupported Metal GLSL buffer block atomic: "
+            f"{operation} {reason} */ {zero_value}"
+        )
+
+    def generate_glsl_buffer_block_atomic_call(self, func_name, args):
+        operations = self.buffer_atomic_operations()
+        operation_info = operations.get(func_name)
+        if operation_info is None or not args:
+            return None
+
+        operation, expected_args = operation_info
+        if len(args) < expected_args:
+            return None
+
+        target = args[0]
+        access, offset = self.glsl_buffer_block_atomic_access(target)
+        if access is None:
+            return None
+        if access.get("readonly"):
+            return self.unsupported_glsl_buffer_block_atomic_call(
+                target,
+                func_name,
+                "cannot write readonly device buffer",
+                access,
+            )
+        if access.get("components") != 1 or access.get("matrix_columns"):
+            return self.unsupported_glsl_buffer_block_atomic_call(
+                target,
+                func_name,
+                "requires a scalar int or uint buffer member",
+                access,
+            )
+        if access.get("component_type") not in {"int", "uint"}:
+            return self.unsupported_glsl_buffer_block_atomic_call(
+                target,
+                func_name,
+                "currently supports only int or uint buffer members",
+                access,
+            )
+
+        if operation == "compare_exchange":
+            self.required_buffer_atomic_compare_helpers.add(access["component_type"])
+            helper_name = self.buffer_atomic_compare_helper_name(
+                access["component_type"]
+            )
+            compare_value = self.generate_expression_with_expected(
+                args[1], access["type"]
+            )
+            replacement = self.generate_expression_with_expected(
+                args[2], access["type"]
+            )
+            return (
+                f"{helper_name}({access['buffer']}, {offset}, "
+                f"{compare_value}, {replacement})"
+            )
+
+        atomic_type = f"atomic_{access['component_type']}"
+        atomic_target = (
+            f"reinterpret_cast<device {atomic_type}*>({access['buffer']} + {offset})"
+        )
+        value = self.generate_expression_with_expected(args[1], access["type"])
+        return f"atomic_{operation}_explicit({atomic_target}, {value}, memory_order_relaxed)"
 
     def glsl_buffer_block_diagnostic(
         self, target, type_name, var_name=None, node=None, declaration_kind=None
@@ -5019,6 +9696,18 @@ class MetalCodeGen:
             namespace = "buffer"
             attribute_names = {"binding", "buffer"}
             prefixes = ("b", "u", "t")
+        elif self.is_acceleration_structure_type(vtype):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
+        elif self.is_visible_function_table_type(vtype):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
+        elif self.is_intersection_function_table_type(vtype):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
         elif self.is_texture_or_image_resource_type(vtype):
             namespace = "texture"
             attribute_names = {"binding", "texture"}
@@ -5141,13 +9830,30 @@ class MetalCodeGen:
             return self.expression_name(array_expr)
         return None
 
-    def texture_sampler_expression(self, texture_name):
-        sampler_arg = ""
-        for sampler_variable, _, _ in self.sampler_variables:
-            if sampler_variable.name == texture_name + "Sampler":
-                sampler_arg = sampler_variable.name
-                break
-        return sampler_arg or self.default_sampler_expression()
+    def texture_sampler_expression(self, texture_name, texture_arg=None):
+        sampler_name = f"{texture_name}Sampler"
+        if sampler_name in self.sampler_variable_names():
+            index = self.array_access_index_expression(texture_arg)
+            if index is not None and self.sampler_array_size(sampler_name) is not None:
+                return f"{sampler_name}[{index}]"
+            return sampler_name
+        return self.default_sampler_expression()
+
+    def array_access_index_expression(self, expr):
+        if not isinstance(expr, ArrayAccessNode):
+            return None
+        index_expr = getattr(expr, "index", getattr(expr, "index_expr", None))
+        if index_expr is None:
+            return None
+        return self.generate_expression(index_expr)
+
+    def sampler_array_size(self, sampler_name):
+        if sampler_name in self.current_sampler_parameter_array_sizes:
+            return self.current_sampler_parameter_array_sizes[sampler_name]
+        for sampler_variable, _, array_size in self.sampler_variables:
+            if getattr(sampler_variable, "name", None) == sampler_name:
+                return array_size
+        return None
 
     def is_explicit_sampler_argument(self, args):
         if len(args) < 3:
@@ -5176,7 +9882,7 @@ class MetalCodeGen:
         sampler_arg = (
             self.generate_expression(args[1])
             if explicit_sampler
-            else self.texture_sampler_expression(texture_base_name)
+            else self.texture_sampler_expression(texture_base_name, args[0])
         )
         coord = self.generate_expression(args[coord_index])
         extra_args = args[coord_index + 1 :]
@@ -5841,7 +10547,12 @@ class MetalCodeGen:
 
     def texture_sampling_capabilities(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        color_offset_types = {"texture2d<float>", "texture2d_array<float>"}
+        gather_offset_types = {"texture2d<float>", "texture2d_array<float>"}
+        sample_offset_types = {
+            "texture2d<float>",
+            "texture2d_array<float>",
+            "texture3d<float>",
+        }
         depth_offset_types = {"depth2d<float>", "depth2d_array<float>"}
         return {
             "texture_type": texture_type,
@@ -5854,9 +10565,9 @@ class MetalCodeGen:
                     "texturecube_array<float>",
                 }
             ),
-            "gather_offset": texture_type in color_offset_types,
-            "sample_offset": texture_type in color_offset_types,
-            "projected_offset": texture_type in color_offset_types,
+            "gather_offset": texture_type in gather_offset_types,
+            "sample_offset": texture_type in sample_offset_types,
+            "projected_offset": texture_type in sample_offset_types,
             "compare_offset": texture_type in depth_offset_types,
             "gather_compare_offset": texture_type in depth_offset_types,
         }
@@ -5869,6 +10580,45 @@ class MetalCodeGen:
 
     def texture_sample_supports_offset(self, texture_type):
         return self.texture_sampling_capabilities(texture_type)["sample_offset"]
+
+    def is_texture1d_sample_resource(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        if self.is_storage_image_resource(texture_type):
+            return False
+        return texture_type.startswith(("texture1d<", "texture1d_array<"))
+
+    def unsupported_texture1d_sampling_option_call(self, func_name, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            "/* unsupported Metal texture sampling: "
+            f"{func_name} on {texture_type} supports only implicit sampling */ "
+            "float4(0.0)"
+        )
+
+    def unsupported_texture1d_texel_fetch_lod_call(self, func_name, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        return (
+            "/* unsupported Metal texel fetch: "
+            f"{func_name} on {texture_type} requires a compile-time literal "
+            "mip level */ float4(0.0)"
+        )
+
+    def unsupported_texture1d_size_lod_call(self, texture_type, return_type):
+        texture_type = self.resource_base_type(texture_type)
+        zero_value = "0" if return_type == "int" else f"{return_type}(0)"
+        return (
+            "/* unsupported Metal texture size query: textureSize on "
+            f"{texture_type} requires a compile-time literal mip level */ "
+            f"{zero_value}"
+        )
+
+    def metal_texture1d_read_lod_argument(self, lod_arg):
+        if lod_arg is None:
+            return "uint(0)"
+        value = self.literal_int_value(lod_arg, self.literal_int_constants)
+        if value is None:
+            return None
+        return f"uint({value})"
 
     def unsupported_texture_sample_offset_call(self, func_name, reason):
         return unsupported_texture_offset_call_expression("Metal", func_name, reason)
@@ -5980,7 +10730,7 @@ class MetalCodeGen:
             f"{self.vector_component(coord, divisor)}"
         )
         if texture_type == "texture2d_array<float>":
-            return f"{projected_coord}, " f"uint({self.vector_component(coord, 'z')})"
+            return f"{projected_coord}, uint({self.vector_component(coord, 'z')})"
         return projected_coord
 
     def projected_texture_offset_supported(self, texture_type):
@@ -6011,6 +10761,10 @@ class MetalCodeGen:
             )
             if count_error:
                 return self.unsupported_texture_projected_call(func_name, count_error)
+            if extra_args and self.is_texture1d_sample_resource(texture_type):
+                return self.unsupported_texture_projected_call(
+                    func_name, "bias is not supported for Metal 1D textures"
+                )
             if not extra_args:
                 return f"{texture_name}.sample({sampler_arg}, {projected_coord})"
             if len(extra_args) == 1:
@@ -6033,8 +10787,7 @@ class MetalCodeGen:
             if len(extra_args) == 1:
                 offset = self.generate_expression(extra_args[0])
                 return (
-                    f"{texture_name}.sample("
-                    f"{sampler_arg}, {projected_coord}, {offset})"
+                    f"{texture_name}.sample({sampler_arg}, {projected_coord}, {offset})"
                 )
             if len(extra_args) == 2:
                 offset = self.generate_expression(extra_args[0])
@@ -6050,10 +10803,13 @@ class MetalCodeGen:
             )
             if count_error:
                 return self.unsupported_texture_projected_call(func_name, count_error)
+            if self.is_texture1d_sample_resource(texture_type):
+                return self.unsupported_texture_projected_call(
+                    func_name, "explicit LOD is not supported for Metal 1D textures"
+                )
             lod = self.generate_expression(extra_args[0])
             return (
-                f"{texture_name}.sample("
-                f"{sampler_arg}, {projected_coord}, level({lod}))"
+                f"{texture_name}.sample({sampler_arg}, {projected_coord}, level({lod}))"
             )
 
         if is_projected_texture_lod_offset_operation(func_name):
@@ -6079,6 +10835,10 @@ class MetalCodeGen:
             )
             if count_error:
                 return self.unsupported_texture_projected_call(func_name, count_error)
+            if self.is_texture1d_sample_resource(texture_type):
+                return self.unsupported_texture_projected_call(
+                    func_name, "gradients are not supported for Metal 1D textures"
+                )
             ddx = self.generate_expression(extra_args[0])
             ddy = self.generate_expression(extra_args[1])
             gradient_options = self.texture_gradient_options(texture_type, ddx, ddy)
@@ -6672,13 +11432,21 @@ class MetalCodeGen:
 
     def texture_query_size_expression(self, texture_arg, lod_arg=None):
         texture_name = self.generate_expression(texture_arg)
+        texture_type = self.texture_resource_type(texture_arg)
         query_descriptor = self.texture_query_resource_descriptor(texture_arg)
         size_descriptor = query_descriptor["size_descriptor"]
         if size_descriptor is None:
             return None
 
-        lod = self.generate_expression(lod_arg) if lod_arg is not None else "0"
-        lod_arg_string = f"uint({lod})"
+        if self.is_texture1d_sample_resource(texture_type):
+            lod_arg_string = self.metal_texture1d_read_lod_argument(lod_arg)
+            if lod_arg_string is None:
+                return self.unsupported_texture1d_size_lod_call(
+                    texture_type, size_descriptor["return_type"]
+                )
+        else:
+            lod = self.generate_expression(lod_arg) if lod_arg is not None else "0"
+            lod_arg_string = f"uint({lod})"
         return self.texture_query_size_descriptor_expression(
             texture_name, size_descriptor, lod_arg_string
         )
@@ -7296,6 +12064,30 @@ class MetalCodeGen:
             )
         return "".join(helpers)
 
+    def buffer_atomic_compare_helper_name(self, component_type):
+        return f"__crossgl_buffer_atomic_compare_exchange_{component_type}"
+
+    def generate_buffer_atomic_compare_helpers(self):
+        if not self.required_buffer_atomic_compare_helpers:
+            return ""
+
+        helpers = []
+        for component_type in sorted(self.required_buffer_atomic_compare_helpers):
+            value_type = self.map_type(component_type)
+            atomic_type = f"atomic_{component_type}"
+            helper_name = self.buffer_atomic_compare_helper_name(component_type)
+            helpers.append(
+                f"{value_type} {helper_name}(device uchar* buffer, uint offset, {value_type} compareValue, {value_type} value) {{\n"
+                f"    device {atomic_type}* target = reinterpret_cast<device {atomic_type}*>(buffer + offset);\n"
+                f"    {value_type} original;\n"
+                "    do {\n"
+                "        original = compareValue;\n"
+                "    } while (!atomic_compare_exchange_weak_explicit(target, &original, value, memory_order_relaxed, memory_order_relaxed) && original == compareValue);\n"
+                "    return original;\n"
+                "}\n\n"
+            )
+        return "".join(helpers)
+
     def generate_image_call(self, func_name, args):
         if func_name == "imageAtomicCompSwap" and len(args) >= 4:
             image_type = self.texture_resource_type(args[0])
@@ -7451,6 +12243,10 @@ class MetalCodeGen:
 
         if is_texture_sample_basic_operation(func_name):
             if extra_args:
+                if self.is_texture1d_sample_resource(texture_type):
+                    return self.unsupported_texture1d_sampling_option_call(
+                        func_name, texture_type
+                    )
                 bias = self.generate_expression(extra_args[0])
                 if is_array_texture:
                     return (
@@ -7462,11 +12258,19 @@ class MetalCodeGen:
                 return f"{texture_name}.sample({sampler_arg}, {coord_xy}, {layer})"
             return f"{texture_name}.sample({sampler_arg}, {coord})"
         if is_texture_sample_lod_operation(func_name) and extra_args:
+            if self.is_texture1d_sample_resource(texture_type):
+                return self.unsupported_texture1d_sampling_option_call(
+                    func_name, texture_type
+                )
             lod = self.generate_expression(extra_args[0])
             if is_array_texture:
                 return f"{texture_name}.sample({sampler_arg}, {coord_xy}, {layer}, level({lod}))"
             return f"{texture_name}.sample({sampler_arg}, {coord}, level({lod}))"
         if is_texture_sample_grad_operation(func_name) and len(extra_args) >= 2:
+            if self.is_texture1d_sample_resource(texture_type):
+                return self.unsupported_texture1d_sampling_option_call(
+                    func_name, texture_type
+                )
             ddx = self.generate_expression(extra_args[0])
             ddy = self.generate_expression(extra_args[1])
             gradient_options = self.texture_gradient_options(texture_type, ddx, ddy)
@@ -7515,32 +12319,63 @@ class MetalCodeGen:
                 return self.unsupported_multisample_texture_query_lod_call(texture_type)
             if self.is_storage_image_resource(texture_type):
                 return self.unsupported_texture_query_lod_call(texture_type)
+            if self.is_texture1d_sample_resource(texture_type):
+                return self.unsupported_texture_query_lod_call(texture_type)
             lod_coord = self.texture_query_lod_coordinate(texture_type, coord)
             return (
                 f"float2({texture_name}.calculate_unclamped_lod({sampler_arg}, {lod_coord}), "
                 f"{texture_name}.calculate_clamped_lod({sampler_arg}, {lod_coord}))"
             )
         if is_texel_fetch_basic_operation(func_name) and len(args) >= 3:
-            lod = self.generate_expression(args[2])
             if self.is_cube_texture_resource(texture_type):
                 return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
             if self.is_multisample_texture_resource(texture_type):
+                lod = self.generate_expression(args[2])
                 if texture_type == "texture2d_ms_array<float>":
                     texel_xy, layer = self.array_texture_coordinate_parts(coord)
                     return f"{texture_name}.read({texel_xy}, {layer}, uint({lod}))"
                 return f"{texture_name}.read({coord}, uint({lod}))"
+            if self.is_texture1d_sample_resource(texture_type):
+                lod = self.metal_texture1d_read_lod_argument(args[2])
+                if lod is None:
+                    return self.unsupported_texture1d_texel_fetch_lod_call(
+                        func_name, texture_type
+                    )
+                if is_array_texture:
+                    texel_coord, layer = self.texture_coordinate_parts(
+                        texture_type, coord
+                    )
+                    return f"{texture_name}.read(uint({texel_coord}), {layer}, {lod})"
+                return f"{texture_name}.read(uint({coord}), {lod})"
+            lod = self.generate_expression(args[2])
             if is_array_texture:
                 texel_coord, layer = self.texture_coordinate_parts(texture_type, coord)
                 return f"{texture_name}.read({texel_coord}, {layer}, {lod})"
             return f"{texture_name}.read({coord}, {lod})"
 
         if is_texel_fetch_offset_operation(func_name) and len(args) >= 4:
-            lod = self.generate_expression(args[2])
-            offset = self.generate_expression(args[3])
             if self.is_cube_texture_resource(texture_type):
                 return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
             if self.is_multisample_texture_resource(texture_type):
                 return unsupported_multisample_texel_fetch_offset_expression("Metal")
+            if self.is_texture1d_sample_resource(texture_type):
+                lod = self.metal_texture1d_read_lod_argument(args[2])
+                if lod is None:
+                    return self.unsupported_texture1d_texel_fetch_lod_call(
+                        func_name, texture_type
+                    )
+                offset = self.generate_expression(args[3])
+                if is_array_texture:
+                    texel_coord, layer = self.texture_coordinate_parts(
+                        texture_type, coord
+                    )
+                    return (
+                        f"{texture_name}.read(uint(({texel_coord} + {offset})), "
+                        f"{layer}, {lod})"
+                    )
+                return f"{texture_name}.read(uint(({coord} + {offset})), {lod})"
+            lod = self.generate_expression(args[2])
+            offset = self.generate_expression(args[3])
             if is_array_texture:
                 texel_coord, layer = self.texture_coordinate_parts(texture_type, coord)
                 return (
@@ -7552,6 +12387,14 @@ class MetalCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if isinstance(type_node, PointerType):
+            pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
+            return f"{pointee_type}*"
+        if isinstance(type_node, ReferenceType):
+            referenced_type = self.convert_type_node_to_string(
+                type_node.referenced_type
+            )
+            return f"{referenced_type}&"
         generic_args = getattr(type_node, "generic_args", [])
         if hasattr(type_node, "name") and generic_args:
             args = ", ".join(
@@ -7658,6 +12501,11 @@ class MetalCodeGen:
         if vtype is None:
             return "float"
 
+        if isinstance(vtype, PointerType):
+            return f"{self.map_type(vtype.pointee_type)}*"
+        if isinstance(vtype, ReferenceType):
+            return f"{self.map_type(vtype.referenced_type)}&"
+
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
@@ -7665,8 +12513,28 @@ class MetalCodeGen:
 
         if "[" in vtype_str and "]" in vtype_str:
             base_type, array_suffix = split_array_type_suffix(vtype_str)
-            base_mapped = self.type_mapping.get(base_type, base_type)
+            base_mapped = self.map_type(base_type)
             return f"{base_mapped}{array_suffix}"
+
+        if self.is_visible_function_table_type(vtype_str):
+            return self.map_visible_function_table_type(vtype_str)
+
+        if self.is_intersection_function_table_type(vtype_str):
+            return self.map_intersection_function_table_type(vtype_str)
+
+        generic_enum_type = generic_enum_specialized_type_name(self, vtype_str)
+        if generic_enum_type is not None:
+            return generic_enum_type
+
+        generic_struct_type = generic_struct_specialized_type_name(self, vtype_str)
+        if generic_struct_type is not None:
+            return generic_struct_type
+
+        if vtype_str in getattr(self, "enum_type_names", set()):
+            return "int"
+
+        if vtype_str in getattr(self, "enum_struct_type_names", set()):
+            return vtype_str
 
         return self.type_mapping.get(vtype_str, vtype_str)
 

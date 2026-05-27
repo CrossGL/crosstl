@@ -67,6 +67,9 @@ class HipParser:
         "ATOMICMIN",
         "ATOMICEXCH",
         "ATOMICCAS",
+        "ATOMICAND",
+        "ATOMICOR",
+        "ATOMICXOR",
     }
     FLAT_BUILTIN_TOKEN_MAP = {
         "HIPTHREADIDX": "threadIdx",
@@ -103,6 +106,12 @@ class HipParser:
         "hipAtomicExch",
         "atomicCAS",
         "hipAtomicCAS",
+        "atomicAnd",
+        "hipAtomicAnd",
+        "atomicOr",
+        "hipAtomicOr",
+        "atomicXor",
+        "hipAtomicXor",
     }
     BUILTIN_TYPE_TOKENS = {
         "INT",
@@ -154,6 +163,7 @@ class HipParser:
         "ULONGLONG3",
         "ULONGLONG4",
     }
+    RESOURCE_TYPE_TOKENS = {"TEXTURE", "SURFACE", "HIPARRAY", "HIPARRAYT"}
 
     def __init__(self, tokens: List[Token]):
         """Initialize the parser with a token stream from ``HipLexer``."""
@@ -199,11 +209,15 @@ class HipParser:
             "__GLOBAL__",
             "__FORCEINLINE__",
             "__NOINLINE__",
+            "__LAUNCH_BOUNDS__",
         }
         while (
             index < len(self.tokens) and self.tokens[index].type in function_qualifiers
         ):
-            index += 1
+            if self.tokens[index].type == "__LAUNCH_BOUNDS__":
+                index = self.skip_launch_bounds_at_pos(index)
+            else:
+                index += 1
 
         index = self.skip_type_at_pos(index)
         if index is None:
@@ -303,6 +317,8 @@ class HipParser:
             return True
         if token.type in self.VECTOR_TYPE_TOKENS:
             return True
+        if token.type in self.RESOURCE_TYPE_TOKENS:
+            return True
         return allow_identifier and token.type == "IDENTIFIER"
 
     def parse(self):
@@ -341,7 +357,14 @@ class HipParser:
             return self.parse_template_prefixed_declaration()
 
         # Parse device/host/global qualifiers
-        if self.match("__DEVICE__", "__HOST__", "__GLOBAL__"):
+        if self.match(
+            "__DEVICE__",
+            "__HOST__",
+            "__GLOBAL__",
+            "__FORCEINLINE__",
+            "__NOINLINE__",
+            "__LAUNCH_BOUNDS__",
+        ):
             return self.parse_function_with_qualifier()
 
         # Parse struct definitions
@@ -406,7 +429,7 @@ class HipParser:
         self.parse_template_suffix()
         self.skip_newlines()
 
-        if self.match("__DEVICE__", "__HOST__", "__GLOBAL__"):
+        if self.match("__DEVICE__", "__HOST__", "__GLOBAL__", "__LAUNCH_BOUNDS__"):
             return self.parse_function_with_qualifier()
         if self.match("STRUCT"):
             return self.parse_struct()
@@ -511,12 +534,21 @@ class HipParser:
 
     def parse_function_with_qualifier(self):
         qualifiers = []
+        attributes = []
 
         while self.match(
-            "__DEVICE__", "__HOST__", "__GLOBAL__", "__FORCEINLINE__", "__NOINLINE__"
+            "__DEVICE__",
+            "__HOST__",
+            "__GLOBAL__",
+            "__FORCEINLINE__",
+            "__NOINLINE__",
+            "__LAUNCH_BOUNDS__",
         ):
-            qualifiers.append(self.current_token.value)
-            self.advance()
+            if self.match("__LAUNCH_BOUNDS__"):
+                attributes.append(self.parse_launch_bounds_attribute())
+            else:
+                qualifiers.append(self.current_token.value)
+                self.advance()
 
         return_type = self.parse_type()
         name = self.consume_function_name()
@@ -532,13 +564,42 @@ class HipParser:
         elif self.match("SEMICOLON"):
             self.advance()
 
-        function = FunctionNode(return_type, name, params, body, qualifiers)
+        function = FunctionNode(return_type, name, params, body, qualifiers, attributes)
 
         # __global__ qualifier marks a kernel
         if "__global__" in qualifiers:
-            return KernelNode(return_type, name, params, body)
+            return KernelNode(return_type, name, params, body, attributes)
 
         return function
+
+    def parse_launch_bounds_attribute(self):
+        self.consume("__LAUNCH_BOUNDS__")
+        values = []
+
+        if self.match("LPAREN"):
+            self.advance()
+            depth = 1
+            while self.current_token and depth > 0:
+                if self.match("LPAREN"):
+                    depth += 1
+                    values.append(self.current_token.value)
+                    self.advance()
+                elif self.match("RPAREN"):
+                    depth -= 1
+                    if depth == 0:
+                        self.advance()
+                        break
+                    values.append(self.current_token.value)
+                    self.advance()
+                else:
+                    values.append(self.current_token.value)
+                    self.advance()
+
+        return f"__launch_bounds__({self.format_attribute_tokens(values)})"
+
+    def format_attribute_tokens(self, values):
+        text = "".join(values).strip()
+        return text.replace(",", ", ")
 
     def parse_simple_function(self):
         qualifiers = []
@@ -642,7 +703,12 @@ class HipParser:
         qualifiers = []
 
         while self.match(
-            "__SHARED__", "__CONSTANT__", "__DEVICE__", "STATIC", "EXTERN"
+            "__SHARED__",
+            "__CONSTANT__",
+            "__MANAGED__",
+            "__DEVICE__",
+            "STATIC",
+            "EXTERN",
         ):
             qualifiers.append(self.current_token.value)
             self.advance()
@@ -669,7 +735,12 @@ class HipParser:
         qualifiers = []
 
         while self.match(
-            "__SHARED__", "__CONSTANT__", "__DEVICE__", "STATIC", "EXTERN"
+            "__SHARED__",
+            "__CONSTANT__",
+            "__MANAGED__",
+            "__DEVICE__",
+            "STATIC",
+            "EXTERN",
         ):
             qualifiers.append(self.current_token.value)
             self.advance()
@@ -769,6 +840,7 @@ class HipParser:
         if (
             self.is_builtin_type_token()
             or self.match(*self.VECTOR_TYPE_TOKENS)
+            or self.match(*self.RESOURCE_TYPE_TOKENS)
             or self.match("IDENTIFIER")
         ):
             type_parts.append(self.parse_type_name())
@@ -802,6 +874,7 @@ class HipParser:
         if (
             self.is_builtin_type_token()
             or self.match(*self.VECTOR_TYPE_TOKENS)
+            or self.match(*self.RESOURCE_TYPE_TOKENS)
             or self.match("IDENTIFIER")
         ):
             type_parts.append(self.parse_type_name())
@@ -828,7 +901,12 @@ class HipParser:
 
     def parse_type_name(self):
         type_name = self.current_token.value
+        token_type = self.current_token.type
         self.advance()
+
+        if token_type == "LONG" and self.match("LONG"):
+            type_name += " long"
+            self.advance()
 
         while self.match("SCOPE"):
             self.consume("SCOPE")
@@ -862,6 +940,7 @@ class HipParser:
             param_type += self.parse_array_suffix()
             params.append({"type": param_type, "name": param_name})
 
+            self.skip_newlines()
             if self.match("COMMA"):
                 self.advance()
                 self.skip_newlines()
@@ -1324,7 +1403,10 @@ class HipParser:
                 expr = MemberAccessNode(expr, member, True)
             elif self.match("LPAREN"):
                 self.consume("LPAREN")
-                args = self.parse_argument_list()
+                if expr == "sizeof" and self.is_sizeof_type_operand():
+                    args = [self.parse_type()]
+                else:
+                    args = self.parse_argument_list()
                 self.consume("RPAREN")
                 expr = self.parse_function_call_node(expr, args)
             elif self.match("KERNEL_LAUNCH_START"):
@@ -1337,6 +1419,41 @@ class HipParser:
                 break
 
         return expr
+
+    def is_sizeof_type_operand(self):
+        saved_pos = self.pos
+        try:
+            while self.match(*self.TYPE_QUALIFIER_TOKENS):
+                self.advance()
+
+            if not self.is_type_token(allow_identifier=False) and not (
+                self.match("IDENTIFIER")
+                and self.current_token.value in self.type_aliases
+            ):
+                return False
+
+            token_type = self.current_token.type
+            self.advance()
+            if token_type == "LONG" and self.match("LONG"):
+                self.advance()
+
+            while self.match("ASTERISK", "STAR"):
+                self.advance()
+
+            while self.match("LBRACKET"):
+                self.advance()
+                while self.current_token and not self.match("RBRACKET"):
+                    self.advance()
+                if not self.current_token:
+                    return False
+                self.advance()
+
+            return self.match("RPAREN")
+        finally:
+            self.pos = saved_pos
+            self.current_token = (
+                self.tokens[self.pos] if self.pos < len(self.tokens) else None
+            )
 
     def append_qualified_name(self, base, separator, member):
         if isinstance(base, str):
@@ -2068,7 +2185,10 @@ class HipParser:
             ):
                 return False
 
+            token_type = self.current_token.type
             self.advance()
+            if token_type == "LONG" and self.match("LONG"):
+                self.advance()
             while self.match("ASTERISK", "STAR"):
                 self.advance()
 
@@ -2133,6 +2253,7 @@ class HipParser:
         while index < len(self.tokens) and self.tokens[index].type in {
             "__SHARED__",
             "__CONSTANT__",
+            "__MANAGED__",
             "__DEVICE__",
             "STATIC",
             "EXTERN",
@@ -2173,6 +2294,9 @@ class HipParser:
         type_value = self.tokens[index].value
         has_qualified_suffix = False
         index += 1
+        if type_token == "LONG" and index < len(self.tokens):
+            if self.tokens[index].type == "LONG":
+                index += 1
 
         while (
             index + 1 < len(self.tokens)
@@ -2216,6 +2340,26 @@ class HipParser:
             and self.tokens[index].type in self.POSTFIX_TYPE_QUALIFIER_TOKENS
         ):
             index += 1
+        return index
+
+    def skip_launch_bounds_at_pos(self, index):
+        index += 1
+        if index >= len(self.tokens) or self.tokens[index].type != "LPAREN":
+            return index
+
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.tokens[index].type
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            elif token_type in {"SEMICOLON", "LBRACE", "RBRACE"}:
+                return index
+            index += 1
+
         return index
 
     def skip_template_at_pos(self, index):

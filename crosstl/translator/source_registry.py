@@ -290,7 +290,7 @@ def register_default_sources() -> None:
             extensions=(".metal",),
             load_lexer_parser=_load_metal,
             reverse_codegen_factory=_reverse_metal,
-            aliases=("metal",),
+            aliases=("metal", "msl"),
         )
     )
     _register(

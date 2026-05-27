@@ -236,8 +236,13 @@ class TestCudaCodeGen:
             return x;
         }
 
+        float tex2D(float x) {
+            return x + 1.0f;
+        }
+
         __global__ void kernel(float* out, float x) {
             out[0] = lerp(x);
+            out[1] = tex2D(x);
         }
         """
         lexer = CudaLexer(code)
@@ -249,8 +254,11 @@ class TestCudaCodeGen:
         result = codegen.generate(ast)
 
         assert "f32 lerp(f32 x) {" in result
+        assert "f32 tex2D(f32 x) {" in result
         assert "out[0] = lerp(x);" in result
+        assert "out[1] = tex2D(x);" in result
         assert "out[0] = mix(x);" not in result
+        assert "out[1] = texture(x);" not in result
 
     def test_user_defined_cuda_atomic_name_call_does_not_convert_to_builtin(self):
         """Test user-defined CUDA atomic names shadow builtin conversion."""
@@ -304,6 +312,93 @@ class TestCudaCodeGen:
         assert "atomicCompareExchange(expected, 0, 3);" in result
         assert "atomicExchange(7)" not in result
 
+    def test_address_taken_pointer_array_and_shared_atomics_lower_to_lvalues(self):
+        """Test CUDA pointer atomics convert address-taken targets to CrossGL lvalues."""
+        code = """
+        __global__ void kernel(int* values, int* expected, int* desired, int index) {
+            __shared__ int sharedCounts[32];
+            atomicAdd(&values[index], 1);
+            int old = atomicCAS(&values[index], expected[index], desired[index]);
+            atomicMax(&sharedCounts[threadIdx.x], old);
+            atomicExch(&values[index + 1], old);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var<workgroup> sharedCounts: array<i32, 32>;" in result
+        assert "atomicAdd(values[index], 1);" in result
+        assert (
+            "var old: i32 = atomicCompareExchange("
+            "values[index], expected[index], desired[index]);"
+        ) in result
+        assert "atomicMax(sharedCounts[gl_LocalInvocationID.x], old);" in result
+        assert "atomicExchange(values[(index + 1)], old);" in result
+        assert "(&values[index])" not in result
+        assert "(&sharedCounts[gl_LocalInvocationID.x])" not in result
+
+    def test_bitwise_atomics_lower_to_crossgl_lvalue_targets(self):
+        """Test CUDA bitwise atomics convert to CrossGL atomic calls."""
+        code = """
+        __global__ void kernel(unsigned int* values, unsigned int mask, int index) {
+            __shared__ unsigned int sharedMasks[32];
+            unsigned int oldAnd = atomicAnd(&values[index], mask);
+            unsigned int oldOr = atomicOr(&sharedMasks[threadIdx.x], oldAnd);
+            atomicXor(&values[index + 1], oldOr);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var<workgroup> sharedMasks: array<u32, 32>;" in result
+        assert "var oldAnd: u32 = atomicAnd(values[index], mask);" in result
+        expected_old_or = (
+            "var oldOr: u32 = atomicOr(sharedMasks[gl_LocalInvocationID.x], oldAnd);"
+        )
+        assert expected_old_or in result
+        assert "atomicXor(values[(index + 1)], oldOr);" in result
+        assert "(&values[index])" not in result
+        assert "(&sharedMasks[gl_LocalInvocationID.x])" not in result
+
+    def test_bounded_wrap_atomics_preserve_cuda_semantics(self):
+        """Test CUDA atomicInc/atomicDec preserve bounded wrap intrinsics."""
+        code = """
+        __global__ void kernel(unsigned int* values, unsigned int limit, int index) {
+            __shared__ unsigned int sharedCounters[32];
+            unsigned int oldInc = atomicInc(&values[index], limit);
+            unsigned int oldDec = atomicDec(&sharedCounters[threadIdx.x], limit);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var<workgroup> sharedCounters: array<u32, 32>;" in result
+        assert "var oldInc: u32 = atomicInc(values[index], limit);" in result
+        expected_old_dec = (
+            "var oldDec: u32 = "
+            "atomicDec(sharedCounters[gl_LocalInvocationID.x], limit);"
+        )
+        assert expected_old_dec in result
+        assert "atomicAdd(values[index], limit)" not in result
+        assert "atomicSub(sharedCounters[gl_LocalInvocationID.x], limit)" not in result
+        assert "(&values[index])" not in result
+        assert "(&sharedCounters[gl_LocalInvocationID.x])" not in result
+
     def test_user_defined_cuda_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined CUDA runtime names shadow runtime call comments."""
         code = """
@@ -328,10 +423,12 @@ class TestCudaCodeGen:
         assert "// CUDA memory free: out" not in result
 
     def test_threadfence_converts_to_crossgl_memory_barrier(self):
-        """Test CUDA thread fence converts back to CrossGL memoryBarrier."""
+        """Test CUDA thread fence variants convert back to CrossGL memoryBarrier."""
         code = """
         __global__ void fence(float* out) {
             __threadfence();
+            __threadfence_block();
+            __threadfence_system();
             __syncthreads();
         }
         """
@@ -343,9 +440,398 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "memoryBarrier();" in result
+        assert result.count("memoryBarrier();") == 3
         assert "workgroupBarrier();" in result
         assert "__threadfence" not in result
+
+    def test_syncwarp_mask_emits_explicit_diagnostic(self):
+        """Test CUDA warp synchronization emits an explicit CrossGL diagnostic."""
+        code = """
+        __global__ void sync(unsigned int mask) {
+            __syncwarp(mask);
+            __syncwarp();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// __syncwarp(mask) not directly supported in CrossGL" in result
+        assert "// __syncwarp() not directly supported in CrossGL" in result
+        assert "None" not in result
+
+    def test_cooperative_groups_thread_block_sync_converts(self):
+        """Test CUDA cooperative-groups thread-block sync converts to CrossGL."""
+        code = """
+        #include <cooperative_groups.h>
+        namespace cg = cooperative_groups;
+
+        __global__ void sync(float* out) {
+            cg::thread_block block = cg::this_thread_block();
+            block.sync();
+            auto direct = cooperative_groups::this_thread_block();
+            direct.sync();
+            cooperative_groups::this_thread_block().sync();
+            cg::sync(block);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert result.count("workgroupBarrier();") == 4
+        assert (
+            "// cooperative_groups thread_block block maps to the current workgroup"
+            in result
+        )
+        assert (
+            "// cooperative_groups thread_block direct maps to the current workgroup"
+            in result
+        )
+        assert "cg::this_thread_block" not in result
+        assert "cooperative_groups::this_thread_block" not in result
+
+    def test_cooperative_groups_thread_block_rank_and_size_converts(self):
+        """Test CUDA cooperative-groups thread-block rank helpers convert."""
+        code = """
+        __global__ void ranks(unsigned int* out) {
+            auto block = cooperative_groups::this_thread_block();
+            unsigned int rank = block.thread_rank();
+            unsigned int size = block.size();
+            unsigned int direct =
+                cooperative_groups::this_thread_block().thread_rank();
+            out[rank] = size + direct;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var rank: u32 = gl_LocalInvocationIndex;" in result
+        assert (
+            "var size: u32 = "
+            "((gl_WorkGroupSize.x * gl_WorkGroupSize.y) * gl_WorkGroupSize.z);"
+            in result
+        )
+        assert "var direct: u32 = gl_LocalInvocationIndex;" in result
+        assert "thread_rank" not in result
+        assert "block.size" not in result
+        assert "cooperative_groups::this_thread_block" not in result
+
+    def test_cooperative_groups_tiled_partition_rank_and_size_converts(self):
+        """Test tiled partitions from thread blocks lower rank and size."""
+        code = """
+        namespace cg = cooperative_groups;
+
+        __global__ void tile_ranks(unsigned int* out) {
+            auto block = cg::this_thread_block();
+            auto tile = cg::tiled_partition<32>(block);
+            unsigned int lane = tile.thread_rank();
+            unsigned int width = tile.size();
+            out[lane] = width;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// cooperative_groups thread_block_tile<32> tile maps to a "
+            "tiled partition of the current workgroup" in result
+        )
+        assert "var lane: u32 = (gl_LocalInvocationIndex % 32);" in result
+        assert "var width: u32 = 32;" in result
+        assert "tiled_partition" not in result
+        assert "thread_rank" not in result
+        assert "tile.size" not in result
+
+    def test_cooperative_groups_sync_factory_and_member_aliases_convert(self):
+        """Test cooperative-groups sync and current member aliases convert."""
+        code = """
+        namespace cg = cooperative_groups;
+
+        __global__ void metadata(unsigned int* out) {
+            auto block = cg::this_thread_block();
+            cg::sync(cg::this_thread_block());
+            unsigned int count = block.num_threads();
+            dim3 local = block.thread_index();
+            dim3 dims = block.dim_threads();
+            auto tile = cg::tiled_partition<16>(block);
+            unsigned int tile_count = tile.num_threads();
+            out[count] = local.x + dims.x + tile_count;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "workgroupBarrier();" in result
+        assert (
+            "var count: u32 = "
+            "((gl_WorkGroupSize.x * gl_WorkGroupSize.y) * gl_WorkGroupSize.z);"
+            in result
+        )
+        assert "var local: vec3<u32> = gl_LocalInvocationID;" in result
+        assert "var dims: vec3<u32> = gl_WorkGroupSize;" in result
+        assert "var tile_count: u32 = 16;" in result
+        assert "cg::sync" not in result
+        assert "cg::this_thread_block" not in result
+        assert "num_threads" not in result
+        assert "thread_index" not in result
+        assert "dim_threads" not in result
+
+    def test_unsupported_cooperative_group_rank_is_expression_safe(self):
+        """Test unsupported cooperative rank helpers remain expression-safe."""
+        code = """
+        __global__ void unsupported(unsigned int* out) {
+            auto group = cooperative_groups::coalesced_threads();
+            unsigned int rank = group.thread_rank();
+            unsigned int width = group.size();
+            unsigned int count = group.num_threads();
+            unsigned int direct =
+                cooperative_groups::coalesced_threads().thread_rank();
+            out[0] = rank + width + count + direct;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "var rank: u32 = (/* cooperative_groups "
+            "coalesced_group.thread_rank not directly supported in CrossGL */ 0);"
+            in result
+        )
+        assert (
+            "var width: u32 = (/* cooperative_groups "
+            "coalesced_group.size not directly supported in CrossGL */ 0);" in result
+        )
+        assert (
+            "var count: u32 = (/* cooperative_groups "
+            "coalesced_group.num_threads not directly supported in CrossGL */ 0);"
+            in result
+        )
+        assert (
+            "var direct: u32 = (/* cooperative_groups "
+            "coalesced_group.thread_rank not directly supported in CrossGL */ 0);"
+            in result
+        )
+        assert "cooperative_groups::coalesced_threads" not in result
+        assert "None" not in result
+
+    def test_unsupported_cooperative_groups_emit_diagnostics(self):
+        """Test unsupported CUDA cooperative-groups collectives are explicit."""
+        code = """
+        __global__ void sync_grid(float* out) {
+            auto grid = cooperative_groups::this_grid();
+            grid.sync();
+            cooperative_groups::coalesced_threads().sync();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// cooperative_groups grid_group for grid not directly supported in CrossGL"
+            in result
+        )
+        assert (
+            "// cooperative_groups grid_group.sync not directly supported in CrossGL"
+            in result
+        )
+        assert (
+            "// cooperative_groups coalesced_group.sync not directly supported in CrossGL"
+            in result
+        )
+        assert "cooperative_groups::this_grid" not in result
+        assert "cooperative_groups::coalesced_threads" not in result
+
+    def test_cooperative_groups_async_copy_wait_emit_diagnostics(self):
+        """Test cooperative-groups async copy and wait stay explicit."""
+        code = """
+        namespace cg = cooperative_groups;
+
+        __global__ void async_copy(int* shared, const int* global) {
+            auto block = cg::this_thread_block();
+            cg::memcpy_async(block, shared, global, sizeof(int) * block.size());
+            cg::memcpy_async(cg::this_thread_block(), shared, global, 16);
+            cg::wait(block);
+            cooperative_groups::wait(cg::this_thread_block());
+            cooperative_groups::wait_prior<1>(block);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert result.count("cooperative_groups thread_block.memcpy_async") == 2
+        assert "cooperative_groups thread_block.wait not directly supported" in result
+        assert (
+            "cooperative_groups thread_block.wait_prior not directly supported"
+            in result
+        )
+        assert "cg::memcpy_async" not in result
+        assert "cooperative_groups::wait" not in result
+        assert "wait_prior<1>" not in result
+        assert "None" not in result
+
+    def test_cuda_barrier_pipeline_async_copy_emit_diagnostics(self):
+        """Test CUDA barrier/pipeline async copy helpers stay explicit."""
+        code = """
+        __global__ void async_copy(int* shared, const int* global, int* out) {
+            __shared__ cuda::pipeline_shared_state<cuda::thread_scope_block, 2> state;
+            cuda::barrier<cuda::thread_scope_block> blockBarrier;
+            init(&blockBarrier, blockDim.x);
+            cuda::memcpy_async(
+                shared,
+                global,
+                sizeof(int) * blockDim.x,
+                blockBarrier
+            );
+            auto token = blockBarrier.arrive();
+            bool ready = blockBarrier.try_wait(token);
+            blockBarrier.wait(token);
+            blockBarrier.arrive_and_wait();
+            auto pipe = cuda::make_pipeline();
+            pipe.producer_acquire();
+            cuda::memcpy_async(shared, global, 16, pipe);
+            pipe.producer_commit();
+            pipe.consumer_wait();
+            pipe.consumer_release();
+            if (ready) {
+                out[0] = 1;
+            }
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// cuda pipeline_shared_state state not directly supported in CrossGL"
+            in result
+        )
+        assert (
+            "// cuda barrier blockBarrier not directly supported in CrossGL" in result
+        )
+        assert "// cuda barrier.init not directly supported in CrossGL" in result
+        assert (
+            "// cuda barrier.memcpy_async not directly supported in CrossGL" in result
+        )
+        assert (
+            "var token: auto = "
+            "(/* cuda barrier.arrive not directly supported in CrossGL */ 0);" in result
+        )
+        assert (
+            "var ready: bool = "
+            "(/* cuda barrier.try_wait not directly supported in CrossGL */ false);"
+            in result
+        )
+        assert "// cuda barrier.wait not directly supported in CrossGL" in result
+        assert (
+            "// cuda barrier.arrive_and_wait not directly supported in CrossGL"
+            in result
+        )
+        assert "// cuda pipeline pipe not directly supported in CrossGL" in result
+        assert (
+            "// cuda pipeline.producer_acquire not directly supported in CrossGL"
+            in result
+        )
+        assert (
+            "// cuda pipeline.memcpy_async not directly supported in CrossGL" in result
+        )
+        assert (
+            "// cuda pipeline.producer_commit not directly supported in CrossGL"
+            in result
+        )
+        assert (
+            "// cuda pipeline.consumer_wait not directly supported in CrossGL" in result
+        )
+        assert (
+            "// cuda pipeline.consumer_release not directly supported in CrossGL"
+            in result
+        )
+        assert "cuda::memcpy_async" not in result
+        assert "cuda::make_pipeline" not in result
+        assert "blockBarrier.arrive" not in result
+        assert "pipe.producer" not in result
+        assert "pipe.consumer" not in result
+        assert "None" not in result
+
+    def test_cuda_pipeline_primitive_intrinsics_emit_diagnostics(self):
+        """Test CUDA pipeline primitive intrinsics stay explicit."""
+        code = """
+        __global__ void primitive_async_copy(
+            int* shared,
+            const int* global,
+            __mbarrier_t* barrier
+        ) {
+            __pipeline_memcpy_async(shared, global, 16);
+            __pipeline_memcpy_async(shared + 16, global + 16, 16, 0);
+            __pipeline_commit();
+            __pipeline_wait_prior(1);
+            __pipeline_arrive_on(barrier);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert result.count("// cuda pipeline.memcpy_async not directly supported") == 2
+        assert "// cuda pipeline.commit not directly supported in CrossGL" in result
+        assert (
+            "// cuda pipeline.wait_prior not directly supported in CrossGL: 1" in result
+        )
+        assert (
+            "// cuda pipeline.arrive_on not directly supported in CrossGL: barrier"
+            in result
+        )
+        assert "__pipeline_memcpy_async" not in result
+        assert "__pipeline_commit" not in result
+        assert "__pipeline_wait_prior" not in result
+        assert "__pipeline_arrive_on" not in result
+        assert "None" not in result
 
     def test_inverse_trig_builtins_convert_to_crossgl(self):
         """Test CUDA inverse trig functions convert back to CrossGL names."""
@@ -747,6 +1233,181 @@ class TestCudaCodeGen:
         assert "err = cudaSuccess;" in result
         assert "cudaGetLastError(" not in result
         assert "cudaPeekAtLastError(" not in result
+
+    def test_cuda_texture_object_descriptor_query_conversion(self):
+        """Test CUDA texture-object descriptor queries emit metadata comments."""
+        code = """
+        void queryTextureObject(cudaTextureObject_t objectTex) {
+            cudaResourceDesc resourceDesc;
+            cudaTextureDesc textureDesc;
+            cudaResourceViewDesc viewDesc;
+            cudaGetTextureObjectResourceDesc(&resourceDesc, objectTex);
+            cudaError_t err = cudaGetTextureObjectTextureDesc(
+                &textureDesc,
+                objectTex
+            );
+            err = cudaGetTextureObjectResourceViewDesc(&viewDesc, objectTex);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA texture object resource descriptor query: "
+            "objectTex, output: resourceDesc"
+        ) in result
+        assert (
+            "// CUDA texture object texture descriptor query: "
+            "objectTex, output: textureDesc"
+        ) in result
+        assert (
+            "// CUDA texture object resource view descriptor query: "
+            "objectTex, output: viewDesc"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        assert "cudaGetTextureObjectResourceDesc(" not in result
+        assert "cudaGetTextureObjectTextureDesc(" not in result
+        assert "cudaGetTextureObjectResourceViewDesc(" not in result
+
+    def test_cuda_surface_object_descriptor_query_conversion(self):
+        """Test CUDA surface-object descriptor queries emit metadata comments."""
+        code = """
+        void querySurfaceObject(cudaSurfaceObject_t surfaceObj) {
+            cudaResourceDesc resourceDesc;
+            cudaGetSurfaceObjectResourceDesc(&resourceDesc, surfaceObj);
+            cudaError_t err = cudaGetSurfaceObjectResourceDesc(
+                &resourceDesc,
+                surfaceObj
+            );
+            err = cudaGetSurfaceObjectResourceDesc(&resourceDesc, surfaceObj);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA surface object resource descriptor query: "
+            "surfaceObj, output: resourceDesc"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        assert "cudaGetSurfaceObjectResourceDesc(" not in result
+
+    def test_cuda_external_memory_runtime_conversion(self):
+        """Test CUDA external-memory APIs emit metadata comments."""
+        code = """
+        void importExternalMemory(cudaExternalMemoryHandleDesc handleDesc) {
+            cudaExternalMemory_t memory;
+            cudaExternalMemoryBufferDesc bufferDesc;
+            cudaExternalMemoryMipmappedArrayDesc mipDesc;
+            cudaMipmappedArray_t mipmapped;
+            void* ptr;
+            cudaImportExternalMemory(&memory, &handleDesc);
+            cudaError_t err = cudaExternalMemoryGetMappedBuffer(
+                &ptr,
+                memory,
+                &bufferDesc
+            );
+            err = cudaExternalMemoryGetMappedMipmappedArray(
+                &mipmapped,
+                memory,
+                &mipDesc
+            );
+            err = cudaDestroyExternalMemory(memory);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA external memory import: output: memory, handle: (&handleDesc)"
+            in result
+        )
+        assert (
+            "// CUDA external memory mapped buffer: memory, "
+            "desc: (&bufferDesc), output: ptr"
+        ) in result
+        assert (
+            "// CUDA external memory mapped mipmapped array: memory, "
+            "desc: (&mipDesc), output: mipmapped"
+        ) in result
+        assert "// CUDA external memory destroy: memory" in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        assert "cudaImportExternalMemory(" not in result
+        assert "cudaExternalMemoryGetMappedBuffer(" not in result
+        assert "cudaExternalMemoryGetMappedMipmappedArray(" not in result
+        assert "cudaDestroyExternalMemory(" not in result
+
+    def test_cuda_external_semaphore_runtime_conversion(self):
+        """Test CUDA external-semaphore APIs emit metadata comments."""
+        code = """
+        void syncExternalSemaphore(
+            cudaExternalSemaphoreHandleDesc handleDesc,
+            cudaStream_t stream
+        ) {
+            cudaExternalSemaphore_t semaphore;
+            cudaExternalSemaphoreSignalParams signalParams;
+            cudaExternalSemaphoreWaitParams waitParams;
+            cudaImportExternalSemaphore(&semaphore, &handleDesc);
+            cudaError_t err = cudaSignalExternalSemaphoresAsync(
+                &semaphore,
+                &signalParams,
+                1,
+                stream
+            );
+            err = cudaWaitExternalSemaphoresAsync(
+                &semaphore,
+                &waitParams,
+                1,
+                stream
+            );
+            err = cudaDestroyExternalSemaphore(semaphore);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA external semaphore import: output: semaphore, "
+            "handle: (&handleDesc)"
+        ) in result
+        assert (
+            "// CUDA external semaphore signal: semaphores: (&semaphore), "
+            "params: (&signalParams), count: 1, stream: stream"
+        ) in result
+        assert (
+            "// CUDA external semaphore wait: semaphores: (&semaphore), "
+            "params: (&waitParams), count: 1, stream: stream"
+        ) in result
+        assert "// CUDA external semaphore destroy: semaphore" in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        assert "cudaImportExternalSemaphore(" not in result
+        assert "cudaSignalExternalSemaphoresAsync(" not in result
+        assert "cudaWaitExternalSemaphoresAsync(" not in result
+        assert "cudaDestroyExternalSemaphore(" not in result
 
     def test_cuda_runtime_event_api_conversion(self):
         """Test CUDA stream and event API calls emit metadata comments"""
@@ -1314,9 +1975,217 @@ class TestCudaCodeGen:
     def test_qualified_template_argument_spacing_conversion(self):
         """Test template arguments keep spaces during conversion"""
         code = """
+        struct ResourceHolder {
+            cudaTextureObject_t sharedName;
+        };
+
+        cudaTextureObject_t sharedName;
+        cudaTextureObject_t globalTex;
+        cudaSurfaceObject_t globalSurface;
+        cudaSurfaceObject_t globalCubeLayerSurface;
+        cudaTextureObject_t globalTextures[2];
+        cudaTextureObject_t mixedGlobal;
+
         void host() {
             std::array<unsigned int, 4> ids{};
             std::vector<const unsigned int> flags;
+            texture<float4, 2> tex2d;
+            texture<float4, cudaTextureType2DLayered> layeredTex;
+            texture<float4, cudaTextureTypeCubemap> cubeTex;
+            surface<void, 1> lineSurface;
+            surface<void, cudaSurfaceType1DLayered> lineLayerSurface;
+            surface<void, 2> surface2d;
+            surface<void, cudaSurfaceType3D> volumeSurface;
+            surface<void, cudaSurfaceTypeCubemap> cubeSurface;
+            surface<void, cudaSurfaceTypeCubemapLayered> cubeLayerSurface;
+            cudaArray_t arrayRef;
+            cudaArray* rawArray;
+        }
+
+        void resourceOps(
+            texture<float4, 1> tex1d,
+            texture<float4, 2> tex2d,
+            texture<float4, cudaTextureType3D> tex3d,
+            texture<float4, cudaTextureType2DLayered> layeredTex,
+            texture<float4, cudaTextureTypeCubemap> cubeTex,
+            texture<float4, cudaTextureTypeCubemapLayered> cubeLayerTex,
+            surface<void, 1> lineSurface,
+            surface<void, cudaSurfaceType1DLayered> lineLayerSurface,
+            surface<void, 2> surface2d,
+            surface<void, cudaSurfaceType3D> volumeSurface,
+            surface<void, cudaSurfaceTypeCubemap> cubeSurface,
+            surface<void, cudaSurfaceTypeCubemapLayered> cubeLayerSurface,
+            cudaTextureObject_t objectTex,
+            cudaSurfaceObject_t objectSurface,
+            cudaTextureObject_t objectTextures[2],
+            cudaSurfaceObject_t objectSurfaces[2],
+            cudaTextureObject_t ambiguousTex,
+            int2 pixel,
+            int3 voxel,
+            float2 uv,
+            float3 uvw
+        ) {
+            float4 line = tex1D<float4>(tex1d, uv.x);
+            float4 sampled = tex2D<float4>(tex2d, uv.x, uv.y);
+            float4 sampledCoord = tex2D<float4>(tex2d, uv);
+            float4 sampledLod = tex2DLod<float4>(tex2d, uv.x, uv.y, 1.0f);
+            float4 sampledGrad = tex2DGrad<float4>(tex2d, uv, uv, uv);
+            float4 layer = tex2DLayered<float4>(
+                layeredTex,
+                uv.x,
+                uv.y,
+                pixel.x
+            );
+            float4 volume = tex3D<float4>(tex3d, uvw.x, uvw.y, uvw.z);
+            float4 cube = texCubemap<float4>(cubeTex, uvw.x, uvw.y, uvw.z);
+            float4 cubeLayer = texCubemapLayered<float4>(
+                cubeLayerTex,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                pixel.x
+            );
+            float4 lineRead = surf1Dread<float4>(
+                lineSurface,
+                pixel.x * sizeof(float4)
+            );
+            surf1Dwrite(lineRead, lineSurface, pixel.x * sizeof(float4));
+            float4 lineLayerRead = surf1DLayeredread<float4>(
+                lineLayerSurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf1DLayeredwrite(
+                lineLayerRead,
+                lineLayerSurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 read = surf2Dread<float4>(
+                surface2d,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(read, surface2d, pixel.x * sizeof(float4), pixel.y);
+            float4 voxelValue = surf3Dread<float4>(
+                volumeSurface,
+                voxel.x * sizeof(float4),
+                voxel.y,
+                voxel.z
+            );
+            surf3Dwrite(
+                voxelValue,
+                volumeSurface,
+                voxel.x * sizeof(float4),
+                voxel.y,
+                voxel.z
+            );
+            float4 cubeRead = surfCubemapread<float4>(
+                cubeSurface,
+                pixel.x * sizeof(float4),
+                pixel.y,
+                voxel.z
+            );
+            surfCubemapwrite(
+                cubeRead,
+                cubeSurface,
+                pixel.x * sizeof(float4),
+                pixel.y,
+                voxel.z
+            );
+            float4 cubeLayerRead = surfCubemapLayeredread<float4>(
+                cubeLayerSurface,
+                pixel.x * sizeof(float4),
+                pixel.y,
+                voxel.z
+            );
+            surfCubemapLayeredwrite(
+                cubeLayerRead,
+                cubeLayerSurface,
+                pixel.x * sizeof(float4),
+                pixel.y,
+                voxel.z
+            );
+            float4 objectSample = tex2D<float4>(objectTex, uv.x, uv.y);
+            float4 objectSampleArray = tex2D<float4>(objectTextures[1], uv);
+            float4 objectRead = surf2Dread<float4>(
+                objectSurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                objectRead,
+                objectSurfaces[1],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 ambiguousSample = tex2D<float4>(ambiguousTex, uv.x, uv.y);
+            float4 ambiguousVolume = tex3D<float4>(
+                ambiguousTex,
+                uvw.x,
+                uvw.y,
+                uvw.z
+            );
+        }
+
+        void localResourceObjects(int2 pixel, float2 uv) {
+            cudaTextureObject_t localTex;
+            cudaSurfaceObject_t localSurface;
+            float4 sampled = tex2D<float4>(localTex, uv);
+            float4 loaded = surf2Dread<float4>(
+                localSurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+
+        void sample2DObject(cudaTextureObject_t sharedName, float2 uv) {
+            float4 sampled = tex2D<float4>(sharedName, uv);
+        }
+
+        void sample3DObject(cudaTextureObject_t sharedName, float3 uvw) {
+            float4 sampled = tex3D<float4>(
+                sharedName,
+                uvw.x,
+                uvw.y,
+                uvw.z
+            );
+        }
+
+        void sampleGlobals(int2 pixel, float2 uv, float3 uvw) {
+            float4 sampled = tex2D<float4>(globalTex, uv);
+            float4 arraySample = tex2D<float4>(globalTextures[1], uv);
+            float4 loaded = surf2Dread<float4>(
+                globalSurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 cubeLayerLoaded = surfCubemapLayeredread<float4>(
+                globalCubeLayerSurface,
+                pixel.x * sizeof(float4),
+                pixel.y,
+                voxel.z
+            );
+            float4 mixedSample = tex2D<float4>(mixedGlobal, uv);
+            float4 mixedVolume = tex3D<float4>(
+                mixedGlobal,
+                uvw.x,
+                uvw.y,
+                uvw.z
+            );
+        }
+
+        void shadowGlobal(cudaTextureObject_t globalTex, float3 uvw) {
+            float4 sampled = tex3D<float4>(
+                globalTex,
+                uvw.x,
+                uvw.y,
+                uvw.z
+            );
+        }
+
+        void shadowUnused(cudaSurfaceObject_t globalSurface) {
+            return;
         }
         """
         lexer = CudaLexer(code)
@@ -1329,8 +2198,946 @@ class TestCudaCodeGen:
 
         assert "var ids: std::array<unsigned int, 4> = {};" in result
         assert "var flags: std::vector<const unsigned int>;" in result
+        assert "cudaTextureObject_t sharedName;" in result
+        assert "var sharedName: cudaTextureObject_t;" in result
+        assert "var globalTex: sampler2D;" in result
+        assert "var globalSurface: image2D;" in result
+        assert "var globalCubeLayerSurface: imageCubeArray;" in result
+        assert "var globalTextures: array<sampler2D, 2>;" in result
+        assert "var mixedGlobal: cudaTextureObject_t;" in result
+        assert "var tex2d: sampler2D;" in result
+        assert "var layeredTex: sampler2DArray;" in result
+        assert "var cubeTex: samplerCube;" in result
+        assert "var lineSurface: image1D;" in result
+        assert "var lineLayerSurface: image1DArray;" in result
+        assert "var surface2d: image2D;" in result
+        assert "var volumeSurface: image3D;" in result
+        assert "var cubeSurface: imageCube;" in result
+        assert "var cubeLayerSurface: imageCubeArray;" in result
+        assert "var arrayRef: cudaArray_t;" in result
+        assert "var rawArray: ptr<cudaArray>;" in result
+        assert "void resourceOps(" in result
+        assert "sampler1D tex1d" in result
+        assert "sampler2D tex2d" in result
+        assert "sampler3D tex3d" in result
+        assert "sampler2DArray layeredTex" in result
+        assert "samplerCube cubeTex" in result
+        assert "samplerCubeArray cubeLayerTex" in result
+        assert "image1D lineSurface" in result
+        assert "image1DArray lineLayerSurface" in result
+        assert "image2D surface2d" in result
+        assert "image3D volumeSurface" in result
+        assert "imageCube cubeSurface" in result
+        assert "imageCubeArray cubeLayerSurface" in result
+        assert "sampler2D objectTex" in result
+        assert "image2D objectSurface" in result
+        assert "array<sampler2D, 2> objectTextures" in result
+        assert "array<image2D, 2> objectSurfaces" in result
+        assert "cudaTextureObject_t ambiguousTex" in result
+        assert "var line: vec4<f32> = texture(tex1d, uv.x);" in result
+        assert (
+            "var sampled: vec4<f32> = texture(tex2d, vec2<f32>(uv.x, uv.y));" in result
+        )
+        assert "var sampledCoord: vec4<f32> = texture(tex2d, uv);" in result
+        assert (
+            "var sampledLod: vec4<f32> = textureLod("
+            "tex2d, vec2<f32>(uv.x, uv.y), 1.0f);" in result
+        )
+        assert "var sampledGrad: vec4<f32> = textureGrad(tex2d, uv, uv, uv);" in result
+        assert (
+            "var layer: vec4<f32> = texture("
+            "layeredTex, vec3<f32>(uv.x, uv.y, pixel.x));" in result
+        )
+        assert (
+            "var volume: vec4<f32> = texture(tex3d, "
+            "vec3<f32>(uvw.x, uvw.y, uvw.z));" in result
+        )
+        assert (
+            "var cube: vec4<f32> = texture(cubeTex, "
+            "vec3<f32>(uvw.x, uvw.y, uvw.z));" in result
+        )
+        assert (
+            "var cubeLayer: vec4<f32> = texture("
+            "cubeLayerTex, vec4<f32>(uvw.x, uvw.y, uvw.z, pixel.x));" in result
+        )
+        assert "var lineRead: vec4<f32> = imageLoad(lineSurface, pixel.x);" in result
+        assert "imageStore(lineSurface, pixel.x, lineRead);" in result
+        assert (
+            "var lineLayerRead: vec4<f32> = imageLoad("
+            "lineLayerSurface, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(lineLayerSurface, vec2<i32>(pixel.x, pixel.y), "
+            "lineLayerRead);" in result
+        )
+        assert (
+            "var read: vec4<f32> = imageLoad("
+            "surface2d, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert "imageStore(surface2d, vec2<i32>(pixel.x, pixel.y), read);" in result
+        assert (
+            "var voxelValue: vec4<f32> = imageLoad("
+            "volumeSurface, vec3<i32>(voxel.x, voxel.y, voxel.z));" in result
+        )
+        assert (
+            "imageStore(volumeSurface, vec3<i32>(voxel.x, voxel.y, voxel.z), "
+            "voxelValue);" in result
+        )
+        assert (
+            "var cubeRead: vec4<f32> = imageLoad("
+            "cubeSurface, vec3<i32>(pixel.x, pixel.y, voxel.z));" in result
+        )
+        assert (
+            "imageStore(cubeSurface, vec3<i32>(pixel.x, pixel.y, voxel.z), "
+            "cubeRead);" in result
+        )
+        assert (
+            "var cubeLayerRead: vec4<f32> = imageLoad("
+            "cubeLayerSurface, vec3<i32>(pixel.x, pixel.y, voxel.z));" in result
+        )
+        assert (
+            "imageStore(cubeLayerSurface, vec3<i32>(pixel.x, pixel.y, voxel.z), "
+            "cubeLayerRead);" in result
+        )
+        assert (
+            "var objectSample: vec4<f32> = texture("
+            "objectTex, vec2<f32>(uv.x, uv.y));" in result
+        )
+        assert (
+            "var objectSampleArray: vec4<f32> = texture(objectTextures[1], uv);"
+            in result
+        )
+        assert (
+            "var objectRead: vec4<f32> = imageLoad("
+            "objectSurface, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(objectSurfaces[1], vec2<i32>(pixel.x, pixel.y), "
+            "objectRead);" in result
+        )
+        assert (
+            "var ambiguousVolume: vec4<f32> = texture(ambiguousTex, "
+            "vec3<f32>(uvw.x, uvw.y, uvw.z));" in result
+        )
+        assert "void localResourceObjects(vec2<i32> pixel, vec2<f32> uv) {" in result
+        assert "var localTex: sampler2D;" in result
+        assert "var localSurface: image2D;" in result
+        assert "void sample2DObject(sampler2D sharedName, vec2<f32> uv) {" in result
+        assert "void sample3DObject(sampler3D sharedName, vec3<f32> uvw) {" in result
+        assert "var arraySample: vec4<f32> = texture(globalTextures[1], uv);" in result
+        assert (
+            "var loaded: vec4<f32> = imageLoad("
+            "globalSurface, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "var cubeLayerLoaded: vec4<f32> = imageLoad("
+            "globalCubeLayerSurface, vec3<i32>(pixel.x, pixel.y, voxel.z));" in result
+        )
+        assert "void shadowGlobal(sampler3D globalTex, vec3<f32> uvw) {" in result
+        assert "void shadowUnused(cudaSurfaceObject_t globalSurface) {" in result
         assert "unsignedint" not in result
         assert "constunsigned" not in result
+
+    def test_resource_object_pointer_and_legacy_texture_template_conversion(self):
+        """Test CUDA resource object pointers and legacy texture refs convert."""
+        code = """
+        texture<float4, cudaTextureType2D, cudaReadModeElementType> texRef;
+        surface<void, cudaSurfaceType2D> surfaceRef;
+
+        void resourcePointerOps(
+            cudaTextureObject_t* textureObjects,
+            cudaSurfaceObject_t* surfaceObjects,
+            texture<float4, cudaTextureType2D, cudaReadModeElementType> legacyTex,
+            surface<void, cudaSurfaceType2D> legacySurface,
+            int index,
+            int2 pixel,
+            float2 uv
+        ) {
+            float4 fromPointer = tex2D<float4>(
+                textureObjects[index],
+                uv.x,
+                uv.y
+            );
+            float4 fromLegacy = tex2D<float4>(legacyTex, uv);
+            float4 fromGlobal = tex2D<float4>(texRef, uv);
+            float4 loadedPointer = surf2Dread<float4>(
+                surfaceObjects[index],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                loadedPointer,
+                surfaceObjects[index],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 loadedLegacy = surf2Dread<float4>(
+                legacySurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                loadedLegacy,
+                legacySurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 loadedGlobal = surf2Dread<float4>(
+                surfaceRef,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "var texRef: sampler2D;" in result
+        assert "var surfaceRef: image2D;" in result
+        assert (
+            "void resourcePointerOps("
+            "ptr<sampler2D> textureObjects, ptr<image2D> surfaceObjects, "
+            "sampler2D legacyTex, image2D legacySurface, i32 index"
+        ) in result
+        assert (
+            "var fromPointer: vec4<f32> = texture("
+            "textureObjects[index], vec2<f32>(uv.x, uv.y));" in result
+        )
+        assert "var fromLegacy: vec4<f32> = texture(legacyTex, uv);" in result
+        assert "var fromGlobal: vec4<f32> = texture(texRef, uv);" in result
+        assert (
+            "var loadedPointer: vec4<f32> = imageLoad("
+            "surfaceObjects[index], vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(surfaceObjects[index], vec2<i32>(pixel.x, pixel.y), "
+            "loadedPointer);" in result
+        )
+        assert (
+            "var loadedLegacy: vec4<f32> = imageLoad("
+            "legacySurface, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(legacySurface, vec2<i32>(pixel.x, pixel.y), "
+            "loadedLegacy);" in result
+        )
+        assert (
+            "var loadedGlobal: vec4<f32> = imageLoad("
+            "surfaceRef, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert "cudaReadModeElementType" not in result
+        assert "cudaTextureObject_t" not in result
+        assert "cudaSurfaceObject_t" not in result
+        assert "tex2D" not in result
+        assert "surf2Dread" not in result
+        assert "surf2Dwrite" not in result
+
+    def test_cuda_texture_gather_helpers_convert(self):
+        """Test CUDA tex2Dgather helpers convert to CrossGL textureGather."""
+        code = """
+        void gatherOps(
+            texture<float4, cudaTextureType2D> tex,
+            cudaTextureObject_t objectTex,
+            bool* resident,
+            float2 uv
+        ) {
+            float4 gathered = tex2Dgather<float4>(tex, uv.x, uv.y);
+            float4 gatheredComponent = tex2Dgather<float4>(
+                tex,
+                uv.x,
+                uv.y,
+                2
+            );
+            float4 gatheredObject = tex2Dgather<float4>(
+                objectTex,
+                uv.x,
+                uv.y,
+                1
+            );
+            float4 sparseGather = tex2Dgather<float4>(
+                objectTex,
+                uv.x,
+                uv.y,
+                resident,
+                3
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "sampler2D tex" in result
+        assert "sampler2D objectTex" in result
+        assert (
+            "var gathered: vec4<f32> = textureGather("
+            "tex, vec2<f32>(uv.x, uv.y));" in result
+        )
+        assert (
+            "var gatheredComponent: vec4<f32> = textureGather("
+            "tex, vec2<f32>(uv.x, uv.y), 2);" in result
+        )
+        assert (
+            "var gatheredObject: vec4<f32> = textureGather("
+            "objectTex, vec2<f32>(uv.x, uv.y), 1);" in result
+        )
+        assert (
+            "var sparseGather: vec4<f32> = "
+            "(/* cuda texture.tex2Dgather sparse residency not directly "
+            "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));" in result
+        )
+        assert "tex2Dgather<float4>(" not in result
+
+    def test_cuda_texture_fetch_helpers_convert(self):
+        """Test CUDA tex1Dfetch helpers convert to CrossGL texelFetch."""
+        code = """
+        void fetchOps(
+            texture<float4, cudaTextureType1D> lineTex,
+            cudaTextureObject_t objectTex,
+            bool* resident,
+            int x
+        ) {
+            float4 fetched = tex1Dfetch<float4>(lineTex, x);
+            float4 objectFetched = tex1Dfetch<float4>(objectTex, x);
+            float4 sparseFetched = tex1Dfetch<float4>(objectTex, x, resident);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "sampler1D lineTex" in result
+        assert "sampler1D objectTex" in result
+        assert "var fetched: vec4<f32> = texelFetch(lineTex, x, 0);" in result
+        assert "var objectFetched: vec4<f32> = texelFetch(objectTex, x, 0);" in result
+        assert (
+            "var sparseFetched: vec4<f32> = "
+            "(/* cuda texture.tex1Dfetch sparse residency not directly "
+            "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));" in result
+        )
+        assert "tex1Dfetch<float4>(" not in result
+
+    def test_cuda_sparse_texture_fetch_helpers_emit_diagnostics(self):
+        """Test sparse CUDA 2D texture fetches import as diagnostics."""
+        code = """
+        void sparseFetchOps(
+            cudaTextureObject_t objectTex,
+            bool* resident,
+            float2 uv,
+            float lod
+        ) {
+            float4 sparseSample = tex2D<float4>(
+                objectTex,
+                uv.x,
+                uv.y,
+                resident
+            );
+            float4 sparseLod = tex2DLod<float4>(
+                objectTex,
+                uv.x,
+                uv.y,
+                lod,
+                resident
+            );
+            float4 sparseGrad = tex2DGrad<float4>(
+                objectTex,
+                uv.x,
+                uv.y,
+                uv,
+                uv,
+                resident
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "sampler2D objectTex" in result
+        for name, helper in (
+            ("sparseSample", "tex2D"),
+            ("sparseLod", "tex2DLod"),
+            ("sparseGrad", "tex2DGrad"),
+        ):
+            assert (
+                f"var {name}: vec4<f32> = "
+                f"(/* cuda texture.{helper} sparse residency not directly "
+                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
+            ) in result
+        assert "tex2D<float4>(" not in result
+        assert "tex2DLod<float4>(" not in result
+        assert "tex2DGrad<float4>(" not in result
+
+    def test_cuda_sparse_layered_texture_helpers_emit_diagnostics(self):
+        """Test sparse CUDA 2D layered texture fetches import as diagnostics."""
+        code = """
+        void sparseLayeredFetchOps(
+            cudaTextureObject_t objectLayers,
+            bool* resident,
+            float2 uv,
+            int layer,
+            float lod
+        ) {
+            float4 sparseLayer = tex2DLayered<float4>(
+                objectLayers,
+                uv.x,
+                uv.y,
+                layer,
+                resident
+            );
+            float4 sparseLayerLod = tex2DLayeredLod<float4>(
+                objectLayers,
+                uv.x,
+                uv.y,
+                layer,
+                lod,
+                resident
+            );
+            float4 sparseLayerGrad = tex2DLayeredGrad<float4>(
+                objectLayers,
+                uv.x,
+                uv.y,
+                layer,
+                uv,
+                uv,
+                resident
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "sampler2DArray objectLayers" in result
+        for name, helper in (
+            ("sparseLayer", "tex2DLayered"),
+            ("sparseLayerLod", "tex2DLayeredLod"),
+            ("sparseLayerGrad", "tex2DLayeredGrad"),
+        ):
+            assert (
+                f"var {name}: vec4<f32> = "
+                f"(/* cuda texture.{helper} sparse residency not directly "
+                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
+            ) in result
+        assert "tex2DLayered<float4>(" not in result
+        assert "tex2DLayeredLod<float4>(" not in result
+        assert "tex2DLayeredGrad<float4>(" not in result
+
+    def test_cuda_sparse_3d_texture_helpers_emit_diagnostics(self):
+        """Test sparse CUDA 3D texture fetches import as diagnostics."""
+        code = """
+        void sparseVolumeFetchOps(
+            cudaTextureObject_t objectVolume,
+            bool* resident,
+            float3 uvw,
+            float lod
+        ) {
+            float4 sparseVolume = tex3D<float4>(
+                objectVolume,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                resident
+            );
+            float4 sparseVolumeLod = tex3DLod<float4>(
+                objectVolume,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                lod,
+                resident
+            );
+            float4 sparseVolumeGrad = tex3DGrad<float4>(
+                objectVolume,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                uvw,
+                uvw,
+                resident
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "sampler3D objectVolume" in result
+        for name, helper in (
+            ("sparseVolume", "tex3D"),
+            ("sparseVolumeLod", "tex3DLod"),
+            ("sparseVolumeGrad", "tex3DGrad"),
+        ):
+            assert (
+                f"var {name}: vec4<f32> = "
+                f"(/* cuda texture.{helper} sparse residency not directly "
+                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
+            ) in result
+        assert "tex3D<float4>(" not in result
+        assert "tex3DLod<float4>(" not in result
+        assert "tex3DGrad<float4>(" not in result
+
+    def test_cuda_sparse_1d_and_cube_texture_helpers_emit_diagnostics(self):
+        """Test sparse CUDA 1D and cubemap texture fetches import as diagnostics."""
+        code = """
+        void sparseLineAndCubeFetchOps(
+            cudaTextureObject_t objectLine,
+            cudaTextureObject_t objectLineLayers,
+            cudaTextureObject_t objectCube,
+            cudaTextureObject_t objectCubeLayers,
+            bool* resident,
+            float x,
+            int layer,
+            float3 dir,
+            float lod
+        ) {
+            float4 sparseLine = tex1D<float4>(objectLine, x, resident);
+            float4 sparseLineLod = tex1DLod<float4>(
+                objectLine,
+                x,
+                lod,
+                resident
+            );
+            float4 sparseLineGrad = tex1DGrad<float4>(
+                objectLine,
+                x,
+                x,
+                x,
+                resident
+            );
+            float4 sparseLineLayer = tex1DLayered<float4>(
+                objectLineLayers,
+                x,
+                layer,
+                resident
+            );
+            float4 sparseLineLayerLod = tex1DLayeredLod<float4>(
+                objectLineLayers,
+                x,
+                layer,
+                lod,
+                resident
+            );
+            float4 sparseLineLayerGrad = tex1DLayeredGrad<float4>(
+                objectLineLayers,
+                x,
+                layer,
+                x,
+                x,
+                resident
+            );
+            float4 sparseCube = texCubemap<float4>(
+                objectCube,
+                dir.x,
+                dir.y,
+                dir.z,
+                resident
+            );
+            float4 sparseCubeLod = texCubemapLod<float4>(
+                objectCube,
+                dir.x,
+                dir.y,
+                dir.z,
+                lod,
+                resident
+            );
+            float4 sparseCubeGrad = texCubemapGrad<float4>(
+                objectCube,
+                dir.x,
+                dir.y,
+                dir.z,
+                dir,
+                dir,
+                resident
+            );
+            float4 sparseCubeLayer = texCubemapLayered<float4>(
+                objectCubeLayers,
+                dir.x,
+                dir.y,
+                dir.z,
+                layer,
+                resident
+            );
+            float4 sparseCubeLayerLod = texCubemapLayeredLod<float4>(
+                objectCubeLayers,
+                dir.x,
+                dir.y,
+                dir.z,
+                layer,
+                lod,
+                resident
+            );
+            float4 sparseCubeLayerGrad = texCubemapLayeredGrad<float4>(
+                objectCubeLayers,
+                dir.x,
+                dir.y,
+                dir.z,
+                layer,
+                dir,
+                dir,
+                resident
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "sampler1D objectLine" in result
+        assert "sampler1DArray objectLineLayers" in result
+        assert "samplerCube objectCube" in result
+        assert "samplerCubeArray objectCubeLayers" in result
+        for name, helper in (
+            ("sparseLine", "tex1D"),
+            ("sparseLineLod", "tex1DLod"),
+            ("sparseLineGrad", "tex1DGrad"),
+            ("sparseLineLayer", "tex1DLayered"),
+            ("sparseLineLayerLod", "tex1DLayeredLod"),
+            ("sparseLineLayerGrad", "tex1DLayeredGrad"),
+            ("sparseCube", "texCubemap"),
+            ("sparseCubeLod", "texCubemapLod"),
+            ("sparseCubeGrad", "texCubemapGrad"),
+            ("sparseCubeLayer", "texCubemapLayered"),
+            ("sparseCubeLayerLod", "texCubemapLayeredLod"),
+            ("sparseCubeLayerGrad", "texCubemapLayeredGrad"),
+        ):
+            assert (
+                f"var {name}: vec4<f32> = "
+                f"(/* cuda texture.{helper} sparse residency not directly "
+                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
+            ) in result
+            assert f"{helper}<float4>(" not in result
+
+    def test_qualified_resource_object_pointer_array_conversion(self):
+        """Test qualified CUDA resource object arrays retain inferred shapes."""
+        code = """
+        const cudaTextureObject_t globalConstTextures[2];
+        cudaSurfaceObject_t *__restrict__ globalSurfaceRows[2];
+
+        void qualifiedResourceHandles(
+            const cudaTextureObject_t* __restrict__ textureObjects,
+            cudaSurfaceObject_t *__restrict__ surfaceObjects,
+            const cudaTextureObject_t textureArray[2],
+            cudaSurfaceObject_t *__restrict__ surfaceRows[2],
+            int row,
+            int slot,
+            int2 pixel,
+            float2 uv
+        ) {
+            float4 pointerSample = tex2D<float4>(
+                textureObjects[slot],
+                uv.x,
+                uv.y
+            );
+            float4 arraySample = tex2D<float4>(textureArray[slot], uv);
+            float4 globalSample = tex2D<float4>(globalConstTextures[slot], uv);
+            float4 pointerRead = surf2Dread<float4>(
+                surfaceObjects[slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                pointerRead,
+                surfaceObjects[slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 rowRead = surf2Dread<float4>(
+                surfaceRows[row][slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                rowRead,
+                surfaceRows[row][slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 globalRowRead = surf2Dread<float4>(
+                globalSurfaceRows[row][slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "var globalConstTextures: array<sampler2D, 2>;" in result
+        assert "var globalSurfaceRows: array<ptr<image2D>, 2>;" in result
+        assert (
+            "void qualifiedResourceHandles("
+            "ptr<sampler2D> textureObjects, ptr<image2D> surfaceObjects, "
+            "array<sampler2D, 2> textureArray, "
+            "array<ptr<image2D>, 2> surfaceRows, i32 row, i32 slot"
+        ) in result
+        assert (
+            "var pointerSample: vec4<f32> = texture("
+            "textureObjects[slot], vec2<f32>(uv.x, uv.y));" in result
+        )
+        assert "var arraySample: vec4<f32> = texture(textureArray[slot], uv);" in result
+        assert (
+            "var globalSample: vec4<f32> = texture(globalConstTextures[slot], uv);"
+            in result
+        )
+        assert (
+            "var pointerRead: vec4<f32> = imageLoad("
+            "surfaceObjects[slot], vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(surfaceObjects[slot], vec2<i32>(pixel.x, pixel.y), "
+            "pointerRead);" in result
+        )
+        assert (
+            "var rowRead: vec4<f32> = imageLoad("
+            "surfaceRows[row][slot], vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(surfaceRows[row][slot], vec2<i32>(pixel.x, pixel.y), "
+            "rowRead);" in result
+        )
+        assert (
+            "var globalRowRead: vec4<f32> = imageLoad("
+            "globalSurfaceRows[row][slot], vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert "__restrict__" not in result
+        assert "cudaTextureObject_t" not in result
+        assert "cudaSurfaceObject_t" not in result
+        assert "tex2D" not in result
+        assert "surf2Dread" not in result
+        assert "surf2Dwrite" not in result
+
+    def test_struct_resource_object_members_infer_crossgl_resource_types(self):
+        """Test CUDA resource calls infer struct member resource types."""
+        code = """
+        struct ResourcePair {
+            cudaTextureObject_t tex;
+            cudaSurfaceObject_t surf;
+            cudaTextureObject_t ambiguous;
+        };
+
+        ResourcePair globalPairs[2];
+
+        void usePair(
+            ResourcePair pair,
+            ResourcePair pairs[2],
+            int index,
+            int2 pixel,
+            float2 uv,
+            float3 uvw
+        ) {
+            float4 sampled = tex2D<float4>(pair.tex, uv.x, uv.y);
+            float4 arraySample = tex2D<float4>(pairs[index].tex, uv);
+            float4 loaded = surf2Dread<float4>(
+                pair.surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(loaded, pair.surf, pixel.x * sizeof(float4), pixel.y);
+            float4 globalLoaded = surf2Dread<float4>(
+                globalPairs[index].surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 ambiguous2d = tex2D<float4>(pair.ambiguous, uv);
+            float4 ambiguous3d = tex3D<float4>(
+                pair.ambiguous,
+                uvw.x,
+                uvw.y,
+                uvw.z
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "struct ResourcePair {" in result
+        assert "sampler2D tex;" in result
+        assert "image2D surf;" in result
+        assert "cudaTextureObject_t ambiguous;" in result
+        assert "var globalPairs: array<ResourcePair, 2>;" in result
+        assert (
+            "void usePair(ResourcePair pair, array<ResourcePair, 2> pairs, "
+            "i32 index, vec2<i32> pixel, vec2<f32> uv, vec3<f32> uvw)" in result
+        )
+        assert (
+            "var sampled: vec4<f32> = texture(pair.tex, "
+            "vec2<f32>(uv.x, uv.y));" in result
+        )
+        assert "var arraySample: vec4<f32> = texture(pairs[index].tex, uv);" in result
+        assert (
+            "var loaded: vec4<f32> = imageLoad("
+            "pair.surf, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert "imageStore(pair.surf, vec2<i32>(pixel.x, pixel.y), loaded);" in result
+        assert (
+            "var globalLoaded: vec4<f32> = imageLoad("
+            "globalPairs[index].surf, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert "tex2D" not in result
+        assert "surf2Dread" not in result
+        assert "surf2Dwrite" not in result
+
+    def test_nested_struct_resource_object_members_infer_crossgl_resource_types(self):
+        """Test nested struct member chains infer CUDA resource handle types."""
+        code = """
+        struct ResourcePair {
+            cudaTextureObject_t tex;
+            cudaSurfaceObject_t surf;
+        };
+
+        struct ResourceBox {
+            ResourcePair pair;
+            ResourcePair* pairPtr;
+            ResourcePair pairs[2];
+        };
+
+        void useBox(
+            ResourceBox box,
+            ResourceBox* boxPtr,
+            ResourceBox boxes[2],
+            int index,
+            int2 pixel,
+            float2 uv
+        ) {
+            float4 directSample = tex2D<float4>(box.pair.tex, uv);
+            float4 pointerSample = tex2D<float4>(boxPtr->pair.tex, uv);
+            float4 pointerMemberSample = tex2D<float4>(box.pairPtr->tex, uv);
+            float4 nestedArraySample = tex2D<float4>(boxes[index].pair.tex, uv);
+            float4 arrayLoaded = surf2Dread<float4>(
+                box.pairs[index].surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                arrayLoaded,
+                boxPtr->pair.surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "struct ResourcePair {" in result
+        assert "sampler2D tex;" in result
+        assert "image2D surf;" in result
+        assert "ResourcePair pair;" in result
+        assert "ptr<ResourcePair> pairPtr;" in result
+        assert "array<ResourcePair, 2> pairs;" in result
+        assert "var directSample: vec4<f32> = texture(box.pair.tex, uv);" in result
+        assert "var pointerSample: vec4<f32> = texture(boxPtr->pair.tex, uv);" in result
+        assert (
+            "var pointerMemberSample: vec4<f32> = texture(box.pairPtr->tex, uv);"
+            in result
+        )
+        assert (
+            "var nestedArraySample: vec4<f32> = texture("
+            "boxes[index].pair.tex, uv);" in result
+        )
+        assert (
+            "var arrayLoaded: vec4<f32> = imageLoad("
+            "box.pairs[index].surf, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(boxPtr->pair.surf, "
+            "vec2<i32>(pixel.x, pixel.y), arrayLoaded);" in result
+        )
+        assert "cudaTextureObject_t" not in result
+        assert "cudaSurfaceObject_t" not in result
+        assert "tex2D" not in result
+        assert "surf2Dread" not in result
+        assert "surf2Dwrite" not in result
+
+    def test_cast_and_dereference_resource_object_members_infer_crossgl_types(self):
+        """Test casted and dereferenced struct resource handles infer types."""
+        code = """
+        struct ResourcePair {
+            cudaTextureObject_t tex;
+            cudaSurfaceObject_t surf;
+        };
+
+        void usePair(void* raw, ResourcePair* pairPtr, int2 pixel, float2 uv) {
+            float4 sampled = tex2D<float4>(((ResourcePair*)raw)->tex, uv);
+            float4 loaded = surf2Dread<float4>(
+                (*pairPtr).surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                loaded,
+                ((ResourcePair*)raw)->surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "struct ResourcePair {" in result
+        assert "sampler2D tex;" in result
+        assert "image2D surf;" in result
+        assert (
+            "void usePair(ptr<void> raw, ptr<ResourcePair> pairPtr, "
+            "vec2<i32> pixel, vec2<f32> uv)" in result
+        )
+        assert (
+            "var sampled: vec4<f32> = texture(ptr<ResourcePair>(raw)->tex, uv);"
+            in result
+        )
+        assert (
+            "var loaded: vec4<f32> = imageLoad("
+            "(*pairPtr).surf, vec2<i32>(pixel.x, pixel.y));" in result
+        )
+        assert (
+            "imageStore(ptr<ResourcePair>(raw)->surf, "
+            "vec2<i32>(pixel.x, pixel.y), loaded);" in result
+        )
+        assert "cudaTextureObject_t" not in result
+        assert "cudaSurfaceObject_t" not in result
+        assert "tex2D" not in result
+        assert "surf2Dread" not in result
+        assert "surf2Dwrite" not in result
 
     def test_nested_template_argument_conversion(self):
         """Test nested template and pointer-qualified unique_ptr conversion"""
@@ -1586,7 +3393,9 @@ class TestCudaCodeGen:
 
         result = translate(str(source_path), backend="rust", format_output=False)
 
-        assert "pub fn kernel(data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
+        assert (
+            "pub fn kernel(mut data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
+        )
         assert "data[indices[0] as usize] = value;" in result
 
     def test_qualified_declaration_conversion(self):

@@ -787,6 +787,44 @@ class TestHipParser:
         ]
         assert [var.name for var in body] == ["p", "cp", "a", "b"]
 
+    def test_multiline_parameter_lists_parsing(self):
+        """Test parameter lists accept newlines before the closing parenthesis."""
+        code = """
+        void resource_lifecycle(
+            hipResourceDesc* resourceDesc,
+            hipTextureDesc* textureDesc
+        ) {
+            sink(resourceDesc, textureDesc);
+        }
+
+        __global__ void kernel(
+            const float* input,
+            float* output,
+            int n
+        ) {
+            output[threadIdx.x] = input[threadIdx.x] + n;
+        }
+        """
+
+        ast = self.parse_code(code)
+
+        host = ast.statements[0]
+        assert isinstance(host, FunctionNode)
+        assert host.name == "resource_lifecycle"
+        assert host.params == [
+            {"type": "hipResourceDesc *", "name": "resourceDesc"},
+            {"type": "hipTextureDesc *", "name": "textureDesc"},
+        ]
+
+        kernel = ast.statements[1]
+        assert isinstance(kernel, KernelNode)
+        assert kernel.name == "kernel"
+        assert kernel.params == [
+            {"type": "const float *", "name": "input"},
+            {"type": "float *", "name": "output"},
+            {"type": "int", "name": "n"},
+        ]
+
     def test_rvalue_reference_declarations_parsing(self):
         """Test rvalue references in parameters, locals, and range loops"""
         code = """
@@ -1232,10 +1270,16 @@ class TestHipParser:
         code = """
         static float cached = 1.0f;
         unsigned int mask = 3u;
+        signed int signedMask = -1;
+        long long wide = 2ll;
+        unsigned long long uwide = 3ull;
+        hipArray_t array;
 
-        __global__ void kernel(unsigned int* out, const float scale) {
+        __global__ void kernel(unsigned int* out, const float scale, long long x) {
             const int local = 1;
             unsigned int idx = 2u;
+            unsigned long long y = 1ull;
+            long long z = (long long)x;
             static float tmp = 0.0f;
             out[0] = idx;
         }
@@ -1247,11 +1291,19 @@ class TestHipParser:
 
         assert ast.statements[0].vtype == "float"
         assert ast.statements[1].vtype == "unsigned int"
-        assert ast.statements[2].params[0]["type"] == "unsigned int *"
-        assert ast.statements[2].params[1]["type"] == "const float"
-        assert ast.statements[2].body[0].vtype == "const int"
-        assert ast.statements[2].body[1].vtype == "unsigned int"
-        assert ast.statements[2].body[2].vtype == "float"
+        assert ast.statements[2].vtype == "signed int"
+        assert ast.statements[3].vtype == "long long"
+        assert ast.statements[4].vtype == "unsigned long long"
+        assert ast.statements[5].vtype == "hipArray_t"
+        assert ast.statements[6].params[0]["type"] == "unsigned int *"
+        assert ast.statements[6].params[1]["type"] == "const float"
+        assert ast.statements[6].params[2]["type"] == "long long"
+        assert ast.statements[6].body[0].vtype == "const int"
+        assert ast.statements[6].body[1].vtype == "unsigned int"
+        assert ast.statements[6].body[2].vtype == "unsigned long long"
+        assert ast.statements[6].body[3].vtype == "long long"
+        assert ast.statements[6].body[3].value.target_type == "long long"
+        assert ast.statements[6].body[4].vtype == "float"
 
     def test_qualified_and_pointer_return_functions_parsing(self):
         """Test qualified scalar and pointer return types"""
@@ -1260,6 +1312,11 @@ class TestHipParser:
         float* get_data(float* data) { return data; }
         const float* get_const_data(const float* data) { return data; }
         static inline unsigned int helper(unsigned int x) { return x; }
+        __forceinline__ __device__ float fast_add(float a, float b) { return a + b; }
+        __noinline__ __device__ float slow_sub(float a, float b) { return a - b; }
+        __launch_bounds__(256, 2) __global__ void bounded(float* data) {
+            data[threadIdx.x] = 0.0f;
+        }
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
@@ -1274,6 +1331,14 @@ class TestHipParser:
         assert ast.statements[3].return_type == "unsigned int"
         assert "static" in ast.statements[3].qualifiers
         assert "inline" in ast.statements[3].qualifiers
+        assert ast.statements[4].name == "fast_add"
+        assert "__forceinline__" in ast.statements[4].qualifiers
+        assert "__device__" in ast.statements[4].qualifiers
+        assert ast.statements[5].name == "slow_sub"
+        assert "__noinline__" in ast.statements[5].qualifiers
+        assert "__device__" in ast.statements[5].qualifiers
+        assert ast.statements[6].name == "bounded"
+        assert ast.statements[6].attributes == ["__launch_bounds__(256, 2)"]
 
     def test_template_prefixed_kernel_parsing(self):
         """Test C++ template-prefixed HIP kernels"""

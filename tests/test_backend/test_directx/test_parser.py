@@ -276,6 +276,99 @@ def test_parse_resource_arrays_and_register_space():
     assert_parses(code)
 
 
+def test_parse_rasterizer_ordered_resources_and_register_space():
+    code = """
+    RasterizerOrderedTexture2D<uint> counters : register(u0, space1);
+    RasterizerOrderedTexture2DArray<float4> layers[2] : register(u1, space2);
+    RasterizerOrderedBuffer<uint> bins : register(u3);
+    RasterizerOrderedStructuredBuffer<int> values : register(u4);
+    RasterizerOrderedByteAddressBuffer bytes : register(u5, space3);
+
+    float4 PSMain(uint2 pixel : TEXCOORD0, uint layer : TEXCOORD1) : SV_Target0 {
+        uint oldCount;
+        InterlockedAdd(counters[pixel], 1u, oldCount);
+        values[0] = int(oldCount);
+        bytes.Store(0, oldCount);
+        return layers[0][uint3(pixel, layer)];
+    }
+    """
+
+    ast = parse_code(code)
+    globals_by_name = {node.name: node for node in ast.global_variables}
+
+    assert globals_by_name["counters"].vtype == "RasterizerOrderedTexture2D<uint>"
+    assert globals_by_name["counters"].register == "u0, space1"
+    assert globals_by_name["layers"].vtype == "RasterizerOrderedTexture2DArray<float4>"
+    assert globals_by_name["layers"].array_sizes == [2]
+    assert globals_by_name["layers"].register == "u1, space2"
+    assert globals_by_name["bins"].vtype == "RasterizerOrderedBuffer<uint>"
+    assert globals_by_name["values"].vtype == "RasterizerOrderedStructuredBuffer<int>"
+    assert globals_by_name["bytes"].vtype == "RasterizerOrderedByteAddressBuffer"
+    assert globals_by_name["bytes"].register == "u5, space3"
+
+
+def test_parse_min_precision_vector_and_matrix_types():
+    code = """
+    struct MinPrecisionData {
+        min16float3 hdr : COLOR0;
+        min10float2 uv : TEXCOORD0;
+        min16float2x3 colorMatrix;
+    };
+
+    min16float3 Shade(
+        min16float3 color,
+        min12int2 offset,
+        min16uint4 mask
+    ) {
+        min10float2 localUv = min10float2(0.0, 1.0);
+        return min16float3(color.x, localUv.x, localUv.y);
+    }
+    """
+
+    ast = parse_code(code)
+    struct = ast.structs[0]
+    func = ast.functions[0]
+
+    assert [member.vtype for member in struct.members] == [
+        "min16float3",
+        "min10float2",
+        "min16float2x3",
+    ]
+    assert func.return_type == "min16float3"
+    assert [param.vtype for param in func.params] == [
+        "min16float3",
+        "min12int2",
+        "min16uint4",
+    ]
+    local_uv = next(
+        node
+        for node in iter_ast_nodes(func)
+        if getattr(node, "name", None) == "localUv"
+    )
+    assert local_uv.vtype == "min10float2"
+
+
+def test_parse_cbuffer_preserves_buffer_and_member_bindings():
+    code = """
+    cbuffer FrameData : register(b0, space1) {
+        row_major float4x4 viewProj : packoffset(c0);
+        float4 tint : packoffset(c4);
+    };
+    """
+
+    ast = parse_code(code)
+    cbuffer = ast.cbuffers[0]
+
+    assert cbuffer.register == "b0, space1"
+    assert cbuffer.packoffset is None
+    assert cbuffer.members[0].name == "viewProj"
+    assert cbuffer.members[0].packoffset == "c0"
+    assert cbuffer.members[0].register is None
+    assert cbuffer.members[1].name == "tint"
+    assert cbuffer.members[1].packoffset == "c4"
+    assert cbuffer.members[1].register is None
+
+
 def test_parse_geometry_shader():
     code = """
     struct GSInput {
@@ -424,6 +517,192 @@ def test_parse_texture_methods():
     }
     """
     assert_parses(code)
+
+
+def test_parse_texture_sample_offset_methods_keep_member_calls():
+    code = """
+    Texture2D tex : register(t0);
+    SamplerState samp : register(s0);
+
+    float4 main(
+        float2 uv : TEXCOORD0,
+        float lod : TEXCOORD1,
+        float2 ddx : TEXCOORD2,
+        float2 ddy : TEXCOORD3,
+        int2 offset : TEXCOORD4
+    ) : SV_Target0 {
+        float4 plain = tex.Sample(samp, uv, offset);
+        float4 mip = tex.SampleLevel(samp, uv, lod, offset);
+        float4 grad = tex.SampleGrad(samp, uv, ddx, ddy, offset);
+        return plain + mip + grad;
+    }
+    """
+
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    assert not [node for node in nodes if isinstance(node, TextureSampleNode)]
+    members = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    assert {"Sample", "SampleLevel", "SampleGrad"}.issubset(set(members))
+
+
+def test_parse_texture_compare_and_gather_offset_methods_keep_member_calls():
+    code = """
+    Texture2D colorMap : register(t0);
+    Texture2D<float> shadowMap : register(t1);
+    SamplerState linearSampler : register(s0);
+    SamplerComparisonState compareSampler : register(s1);
+
+    float4 main(
+        float2 uv : TEXCOORD0,
+        float depth : TEXCOORD1,
+        int2 offset : TEXCOORD2
+    ) : SV_Target0 {
+        float cmp = shadowMap.SampleCmp(compareSampler, uv, depth, offset);
+        float cmpZero = shadowMap.SampleCmpLevelZero(
+            compareSampler, uv, depth, offset
+        );
+        float4 gather = colorMap.GatherRed(linearSampler, uv, offset);
+        float4 gatherAny = colorMap.Gather(linearSampler, uv, offset);
+        float4 gatherCmp = shadowMap.GatherCmp(
+            compareSampler, uv, depth, offset
+        );
+        return gather + gatherAny + gatherCmp + float4(cmp + cmpZero);
+    }
+    """
+
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    members = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    assert {
+        "SampleCmp",
+        "SampleCmpLevelZero",
+        "GatherRed",
+        "Gather",
+        "GatherCmp",
+    }.issubset(set(members))
+
+
+def test_parse_texture_status_and_clamp_overloads_keep_member_calls():
+    code = """
+    Texture2D colorMap : register(t0);
+    Texture2D<float> shadowMap : register(t1);
+    SamplerState linearSampler : register(s0);
+    SamplerComparisonState compareSampler : register(s1);
+
+    float4 main(
+        float2 uv : TEXCOORD0,
+        float depth : TEXCOORD1,
+        float lod : TEXCOORD2,
+        float bias : TEXCOORD3,
+        float2 ddx : TEXCOORD4,
+        float2 ddy : TEXCOORD5,
+        int2 offset : TEXCOORD6,
+        uint status : TEXCOORD7
+    ) : SV_Target0 {
+        float4 plain = colorMap.Sample(
+            linearSampler, uv, offset, 0.0, status
+        );
+        float4 biased = colorMap.SampleBias(
+            linearSampler, uv, bias, offset, 0.0, status
+        );
+        float4 mip = colorMap.SampleLevel(
+            linearSampler, uv, lod, offset, status
+        );
+        float4 grad = colorMap.SampleGrad(
+            linearSampler, uv, ddx, ddy, offset, 0.0, status
+        );
+        float cmp = shadowMap.SampleCmp(
+            compareSampler, uv, depth, offset, 0.0, status
+        );
+        float cmpZero = shadowMap.SampleCmpLevelZero(
+            compareSampler, uv, depth, offset, status
+        );
+        float4 gather = colorMap.Gather(linearSampler, uv, offset, status);
+        float4 gatherRed = colorMap.GatherRed(linearSampler, uv, offset, status);
+        float4 gatherOffsets = colorMap.GatherRed(
+            linearSampler, uv, offset, offset, offset, offset, status
+        );
+        float4 gatherCmp = shadowMap.GatherCmp(
+            compareSampler, uv, depth, offset, status
+        );
+        return (
+            plain + biased + mip + grad + gather + gatherRed + gatherOffsets
+            + gatherCmp + float4(cmp + cmpZero)
+        );
+    }
+    """
+
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    assert not [node for node in nodes if isinstance(node, TextureSampleNode)]
+    members = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    assert {
+        "Sample",
+        "SampleBias",
+        "SampleLevel",
+        "SampleGrad",
+        "SampleCmp",
+        "SampleCmpLevelZero",
+        "Gather",
+        "GatherRed",
+        "GatherCmp",
+    }.issubset(set(members))
+
+
+def test_parse_tiled_resource_status_loads_and_checks_keep_calls():
+    code = """
+    Texture2D colorMap : register(t0);
+    Texture2DMS<float4> msMap : register(t1);
+    RWTexture2D<float4> outputImage : register(u0);
+
+    float4 main(
+        int2 pixel : TEXCOORD0,
+        int sampleIndex : TEXCOORD1,
+        int2 offset : TEXCOORD2
+    ) : SV_Target0 {
+        uint status = 0;
+        float4 fetched = colorMap.Load(int3(pixel, 0), offset, status);
+        float4 stored = outputImage.Load(pixel, status);
+        float4 ms = msMap.Load(pixel, sampleIndex, offset, status);
+        bool mapped = CheckAccessFullyMapped(status);
+        return mapped ? fetched + stored + ms : float4(0.0, 0.0, 0.0, 0.0);
+    }
+    """
+
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    member_calls = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    free_calls = [
+        node.name
+        for node in nodes
+        if isinstance(node, FunctionCallNode) and isinstance(node.name, str)
+    ]
+    assert member_calls.count("Load") == 3
+    assert "CheckAccessFullyMapped" in free_calls
 
 
 def test_parse_resource_method_ast_shapes():

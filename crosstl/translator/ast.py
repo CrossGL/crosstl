@@ -27,6 +27,63 @@ class ASTNode:
         """Return an annotation value, or a default when it is absent."""
         return self.annotations.get(key, default)
 
+    def child_nodes(self):
+        """Yield direct structural AST children, excluding metadata backlinks."""
+        for field_name, value in vars(self).items():
+            if field_name in AST_CHILD_FIELD_EXCLUSIONS:
+                continue
+            yield from iter_ast_child_nodes(value)
+
+    def walk(self):
+        """Yield this node and all structural descendants once."""
+        visited = set()
+
+        def visit(node):
+            node_id = id(node)
+            if node_id in visited:
+                return
+            visited.add(node_id)
+            yield node
+            for child in node.child_nodes():
+                yield from visit(child)
+
+        yield from visit(self)
+
+    def bind_parent_links(self, parent=None):
+        """Set parent links for this structural subtree and return ``self``."""
+        visited = set()
+
+        def bind(node, parent_node):
+            node_id = id(node)
+            if node_id in visited:
+                return
+            visited.add(node_id)
+            node.parent = parent_node
+            for child in node.child_nodes():
+                bind(child, node)
+
+        bind(self, parent)
+        return self
+
+
+AST_CHILD_FIELD_EXCLUSIONS = frozenset({"annotations", "parent", "source_location"})
+
+
+def iter_ast_child_nodes(value):
+    """Yield ASTNode children from a nested structural field value."""
+    if isinstance(value, ASTNode):
+        yield value
+        return
+
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from iter_ast_child_nodes(item)
+        return
+
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from iter_ast_child_nodes(item)
+
 
 # ============================================================================
 # TYPE SYSTEM
@@ -211,8 +268,7 @@ class ShaderNode(ASTNode):
         self.functions = functions or []
         self.global_variables = global_variables or []
         self.constants = constants or []
-        if cbuffers is not None:
-            self.cbuffers = cbuffers
+        self.cbuffers = cbuffers or []
         self.imports = imports or []
         self.preprocessors = preprocessors or []
 
@@ -231,6 +287,8 @@ class StageNode(ASTNode):
         local_functions: List["FunctionNode"] = None,
         local_structs: List["StructNode"] = None,
         execution_config: Dict[str, Any] = None,
+        layout_qualifiers: List["LayoutQualifierNode"] = None,
+        local_cbuffers: List["StructNode"] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -239,7 +297,9 @@ class StageNode(ASTNode):
         self.local_variables = local_variables or []
         self.local_functions = local_functions or []
         self.local_structs = local_structs or []
+        self.local_cbuffers = local_cbuffers or []
         self.execution_config = execution_config or {}
+        self.layout_qualifiers = layout_qualifiers or []
 
     def __repr__(self):
         return f"StageNode(stage={self.stage}, entry_point={self.entry_point.name})"
@@ -511,6 +571,23 @@ class AttributeNode(ASTNode):
 
     def __repr__(self):
         return f"AttributeNode(name={self.name})"
+
+
+class LayoutQualifierNode(ASTNode):
+    """Stage-level ``layout(...) in/out`` qualifier metadata."""
+
+    def __init__(
+        self,
+        entries: List[AttributeNode] = None,
+        direction: Optional[str] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.entries = entries or []
+        self.direction = direction
+
+    def __repr__(self):
+        return f"LayoutQualifierNode(direction={self.direction}, entries={len(self.entries)})"
 
 
 # ============================================================================
@@ -1345,13 +1422,14 @@ VectorConstructorNode = ConstructorNode
 
 def create_legacy_shader_node(structs, functions, global_variables, cbuffers):
     """Create a root shader node for legacy tests and backend adapters."""
+    cbuffer_nodes = cbuffers or []
     return ShaderNode(
         name="LegacyShader",
         execution_model=ExecutionModel.GRAPHICS_PIPELINE,
         structs=structs or [],
         functions=functions or [],
         global_variables=global_variables or [],
-        constants=cbuffers or [],
+        cbuffers=cbuffer_nodes,
     )
 
 

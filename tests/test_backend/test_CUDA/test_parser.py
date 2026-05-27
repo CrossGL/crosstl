@@ -4,6 +4,7 @@ import pytest
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
 from crosstl.backend.CUDA.CudaAst import (
+    ArrayAccessNode,
     AssignmentNode,
     AtomicOperationNode,
     BinaryOpNode,
@@ -21,6 +22,8 @@ from crosstl.backend.CUDA.CudaAst import (
     RangeForNode,
     ReturnNode,
     ShaderNode,
+    SharedMemoryNode,
+    SyncNode,
     SwitchNode,
     TernaryOpNode,
     TypeAliasNode,
@@ -657,6 +660,14 @@ class TestCudaParser:
             auto us = std::chrono::duration_cast<std::chrono::microseconds>(
                 elapsed
             ).count();
+            texture<float4, 2> tex2d;
+            texture<float4, cudaTextureType2DLayered> layeredTex;
+            surface<void, cudaSurfaceType1DLayered> lineLayerSurface;
+            surface<void, cudaSurfaceType3D> volumeSurface;
+            surface<void, cudaSurfaceTypeCubemap> cubeSurface;
+            surface<void, cudaSurfaceTypeCubemapLayered> cubeLayerSurface;
+            cudaArray_t arrayRef;
+            cudaArray* rawArray;
         }
         """
         lexer = CudaLexer(code)
@@ -674,6 +685,273 @@ class TestCudaParser:
             body[3].value.name.object.name
             == "std::chrono::duration_cast<std::chrono::microseconds>"
         )
+        assert body[4].vtype == "texture<float4, 2>"
+        assert body[5].vtype == "texture<float4, cudaTextureType2DLayered>"
+        assert body[6].vtype == "surface<void, cudaSurfaceType1DLayered>"
+        assert body[7].vtype == "surface<void, cudaSurfaceType3D>"
+        assert body[8].vtype == "surface<void, cudaSurfaceTypeCubemap>"
+        assert body[9].vtype == "surface<void, cudaSurfaceTypeCubemapLayered>"
+        assert body[10].vtype == "cudaArray_t"
+        assert body[11].vtype == "cudaArray *"
+
+    def test_resource_object_pointer_and_legacy_texture_template_parsing(self):
+        """Test CUDA resource object pointers and three-argument textures parse."""
+        code = """
+        texture<float4, cudaTextureType2D, cudaReadModeElementType> texRef;
+        surface<void, cudaSurfaceType2D> surfaceRef;
+
+        void resourcePointerOps(
+            cudaTextureObject_t* textureObjects,
+            cudaSurfaceObject_t* surfaceObjects,
+            texture<float4, cudaTextureType2D, cudaReadModeElementType> legacyTex,
+            surface<void, cudaSurfaceType2D> legacySurface,
+            int index,
+            int2 pixel,
+            float2 uv
+        ) {
+            float4 fromPointer = tex2D<float4>(
+                textureObjects[index],
+                uv.x,
+                uv.y
+            );
+            float4 fromLegacy = tex2D<float4>(legacyTex, uv);
+            float4 loadedPointer = surf2Dread<float4>(
+                surfaceObjects[index],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                loadedPointer,
+                surfaceObjects[index],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 loadedLegacy = surf2Dread<float4>(
+                legacySurface,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.global_variables[0].vtype == (
+            "texture<float4, cudaTextureType2D, cudaReadModeElementType>"
+        )
+        assert ast.global_variables[0].name == "texRef"
+        assert ast.global_variables[1].vtype == "surface<void, cudaSurfaceType2D>"
+        assert ast.global_variables[1].name == "surfaceRef"
+
+        params = ast.functions[0].params
+        assert params[0].vtype == "cudaTextureObject_t *"
+        assert params[0].name == "textureObjects"
+        assert params[1].vtype == "cudaSurfaceObject_t *"
+        assert params[1].name == "surfaceObjects"
+        assert params[2].vtype == (
+            "texture<float4, cudaTextureType2D, cudaReadModeElementType>"
+        )
+        assert params[2].name == "legacyTex"
+        assert params[3].vtype == "surface<void, cudaSurfaceType2D>"
+        assert params[3].name == "legacySurface"
+
+        body = ast.functions[0].body
+        assert body[0].vtype == "float4"
+        assert body[0].value.name == "tex2D<float4>"
+        assert isinstance(body[0].value.args[0], ArrayAccessNode)
+        assert body[0].value.args[0].array == "textureObjects"
+        assert body[1].value.name == "tex2D<float4>"
+        assert body[1].value.args[0] == "legacyTex"
+        assert body[2].value.name == "surf2Dread<float4>"
+        assert isinstance(body[2].value.args[0], ArrayAccessNode)
+        assert body[2].value.args[0].array == "surfaceObjects"
+        assert body[3].name == "surf2Dwrite"
+        assert isinstance(body[3].args[1], ArrayAccessNode)
+        assert body[4].value.name == "surf2Dread<float4>"
+        assert body[4].value.args[0] == "legacySurface"
+
+    def test_cuda_texture_gather_helper_parsing(self):
+        """Test CUDA tex2Dgather helper overloads parse."""
+        code = """
+        void gatherOps(
+            texture<float4, cudaTextureType2D> tex,
+            cudaTextureObject_t objectTex,
+            bool* resident,
+            float2 uv
+        ) {
+            float4 gathered = tex2Dgather<float4>(tex, uv.x, uv.y);
+            float4 gatheredComponent = tex2Dgather<float4>(
+                objectTex,
+                uv.x,
+                uv.y,
+                2
+            );
+            float4 sparseGather = tex2Dgather<float4>(
+                objectTex,
+                uv.x,
+                uv.y,
+                resident,
+                3
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        params = ast.functions[0].params
+        assert params[0].vtype == "texture<float4, cudaTextureType2D>"
+        assert params[1].vtype == "cudaTextureObject_t"
+        assert params[2].vtype == "bool *"
+
+        body = ast.functions[0].body
+        assert body[0].value.name == "tex2Dgather<float4>"
+        assert body[0].value.args[0] == "tex"
+        assert body[0].value.args[1].object == "uv"
+        assert body[0].value.args[1].member == "x"
+        assert body[0].value.args[2].object == "uv"
+        assert body[0].value.args[2].member == "y"
+        assert body[1].value.name == "tex2Dgather<float4>"
+        assert body[1].value.args[0] == "objectTex"
+        assert body[1].value.args[1].object == "uv"
+        assert body[1].value.args[1].member == "x"
+        assert body[1].value.args[2].object == "uv"
+        assert body[1].value.args[2].member == "y"
+        assert body[1].value.args[3] == "2"
+        assert body[2].value.name == "tex2Dgather<float4>"
+        assert body[2].value.args[0] == "objectTex"
+        assert body[2].value.args[1].object == "uv"
+        assert body[2].value.args[1].member == "x"
+        assert body[2].value.args[2].object == "uv"
+        assert body[2].value.args[2].member == "y"
+        assert body[2].value.args[3:] == ["resident", "3"]
+
+    def test_cuda_texture_fetch_helper_parsing(self):
+        """Test CUDA tex1Dfetch helper overloads parse."""
+        code = """
+        void fetchOps(
+            texture<float4, cudaTextureType1D> lineTex,
+            cudaTextureObject_t objectTex,
+            bool* resident,
+            int x
+        ) {
+            float4 fetched = tex1Dfetch<float4>(lineTex, x);
+            float4 objectFetched = tex1Dfetch<float4>(objectTex, x);
+            float4 sparseFetched = tex1Dfetch<float4>(objectTex, x, resident);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        params = ast.functions[0].params
+        assert params[0].vtype == "texture<float4, cudaTextureType1D>"
+        assert params[1].vtype == "cudaTextureObject_t"
+        assert params[2].vtype == "bool *"
+
+        body = ast.functions[0].body
+        assert body[0].value.name == "tex1Dfetch<float4>"
+        assert body[0].value.args == ["lineTex", "x"]
+        assert body[1].value.name == "tex1Dfetch<float4>"
+        assert body[1].value.args == ["objectTex", "x"]
+        assert body[2].value.name == "tex1Dfetch<float4>"
+        assert body[2].value.args == ["objectTex", "x", "resident"]
+
+    def test_qualified_resource_object_pointer_array_parsing(self):
+        """Test global CUDA resource object pointer arrays with qualifiers parse."""
+        code = """
+        const cudaTextureObject_t globalConstTextures[2];
+        cudaSurfaceObject_t *__restrict__ globalSurfaceRows[2];
+
+        void qualifiedResourceHandles(
+            const cudaTextureObject_t* __restrict__ textureObjects,
+            cudaSurfaceObject_t *__restrict__ surfaceObjects,
+            const cudaTextureObject_t textureArray[2],
+            cudaSurfaceObject_t *__restrict__ surfaceRows[2],
+            int row,
+            int slot,
+            int2 pixel,
+            float2 uv
+        ) {
+            float4 pointerSample = tex2D<float4>(
+                textureObjects[slot],
+                uv.x,
+                uv.y
+            );
+            float4 arraySample = tex2D<float4>(textureArray[slot], uv);
+            float4 globalSample = tex2D<float4>(globalConstTextures[slot], uv);
+            float4 pointerRead = surf2Dread<float4>(
+                surfaceObjects[slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                pointerRead,
+                surfaceObjects[slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 rowRead = surf2Dread<float4>(
+                surfaceRows[row][slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                rowRead,
+                surfaceRows[row][slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            float4 globalRowRead = surf2Dread<float4>(
+                globalSurfaceRows[row][slot],
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [(var.vtype, var.name) for var in ast.global_variables] == [
+            ("const cudaTextureObject_t[2]", "globalConstTextures"),
+            ("cudaSurfaceObject_t * __restrict__[2]", "globalSurfaceRows"),
+        ]
+
+        params = ast.functions[0].params
+        assert [param.vtype for param in params[:4]] == [
+            "const cudaTextureObject_t * __restrict__",
+            "cudaSurfaceObject_t * __restrict__",
+            "const cudaTextureObject_t[2]",
+            "cudaSurfaceObject_t * __restrict__[2]",
+        ]
+        assert [param.name for param in params[:4]] == [
+            "textureObjects",
+            "surfaceObjects",
+            "textureArray",
+            "surfaceRows",
+        ]
+
+        body = ast.functions[0].body
+        assert isinstance(body[0].value.args[0], ArrayAccessNode)
+        assert body[0].value.args[0].array == "textureObjects"
+        assert isinstance(body[1].value.args[0], ArrayAccessNode)
+        assert body[1].value.args[0].array == "textureArray"
+        assert isinstance(body[2].value.args[0], ArrayAccessNode)
+        assert body[2].value.args[0].array == "globalConstTextures"
+        assert isinstance(body[3].value.args[0], ArrayAccessNode)
+        assert body[3].value.args[0].array == "surfaceObjects"
+        assert isinstance(body[5].value.args[0], ArrayAccessNode)
+        assert isinstance(body[5].value.args[0].array, ArrayAccessNode)
+        assert body[5].value.args[0].array.array == "surfaceRows"
+        assert isinstance(body[7].value.args[0], ArrayAccessNode)
+        assert isinstance(body[7].value.args[0].array, ArrayAccessNode)
+        assert body[7].value.args[0].array.array == "globalSurfaceRows"
 
     def test_nested_template_argument_parsing(self):
         """Test nested template arguments that close with >>"""
@@ -1038,6 +1316,127 @@ class TestCudaParser:
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
 
+    def test_atomic_address_taken_pointer_array_and_shared_targets_parsing(self):
+        """Test CUDA atomics preserve address-taken lvalue target shape."""
+        code = """
+        __global__ void kernel(int* values, int* expected, int* desired, int index) {
+            __shared__ int sharedCounts[32];
+            atomicAdd(&values[index], 1);
+            int old = atomicCAS(&values[index], expected[index], desired[index]);
+            atomicMax(&sharedCounts[threadIdx.x], old);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.kernels[0].body
+        atomic_add = body[1]
+        atomic_cas = body[2].value
+        atomic_max = body[3]
+
+        assert isinstance(atomic_add, AtomicOperationNode)
+        assert atomic_add.operation == "atomicAdd"
+        assert isinstance(atomic_add.args[0], UnaryOpNode)
+        assert atomic_add.args[0].op == "&"
+        assert isinstance(atomic_add.args[0].operand, ArrayAccessNode)
+        assert atomic_add.args[0].operand.array == "values"
+        assert atomic_add.args[0].operand.index == "index"
+
+        assert isinstance(atomic_cas, AtomicOperationNode)
+        assert atomic_cas.operation == "atomicCAS"
+        assert isinstance(atomic_cas.args[0], UnaryOpNode)
+        assert isinstance(atomic_cas.args[1], ArrayAccessNode)
+        assert atomic_cas.args[1].array == "expected"
+        assert isinstance(atomic_cas.args[2], ArrayAccessNode)
+        assert atomic_cas.args[2].array == "desired"
+
+        assert isinstance(atomic_max, AtomicOperationNode)
+        assert atomic_max.operation == "atomicMax"
+        assert isinstance(atomic_max.args[0], UnaryOpNode)
+        shared_target = atomic_max.args[0].operand
+        assert isinstance(shared_target, ArrayAccessNode)
+        assert shared_target.array == "sharedCounts"
+        assert isinstance(shared_target.index, CudaBuiltinNode)
+        assert shared_target.index.builtin_name == "threadIdx"
+        assert shared_target.index.component == "x"
+
+    def test_bitwise_atomic_operations_parsing(self):
+        """Test CUDA bitwise atomic operations parse as atomic nodes."""
+        code = """
+        __global__ void kernel(unsigned int* values, unsigned int mask, int index) {
+            __shared__ unsigned int sharedMasks[32];
+            unsigned int oldAnd = atomicAnd(&values[index], mask);
+            unsigned int oldOr = atomicOr(&sharedMasks[threadIdx.x], oldAnd);
+            atomicXor(&values[index + 1], oldOr);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.kernels[0].body
+        atomic_and = body[1].value
+        atomic_or = body[2].value
+        atomic_xor = body[3]
+
+        assert isinstance(atomic_and, AtomicOperationNode)
+        assert atomic_and.operation == "atomicAnd"
+        assert isinstance(atomic_and.args[0], UnaryOpNode)
+        assert atomic_and.args[0].op == "&"
+        assert isinstance(atomic_and.args[0].operand, ArrayAccessNode)
+        assert atomic_and.args[0].operand.array == "values"
+
+        assert isinstance(atomic_or, AtomicOperationNode)
+        assert atomic_or.operation == "atomicOr"
+        assert isinstance(atomic_or.args[0], UnaryOpNode)
+        shared_target = atomic_or.args[0].operand
+        assert isinstance(shared_target, ArrayAccessNode)
+        assert shared_target.array == "sharedMasks"
+        assert isinstance(shared_target.index, CudaBuiltinNode)
+        assert shared_target.index.builtin_name == "threadIdx"
+
+        assert isinstance(atomic_xor, AtomicOperationNode)
+        assert atomic_xor.operation == "atomicXor"
+        assert isinstance(atomic_xor.args[0], UnaryOpNode)
+        assert isinstance(atomic_xor.args[0].operand, ArrayAccessNode)
+
+    def test_bounded_wrap_atomic_operations_parsing(self):
+        """Test CUDA atomicInc/atomicDec parse as bounded atomic nodes."""
+        code = """
+        __global__ void kernel(unsigned int* values, unsigned int limit, int index) {
+            __shared__ unsigned int sharedCounters[32];
+            unsigned int oldInc = atomicInc(&values[index], limit);
+            unsigned int oldDec = atomicDec(&sharedCounters[threadIdx.x], limit);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.kernels[0].body
+        atomic_inc = body[1].value
+        atomic_dec = body[2].value
+
+        assert isinstance(atomic_inc, AtomicOperationNode)
+        assert atomic_inc.operation == "atomicInc"
+        assert isinstance(atomic_inc.args[0], UnaryOpNode)
+        assert atomic_inc.args[0].op == "&"
+        assert isinstance(atomic_inc.args[0].operand, ArrayAccessNode)
+        assert atomic_inc.args[0].operand.array == "values"
+
+        assert isinstance(atomic_dec, AtomicOperationNode)
+        assert atomic_dec.operation == "atomicDec"
+        assert isinstance(atomic_dec.args[0], UnaryOpNode)
+        shared_target = atomic_dec.args[0].operand
+        assert isinstance(shared_target, ArrayAccessNode)
+        assert shared_target.array == "sharedCounters"
+        assert isinstance(shared_target.index, CudaBuiltinNode)
+        assert shared_target.index.builtin_name == "threadIdx"
+
     def test_user_defined_atomic_name_is_not_parsed_as_builtin_atomic(self):
         """Test user-defined atomic names shadow CUDA atomic parsing."""
         code = """
@@ -1106,6 +1505,299 @@ class TestCudaParser:
 
         assert isinstance(ast, ShaderNode)
         assert len(ast.kernels) == 1
+
+    def test_masked_syncwarp_parsing(self):
+        """Test parsing masked and unmasked CUDA warp synchronization."""
+        code = """
+        __global__ void kernel(unsigned int mask) {
+            __syncwarp(mask);
+            __syncwarp();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        masked_sync = ast.kernels[0].body[0]
+        unmasked_sync = ast.kernels[0].body[1]
+
+        assert isinstance(masked_sync, SyncNode)
+        assert masked_sync.sync_type == "__syncwarp"
+        assert masked_sync.args == ["mask"]
+        assert isinstance(unmasked_sync, SyncNode)
+        assert unmasked_sync.sync_type == "__syncwarp"
+        assert unmasked_sync.args == []
+
+    def test_cooperative_groups_thread_block_parsing(self):
+        """Test parsing CUDA cooperative-groups thread-block handles."""
+        code = """
+        __global__ void kernel() {
+            cooperative_groups::thread_block block =
+                cooperative_groups::this_thread_block();
+            block.sync();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        declaration = ast.kernels[0].body[0]
+        sync_call = ast.kernels[0].body[1]
+
+        assert isinstance(declaration, VariableNode)
+        assert declaration.vtype == "cooperative_groups::thread_block"
+        assert isinstance(declaration.value, FunctionCallNode)
+        assert declaration.value.name == "cooperative_groups::this_thread_block"
+        assert isinstance(sync_call, FunctionCallNode)
+        assert isinstance(sync_call.name, MemberAccessNode)
+        assert sync_call.name.object == "block"
+        assert sync_call.name.member == "sync"
+
+    def test_cooperative_groups_rank_and_tile_parsing(self):
+        """Test parsing CUDA cooperative-groups rank and tile helpers."""
+        code = """
+        __global__ void kernel() {
+            cooperative_groups::thread_block block =
+                cooperative_groups::this_thread_block();
+            auto tile = cooperative_groups::tiled_partition<32>(block);
+            unsigned int rank = block.thread_rank();
+            unsigned int width = tile.size();
+            unsigned int lane = tile.thread_rank();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.kernels[0].body
+        tile = body[1]
+        rank = body[2]
+        width = body[3]
+        lane = body[4]
+
+        assert isinstance(tile, VariableNode)
+        assert isinstance(tile.value, FunctionCallNode)
+        assert tile.value.name == "cooperative_groups::tiled_partition<32>"
+        assert tile.value.args == ["block"]
+
+        for declaration, owner, member in [
+            (rank, "block", "thread_rank"),
+            (width, "tile", "size"),
+            (lane, "tile", "thread_rank"),
+        ]:
+            assert isinstance(declaration, VariableNode)
+            assert isinstance(declaration.value, FunctionCallNode)
+            assert isinstance(declaration.value.name, MemberAccessNode)
+            assert declaration.value.name.object == owner
+            assert declaration.value.name.member == member
+
+    def test_cooperative_groups_sync_and_member_alias_parsing(self):
+        """Test parsing cooperative-groups sync and current member aliases."""
+        code = """
+        namespace cg = cooperative_groups;
+
+        __global__ void kernel() {
+            auto block = cg::this_thread_block();
+            cg::sync(cg::this_thread_block());
+            unsigned int count = block.num_threads();
+            dim3 local = block.thread_index();
+            dim3 dims = block.dim_threads();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.kernels[0].body
+        sync_call = body[1]
+        count = body[2]
+        local = body[3]
+        dims = body[4]
+
+        assert isinstance(sync_call, FunctionCallNode)
+        assert sync_call.name == "cg::sync"
+        assert isinstance(sync_call.args[0], FunctionCallNode)
+        assert sync_call.args[0].name == "cg::this_thread_block"
+
+        for declaration, owner, member in [
+            (count, "block", "num_threads"),
+            (local, "block", "thread_index"),
+            (dims, "block", "dim_threads"),
+        ]:
+            assert isinstance(declaration, VariableNode)
+            assert isinstance(declaration.value, FunctionCallNode)
+            assert isinstance(declaration.value.name, MemberAccessNode)
+            assert declaration.value.name.object == owner
+            assert declaration.value.name.member == member
+
+    def test_cooperative_groups_async_copy_wait_parsing(self):
+        """Test parsing cooperative-groups async copy and wait collectives."""
+        code = """
+        namespace cg = cooperative_groups;
+
+        __global__ void kernel(int* shared, const int* global) {
+            auto block = cg::this_thread_block();
+            cg::memcpy_async(block, shared, global, sizeof(int) * block.size());
+            cg::wait(block);
+            cooperative_groups::wait_prior<1>(block);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.kernels[0].body
+        async_copy = body[1]
+        wait = body[2]
+        wait_prior = body[3]
+
+        assert isinstance(async_copy, FunctionCallNode)
+        assert async_copy.name == "cg::memcpy_async"
+        assert async_copy.args[:3] == ["block", "shared", "global"]
+        assert isinstance(async_copy.args[3], BinaryOpNode)
+        assert isinstance(async_copy.args[3].right, FunctionCallNode)
+        assert isinstance(async_copy.args[3].right.name, MemberAccessNode)
+        assert async_copy.args[3].right.name.object == "block"
+        assert async_copy.args[3].right.name.member == "size"
+
+        assert isinstance(wait, FunctionCallNode)
+        assert wait.name == "cg::wait"
+        assert wait.args == ["block"]
+
+        assert isinstance(wait_prior, FunctionCallNode)
+        assert wait_prior.name == "cooperative_groups::wait_prior<1>"
+        assert wait_prior.args == ["block"]
+
+    def test_cuda_barrier_pipeline_async_copy_parsing(self):
+        """Test parsing CUDA barrier/pipeline async copy helpers."""
+        code = """
+        __global__ void kernel(int* shared, const int* global) {
+            __shared__ cuda::pipeline_shared_state<cuda::thread_scope_block, 2> state;
+            cuda::barrier<cuda::thread_scope_block> blockBarrier;
+            init(&blockBarrier, blockDim.x);
+            cuda::memcpy_async(
+                shared,
+                global,
+                sizeof(int) * blockDim.x,
+                blockBarrier
+            );
+            auto pipe = cuda::make_pipeline();
+            pipe.producer_acquire();
+            cuda::memcpy_async(shared, global, 16, pipe);
+            pipe.consumer_wait();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.kernels[0].body
+        assert isinstance(body[0], SharedMemoryNode)
+        assert (
+            body[0].vtype == "cuda::pipeline_shared_state<cuda::thread_scope_block, 2>"
+        )
+        assert body[0].name == "state"
+
+        barrier = body[1]
+        assert isinstance(barrier, VariableNode)
+        assert barrier.vtype == "cuda::barrier<cuda::thread_scope_block>"
+        assert barrier.name == "blockBarrier"
+
+        init_call = body[2]
+        assert isinstance(init_call, FunctionCallNode)
+        assert init_call.name == "init"
+        assert isinstance(init_call.args[0], UnaryOpNode)
+        assert init_call.args[0].op == "&"
+        assert init_call.args[0].operand == "blockBarrier"
+        assert isinstance(init_call.args[1], CudaBuiltinNode)
+
+        barrier_copy = body[3]
+        assert isinstance(barrier_copy, FunctionCallNode)
+        assert barrier_copy.name == "cuda::memcpy_async"
+        assert barrier_copy.args[0:2] == ["shared", "global"]
+        assert isinstance(barrier_copy.args[2], BinaryOpNode)
+        assert barrier_copy.args[3] == "blockBarrier"
+
+        pipe = body[4]
+        assert isinstance(pipe, VariableNode)
+        assert pipe.vtype == "auto"
+        assert isinstance(pipe.value, FunctionCallNode)
+        assert pipe.value.name == "cuda::make_pipeline"
+
+        acquire = body[5]
+        assert isinstance(acquire, FunctionCallNode)
+        assert isinstance(acquire.name, MemberAccessNode)
+        assert acquire.name.object == "pipe"
+        assert acquire.name.member == "producer_acquire"
+
+        pipeline_copy = body[6]
+        assert isinstance(pipeline_copy, FunctionCallNode)
+        assert pipeline_copy.name == "cuda::memcpy_async"
+        assert pipeline_copy.args == ["shared", "global", "16", "pipe"]
+
+        wait = body[7]
+        assert isinstance(wait, FunctionCallNode)
+        assert isinstance(wait.name, MemberAccessNode)
+        assert wait.name.object == "pipe"
+        assert wait.name.member == "consumer_wait"
+
+    def test_cuda_pipeline_primitive_intrinsic_parsing(self):
+        """Test parsing CUDA pipeline primitive intrinsic calls."""
+        code = """
+        __global__ void kernel(int* shared, const int* global, __mbarrier_t* barrier) {
+            __pipeline_memcpy_async(shared, global, 16);
+            __pipeline_memcpy_async(shared + 16, global + 16, 16, 0);
+            __pipeline_commit();
+            __pipeline_wait_prior(1);
+            __pipeline_arrive_on(barrier);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        params = ast.kernels[0].params
+        assert [(param.vtype, param.name) for param in params] == [
+            ("int *", "shared"),
+            ("const int *", "global"),
+            ("__mbarrier_t *", "barrier"),
+        ]
+
+        body = ast.kernels[0].body
+        first_copy = body[0]
+        second_copy = body[1]
+        commit = body[2]
+        wait = body[3]
+        arrive = body[4]
+
+        assert isinstance(first_copy, FunctionCallNode)
+        assert first_copy.name == "__pipeline_memcpy_async"
+        assert first_copy.args == ["shared", "global", "16"]
+
+        assert isinstance(second_copy, FunctionCallNode)
+        assert second_copy.name == "__pipeline_memcpy_async"
+        assert isinstance(second_copy.args[0], BinaryOpNode)
+        assert isinstance(second_copy.args[1], BinaryOpNode)
+        assert second_copy.args[2:] == ["16", "0"]
+
+        assert isinstance(commit, FunctionCallNode)
+        assert commit.name == "__pipeline_commit"
+        assert commit.args == []
+
+        assert isinstance(wait, FunctionCallNode)
+        assert wait.name == "__pipeline_wait_prior"
+        assert wait.args == ["1"]
+
+        assert isinstance(arrive, FunctionCallNode)
+        assert arrive.name == "__pipeline_arrive_on"
+        assert arrive.args == ["barrier"]
 
     def test_fixed_arrays_and_initializer_lists_parsing(self):
         """Test fixed arrays and brace initializer lists"""
@@ -1300,6 +1992,58 @@ class TestCudaParser:
         assert pointer_write.object == "p"
         assert pointer_write.member == "value"
         assert pointer_write.is_pointer is True
+
+    def test_resource_member_access_through_cast_and_dereference_parsing(self):
+        """Test casted and dereferenced struct resource member access parsing."""
+        code = """
+        struct ResourcePair {
+            cudaTextureObject_t tex;
+            cudaSurfaceObject_t surf;
+        };
+
+        void usePair(void* raw, ResourcePair* pairPtr, int2 pixel, float2 uv) {
+            float4 sampled = tex2D<float4>(((ResourcePair*)raw)->tex, uv);
+            float4 loaded = surf2Dread<float4>(
+                (*pairPtr).surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+            surf2Dwrite(
+                loaded,
+                ((ResourcePair*)raw)->surf,
+                pixel.x * sizeof(float4),
+                pixel.y
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.functions[0].body
+        sampled_target = body[0].value.args[0]
+        loaded_target = body[1].value.args[0]
+        write_target = body[2].args[1]
+
+        assert isinstance(sampled_target, MemberAccessNode)
+        assert sampled_target.member == "tex"
+        assert sampled_target.is_pointer is True
+        assert isinstance(sampled_target.object, CastNode)
+        assert sampled_target.object.target_type == "ResourcePair *"
+        assert sampled_target.object.expression == "raw"
+        assert isinstance(loaded_target, MemberAccessNode)
+        assert loaded_target.member == "surf"
+        assert loaded_target.is_pointer is False
+        assert isinstance(loaded_target.object, UnaryOpNode)
+        assert loaded_target.object.op == "*"
+        assert loaded_target.object.operand == "pairPtr"
+        assert isinstance(write_target, MemberAccessNode)
+        assert write_target.member == "surf"
+        assert write_target.is_pointer is True
+        assert isinstance(write_target.object, CastNode)
+        assert write_target.object.target_type == "ResourcePair *"
+        assert write_target.object.expression == "raw"
 
     def test_bitwise_logical_and_shift_expression_parsing(self):
         """Test bitwise, shift, logical, and compound shift expressions"""

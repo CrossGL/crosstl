@@ -12,8 +12,8 @@ The matrix is intentionally data-driven:
   by `tools/support_matrix.py`.
 - `generated/graphics-backend-roadmap.json` is a focused generated view for the
   DirectX, OpenGL, and Metal roadmap.
-- The generated JSON also records test counts and sampled unsupported markers
-  with file/line references for each backend.
+- The generated JSON also records test counts and stable sampled unsupported
+  markers from implementation paths for each backend.
 
 Status values are conservative. Do not mark a feature `supported` unless there is
 implementation and test evidence. Use `partial`, `diagnostic`, `unsupported`,

@@ -1,3 +1,4 @@
+import re
 from textwrap import dedent
 
 import pytest
@@ -139,6 +140,177 @@ def test_codegen_preserves_image_layout_and_access_qualifiers():
     )
 
 
+def test_codegen_preserves_storage_image_parameter_access_qualifiers():
+    code = """
+    #version 460 core
+    layout(rgba32f, binding = 0) uniform readonly image2D source;
+    layout(rgba32f, binding = 1) uniform writeonly image2D target;
+
+    float readPixel(readonly image2D image, ivec2 pixel) {
+        return imageLoad(image, pixel).x;
+    }
+
+    void writePixel(writeonly image2D image, ivec2 pixel, vec4 value) {
+        imageStore(image, pixel, value);
+    }
+
+    void main() {
+        float value = readPixel(source, ivec2(0, 0));
+        writePixel(target, ivec2(0, 0), vec4(value));
+    }
+    """
+
+    output = generate_crossgl(code, "compute")
+
+    assert "image2D source @binding(0) @rgba32f @readonly;" in output
+    assert "image2D target @binding(1) @rgba32f @writeonly;" in output
+    assert "float readPixel(image2D image @readonly, ivec2 pixel)" in output
+    assert (
+        "void writePixel(image2D image @writeonly, ivec2 pixel, vec4 value)" in output
+    )
+
+    shader_ast = parse_crossgl(output)
+    regenerated_glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "float readPixel(readonly image2D image, ivec2 pixel)" in regenerated_glsl
+    assert (
+        "void writePixel(writeonly image2D image, ivec2 pixel, vec4 value)"
+        in regenerated_glsl
+    )
+
+
+def test_codegen_preserves_storage_image_parameter_memory_qualifiers():
+    code = """
+    #version 460 core
+    layout(rgba32f, binding = 0) coherent volatile restrict readonly uniform image2D source;
+    layout(rgba32f, binding = 1) coherent volatile restrict writeonly uniform image2D target;
+
+    float readPixel(coherent volatile restrict readonly image2D image, ivec2 pixel) {
+        return imageLoad(image, pixel).x;
+    }
+
+    void writePixel(coherent volatile restrict writeonly image2D image, ivec2 pixel, vec4 value) {
+        imageStore(image, pixel, value);
+    }
+
+    void main() {
+        float value = readPixel(source, ivec2(0, 0));
+        writePixel(target, ivec2(0, 0), vec4(value));
+    }
+    """
+
+    output = generate_crossgl(code, "compute")
+
+    assert (
+        "image2D source @binding(0) @rgba32f @coherent @volatile @restrict @readonly;"
+        in output
+    )
+    assert (
+        "image2D target @binding(1) @rgba32f @coherent @volatile @restrict @writeonly;"
+        in output
+    )
+    assert (
+        "float readPixel(image2D image @coherent @volatile @restrict @readonly, "
+        "ivec2 pixel)" in output
+    )
+    assert (
+        "void writePixel(image2D image @coherent @volatile @restrict @writeonly, "
+        "ivec2 pixel, vec4 value)" in output
+    )
+
+    shader_ast = parse_crossgl(output)
+    regenerated_glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert (
+        "layout(rgba32f, binding = 0) coherent volatile restrict readonly uniform "
+        "image2D source;" in regenerated_glsl
+    )
+    assert (
+        "layout(rgba32f, binding = 1) coherent volatile restrict writeonly uniform "
+        "image2D target;" in regenerated_glsl
+    )
+    assert (
+        "float readPixel(coherent volatile restrict readonly image2D image, "
+        "ivec2 pixel)" in regenerated_glsl
+    )
+    assert (
+        "void writePixel(coherent volatile restrict writeonly image2D image, "
+        "ivec2 pixel, vec4 value)" in regenerated_glsl
+    )
+
+
+def test_codegen_preserves_resource_array_parameter_qualifiers():
+    code = """
+    #version 460 core
+    layout(binding = 0) uniform sampler2D textures[4];
+    layout(r32ui, binding = 1) coherent restrict readonly uniform uimage2D counters[4];
+    layout(rgba32f, binding = 5) coherent volatile writeonly uniform image2D targets[4];
+
+    vec4 sampleLayer(sampler2D texs[4], int layer, vec2 uv) {
+        return texture(texs[layer], uv);
+    }
+
+    uint readCounter(coherent restrict readonly uimage2D images[4], int layer, ivec2 pixel) {
+        return imageLoad(images[layer], pixel).x;
+    }
+
+    void writeTarget(coherent volatile writeonly image2D images[4], int layer, ivec2 pixel, vec4 value) {
+        imageStore(images[layer], pixel, value);
+    }
+
+    void main() {
+        vec4 color = sampleLayer(textures, 1, vec2(0.5));
+        uint value = readCounter(counters, 1, ivec2(0));
+        writeTarget(targets, 1, ivec2(0), color + vec4(value));
+    }
+    """
+
+    output = generate_crossgl(code, "compute")
+
+    assert "sampler2D textures[4] @binding(0);" in output
+    assert (
+        "uimage2D counters[4] @binding(1) @r32ui @coherent @restrict @readonly;"
+        in output
+    )
+    assert (
+        "image2D targets[4] @binding(5) @rgba32f @coherent @volatile @writeonly;"
+        in output
+    )
+    assert "vec4 sampleLayer(sampler2D texs[4], int layer, vec2 uv)" in output
+    assert (
+        "uint readCounter(uimage2D images[4] @coherent @restrict @readonly, "
+        "int layer, ivec2 pixel)" in output
+    )
+    assert (
+        "void writeTarget(image2D images[4] @coherent @volatile @writeonly, "
+        "int layer, ivec2 pixel, vec4 value)" in output
+    )
+    assert "@readonly[4]" not in output
+    assert "@writeonly[4]" not in output
+
+    shader_ast = parse_crossgl(output)
+    regenerated_glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "layout(binding = 0) uniform sampler2D textures[4];" in regenerated_glsl
+    assert (
+        "layout(r32ui, binding = 1) coherent restrict readonly uniform uimage2D "
+        "counters[4];" in regenerated_glsl
+    )
+    assert (
+        "layout(rgba32f, binding = 5) coherent volatile writeonly uniform image2D "
+        "targets[4];" in regenerated_glsl
+    )
+    assert "vec4 sampleLayer(sampler2D texs[4], int layer, vec2 uv)" in regenerated_glsl
+    assert (
+        "uint readCounter(coherent restrict readonly uimage2D images[4], "
+        "int layer, ivec2 pixel)" in regenerated_glsl
+    )
+    assert (
+        "void writeTarget(coherent volatile writeonly image2D images[4], "
+        "int layer, ivec2 pixel, vec4 value)" in regenerated_glsl
+    )
+
+
 def test_parse_image_atomics_and_counters():
     code = """
     #version 450 core
@@ -154,6 +326,34 @@ def test_parse_image_atomics_and_counters():
     """
     ast = parse_glsl(code, "fragment")
     assert ast is not None
+
+
+def test_codegen_preserves_compute_shared_workgroup_memory_qualifier():
+    code = """
+    #version 450 core
+    layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+    shared uint scratch[4];
+    shared vec4 tile[2];
+
+    void main() {
+        uint lane = gl_LocalInvocationIndex;
+        scratch[lane] = lane;
+        tile[0] = vec4(float(scratch[lane]));
+        barrier();
+    }
+    """
+
+    output = generate_crossgl(code, "compute")
+
+    assert "shared uint scratch[4];" in output
+    assert "shared vec4 tile[2];" in output
+    assert "\n    uint scratch[4];" not in output
+    assert "\n    vec4 tile[2];" not in output
+    assert "scratch[lane] = lane;" in output
+    assert "barrier();" in output
+
+    shader_ast = parse_crossgl(output)
+    assert shader_ast is not None
 
 
 def test_codegen_resources_roundtrip():
@@ -218,7 +418,7 @@ def test_codegen_ssbo_single_array_blocks_use_structured_buffer_contract():
     assert "outputBlock[0] = (value * 2.0);" in glsl
 
 
-def test_codegen_ssbo_scalar_blocks_remain_regular_blocks():
+def test_codegen_ssbo_scalar_blocks_preserve_block_attributes():
     code = """
     #version 450 core
     layout(std430, binding = 1) buffer Counter {
@@ -234,7 +434,7 @@ def test_codegen_ssbo_scalar_blocks_remain_regular_blocks():
 
     assert "RWStructuredBuffer" not in crossgl
     assert "struct Counter" in crossgl
-    assert "Counter counter;" in crossgl
+    assert "Counter counter @glsl_buffer_block(std430) @binding(1);" in crossgl
     assert "atomicAdd(counter.value, 1);" in crossgl
 
 
@@ -372,14 +572,11 @@ def test_codegen_ssbo_length_uses_buffer_dimensions_contract():
     assert "layers[1].GetDimensions(layerLen);" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
-    assert (
-        "len = 0 /* unsupported Metal buffer dimensions: device buffers do not carry length */;"
-        in metal
-    )
-    assert (
-        "layerLen = 0 /* unsupported Metal buffer dimensions: device buffers do not carry length */;"
-        in metal
-    )
+    assert "constant uint* valuesBlockLength [[buffer(3)]]" in metal
+    assert "array<constant uint*, 2> layersLength [[buffer(4)]]" in metal
+    assert "len = valuesBlockLength[0];" in metal
+    assert "layerLen = layersLength[1][0];" in metal
+    assert "unsupported Metal buffer dimensions" not in metal
 
     glsl = GLSLCodeGen().generate(shader_ast)
     assert "len = valuesBlock.length();" in glsl
@@ -423,10 +620,9 @@ def test_codegen_unsized_ssbo_instance_arrays_preserve_dynamic_receivers():
     metal = MetalCodeGen().generate(shader_ast)
     assert "int value = buffers[dynamicIndex][2];" in metal
     assert "buffers[dynamicIndex][3] = value + 1;" in metal
-    assert (
-        "len = 0 /* unsupported Metal buffer dimensions: device buffers do not carry length */;"
-        in metal
-    )
+    assert "array<constant uint*, 2> buffersLength [[buffer(3)]]" in metal
+    assert "len = buffersLength[dynamicIndex][0];" in metal
+    assert "unsupported Metal buffer dimensions" not in metal
 
     glsl = GLSLCodeGen().generate(shader_ast)
     assert (
@@ -438,7 +634,7 @@ def test_codegen_unsized_ssbo_instance_arrays_preserve_dynamic_receivers():
     assert "len = buffers[dynamicIndex].data.length();" in glsl
 
 
-def test_codegen_mixed_ssbo_runtime_array_blocks_preserve_shape_with_diagnostic():
+def test_codegen_mixed_ssbo_runtime_array_blocks_preserve_shape_with_attribute():
     code = """
     #version 450 core
     layout(std430, binding = 0) buffer ParticlesBlock {
@@ -455,8 +651,7 @@ def test_codegen_mixed_ssbo_runtime_array_blocks_preserve_shape_with_diagnostic(
 
     crossgl = generate_crossgl(code, "compute")
 
-    assert "unsupported GLSL SSBO block ParticlesBlock" in crossgl
-    assert "preserved as attributed block struct" in crossgl
+    assert "unsupported GLSL SSBO block ParticlesBlock" not in crossgl
     assert "struct ParticlesBlock" in crossgl
     assert "uint count;" in crossgl
     assert "float data[];" in crossgl
@@ -491,6 +686,57 @@ def test_codegen_mixed_ssbo_runtime_array_blocks_preserve_shape_with_diagnostic(
     assert "uint n = (*reinterpret_cast<const device uint*>(particles + 0));" in metal
     assert "float v = (*reinterpret_cast<const device float*>(particles + 4));" in metal
     assert "(*reinterpret_cast<device float*>(particles + 4)) = v + float(n);" in metal
+
+
+def test_codegen_mixed_ssbo_fixed_member_arrays_accept_global_const_size():
+    crossgl = """
+    shader ConstSizedBlock {
+        const int WIDTH = 3;
+
+        struct Block {
+            float weights[WIDTH];
+            float data[];
+        };
+
+        Block block @glsl_buffer_block(std430) @binding(7);
+
+        compute {
+            void main(uint i) {
+                float x = block.weights[2];
+                float y = block.data[i];
+                block.weights[1] = x + y;
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "static const int WIDTH = 3;" in hlsl
+    assert "RWByteAddressBuffer block : register(u7);" in hlsl
+    assert "float x = asfloat(block.Load(8));" in hlsl
+    assert "float y = asfloat(block.Load((12 + i * 4)));" in hlsl
+    assert "block.Store(4, asuint((x + y)));" in hlsl
+    assert "unsupported HLSL GLSL buffer block" not in hlsl
+
+    assert "constant int WIDTH = 3;" in metal
+    assert "device uchar* block [[buffer(7)]]" in metal
+    assert "float x = (*reinterpret_cast<const device float*>(block + 8));" in metal
+    assert (
+        "float y = (*reinterpret_cast<const device float*>" "(block + (12 + i * 4)));"
+    ) in metal
+    assert "(*reinterpret_cast<device float*>(block + 4)) = x + y;" in metal
+    assert "unsupported Metal GLSL buffer block" not in metal
+
+    assert "layout(std430, binding = 7) buffer Block" in glsl
+    assert "float weights[WIDTH];" in glsl
+    assert "float data[];" in glsl
+    assert "block.weights[1] = (x + y);" in glsl
 
 
 def test_codegen_mixed_ssbo_metal_vec3_metadata_uses_scalar_pointer_offsets():
@@ -1126,7 +1372,6 @@ def test_codegen_mixed_ssbo_directx_metal_fixed_vec3_snapshot():
     assert shader_ast is not None
 
     expected_hlsl = """
-    #version 450 core
     RWByteAddressBuffer snapshotBlock : register(u60);
     // Compute Shader
     [numthreads(1, 1, 1)]
@@ -1138,7 +1383,6 @@ def test_codegen_mixed_ssbo_directx_metal_fixed_vec3_snapshot():
     }
     """
     expected_metal = """
-    #version 450 core
     #include <metal_stdlib>
     using namespace metal;
 
@@ -1200,7 +1444,6 @@ def test_codegen_mixed_ssbo_directx_metal_readonly_mat2_snapshot():
     assert shader_ast is not None
 
     expected_hlsl = """
-    #version 450 core
     ByteAddressBuffer snapshotMatrixBlock : register(t61);
     // Compute Shader
     [numthreads(1, 1, 1)]
@@ -1210,7 +1453,6 @@ def test_codegen_mixed_ssbo_directx_metal_readonly_mat2_snapshot():
     }
     """
     expected_metal = """
-    #version 450 core
     #include <metal_stdlib>
     using namespace metal;
 
@@ -1245,6 +1487,1053 @@ def test_codegen_mixed_ssbo_directx_metal_readonly_mat2_snapshot():
     )
 
 
+def test_codegen_mixed_ssbo_bool_members_lower_as_uint_slots():
+    crossgl = """
+    shader main {
+        struct BoolBlock {
+            bool enabled;
+            bool flags[2];
+            float values[];
+        };
+
+        BoolBlock boolBlock @glsl_buffer_block(std430) @binding(53);
+
+        bool readFlag(BoolBlock localBlock @glsl_buffer_block(std430), uint i) {
+            return localBlock.flags[i];
+        }
+
+        compute {
+            void main() {
+                bool enabled = boolBlock.enabled;
+                bool first = boolBlock.flags[0];
+                bool dynamic = readFlag(boolBlock, 1u);
+                if (enabled && dynamic) {
+                    boolBlock.flags[0] = false;
+                }
+                boolBlock.flags[1] = first;
+                float tail = boolBlock.values[0];
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer boolBlock : register(u53);" in hlsl
+    assert "bool readFlag(RWByteAddressBuffer localBlock, uint i)" in hlsl
+    assert "return (localBlock.Load((4 + i * 4)) != 0u);" in hlsl
+    assert "bool enabled = (boolBlock.Load(0) != 0u);" in hlsl
+    assert "bool first = (boolBlock.Load(4) != 0u);" in hlsl
+    assert "bool dynamic = readFlag(boolBlock, 1u);" in hlsl
+    assert "boolBlock.Store(4, ((false) ? 1u : 0u));" in hlsl
+    assert "boolBlock.Store(8, ((first) ? 1u : 0u));" in hlsl
+    assert "float tail = asfloat(boolBlock.Load(12));" in hlsl
+    assert "unsupported HLSL GLSL buffer block" not in hlsl
+
+    assert "kernel void kernel_main(device uchar* boolBlock [[buffer(53)]])" in metal
+    assert "bool readFlag(device uchar* localBlock, uint i)" in metal
+    assert (
+        "return ((*reinterpret_cast<const device uint*>"
+        "(localBlock + (4 + i * 4))) != 0u);" in metal
+    )
+    assert (
+        "bool enabled = ((*reinterpret_cast<const device uint*>"
+        "(boolBlock + 0)) != 0u);" in metal
+    )
+    assert (
+        "bool first = ((*reinterpret_cast<const device uint*>"
+        "(boolBlock + 4)) != 0u);" in metal
+    )
+    assert "bool dynamic = readFlag(boolBlock, 1u);" in metal
+    assert (
+        "(*reinterpret_cast<device uint*>(boolBlock + 4)) = "
+        "((false) ? 1u : 0u);" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>(boolBlock + 8)) = "
+        "((first) ? 1u : 0u);" in metal
+    )
+    assert (
+        "float tail = (*reinterpret_cast<const device float*>"
+        "(boolBlock + 12));" in metal
+    )
+    assert "unsupported Metal GLSL buffer block" not in metal
+
+    assert "layout(std430, binding = 53) buffer BoolBlock" in glsl
+    assert "bool enabled;" in glsl
+    assert "bool flags[2];" in glsl
+    assert "float values[];" in glsl
+    assert "bool dynamic = readFlag(boolBlock, 1u);" in glsl
+
+
+def test_codegen_mixed_ssbo_bool_vector_members_lower_as_uint_components():
+    crossgl = """
+    shader main {
+        struct BoolVectorBlock {
+            bvec3 mask;
+            bvec2 pairs[2];
+            bvec4 values[];
+        };
+
+        BoolVectorBlock boolVectorBlock @glsl_buffer_block(std430) @binding(55);
+
+        bvec4 readValue(BoolVectorBlock localBlock @glsl_buffer_block(std430), uint i) {
+            return localBlock.values[i];
+        }
+
+        compute {
+            void main() {
+                bvec3 mask = boolVectorBlock.mask;
+                bvec2 pair = boolVectorBlock.pairs[1];
+                bvec4 dynamic = readValue(boolVectorBlock, 0u);
+                boolVectorBlock.mask = bvec3(dynamic.x, pair.x, mask.z);
+                boolVectorBlock.pairs[0] = bvec2(mask.x, dynamic.y);
+                boolVectorBlock.values[1] = bvec4(mask.x, pair.y, dynamic.z, true);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer boolVectorBlock : register(u55);" in hlsl
+    assert "bool4 readValue(RWByteAddressBuffer localBlock, uint i)" in hlsl
+    assert (
+        "return bool4((localBlock.Load((32 + i * 16)) != 0u), "
+        "(localBlock.Load((32 + i * 16 + 4)) != 0u), "
+        "(localBlock.Load((32 + i * 16 + 8)) != 0u), "
+        "(localBlock.Load((32 + i * 16 + 12)) != 0u));" in hlsl
+    )
+    assert (
+        "bool3 mask = bool3((boolVectorBlock.Load(0) != 0u), "
+        "(boolVectorBlock.Load(4) != 0u), "
+        "(boolVectorBlock.Load(8) != 0u));" in hlsl
+    )
+    assert (
+        "bool2 pair = bool2((boolVectorBlock.Load(24) != 0u), "
+        "(boolVectorBlock.Load(28) != 0u));" in hlsl
+    )
+    assert "bool3 __crossgl_bool_store_0 = bool3(dynamic.x, pair.x, mask.z);" in hlsl
+    assert (
+        "boolVectorBlock.Store3(0, uint3((__crossgl_bool_store_0.x ? 1u : 0u), "
+        "(__crossgl_bool_store_0.y ? 1u : 0u), "
+        "(__crossgl_bool_store_0.z ? 1u : 0u)));" in hlsl
+    )
+    assert "bool2 __crossgl_bool_store_1 = bool2(mask.x, dynamic.y);" in hlsl
+    assert (
+        "boolVectorBlock.Store2(16, uint2((__crossgl_bool_store_1.x ? 1u : 0u), "
+        "(__crossgl_bool_store_1.y ? 1u : 0u)));" in hlsl
+    )
+    assert (
+        "bool4 __crossgl_bool_store_2 = bool4(mask.x, pair.y, dynamic.z, true);" in hlsl
+    )
+    assert (
+        "boolVectorBlock.Store4(48, uint4((__crossgl_bool_store_2.x ? 1u : 0u), "
+        "(__crossgl_bool_store_2.y ? 1u : 0u), "
+        "(__crossgl_bool_store_2.z ? 1u : 0u), "
+        "(__crossgl_bool_store_2.w ? 1u : 0u)));" in hlsl
+    )
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    assert (
+        "kernel void kernel_main(device uchar* boolVectorBlock [[buffer(55)]])" in metal
+    )
+    assert "bool4 readValue(device uchar* localBlock, uint i)" in metal
+    assert (
+        "reinterpret_cast<const device uint*>(localBlock + (32 + i * 16 + 12))" in metal
+    )
+    assert (
+        "bool3 mask = bool3(((*reinterpret_cast<const device uint*>"
+        "(boolVectorBlock + 0)) != 0u), "
+        "((*reinterpret_cast<const device uint*>(boolVectorBlock + 4)) != 0u), "
+        "((*reinterpret_cast<const device uint*>(boolVectorBlock + 8)) != 0u));"
+        in metal
+    )
+    assert "bool3 __crossgl_buffer_store_0 = bool3(dynamic.x, pair.x, mask.z);" in metal
+    assert (
+        "(*reinterpret_cast<device uint*>(boolVectorBlock + 8)) = "
+        "((__crossgl_buffer_store_0.z) ? 1u : 0u);" in metal
+    )
+    assert "bool2 __crossgl_buffer_store_1 = bool2(mask.x, dynamic.y);" in metal
+    assert (
+        "(*reinterpret_cast<device uint*>(boolVectorBlock + 20)) = "
+        "((__crossgl_buffer_store_1.y) ? 1u : 0u);" in metal
+    )
+    assert (
+        "bool4 __crossgl_buffer_store_2 = bool4(mask.x, pair.y, dynamic.z, true);"
+        in metal
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>(boolVectorBlock + 60)) = "
+        "((__crossgl_buffer_store_2.w) ? 1u : 0u);" in metal
+    )
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 55) buffer BoolVectorBlock" in glsl
+    assert "bvec3 mask;" in glsl
+    assert "bvec2 pairs[2];" in glsl
+    assert "bvec4 values[];" in glsl
+    assert "boolVectorBlock.values[1] = bvec4(mask.x, pair.y, dynamic.z, true);" in glsl
+
+
+def test_codegen_mixed_ssbo_nested_struct_members_lower_as_leaf_offsets():
+    crossgl = """
+    shader main {
+        struct InnerBlockData {
+            float scale;
+            bvec3 mask;
+        };
+
+        struct NestedBlock {
+            uint count;
+            InnerBlockData inner;
+            float values[];
+        };
+
+        NestedBlock nestedBlock @glsl_buffer_block(std430) @binding(56);
+
+        float readNested(NestedBlock localBlock @glsl_buffer_block(std430), uint i) {
+            return localBlock.inner.scale + localBlock.values[i];
+        }
+
+        compute {
+            void main() {
+                float scale = nestedBlock.inner.scale;
+                bvec3 mask = nestedBlock.inner.mask;
+                nestedBlock.inner.scale = scale + 1.0;
+                nestedBlock.inner.mask = bvec3(mask.y, mask.x, true);
+                nestedBlock.values[0] = readNested(nestedBlock, 0u);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer nestedBlock : register(u56);" in hlsl
+    assert "float readNested(RWByteAddressBuffer localBlock, uint i)" in hlsl
+    assert (
+        "return (asfloat(localBlock.Load(16)) + "
+        "asfloat(localBlock.Load((48 + i * 4))));" in hlsl
+    )
+    assert "float scale = asfloat(nestedBlock.Load(16));" in hlsl
+    assert (
+        "bool3 mask = bool3((nestedBlock.Load(32) != 0u), "
+        "(nestedBlock.Load(36) != 0u), "
+        "(nestedBlock.Load(40) != 0u));" in hlsl
+    )
+    assert "nestedBlock.Store(16, asuint((scale + 1.0)));" in hlsl
+    assert "bool3 __crossgl_bool_store_0 = bool3(mask.y, mask.x, true);" in hlsl
+    assert (
+        "nestedBlock.Store3(32, uint3((__crossgl_bool_store_0.x ? 1u : 0u), "
+        "(__crossgl_bool_store_0.y ? 1u : 0u), "
+        "(__crossgl_bool_store_0.z ? 1u : 0u)));" in hlsl
+    )
+    assert "nestedBlock.Store(48, asuint(readNested(nestedBlock, 0u)));" in hlsl
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    assert "kernel void kernel_main(device uchar* nestedBlock [[buffer(56)]])" in metal
+    assert "float readNested(device uchar* localBlock, uint i)" in metal
+    assert (
+        "return (*reinterpret_cast<const device float*>(localBlock + 16)) + "
+        "(*reinterpret_cast<const device float*>(localBlock + (48 + i * 4)));" in metal
+    )
+    assert (
+        "float scale = (*reinterpret_cast<const device float*>"
+        "(nestedBlock + 16));" in metal
+    )
+    assert (
+        "bool3 mask = bool3(((*reinterpret_cast<const device uint*>"
+        "(nestedBlock + 32)) != 0u), "
+        "((*reinterpret_cast<const device uint*>(nestedBlock + 36)) != 0u), "
+        "((*reinterpret_cast<const device uint*>(nestedBlock + 40)) != 0u));" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device float*>(nestedBlock + 16)) = scale + 1.0;" in metal
+    )
+    assert "bool3 __crossgl_buffer_store_0 = bool3(mask.y, mask.x, true);" in metal
+    assert (
+        "(*reinterpret_cast<device uint*>(nestedBlock + 40)) = "
+        "((__crossgl_buffer_store_0.z) ? 1u : 0u);" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device float*>(nestedBlock + 48)) = "
+        "readNested(nestedBlock, 0u);" in metal
+    )
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 56) buffer NestedBlock" in glsl
+    assert "InnerBlockData inner;" in glsl
+    assert "nestedBlock.inner.scale = (scale + 1.0);" in glsl
+    assert "nestedBlock.inner.mask = bvec3(mask.y, mask.x, true);" in glsl
+
+
+def test_codegen_mixed_ssbo_nested_struct_arrays_lower_as_leaf_offsets():
+    crossgl = """
+    shader main {
+        struct ArrayBlockData {
+            uint id;
+            vec3 normal;
+            bvec2 flags;
+        };
+
+        struct NestedArrayBlock {
+            ArrayBlockData fixedItems[2];
+            uint count;
+            ArrayBlockData items[];
+        };
+
+        NestedArrayBlock nestedArrayBlock @glsl_buffer_block(std430) @binding(57);
+
+        float readNestedArray(NestedArrayBlock localBlock @glsl_buffer_block(std430), uint i) {
+            return localBlock.items[i].normal.x + float(localBlock.fixedItems[1].id);
+        }
+
+        compute {
+            void main() {
+                uint i = nestedArrayBlock.count;
+                vec3 normal = nestedArrayBlock.fixedItems[1].normal;
+                bvec2 flags = nestedArrayBlock.items[i].flags;
+                nestedArrayBlock.fixedItems[0].id = nestedArrayBlock.items[i].id;
+                nestedArrayBlock.items[i].normal = normal;
+                nestedArrayBlock.items[i].flags = bvec2(flags.y, true);
+                float value = readNestedArray(nestedArrayBlock, i);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer nestedArrayBlock : register(u57);" in hlsl
+    assert "float readNestedArray(RWByteAddressBuffer localBlock, uint i)" in hlsl
+    assert (
+        "return (asfloat(localBlock.Load3((112 + i * 48 + 16))).x + "
+        "float(localBlock.Load(48)));" in hlsl
+    )
+    assert "uint i = nestedArrayBlock.Load(96);" in hlsl
+    assert "float3 normal = asfloat(nestedArrayBlock.Load3(64));" in hlsl
+    assert (
+        "bool2 flags = bool2((nestedArrayBlock.Load((112 + i * 48 + 32)) != 0u), "
+        "(nestedArrayBlock.Load((112 + i * 48 + 32 + 4)) != 0u));" in hlsl
+    )
+    assert "nestedArrayBlock.Store(0, nestedArrayBlock.Load((112 + i * 48)));" in hlsl
+    assert "nestedArrayBlock.Store3((112 + i * 48 + 16), asuint(normal));" in hlsl
+    assert "bool2 __crossgl_bool_store_0 = bool2(flags.y, true);" in hlsl
+    assert (
+        "nestedArrayBlock.Store2((112 + i * 48 + 32), "
+        "uint2((__crossgl_bool_store_0.x ? 1u : 0u), "
+        "(__crossgl_bool_store_0.y ? 1u : 0u)));" in hlsl
+    )
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    assert (
+        "kernel void kernel_main(device uchar* nestedArrayBlock [[buffer(57)]])"
+        in metal
+    )
+    assert "float readNestedArray(device uchar* localBlock, uint i)" in metal
+    assert "float((*reinterpret_cast<const device uint*>(localBlock + 48)))" in metal
+    assert (
+        "uint i = (*reinterpret_cast<const device uint*>"
+        "(nestedArrayBlock + 96));" in metal
+    )
+    assert (
+        "float3 normal = float3((*reinterpret_cast<const device float*>"
+        "(nestedArrayBlock + 64)), "
+        "(*reinterpret_cast<const device float*>(nestedArrayBlock + 68)), "
+        "(*reinterpret_cast<const device float*>(nestedArrayBlock + 72)));" in metal
+    )
+    assert (
+        "bool2 flags = bool2(((*reinterpret_cast<const device uint*>"
+        "(nestedArrayBlock + (112 + i * 48 + 32))) != 0u), "
+        "((*reinterpret_cast<const device uint*>"
+        "(nestedArrayBlock + (112 + i * 48 + 32 + 4))) != 0u));" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>(nestedArrayBlock + 0)) = "
+        "(*reinterpret_cast<const device uint*>"
+        "(nestedArrayBlock + (112 + i * 48)));" in metal
+    )
+    assert "float3 __crossgl_buffer_store_0 = normal;" in metal
+    assert (
+        "(*reinterpret_cast<device float*>"
+        "(nestedArrayBlock + (112 + i * 48 + 16 + 8))) = "
+        "__crossgl_buffer_store_0.z;" in metal
+    )
+    assert "bool2 __crossgl_buffer_store_1 = bool2(flags.y, true);" in metal
+    assert (
+        "(*reinterpret_cast<device uint*>"
+        "(nestedArrayBlock + (112 + i * 48 + 32 + 4))) = "
+        "((__crossgl_buffer_store_1.y) ? 1u : 0u);" in metal
+    )
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 57) buffer NestedArrayBlock" in glsl
+    assert "ArrayBlockData fixedItems[2];" in glsl
+    assert "ArrayBlockData items[];" in glsl
+    assert "nestedArrayBlock.items[i].normal = normal;" in glsl
+    assert "nestedArrayBlock.items[i].flags = bvec2(flags.y, true);" in glsl
+
+
+def test_codegen_mixed_ssbo_nested_struct_aggregates_materialize_leaf_fields():
+    crossgl = """
+    shader main {
+        struct AggregatePayload {
+            float scale;
+            bvec3 mask;
+        };
+
+        struct AggregateBlockData {
+            AggregatePayload payload;
+            uint id;
+        };
+
+        struct AggregateBlock {
+            AggregateBlockData inner;
+            AggregateBlockData items[];
+        };
+
+        AggregateBlock aggregateBlock @glsl_buffer_block(std430) @binding(58);
+
+        AggregateBlockData passThrough(AggregateBlock localBlock @glsl_buffer_block(std430), uint i) {
+            return localBlock.items[i];
+        }
+
+        compute {
+            void main() {
+                uint i = 1u;
+                AggregateBlockData inner = aggregateBlock.inner;
+                AggregateBlockData item = passThrough(aggregateBlock, i);
+                aggregateBlock.inner = item;
+                aggregateBlock.items[i] = inner;
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer aggregateBlock : register(u58);" in hlsl
+    assert re.search(
+        r"AggregateBlockData __crossgl_load_rw_glsl_buffer_AggregateBlockData_[0-9a-f]{10}"
+        r"\(RWByteAddressBuffer buffer, uint offset\)",
+        hlsl,
+    )
+    assert "result.payload.scale = asfloat(buffer.Load(offset));" in hlsl
+    assert (
+        "result.payload.mask = bool3((buffer.Load((offset + 16)) != 0u), "
+        "(buffer.Load((offset + 16 + 4)) != 0u), "
+        "(buffer.Load((offset + 16 + 8)) != 0u));" in hlsl
+    )
+    assert "result.id = buffer.Load((offset + 32));" in hlsl
+    assert (
+        "AggregateBlockData passThrough(RWByteAddressBuffer localBlock, uint i)" in hlsl
+    )
+    assert re.search(
+        r"return __crossgl_load_rw_glsl_buffer_AggregateBlockData_[0-9a-f]{10}"
+        r"\(localBlock, \(48 \+ i \* 48\)\);",
+        hlsl,
+    )
+    assert re.search(
+        r"AggregateBlockData inner = "
+        r"__crossgl_load_rw_glsl_buffer_AggregateBlockData_[0-9a-f]{10}"
+        r"\(aggregateBlock, 0\);",
+        hlsl,
+    )
+    assert "AggregateBlockData __crossgl_aggregate_store_0 = item;" in hlsl
+    assert (
+        "aggregateBlock.Store(0, "
+        "asuint(__crossgl_aggregate_store_0.payload.scale));" in hlsl
+    )
+    assert (
+        "bool3 __crossgl_bool_store_1 = "
+        "__crossgl_aggregate_store_0.payload.mask;" in hlsl
+    )
+    assert (
+        "aggregateBlock.Store3(16, uint3((__crossgl_bool_store_1.x ? 1u : 0u), "
+        "(__crossgl_bool_store_1.y ? 1u : 0u), "
+        "(__crossgl_bool_store_1.z ? 1u : 0u)));" in hlsl
+    )
+    assert "aggregateBlock.Store(32, __crossgl_aggregate_store_0.id);" in hlsl
+    assert "AggregateBlockData __crossgl_aggregate_store_2 = inner;" in hlsl
+    assert (
+        "aggregateBlock.Store((48 + i * 48), "
+        "asuint(__crossgl_aggregate_store_2.payload.scale));" in hlsl
+    )
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    assert (
+        "kernel void kernel_main(device uchar* aggregateBlock [[buffer(58)]])" in metal
+    )
+    assert "AggregateBlockData passThrough(device uchar* localBlock, uint i)" in metal
+    assert (
+        "return AggregateBlockData{AggregatePayload{"
+        "(*reinterpret_cast<const device float*>"
+        "(localBlock + (48 + i * 48))), "
+        "bool3(((*reinterpret_cast<const device uint*>"
+        "(localBlock + (48 + i * 48 + 16))) != 0u), "
+        "((*reinterpret_cast<const device uint*>"
+        "(localBlock + (48 + i * 48 + 16 + 4))) != 0u), "
+        "((*reinterpret_cast<const device uint*>"
+        "(localBlock + (48 + i * 48 + 16 + 8))) != 0u))}, "
+        "(*reinterpret_cast<const device uint*>"
+        "(localBlock + (48 + i * 48 + 32)))};" in metal
+    )
+    assert (
+        "AggregateBlockData inner = AggregateBlockData{"
+        "AggregatePayload{"
+        "(*reinterpret_cast<const device float*>(aggregateBlock + 0)), "
+        "bool3(((*reinterpret_cast<const device uint*>(aggregateBlock + 16)) != 0u), "
+        "((*reinterpret_cast<const device uint*>(aggregateBlock + 20)) != 0u), "
+        "((*reinterpret_cast<const device uint*>(aggregateBlock + 24)) != 0u))}, "
+        "(*reinterpret_cast<const device uint*>(aggregateBlock + 32))};" in metal
+    )
+    assert "AggregateBlockData __crossgl_aggregate_store_0 = item;" in metal
+    assert (
+        "(*reinterpret_cast<device float*>(aggregateBlock + 0)) = "
+        "__crossgl_aggregate_store_0.payload.scale;" in metal
+    )
+    assert (
+        "bool3 __crossgl_buffer_store_1 = "
+        "__crossgl_aggregate_store_0.payload.mask;" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>(aggregateBlock + 24)) = "
+        "((__crossgl_buffer_store_1.z) ? 1u : 0u);" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>(aggregateBlock + 32)) = "
+        "__crossgl_aggregate_store_0.id;" in metal
+    )
+    assert "AggregateBlockData __crossgl_aggregate_store_2 = inner;" in metal
+    assert (
+        "(*reinterpret_cast<device float*>(aggregateBlock + (48 + i * 48))) = "
+        "__crossgl_aggregate_store_2.payload.scale;" in metal
+    )
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 58) buffer AggregateBlock" in glsl
+    assert "struct AggregatePayload" in glsl
+    assert "AggregatePayload payload;" in glsl
+    assert "AggregateBlockData inner;" in glsl
+    assert "AggregateBlockData items[];" in glsl
+    assert "aggregateBlock.inner = item;" in glsl
+    assert "aggregateBlock.items[i] = inner;" in glsl
+
+
+def test_codegen_mixed_ssbo_nested_struct_aggregate_arrays_materialize_leaf_fields():
+    crossgl = """
+    shader main {
+        struct ArrayAggregateItem {
+            vec2 uv;
+            bvec2 flags;
+        };
+
+        struct ArrayAggregateData {
+            float weights[2];
+            ArrayAggregateItem items[2];
+            uint id;
+        };
+
+        struct ArrayAggregateBlock {
+            ArrayAggregateData inner;
+            ArrayAggregateData entries[];
+        };
+
+        ArrayAggregateBlock arrayAggregateBlock @glsl_buffer_block(std430) @binding(59);
+
+        ArrayAggregateData passArrayAggregate(ArrayAggregateBlock localBlock @glsl_buffer_block(std430), uint i) {
+            return localBlock.entries[i];
+        }
+
+        compute {
+            void main() {
+                uint i = 1u;
+                ArrayAggregateData inner = arrayAggregateBlock.inner;
+                ArrayAggregateData entry = passArrayAggregate(arrayAggregateBlock, i);
+                arrayAggregateBlock.inner = entry;
+                arrayAggregateBlock.entries[i] = inner;
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer arrayAggregateBlock : register(u59);" in hlsl
+    assert re.search(
+        r"ArrayAggregateData __crossgl_load_rw_glsl_buffer_ArrayAggregateData_[0-9a-f]{10}"
+        r"\(RWByteAddressBuffer buffer, uint offset\)",
+        hlsl,
+    )
+    assert "result.weights[0] = asfloat(buffer.Load(offset));" in hlsl
+    assert "result.weights[1] = asfloat(buffer.Load((offset + 4)));" in hlsl
+    assert "result.items[0].uv = asfloat(buffer.Load2((offset + 8)));" in hlsl
+    assert (
+        "result.items[1].flags = bool2((buffer.Load((offset + 8 + 16 + 8)) != 0u), "
+        "(buffer.Load((offset + 8 + 16 + 8 + 4)) != 0u));" in hlsl
+    )
+    assert "result.id = buffer.Load((offset + 40));" in hlsl
+    assert re.search(
+        r"return __crossgl_load_rw_glsl_buffer_ArrayAggregateData_[0-9a-f]{10}"
+        r"\(localBlock, \(48 \+ i \* 48\)\);",
+        hlsl,
+    )
+    assert re.search(
+        r"ArrayAggregateData inner = "
+        r"__crossgl_load_rw_glsl_buffer_ArrayAggregateData_[0-9a-f]{10}"
+        r"\(arrayAggregateBlock, 0\);",
+        hlsl,
+    )
+    assert "ArrayAggregateData __crossgl_aggregate_store_0 = entry;" in hlsl
+    assert (
+        "arrayAggregateBlock.Store(0, "
+        "asuint(__crossgl_aggregate_store_0.weights[0]));" in hlsl
+    )
+    assert (
+        "arrayAggregateBlock.Store2(8, "
+        "asuint(__crossgl_aggregate_store_0.items[0].uv));" in hlsl
+    )
+    assert "bool2 __crossgl_bool_store_1" in hlsl
+    assert (
+        "arrayAggregateBlock.Store((48 + i * 48 + 40), "
+        "__crossgl_aggregate_store_3.id);" in hlsl
+    )
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    assert re.search(
+        r"ArrayAggregateData __crossgl_load_glsl_buffer_ArrayAggregateData_[0-9a-f]{10}"
+        r"\(const device uchar\* buffer, uint offset\)",
+        metal,
+    )
+    assert (
+        "result.weights[0] = "
+        "(*reinterpret_cast<const device float*>(buffer + offset));" in metal
+    )
+    assert (
+        "result.items[0].uv = float2((*reinterpret_cast<const device float*>"
+        "(buffer + (offset + 8))), "
+        "(*reinterpret_cast<const device float*>(buffer + (offset + 8 + 4))));" in metal
+    )
+    assert (
+        "result.items[1].flags = bool2(((*reinterpret_cast<const device uint*>"
+        "(buffer + (offset + 8 + 16 + 8))) != 0u), "
+        "((*reinterpret_cast<const device uint*>"
+        "(buffer + (offset + 8 + 16 + 8 + 4))) != 0u));" in metal
+    )
+    assert re.search(
+        r"return __crossgl_load_glsl_buffer_ArrayAggregateData_[0-9a-f]{10}"
+        r"\(localBlock, \(48 \+ i \* 48\)\);",
+        metal,
+    )
+    assert "ArrayAggregateData __crossgl_aggregate_store_0 = entry;" in metal
+    assert (
+        "(*reinterpret_cast<device float*>(arrayAggregateBlock + 0)) = "
+        "__crossgl_aggregate_store_0.weights[0];" in metal
+    )
+    assert "float2 __crossgl_buffer_store_1" in metal
+    assert "bool2 __crossgl_buffer_store_2" in metal
+    assert (
+        "(*reinterpret_cast<device uint*>"
+        "(arrayAggregateBlock + (48 + i * 48 + 40))) = "
+        "__crossgl_aggregate_store_5.id;" in metal
+    )
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 59) buffer ArrayAggregateBlock" in glsl
+    assert "float weights[2];" in glsl
+    assert "ArrayAggregateItem items[2];" in glsl
+    assert "ArrayAggregateData entries[];" in glsl
+    assert "arrayAggregateBlock.inner = entry;" in glsl
+    assert "arrayAggregateBlock.entries[i] = inner;" in glsl
+
+
+def test_codegen_mixed_ssbo_readonly_aggregate_helpers_use_const_readers():
+    crossgl = """
+    shader main {
+        struct ReadOnlyAggregateItem {
+            vec2 uv;
+            bvec2 flags;
+        };
+
+        struct ReadOnlyAggregateData {
+            float weights[2];
+            ReadOnlyAggregateItem items[2];
+            uint id;
+        };
+
+        struct ReadOnlyAggregateBlock {
+            ReadOnlyAggregateData inner;
+            ReadOnlyAggregateData entries[];
+        };
+
+        ReadOnlyAggregateBlock readAggregateBlock @glsl_buffer_block(std430) @binding(95) @readonly;
+
+        ReadOnlyAggregateData readEntry(ReadOnlyAggregateBlock localBlock @glsl_buffer_block(std430) @readonly, uint i) {
+            return localBlock.entries[i];
+        }
+
+        compute {
+            void main() {
+                uint i = 1u;
+                ReadOnlyAggregateData inner = readAggregateBlock.inner;
+                ReadOnlyAggregateData entry = readEntry(readAggregateBlock, i);
+                float weight = entry.weights[1] + inner.weights[0];
+                bool flag = entry.items[1].flags.y;
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "ByteAddressBuffer readAggregateBlock : register(t95);" in hlsl
+    assert "RWByteAddressBuffer readAggregateBlock" not in hlsl
+    assert re.search(
+        r"ReadOnlyAggregateData __crossgl_load_ro_glsl_buffer_"
+        r"ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(ByteAddressBuffer buffer, uint offset\)",
+        hlsl,
+    )
+    assert (
+        "ReadOnlyAggregateData readEntry(ByteAddressBuffer localBlock, uint i)" in hlsl
+    )
+    assert re.search(
+        r"return __crossgl_load_ro_glsl_buffer_ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(localBlock, \(48 \+ i \* 48\)\);",
+        hlsl,
+    )
+    assert re.search(
+        r"ReadOnlyAggregateData inner = "
+        r"__crossgl_load_ro_glsl_buffer_ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(readAggregateBlock, 0\);",
+        hlsl,
+    )
+    assert "result.items[1].flags = bool2" in hlsl
+    assert "readAggregateBlock.Store" not in hlsl
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    assert "const device uchar* readAggregateBlock [[buffer(95)]]" in metal
+    assert "kernel void kernel_main(device uchar* readAggregateBlock" not in metal
+    assert re.search(
+        r"ReadOnlyAggregateData __crossgl_load_glsl_buffer_"
+        r"ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(const device uchar\* buffer, uint offset\)",
+        metal,
+    )
+    assert (
+        "ReadOnlyAggregateData readEntry(const device uchar* localBlock, uint i)"
+        in metal
+    )
+    assert re.search(
+        r"return __crossgl_load_glsl_buffer_ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(localBlock, \(48 \+ i \* 48\)\);",
+        metal,
+    )
+    assert re.search(
+        r"ReadOnlyAggregateData inner = "
+        r"__crossgl_load_glsl_buffer_ReadOnlyAggregateData_[0-9a-f]{10}"
+        r"\(readAggregateBlock, 0\);",
+        metal,
+    )
+    assert "result.items[1].flags = bool2" in metal
+    assert "reinterpret_cast<device" not in metal
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 95) readonly buffer ReadOnlyAggregateBlock" in glsl
+    assert "ReadOnlyAggregateData readEntry(ReadOnlyAggregateBlock localBlock" in glsl
+    assert "ReadOnlyAggregateData inner = readAggregateBlock.inner;" in glsl
+    assert "ReadOnlyAggregateData entry = readEntry(readAggregateBlock, i);" in glsl
+
+
+def test_codegen_mixed_ssbo_nested_aggregate_leaf_compound_offsets():
+    code = """
+    #version 450 core
+    struct CompoundItem {
+        vec2 uv;
+        bvec2 flags;
+    };
+
+    struct CompoundData {
+        float weights[2];
+        CompoundItem items[2];
+        uint id;
+    };
+
+    layout(std430, binding = 98) buffer CompoundAggregateBlock {
+        uint index;
+        CompoundData entries[];
+    } compoundAggregateBlock;
+
+    void main() {
+        uint i = compoundAggregateBlock.index;
+        compoundAggregateBlock.entries[i].weights[1] += 1.0;
+        compoundAggregateBlock.entries[i].items[1].uv += vec2(0.5);
+        compoundAggregateBlock.entries[i].items[0].flags = bvec2(true, false);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer compoundAggregateBlock : register(u98);" in hlsl
+    assert "uint i = compoundAggregateBlock.Load(0);" in hlsl
+    assert (
+        "compoundAggregateBlock.Store((8 + i * 48 + 4), "
+        "asuint((asfloat(compoundAggregateBlock.Load((8 + i * 48 + 4))) + 1.0)));"
+        in hlsl
+    )
+    assert (
+        "compoundAggregateBlock.Store2((8 + i * 48 + 8 + 16), "
+        "asuint((asfloat(compoundAggregateBlock.Load2((8 + i * 48 + 8 + 16))) "
+        "+ float2(0.5, 0.5))));" in hlsl
+    )
+    assert "bool2 __crossgl_bool_store_0 = bool2(true, false);" in hlsl
+    assert (
+        "compoundAggregateBlock.Store2((8 + i * 48 + 8 + 8), "
+        "uint2((__crossgl_bool_store_0.x ? 1u : 0u), "
+        "(__crossgl_bool_store_0.y ? 1u : 0u)));" in hlsl
+    )
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    assert "device uchar* compoundAggregateBlock [[buffer(98)]]" in metal
+    assert (
+        "uint i = (*reinterpret_cast<const device uint*>"
+        "(compoundAggregateBlock + 0));" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device float*>"
+        "(compoundAggregateBlock + (8 + i * 48 + 4))) = "
+        "((*reinterpret_cast<const device float*>"
+        "(compoundAggregateBlock + (8 + i * 48 + 4))) + 1.0);" in metal
+    )
+    assert (
+        "float2 __crossgl_buffer_store_0 = "
+        "(float2((*reinterpret_cast<const device float*>"
+        "(compoundAggregateBlock + (8 + i * 48 + 8 + 16))), "
+        "(*reinterpret_cast<const device float*>"
+        "(compoundAggregateBlock + (8 + i * 48 + 8 + 16 + 4)))) "
+        "+ float2(0.5));" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>"
+        "(compoundAggregateBlock + (8 + i * 48 + 8 + 8 + 4))) = "
+        "((__crossgl_buffer_store_1.y) ? 1u : 0u);" in metal
+    )
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 98) buffer CompoundAggregateBlock" in glsl
+    assert "compoundAggregateBlock.entries[i].weights[1] += 1.0;" in glsl
+    assert "compoundAggregateBlock.entries[i].items[1].uv += vec2(0.5);" in glsl
+    assert (
+        "compoundAggregateBlock.entries[i].items[0].flags = bvec2(true, false);" in glsl
+    )
+
+
+def test_codegen_mixed_ssbo_aggregate_helpers_distinguish_std140_and_std430_layouts():
+    crossgl = """
+    shader main {
+        struct LayoutSharedData {
+            float weights[2];
+            uint id;
+        };
+
+        struct LayoutStd430Block {
+            LayoutSharedData item;
+        };
+
+        struct LayoutStd140Block {
+            LayoutSharedData item;
+        };
+
+        LayoutStd430Block block430 @glsl_buffer_block(std430) @binding(62);
+        LayoutStd140Block block140 @glsl_buffer_block(std140) @binding(63);
+
+        compute {
+            void main() {
+                LayoutSharedData a = block430.item;
+                LayoutSharedData b = block140.item;
+                block430.item = b;
+                block140.item = a;
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    hlsl_helpers = re.findall(
+        r"LayoutSharedData "
+        r"(__crossgl_load_rw_glsl_buffer_LayoutSharedData_[0-9a-f]{10})"
+        r"\(RWByteAddressBuffer buffer, uint offset\)",
+        hlsl,
+    )
+    assert len(hlsl_helpers) == 2
+    assert len(set(hlsl_helpers)) == 2
+    assert "result.weights[1] = asfloat(buffer.Load((offset + 4)));" in hlsl
+    assert "result.id = buffer.Load((offset + 8));" in hlsl
+    assert "result.weights[1] = asfloat(buffer.Load((offset + 16)));" in hlsl
+    assert "result.id = buffer.Load((offset + 32));" in hlsl
+    assert re.search(
+        r"LayoutSharedData a = "
+        r"__crossgl_load_rw_glsl_buffer_LayoutSharedData_[0-9a-f]{10}"
+        r"\(block430, 0\);",
+        hlsl,
+    )
+    assert re.search(
+        r"LayoutSharedData b = "
+        r"__crossgl_load_rw_glsl_buffer_LayoutSharedData_[0-9a-f]{10}"
+        r"\(block140, 0\);",
+        hlsl,
+    )
+    assert "block430.Store(4, asuint(__crossgl_aggregate_store_0.weights[1]));" in hlsl
+    assert "block430.Store(8, __crossgl_aggregate_store_0.id);" in hlsl
+    assert "block140.Store(16, asuint(__crossgl_aggregate_store_1.weights[1]));" in hlsl
+    assert "block140.Store(32, __crossgl_aggregate_store_1.id);" in hlsl
+    assert ("un" + "supported HLSL GLSL buffer block") not in hlsl
+
+    metal_helpers = re.findall(
+        r"LayoutSharedData "
+        r"(__crossgl_load_glsl_buffer_LayoutSharedData_[0-9a-f]{10})"
+        r"\(const device uchar\* buffer, uint offset\)",
+        metal,
+    )
+    assert len(metal_helpers) == 2
+    assert len(set(metal_helpers)) == 2
+    assert (
+        "result.weights[1] = "
+        "(*reinterpret_cast<const device float*>(buffer + (offset + 4)));" in metal
+    )
+    assert (
+        "result.id = "
+        "(*reinterpret_cast<const device uint*>(buffer + (offset + 8)));" in metal
+    )
+    assert (
+        "result.weights[1] = "
+        "(*reinterpret_cast<const device float*>(buffer + (offset + 16)));" in metal
+    )
+    assert (
+        "result.id = "
+        "(*reinterpret_cast<const device uint*>(buffer + (offset + 32)));" in metal
+    )
+    assert re.search(
+        r"LayoutSharedData a = "
+        r"__crossgl_load_glsl_buffer_LayoutSharedData_[0-9a-f]{10}"
+        r"\(block430, 0\);",
+        metal,
+    )
+    assert re.search(
+        r"LayoutSharedData b = "
+        r"__crossgl_load_glsl_buffer_LayoutSharedData_[0-9a-f]{10}"
+        r"\(block140, 0\);",
+        metal,
+    )
+    assert (
+        "(*reinterpret_cast<device float*>(block430 + 4)) = "
+        "__crossgl_aggregate_store_0.weights[1];" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>(block430 + 8)) = "
+        "__crossgl_aggregate_store_0.id;" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device float*>(block140 + 16)) = "
+        "__crossgl_aggregate_store_1.weights[1];" in metal
+    )
+    assert (
+        "(*reinterpret_cast<device uint*>(block140 + 32)) = "
+        "__crossgl_aggregate_store_1.id;" in metal
+    )
+    assert ("un" + "supported Metal GLSL buffer block") not in metal
+
+    assert "layout(std430, binding = 62) buffer LayoutStd430Block" in glsl
+    assert "layout(std140, binding = 63) buffer LayoutStd140Block" in glsl
+    assert "block430.item = b;" in glsl
+    assert "block140.item = a;" in glsl
+
+
+def test_codegen_mixed_ssbo_metal_store_parenthesizes_binary_ternary_operand():
+    crossgl = """
+    shader main {
+        struct TernaryStoreBlock {
+            bool enabled;
+            float values[];
+        };
+
+        TernaryStoreBlock ternaryStoreBlock @glsl_buffer_block(std430) @binding(54);
+
+        compute {
+            void main() {
+                uint i = 1u;
+                ternaryStoreBlock.values[i] = ternaryStoreBlock.values[i] + (ternaryStoreBlock.enabled ? 1.0 : 0.0);
+            }
+        }
+    }
+    """
+
+    shader_ast = parse_crossgl(dedent(crossgl))
+    assert shader_ast is not None
+
+    metal = MetalCodeGen().generate(shader_ast)
+
+    assert (
+        "(*reinterpret_cast<device float*>(ternaryStoreBlock + (4 + i * 4))) = "
+        "(*reinterpret_cast<const device float*>"
+        "(ternaryStoreBlock + (4 + i * 4))) + "
+        "(((*reinterpret_cast<const device uint*>(ternaryStoreBlock + 0)) != 0u) "
+        "? 1.0 : 0.0);" in metal
+    )
+    assert (
+        "+ ((*reinterpret_cast<const device uint*>(ternaryStoreBlock + 0)) != 0u) "
+        "? 1.0 : 0.0;" not in metal
+    )
+
+
 def test_codegen_mixed_ssbo_block_arrays_lower_to_byte_address_arrays():
     code = """
     #version 450 core
@@ -1269,7 +2558,6 @@ def test_codegen_mixed_ssbo_block_arrays_lower_to_byte_address_arrays():
     assert shader_ast is not None
 
     expected_hlsl = """
-    #version 450 core
     globallycoherent RWByteAddressBuffer mixedBlocks[2] : register(u72);
     // Compute Shader
     [numthreads(1, 1, 1)]
@@ -1280,7 +2568,6 @@ def test_codegen_mixed_ssbo_block_arrays_lower_to_byte_address_arrays():
     }
     """
     expected_metal = """
-    #version 450 core
     #include <metal_stdlib>
     using namespace metal;
 
@@ -1342,7 +2629,6 @@ def test_codegen_mixed_ssbo_readonly_block_arrays_lower_const_readers():
     assert shader_ast is not None
 
     expected_hlsl = """
-    #version 450 core
     ByteAddressBuffer readMixedBlocks[2] : register(t73);
     // Compute Shader
     [numthreads(1, 1, 1)]
@@ -1352,7 +2638,6 @@ def test_codegen_mixed_ssbo_readonly_block_arrays_lower_const_readers():
     }
     """
     expected_metal = """
-    #version 450 core
     #include <metal_stdlib>
     using namespace metal;
 
@@ -1408,7 +2693,6 @@ def test_codegen_mixed_ssbo_unsized_block_arrays_infer_literal_size():
     assert shader_ast is not None
 
     expected_hlsl = """
-    #version 450 core
     RWByteAddressBuffer unsizedMixed[3] : register(u74);
     // Compute Shader
     [numthreads(1, 1, 1)]
@@ -1418,7 +2702,6 @@ def test_codegen_mixed_ssbo_unsized_block_arrays_infer_literal_size():
     }
     """
     expected_metal = """
-    #version 450 core
     #include <metal_stdlib>
     using namespace metal;
 
@@ -1526,7 +2809,7 @@ def test_codegen_mixed_ssbo_helper_array_store_uses_indexed_byte_address_receive
 
     assert "RWByteAddressBuffer helperWriteBlocks[3] : register(u79);" in hlsl
     assert "uint i = helperWriteBlocks[2].Load(0);" in hlsl
-    assert "writeValue(i, float4(1.0));" in hlsl
+    assert "writeValue(i, float4(1.0, 1.0, 1.0, 1.0));" in hlsl
     assert "helperWriteBlocks[2].Store4((16 + i * 16), asuint(value));" in hlsl
 
     assert "array<device uchar*, 3> helperWriteBlocks [[buffer(79)]]" in metal
@@ -1572,7 +2855,7 @@ def test_codegen_mixed_ssbo_helper_array_compound_store_uses_indexed_receiver():
     assert "uint i = helperCompoundBlocks[1].Load(0);" in hlsl
     assert (
         "helperCompoundBlocks[1].Store2((8 + i * 8), "
-        "asuint((asfloat(helperCompoundBlocks[1].Load2((8 + i * 8))) + float2(1.0))));"
+        "asuint((asfloat(helperCompoundBlocks[1].Load2((8 + i * 8))) + float2(1.0, 1.0))));"
         in hlsl
     )
 
@@ -1890,7 +3173,7 @@ def test_codegen_mixed_ssbo_nested_helper_write_threads_metal_resource_array():
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "RWByteAddressBuffer nestedWriteBlocks[3] : register(u87);" in hlsl
-    assert "middle(i, float4(1.0));" in hlsl
+    assert "middle(i, float4(1.0, 1.0, 1.0, 1.0));" in hlsl
     assert "leaf(i, value);" in hlsl
     assert "nestedWriteBlocks[2].Store4((16 + i * 16), asuint(value));" in hlsl
 
@@ -2277,7 +3560,7 @@ def test_codegen_mixed_ssbo_unsupported_explicit_parameters_are_diagnostic():
     crossgl = """
     shader main {
         struct UnsupportedParamBlock {
-            bool flag;
+            double flag;
             float values[];
         };
 
@@ -2419,12 +3702,12 @@ def test_codegen_mixed_ssbo_unsupported_nested_fallback_keeps_expression_type():
     crossgl = """
     shader main {
         struct UnsupportedVectorBlock {
-            bool flag;
+            double flag;
             vec4 values[];
         };
 
         struct UnsupportedScalarBlock {
-            bool flag;
+            double flag;
             float values[];
         };
 
@@ -2462,12 +3745,14 @@ def test_codegen_mixed_ssbo_unsupported_nested_fallback_keeps_expression_type():
 
     assert "bool choose = true;" in hlsl
     assert (
-        "dot(float4(0) /* unsupported HLSL GLSL buffer block access block: "
-        "no target-side fallback declaration emitted */, float4(1.0))" in hlsl
+        "dot(float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block access block: "
+        "no target-side fallback declaration emitted */, "
+        "float4(1.0, 1.0, 1.0, 1.0))" in hlsl
     )
     assert (
-        "dot(float4(0) /* unsupported HLSL GLSL buffer block function call "
-        "readParam: target function omitted */, float4(1.0))" in hlsl
+        "dot(float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block function call "
+        "readParam: target function omitted */, "
+        "float4(1.0, 1.0, 1.0, 1.0))" in hlsl
     )
     assert "dot(0 /* unsupported HLSL GLSL buffer block access block" not in hlsl
     assert (
@@ -2479,13 +3764,13 @@ def test_codegen_mixed_ssbo_unsupported_nested_fallback_keeps_expression_type():
         "no target-side fallback declaration emitted */;" in hlsl
     )
     assert (
-        "float4 viaVectorAdd = (float4(0) /* unsupported HLSL GLSL buffer block "
+        "float4 viaVectorAdd = (float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "access block: no target-side fallback declaration emitted */ + 0 "
         "/* unsupported HLSL GLSL buffer block access scalarBlock: no target-side "
         "fallback declaration emitted */);" in hlsl
     )
     assert (
-        "float4 viaFunctionAdd = (float4(0) /* unsupported HLSL GLSL buffer block "
+        "float4 viaFunctionAdd = (float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "function call readParam: target function omitted */ + 0 "
         "/* unsupported HLSL GLSL buffer block access scalarBlock: no target-side "
         "fallback declaration emitted */);" in hlsl
@@ -2495,12 +3780,12 @@ def test_codegen_mixed_ssbo_unsupported_nested_fallback_keeps_expression_type():
         "scalarBlock: no target-side fallback declaration emitted */ + 1.0);" in hlsl
     )
     assert (
-        "float4 viaTernaryAccess = (choose ? float4(0) /* unsupported HLSL "
+        "float4 viaTernaryAccess = (choose ? float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL "
         "GLSL buffer block access block: no target-side fallback declaration "
-        "emitted */ : float4(1.0));" in hlsl
+        "emitted */ : float4(1.0, 1.0, 1.0, 1.0));" in hlsl
     )
     assert (
-        "float4 viaTernaryCall = (choose ? float4(1.0) : float4(0) "
+        "float4 viaTernaryCall = (choose ? float4(1.0, 1.0, 1.0, 1.0) : float4(0.0, 0.0, 0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readParam: "
         "target function omitted */);" in hlsl
     )
@@ -2594,7 +3879,7 @@ def test_codegen_mixed_ssbo_unsupported_bool_conditions_are_boolean_diagnostics(
     crossgl = """
     shader main {
         struct UnsupportedBoolBlock {
-            bool flag;
+            double flag;
             bool flags[];
         };
 
@@ -2684,13 +3969,13 @@ def test_codegen_mixed_ssbo_unsupported_integer_bounds_are_typed_diagnostics():
     crossgl = """
     shader main {
         struct UnsupportedIndexBlock {
-            bool flag;
+            double flag;
             uint count;
             uint indices[];
         };
 
         struct UnsupportedSignedIndexBlock {
-            bool flag;
+            double flag;
             int limit;
             int offsets[];
         };
@@ -2842,7 +4127,7 @@ def test_codegen_mixed_ssbo_unsupported_resource_indices_are_typed_diagnostics()
         };
 
         struct UnsupportedResourceIndexBlock {
-            bool flag;
+            double flag;
             int layer;
             uint uLayer;
             int x;
@@ -2987,7 +4272,7 @@ def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types():
         };
 
         struct UnsupportedArrayArgBlock {
-            bool flag;
+            double flag;
             int layer;
             vec2 uv;
             ivec2 pixel;
@@ -3058,20 +4343,20 @@ def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types():
     assert (
         "float4 sampledDirect = sampleArray(textures, samplers, 0 /* unsupported "
         "HLSL GLSL buffer block access arrayBlock: no target-side fallback "
-        "declaration emitted */, float2(0) /* unsupported HLSL GLSL buffer "
+        "declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer "
         "block access arrayBlock: no target-side fallback declaration emitted */);"
         in hlsl
     )
     assert (
         "float4 sampledCall = sampleArray(textures, samplers, 0 /* unsupported "
         "HLSL GLSL buffer block function call readLayer: target function "
-        "omitted */, float2(0) /* unsupported HLSL GLSL buffer block function "
+        "omitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block function "
         "call readUv: target function omitted */);" in hlsl
     )
     assert (
         "uint incrementedDirect = incrementArray(counters, 0 /* unsupported "
         "HLSL GLSL buffer block access arrayBlock: no target-side fallback "
-        "declaration emitted */, int2(0) /* unsupported HLSL GLSL buffer block "
+        "declaration emitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block "
         "access arrayBlock: no target-side fallback declaration emitted */, 0u "
         "/* unsupported HLSL GLSL buffer block access arrayBlock: no target-side "
         "fallback declaration emitted */);" in hlsl
@@ -3079,7 +4364,7 @@ def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types():
     assert (
         "uint incrementedCall = incrementArray(counters, 0 /* unsupported "
         "HLSL GLSL buffer block function call readLayer: target function "
-        "omitted */, int2(0) /* unsupported HLSL GLSL buffer block function "
+        "omitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block function "
         "call readPixel: target function omitted */, 0u /* unsupported HLSL "
         "GLSL buffer block function call readAmount: target function omitted */);"
         in hlsl
@@ -3164,12 +4449,12 @@ def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types():
         "readUv(arrayBlock));" in glsl
     )
     assert (
-        "uint incrementedDirect = incrementArray(counters, arrayBlock.layer, "
-        "arrayBlock.pixel, arrayBlock.amount);" in glsl
+        "uint incrementedDirect = incrementArray__glsl_images_counters("
+        "arrayBlock.layer, arrayBlock.pixel, arrayBlock.amount);" in glsl
     )
     assert (
-        "uint incrementedCall = incrementArray(counters, readLayer(arrayBlock), "
-        "readPixel(arrayBlock), readAmount(arrayBlock));" in glsl
+        "uint incrementedCall = incrementArray__glsl_images_counters("
+        "readLayer(arrayBlock), readPixel(arrayBlock), readAmount(arrayBlock));" in glsl
     )
     assert "sampler sams" not in glsl
     assert "samplers" not in glsl
@@ -3187,7 +4472,7 @@ def test_codegen_mixed_ssbo_shadow_resource_array_helpers_infer_fallback_arg_typ
         };
 
         struct UnsupportedShadowArrayBlock {
-            bool flag;
+            double flag;
             int layer;
             vec2 uv;
             vec4 cubeLayer;
@@ -3258,7 +4543,7 @@ def test_codegen_mixed_ssbo_shadow_resource_array_helpers_infer_fallback_arg_typ
     assert (
         "float direct = shadowLayer(shadowMaps, shadowSamplers, 0 /* unsupported "
         "HLSL GLSL buffer block access shadowBlock: no target-side fallback "
-        "declaration emitted */, float2(0) /* unsupported HLSL GLSL buffer block "
+        "declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "access shadowBlock: no target-side fallback declaration emitted */, 0 "
         "/* unsupported HLSL GLSL buffer block access shadowBlock: no target-side "
         "fallback declaration emitted */);" in hlsl
@@ -3266,14 +4551,14 @@ def test_codegen_mixed_ssbo_shadow_resource_array_helpers_infer_fallback_arg_typ
     assert (
         "float call = shadowLayer(shadowMaps, shadowSamplers, 0 /* unsupported "
         "HLSL GLSL buffer block function call readLayer: target function omitted */, "
-        "float2(0) /* unsupported HLSL GLSL buffer block function call readUv: "
+        "float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block function call readUv: "
         "target function omitted */, 0 /* unsupported HLSL GLSL buffer block "
         "function call readDepth: target function omitted */);" in hlsl
     )
     assert (
         "float4 cubeDirect = cubeGatherLayer(cubeShadowArrays, shadowSamplers, 0 "
         "/* unsupported HLSL GLSL buffer block access shadowBlock: no target-side "
-        "fallback declaration emitted */, float4(0) /* unsupported HLSL GLSL "
+        "fallback declaration emitted */, float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL "
         "buffer block access shadowBlock: no target-side fallback declaration "
         "emitted */, 0 /* unsupported HLSL GLSL buffer block access shadowBlock: "
         "no target-side fallback declaration emitted */);" in hlsl
@@ -3281,7 +4566,7 @@ def test_codegen_mixed_ssbo_shadow_resource_array_helpers_infer_fallback_arg_typ
     assert (
         "float4 cubeCall = cubeGatherLayer(cubeShadowArrays, shadowSamplers, 0 "
         "/* unsupported HLSL GLSL buffer block function call readLayer: target "
-        "function omitted */, float4(0) /* unsupported HLSL GLSL buffer block "
+        "function omitted */, float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "function call readCubeLayer: target function omitted */, 0 /* unsupported "
         "HLSL GLSL buffer block function call readDepth: target function omitted */);"
         in hlsl
@@ -3390,6 +4675,118 @@ def test_codegen_mixed_ssbo_shadow_resource_array_helpers_infer_fallback_arg_typ
     assert "textureGatherCompare(" not in glsl
 
 
+def test_codegen_native_shadow_gather_imports_compare_helpers():
+    code = """
+    #version 460 core
+    layout(binding = 0) uniform sampler2DShadow shadowMaps[2];
+    layout(binding = 2) uniform sampler2DArrayShadow shadowArrays[2];
+    layout(location = 0) out vec4 fragColor;
+
+    vec4 gatherLayer(sampler2DShadow maps[2], sampler2DArrayShadow arrays[2], int layer, vec2 uv, vec3 uvLayer, float depth, ivec2 offset) {
+        vec4 planar = textureGather(maps[layer], uv, depth);
+        vec4 planarOffset = textureGatherOffset(maps[0], uv, depth, offset);
+        vec4 layered = textureGather(arrays[layer], uvLayer, depth);
+        vec4 layeredOffset = textureGatherOffset(arrays[0], uvLayer, depth, offset);
+        return planar + planarOffset + layered + layeredOffset;
+    }
+
+    void main() {
+        fragColor = gatherLayer(
+            shadowMaps,
+            shadowArrays,
+            1,
+            vec2(0.5),
+            vec3(0.5, 0.5, 1.0),
+            0.25,
+            ivec2(1, -1)
+        );
+    }
+    """
+
+    output = generate_crossgl(code, "fragment")
+
+    assert "vec4 planar = textureGatherCompare(maps[layer], uv, depth);" in output
+    assert (
+        "vec4 planarOffset = textureGatherCompareOffset(maps[0], uv, depth, "
+        "offset);" in output
+    )
+    assert (
+        "vec4 layered = textureGatherCompare(arrays[layer], uvLayer, depth);" in output
+    )
+    assert (
+        "vec4 layeredOffset = textureGatherCompareOffset(arrays[0], uvLayer, "
+        "depth, offset);" in output
+    )
+    assert "textureGather(maps[layer], uv, depth)" not in output
+    assert "textureGatherOffset(maps[0], uv, depth, offset)" not in output
+
+    shader_ast = parse_crossgl(output)
+    regenerated_glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "layout(binding = 0) uniform sampler2DShadow shadowMaps[2];" in (
+        regenerated_glsl
+    )
+    assert "layout(binding = 2) uniform sampler2DArrayShadow shadowArrays[2];" in (
+        regenerated_glsl
+    )
+    assert "textureGather(maps[layer], uv, depth)" in regenerated_glsl
+    assert "textureGatherOffset(maps[0], uv, depth, offset)" in regenerated_glsl
+    assert "textureGather(arrays[layer], uvLayer, depth)" in regenerated_glsl
+    assert "textureGatherOffset(arrays[0], uvLayer, depth, offset)" in (
+        regenerated_glsl
+    )
+    assert "textureGatherCompare" not in regenerated_glsl
+
+
+def test_codegen_native_shadow_gather_offsets_imports_compare_helper():
+    code = """
+    #version 460 core
+    layout(binding = 0) uniform sampler2DShadow shadowMaps[2];
+    layout(binding = 2) uniform sampler2DArrayShadow shadowArrays[2];
+    layout(location = 0) out vec4 fragColor;
+
+    vec4 gatherOffsets(sampler2DShadow maps[2], sampler2DArrayShadow arrays[2], int layer, vec2 uv, vec3 uvLayer, float depth, ivec2 offsets[4]) {
+        vec4 planar = textureGatherOffsets(maps[layer], uv, depth, offsets);
+        vec4 layered = textureGatherOffsets(arrays[layer], uvLayer, depth, offsets);
+        return planar + layered;
+    }
+
+    void main() {
+        fragColor = vec4(0.0);
+    }
+    """
+
+    output = generate_crossgl(code, "fragment")
+
+    assert (
+        "vec4 planar = textureGatherCompareOffsets(maps[layer], uv, depth, "
+        "offsets);" in output
+    )
+    assert (
+        "vec4 layered = textureGatherCompareOffsets(arrays[layer], uvLayer, "
+        "depth, offsets);" in output
+    )
+    assert "textureGatherOffsets(maps[layer], uv, depth, offsets)" not in output
+
+    shader_ast = parse_crossgl(output)
+    regenerated_glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "textureGatherCompareOffsets" not in regenerated_glsl
+    assert "textureGatherOffsets(" not in regenerated_glsl
+    assert "textureGatherOffset(maps[layer], uv, depth, offsets[0]).x" in (
+        regenerated_glsl
+    )
+    assert "textureGatherOffset(maps[layer], uv, depth, offsets[3]).w" in (
+        regenerated_glsl
+    )
+    assert "textureGatherOffset(arrays[layer], uvLayer, depth, offsets[0]).x" in (
+        regenerated_glsl
+    )
+    assert "textureGatherOffset(arrays[layer], uvLayer, depth, offsets[3]).w" in (
+        regenerated_glsl
+    )
+
+
 def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types():
     crossgl = """
     shader MultisampleArrayFallbacks {
@@ -3401,7 +4798,7 @@ def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types
         };
 
         struct UnsupportedMultisampleBlock {
-            bool flag;
+            double flag;
             int layer;
             ivec2 pixel;
             ivec3 pixelLayer;
@@ -3470,9 +4867,9 @@ def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types
     assert (
         "float4 direct = fetchSamples(msTextures, msArrays, 0 /* unsupported "
         "HLSL GLSL buffer block access msBlock: no target-side fallback "
-        "declaration emitted */, int2(0) /* unsupported HLSL GLSL buffer block "
+        "declaration emitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block "
         "access msBlock: no target-side fallback declaration emitted */, "
-        "int3(0) /* unsupported HLSL GLSL buffer block access msBlock: "
+        "int3(0, 0, 0) /* unsupported HLSL GLSL buffer block access msBlock: "
         "no target-side fallback declaration emitted */, 0 /* unsupported HLSL "
         "GLSL buffer block access msBlock: no target-side fallback declaration "
         "emitted */);" in hlsl
@@ -3480,8 +4877,8 @@ def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types
     assert (
         "float4 call = fetchSamples(msTextures, msArrays, 0 /* unsupported HLSL "
         "GLSL buffer block function call readLayer: target function omitted */, "
-        "int2(0) /* unsupported HLSL GLSL buffer block function call readPixel: "
-        "target function omitted */, int3(0) /* unsupported HLSL GLSL buffer "
+        "int2(0, 0) /* unsupported HLSL GLSL buffer block function call readPixel: "
+        "target function omitted */, int3(0, 0, 0) /* unsupported HLSL GLSL buffer "
         "block function call readPixelLayer: target function omitted */, 0 "
         "/* unsupported HLSL GLSL buffer block function call readSample: target "
         "function omitted */);" in hlsl
@@ -3489,7 +4886,7 @@ def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types
     assert (
         "float4 inlineFetch = msTextures[0 /* unsupported HLSL GLSL buffer block "
         "access msBlock: no target-side fallback declaration emitted */].Load("
-        "int2(0) /* unsupported HLSL GLSL buffer block access msBlock: "
+        "int2(0, 0) /* unsupported HLSL GLSL buffer block access msBlock: "
         "no target-side fallback declaration emitted */, 0 /* unsupported HLSL "
         "GLSL buffer block access msBlock: no target-side fallback declaration "
         "emitted */);" in hlsl
@@ -3500,8 +4897,10 @@ def test_codegen_mixed_ssbo_multisample_resource_arrays_infer_fallback_arg_types
         in hlsl
     )
     assert ".Load(0 /* unsupported HLSL GLSL buffer block" not in hlsl
-    assert ".Load(int2(0) /* unsupported HLSL GLSL buffer block access msBlock" in hlsl
-    assert ".Load(int3(0) /* unsupported HLSL GLSL buffer block" not in hlsl
+    assert (
+        ".Load(int2(0, 0) /* unsupported HLSL GLSL buffer block access msBlock" in hlsl
+    )
+    assert ".Load(int3(0, 0, 0) /* unsupported HLSL GLSL buffer block" not in hlsl
     assert "msBlock.layer" not in hlsl
     assert "msBlock.pixel" not in hlsl
     assert "msBlock.pixelLayer" not in hlsl
@@ -3604,7 +5003,7 @@ def test_codegen_mixed_ssbo_multisample_diagnostics_preserve_fallback_arg_types(
         };
 
         struct UnsupportedMultisampleDiagnosticBlock {
-            bool flag;
+            double flag;
             vec2 uv;
             vec3 uvLayer;
             vec2 ddx;
@@ -3713,19 +5112,19 @@ def test_codegen_mixed_ssbo_multisample_diagnostics_preserve_fallback_arg_types(
     )
     assert (
         "unsupported DirectX multisample texture call: texture on "
-        "Texture2DMS<float4> */ float4(0.0)" in hlsl
+        "Texture2DMS<float4> */ float4(0.0, 0.0, 0.0, 0.0)" in hlsl
     )
     assert (
         "unsupported DirectX multisample texture call: textureGrad on "
-        "Texture2DMS<float4> */ float4(0.0)" in hlsl
+        "Texture2DMS<float4> */ float4(0.0, 0.0, 0.0, 0.0)" in hlsl
     )
     assert (
         "unsupported DirectX multisample texture query: textureQueryLod on "
-        "Texture2DMS<float4> */ float2(0.0)" in hlsl
+        "Texture2DMS<float4> */ float2(0.0, 0.0)" in hlsl
     )
     assert (
         "unsupported DirectX multisample texture query: textureQueryLod on "
-        "Texture2DMSArray<float4> */ float2(0.0)" in hlsl
+        "Texture2DMSArray<float4> */ float2(0.0, 0.0)" in hlsl
     )
     assert (
         "unsupported DirectX multisample texture comparison: textureCompare on "
@@ -3733,7 +5132,8 @@ def test_codegen_mixed_ssbo_multisample_diagnostics_preserve_fallback_arg_types(
     )
     assert (
         "unsupported DirectX multisample texture gather comparison: "
-        "textureGatherCompare on Texture2DMSArray<float4> */ float4(0.0)" in hlsl
+        "textureGatherCompare on Texture2DMSArray<float4> */ "
+        "float4(0.0, 0.0, 0.0, 0.0)" in hlsl
     )
     assert (
         hlsl.count(
@@ -3742,27 +5142,27 @@ def test_codegen_mixed_ssbo_multisample_diagnostics_preserve_fallback_arg_types(
         == 3
     )
     assert (
-        "float4 direct2D = invalid2D(msTex, float2(0) /* unsupported HLSL "
+        "float4 direct2D = invalid2D(msTex, float2(0.0, 0.0) /* unsupported HLSL "
         "GLSL buffer block access msDiag" in hlsl
     )
     assert (
-        "float4 call2D = invalid2D(msTex, float2(0) /* unsupported HLSL GLSL "
+        "float4 call2D = invalid2D(msTex, float2(0.0, 0.0) /* unsupported HLSL GLSL "
         "buffer block function call readUv" in hlsl
     )
     assert (
-        "float4 directArray = invalidArray(msArray, float3(0) /* unsupported "
+        "float4 directArray = invalidArray(msArray, float3(0.0, 0.0, 0.0) /* unsupported "
         "HLSL GLSL buffer block access msDiag" in hlsl
     )
     assert (
-        "float4 callArray = invalidArray(msArray, float3(0) /* unsupported "
+        "float4 callArray = invalidArray(msArray, float3(0.0, 0.0, 0.0) /* unsupported "
         "HLSL GLSL buffer block function call readUvLayer" in hlsl
     )
     assert (
-        "int3(0) /* unsupported HLSL GLSL buffer block function call "
+        "int3(0, 0, 0) /* unsupported HLSL GLSL buffer block function call "
         "readPixelLayer: target function omitted */" in hlsl
     )
     assert (
-        "float compareValue = invalidCompare(msTex, linearSampler, float2(0) "
+        "float compareValue = invalidCompare(msTex, linearSampler, float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access msDiag" in hlsl
     )
     assert "texture(msTex," not in hlsl
@@ -3914,7 +5314,7 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
         };
 
         struct UnsupportedMsImageBlock {
-            bool flag;
+            double flag;
             ivec2 pixel;
             ivec3 pixelLayer;
             int sampleIndex;
@@ -4021,14 +5421,15 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
     )
     assert (
         "float4 direct = touchImages(msColor, msLayers, counters, signedLayers, "
-        "int2(0) /* unsupported HLSL GLSL buffer block access msImageBlock" in hlsl
+        "int2(0, 0) /* unsupported HLSL GLSL buffer block access msImageBlock" in hlsl
     )
     assert (
         "float4 call = touchImages(msColor, msLayers, counters, signedLayers, "
-        "int2(0) /* unsupported HLSL GLSL buffer block function call readPixel" in hlsl
+        "int2(0, 0) /* unsupported HLSL GLSL buffer block function call readPixel"
+        in hlsl
     )
     assert (
-        "float4 inlineColor = msColor.Load(int2(0) /* unsupported HLSL GLSL "
+        "float4 inlineColor = msColor.Load(int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block access msImageBlock: no target-side fallback "
         "declaration emitted */, 0 /* unsupported HLSL GLSL buffer block "
         "access msImageBlock: no target-side fallback declaration emitted */);" in hlsl
@@ -4038,7 +5439,7 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
         "RWTexture2DMS<uint>" in hlsl
     )
     assert (
-        "float4(0) /* unsupported HLSL GLSL buffer block function call readColor"
+        "float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block function call readColor"
         in hlsl
     )
     assert "0u /* unsupported HLSL GLSL buffer block function call readCount" in hlsl
@@ -4172,16 +5573,17 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
         "textureSamples(signedImage));" in glsl
     )
     assert (
-        "vec4 direct = touchImages(msColor, msLayers, counters, signedLayers, "
-        "msImageBlock.pixel, msImageBlock.pixelLayer, "
-        "msImageBlock.sampleIndex, msImageBlock.color, msImageBlock.count, "
-        "msImageBlock.signedValue);" in glsl
+        "vec4 direct = touchImages__glsl_colorImage_msColor_layerImage_msLayers_"
+        "countImage_counters_signedImage_signedLayers(msImageBlock.pixel, "
+        "msImageBlock.pixelLayer, msImageBlock.sampleIndex, msImageBlock.color, "
+        "msImageBlock.count, msImageBlock.signedValue);" in glsl
     )
     assert (
-        "vec4 call = touchImages(msColor, msLayers, counters, signedLayers, "
-        "readPixel(msImageBlock), readPixelLayer(msImageBlock), "
-        "readSample(msImageBlock), readColor(msImageBlock), "
-        "readCount(msImageBlock), readSigned(msImageBlock));" in glsl
+        "vec4 call = touchImages__glsl_colorImage_msColor_layerImage_msLayers_"
+        "countImage_counters_signedImage_signedLayers(readPixel(msImageBlock), "
+        "readPixelLayer(msImageBlock), readSample(msImageBlock), "
+        "readColor(msImageBlock), readCount(msImageBlock), "
+        "readSigned(msImageBlock));" in glsl
     )
     assert (
         "vec4 inlineColor = imageLoad(msColor, msImageBlock.pixel, msImageBlock.sampleIndex);"
@@ -4605,8 +6007,8 @@ def test_codegen_for_in_do_while_image_query_arrays_infer_size():
     assert "ivec2 mid(image2DMS images[4], int mode, int limit)" in glsl
     assert "for (int i = 0; i < 1; ++i)" in glsl
     assert "for (int j = 0; j < limit; ++j)" in glsl
-    assert glsl.count("do {") == 2
-    assert glsl.count("} while (false);") == 2
+    assert glsl.count("do {") == 4
+    assert glsl.count("} while (false);") == 4
     assert "imageSize(images[3])" in glsl
     assert "ivec2(textureSamples(images[1]))" in glsl
     assert "imageSize(afterImage)" in glsl
@@ -4769,7 +6171,7 @@ def test_codegen_cast_and_literal_swizzle_image_indices_infer_size():
     assert "vec2 readLayer(image2D images[4], ivec2 pixel)" in glsl
     assert "imageLoad(images[int((BASE + 2))], pixel).xy" in glsl
     assert "imageLoad(images[ivec2(1, 3).y], pixel).xy" in glsl
-    assert "readLayer(rgFloatImages, ivec2(0, 1))" in glsl
+    assert "readLayer__glsl_images_rgFloatImages(ivec2(0, 1))" in glsl
     assert "image2D rgFloatImages[]" not in glsl
     assert "image2D rgFloatImages[5]" not in glsl
 
@@ -7353,7 +8755,7 @@ def test_codegen_ternary_image_indices_in_function_args_infer_size():
         "combine(imageLoad(images[(choose ? 3 : 1)], pixel).xy, "
         "imageLoad(images[1], pixel).xy)" in glsl
     )
-    assert "readLayer(rgFloatImages, ivec2(0, 1), true)" in glsl
+    assert "readLayer__glsl_images_rgFloatImages(ivec2(0, 1), true)" in glsl
     assert "image2D rgFloatImages[2]" not in glsl
     assert "image2D rgFloatImages[5]" not in glsl
 
@@ -10322,7 +11724,7 @@ def test_codegen_loop_forms_image_shadowed_const_restores_after_loop():
     assert "array<texture2d<float, access::read_write>, 5> rgFloatImages" not in metal
 
     assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
-    assert glsl.count("int COUNT = 0;") == 3
+    assert glsl.count("int COUNT = 0;") == 6
     assert glsl.count("imageLoad(images[COUNT], pixel).xy") == 3
     assert "do {" in glsl
     assert "} while (false);" in glsl
@@ -10953,8 +12355,8 @@ def test_codegen_for_in_do_while_transitive_image_arrays_infer_size():
     assert "vec2 mid(image2D images[4], ivec2 pixel, int mode, int limit)" in glsl
     assert "for (int i = 0; i < 1; ++i)" in glsl
     assert "for (int j = 0; j < limit; ++j)" in glsl
-    assert glsl.count("do {") == 2
-    assert glsl.count("} while (false);") == 2
+    assert glsl.count("do {") == 4
+    assert glsl.count("} while (false);") == 4
     assert "imageLoad(images[3], pixel).xy" in glsl
     assert "imageLoad(images[1], pixel).xy" in glsl
     assert "result = leaf(images, pixel, limit);" in glsl
@@ -11259,7 +12661,7 @@ def test_codegen_do_while_transitive_shadowed_image_const_restores_after_loop():
     assert "vec2 mid(image2D images[4], ivec2 pixel)" in glsl
     assert "do {" in glsl
     assert "} while (false);" in glsl
-    assert glsl.count("int COUNT = 0;") == 1
+    assert glsl.count("int COUNT = 0;") == 2
     assert "imageLoad(images[COUNT], pixel).xy" in glsl
     assert "return leaf(images, pixel);" in glsl
     assert "DoWhileNode(" not in glsl
@@ -11658,7 +13060,7 @@ def test_codegen_switch_match_shadowed_transitive_image_arrays_infer_size():
     assert "layout(rg32f, binding = 4) uniform image2D afterImage;" in glsl
     assert "vec2 leaf(image2D images[4], ivec2 pixel)" in glsl
     assert "vec2 mid(image2D images[4], ivec2 pixel, int mode)" in glsl
-    assert glsl.count("int COUNT = 0;") == 2
+    assert glsl.count("int COUNT = 0;") == 4
     assert glsl.count("imageLoad(images[COUNT], pixel).xy") == 3
     assert glsl.count("leaf(images, pixel)") == 2
     assert "image2D rgFloatImages[]" not in glsl
@@ -12180,7 +13582,7 @@ def test_codegen_switch_match_fixed_image_arrays_shadowed_case_const_stays_dynam
 
     assert "layout(rg32f, binding = 0) uniform image2D rgFloatImages[4];" in glsl
     assert "vec2 imageCases(image2D images[4], ivec2 pixel, int mode)" in glsl
-    assert glsl.count("int COUNT = 0;") == 2
+    assert glsl.count("int COUNT = 0;") == 4
     assert "imageLoad(images[COUNT], pixel).xy" in glsl
     assert "image2D rgFloatImages[5]" not in glsl
 
@@ -12591,7 +13993,7 @@ def test_codegen_mixed_ssbo_multisample_integer_image_values_pack_fallbacks():
         };
 
         struct UnsupportedMsIntBlock {
-            bool flag;
+            double flag;
             ivec2 pixel;
             ivec3 pixelLayer;
             int sampleIndex;
@@ -12657,25 +14059,25 @@ def test_codegen_mixed_ssbo_multisample_integer_image_values_pack_fallbacks():
     assert "Texture2DMS<int4> signedImage : register(t0);" in hlsl
     assert "Texture2DMSArray<uint4> unsignedLayers : register(t1);" in hlsl
     assert (
-        "int4 signedDirect = signedImage.Load(int2(0) /* unsupported HLSL GLSL "
+        "int4 signedDirect = signedImage.Load(int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block access intBlock: no target-side fallback declaration "
         "emitted */, 0 /* unsupported HLSL GLSL buffer block access intBlock: "
         "no target-side fallback declaration emitted */);" in hlsl
     )
     assert (
-        "uint4 unsignedCall = unsignedLayers.Load(int3(0) /* unsupported HLSL "
+        "uint4 unsignedCall = unsignedLayers.Load(int3(0, 0, 0) /* unsupported HLSL "
         "GLSL buffer block function call readPixelLayer: target function "
         "omitted */, 0 /* unsupported HLSL GLSL buffer block function call "
         "readSample: target function omitted */);" in hlsl
     )
     assert (
-        "int signedScalar = signedImage.Load(int2(0) /* unsupported HLSL GLSL "
+        "int signedScalar = signedImage.Load(int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block function call readPixel: target function omitted */, 0 "
         "/* unsupported HLSL GLSL buffer block function call readSample: target "
         "function omitted */).x;" in hlsl
     )
     assert (
-        "uint unsignedScalar = unsignedLayers.Load(int3(0) /* unsupported HLSL GLSL "
+        "uint unsignedScalar = unsignedLayers.Load(int3(0, 0, 0) /* unsupported HLSL GLSL "
         "buffer block access intBlock: no target-side fallback declaration "
         "emitted */, 0 /* unsupported HLSL GLSL buffer block access intBlock: "
         "no target-side fallback declaration emitted */).x;" in hlsl
@@ -12822,7 +14224,7 @@ def test_codegen_mixed_ssbo_multisample_image_atomics_use_sample_fallbacks():
         };
 
         struct UnsupportedMsAtomicBlock {
-            bool flag;
+            double flag;
             ivec2 pixel;
             ivec3 pixelLayer;
             int sampleIndex;
@@ -13315,11 +14717,11 @@ def test_codegen_allows_explicit_image_atomic_result_casts():
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert (
-        "float scalarCast = float(imageAtomicAdd_uimage2D(counters, int2(0), 1u));"
+        "float scalarCast = float(imageAtomicAdd_uimage2D(counters, int2(0, 0), 1u));"
         in hlsl
     )
     assert (
-        "target[int2(0)] = float(imageAtomicAdd_uimage2D(counters, int2(1), 2u));"
+        "target[int2(0, 0)] = float(imageAtomicAdd_uimage2D(counters, int2(1, 1), 2u));"
         in hlsl
     )
 
@@ -13340,9 +14742,10 @@ def test_codegen_allows_explicit_image_atomic_result_casts():
 
 
 @pytest.mark.parametrize(
-    "crossgl",
+    "crossgl, expected_error",
     [
-        """
+        pytest.param(
+            """
         shader HiddenAtomicBinaryFloatResult {
             uimage2D counters @r32ui;
             struct VSOutput { vec2 uv; };
@@ -13354,7 +14757,11 @@ def test_codegen_allows_explicit_image_atomic_result_casts():
             }
         }
         """,
-        """
+            "requires uint result context for r32ui images: expected float",
+            id="binary",
+        ),
+        pytest.param(
+            """
         shader HiddenAtomicTernaryFloatResult {
             uimage2D counters @r32ui;
             struct VSOutput { vec2 uv; };
@@ -13368,7 +14775,11 @@ def test_codegen_allows_explicit_image_atomic_result_casts():
             }
         }
         """,
-        """
+            "requires uint result context for r32ui images: expected float",
+            id="ternary",
+        ),
+        pytest.param(
+            """
         shader HiddenAtomicImageStoreFloatResult {
             uimage2D counters @r32ui;
             image2D target @r32f;
@@ -13385,17 +14796,20 @@ def test_codegen_allows_explicit_image_atomic_result_casts():
             }
         }
         """,
+            (
+                "requires uint result context for r32ui images: expected float|"
+                "requires float value for r32f images"
+            ),
+            id="image-store",
+        ),
     ],
 )
-def test_codegen_rejects_hidden_image_atomic_result_contexts(crossgl):
+def test_codegen_rejects_hidden_image_atomic_result_contexts(crossgl, expected_error):
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
     for generator in (HLSLCodeGen(), MetalCodeGen(), GLSLCodeGen()):
-        with pytest.raises(
-            ValueError,
-            match="requires uint result context for r32ui images: expected float",
-        ):
+        with pytest.raises(ValueError, match=expected_error):
             generator.generate(shader_ast)
 
 
@@ -13424,9 +14838,9 @@ def test_codegen_allows_explicit_image_load_result_casts():
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
-    assert "float floatCast = float(counters[int2(0)]);" in hlsl
-    assert "uint uintCast = uint(values[int2(1)]);" in hlsl
-    assert "target[int2(0)] = float(counters[int2(2)]);" in hlsl
+    assert "float floatCast = float(counters[int2(0, 0)]);" in hlsl
+    assert "uint uintCast = uint(values[int2(1, 1)]);" in hlsl
+    assert "target[int2(0, 0)] = float(counters[int2(2, 2)]);" in hlsl
 
     assert "float floatCast = float(counters.read(uint2(int2(0))).x);" in metal
     assert "uint uintCast = uint(values.read(uint2(int2(1))).x);" in metal
@@ -13537,11 +14951,11 @@ def test_codegen_allows_matching_image_load_result_contexts():
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
-    assert "float scalarFromRg = rgFloat[int2(0)].x;" in hlsl
-    assert "float2 rgExact = rgFloat[int2(1)];" in hlsl
-    assert "float4 rgbaExact = rgbaFloat[int2(2)];" in hlsl
-    assert "float2 explicitScalarCast = float2(scalarFloat[int2(3)]);" in hlsl
-    assert "uint2 unsignedExact = rgUnsigned[int2(4)];" in hlsl
+    assert "float scalarFromRg = rgFloat[int2(0, 0)].x;" in hlsl
+    assert "float2 rgExact = rgFloat[int2(1, 1)];" in hlsl
+    assert "float4 rgbaExact = rgbaFloat[int2(2, 2)];" in hlsl
+    assert "float2 explicitScalarCast = ((float2)(scalarFloat[int2(3, 3)]));" in hlsl
+    assert "uint2 unsignedExact = rgUnsigned[int2(4, 4)];" in hlsl
 
     assert "float scalarFromRg = rgFloat.read(uint2(int2(0))).x;" in metal
     assert "float2 rgExact = rgFloat.read(uint2(int2(1))).xy;" in metal
@@ -13664,14 +15078,14 @@ def test_codegen_allows_matching_multicomponent_image_store_values():
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
-    assert "unsignedTarget[int2(0)] = uint2(1u, 0u);" in hlsl
-    assert "unsignedTarget[int2(1)] = uint2(2u);" in hlsl
-    assert "floatTarget[int2(2)] = float2(1.0, 0.0);" in hlsl
-    assert "floatTarget[int2(3)] = float2(2.0);" in hlsl
-    assert "floatTarget[int2(4)] = source[int2(5)];" in hlsl
-    assert "rgbaTarget[int2(6)] = float4(3.0);" in hlsl
-    assert "rgbaTarget[int2(7)] = float4(4.0);" in hlsl
-    assert "floatTarget[int2(8)] = float2(5.0);" in hlsl
+    assert "unsignedTarget[int2(0, 0)] = uint2(1u, 0u);" in hlsl
+    assert "unsignedTarget[int2(1, 1)] = uint2(2u, 2u);" in hlsl
+    assert "floatTarget[int2(2, 2)] = float2(1.0, 0.0);" in hlsl
+    assert "floatTarget[int2(3, 3)] = float2(2.0, 2.0);" in hlsl
+    assert "floatTarget[int2(4, 4)] = source[int2(5, 5)];" in hlsl
+    assert "rgbaTarget[int2(6, 6)] = float4(3.0, 3.0, 3.0, 3.0);" in hlsl
+    assert "rgbaTarget[int2(7, 7)] = float4(4.0, 4.0, 4.0, 4.0);" in hlsl
+    assert "floatTarget[int2(8, 8)] = float2(5.0, 5.0);" in hlsl
 
     assert "unsignedTarget.write(uint4(1u, 0u, 0u, 0u), uint2(int2(0)));" in metal
     assert "unsignedTarget.write(uint4(uint2(2u), 0u, 0u), uint2(int2(1)));" in metal
@@ -14015,7 +15429,7 @@ def test_codegen_mixed_ssbo_unsupported_sampling_vectors_are_typed_diagnostics()
         };
 
         struct UnsupportedSamplerCoordBlock {
-            bool flag;
+            double flag;
             vec2 uv;
             vec2 dx;
             vec2 dy;
@@ -14056,48 +15470,48 @@ def test_codegen_mixed_ssbo_unsupported_sampling_vectors_are_typed_diagnostics()
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert (
-        "float4 lodDirect = textures[0].SampleLevel(samplers[0], float2(0) "
+        "float4 lodDirect = textures[0].SampleLevel(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access coordBlock: no target-side "
         "fallback declaration emitted */, 2.0);" in hlsl
     )
     assert (
-        "float4 lodCall = textures[0].SampleLevel(samplers[0], float2(0) "
+        "float4 lodCall = textures[0].SampleLevel(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
         "function omitted */, 2.0);" in hlsl
     )
     assert (
-        "float4 gradDirect = textures[0].SampleGrad(samplers[0], float2(0) "
+        "float4 gradDirect = textures[0].SampleGrad(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access coordBlock: no target-side "
-        "fallback declaration emitted */, float2(0) /* unsupported HLSL GLSL "
+        "fallback declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL "
         "buffer block access coordBlock: no target-side fallback declaration "
-        "emitted */, float2(0) /* unsupported HLSL GLSL buffer block access "
+        "emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block access "
         "coordBlock: no target-side fallback declaration emitted */);" in hlsl
     )
     assert (
-        "float4 gradCall = textures[0].SampleGrad(samplers[0], float2(0) "
+        "float4 gradCall = textures[0].SampleGrad(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, float2(0) /* unsupported HLSL GLSL buffer block "
-        "function call readUv: target function omitted */, float2(0) "
+        "function omitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
+        "function call readUv: target function omitted */, float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access coordBlock: no target-side "
         "fallback declaration emitted */);" in hlsl
     )
     assert (
-        "float4 gatheredDirect = textures[0].Gather(samplers[0], float2(0) "
+        "float4 gatheredDirect = textures[0].Gather(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access coordBlock: no target-side "
         "fallback declaration emitted */);" in hlsl
     )
     assert (
-        "float4 gatheredCall = textures[0].Gather(samplers[0], float2(0) "
+        "float4 gatheredCall = textures[0].Gather(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
         "function omitted */);" in hlsl
     )
     assert (
-        "float4 fetchedDirect = textures[0].Load(int3(int2(0) /* unsupported "
+        "float4 fetchedDirect = textures[0].Load(int3(int2(0, 0) /* unsupported "
         "HLSL GLSL buffer block access coordBlock: no target-side fallback "
         "declaration emitted */, 0));" in hlsl
     )
     assert (
-        "float4 fetchedCall = textures[0].Load(int3(int2(0) /* unsupported "
+        "float4 fetchedCall = textures[0].Load(int3(int2(0, 0) /* unsupported "
         "HLSL GLSL buffer block function call readPixel: target function "
         "omitted */, 0));" in hlsl
     )
@@ -14190,7 +15604,7 @@ def test_codegen_mixed_ssbo_unsupported_sampling_offsets_are_typed_diagnostics()
         };
 
         struct UnsupportedSamplerOffsetBlock {
-            bool flag;
+            double flag;
             vec2 uv;
             vec2 dx;
             vec2 dy;
@@ -14236,61 +15650,61 @@ def test_codegen_mixed_ssbo_unsupported_sampling_offsets_are_typed_diagnostics()
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert (
-        "float4 lodDirect = textures[0].SampleLevel(samplers[0], float2(0) "
+        "float4 lodDirect = textures[0].SampleLevel(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, 2.0, int2(0) /* unsupported HLSL GLSL "
+        "fallback declaration emitted */, 2.0, int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block access offsetBlock: no target-side fallback declaration "
         "emitted */);" in hlsl
     )
     assert (
-        "float4 lodCall = textures[0].SampleLevel(samplers[0], float2(0) "
+        "float4 lodCall = textures[0].SampleLevel(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, 2.0, int2(0) /* unsupported HLSL GLSL buffer block "
+        "function omitted */, 2.0, int2(0, 0) /* unsupported HLSL GLSL buffer block "
         "function call readOffset: target function omitted */);" in hlsl
     )
     assert (
-        "float4 gradDirect = textures[0].SampleGrad(samplers[0], float2(0) "
+        "float4 gradDirect = textures[0].SampleGrad(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, float2(0) /* unsupported HLSL GLSL "
+        "fallback declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL "
         "buffer block access offsetBlock: no target-side fallback declaration "
-        "emitted */, float2(0) /* unsupported HLSL GLSL buffer block access "
-        "offsetBlock: no target-side fallback declaration emitted */, int2(0) "
+        "emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block access "
+        "offsetBlock: no target-side fallback declaration emitted */, int2(0, 0) "
         "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
         "fallback declaration emitted */);" in hlsl
     )
     assert (
-        "float4 gradCall = textures[0].SampleGrad(samplers[0], float2(0) "
+        "float4 gradCall = textures[0].SampleGrad(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, float2(0) /* unsupported HLSL GLSL buffer block "
-        "function call readUv: target function omitted */, float2(0) "
+        "function omitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
+        "function call readUv: target function omitted */, float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, int2(0) /* unsupported HLSL GLSL "
+        "fallback declaration emitted */, int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block function call readOffset: target function omitted */);" in hlsl
     )
     assert (
-        "float4 gatheredDirect = textures[0].Gather(samplers[0], float2(0) "
+        "float4 gatheredDirect = textures[0].Gather(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, int2(0) /* unsupported HLSL GLSL "
+        "fallback declaration emitted */, int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block access offsetBlock: no target-side fallback declaration "
         "emitted */);" in hlsl
     )
     assert (
-        "float4 gatheredCall = textures[0].Gather(samplers[0], float2(0) "
+        "float4 gatheredCall = textures[0].Gather(samplers[0], float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, int2(0) /* unsupported HLSL GLSL buffer block "
+        "function omitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block "
         "function call readOffset: target function omitted */);" in hlsl
     )
     assert (
-        "float4 fetchedDirect = textures[0].Load(int3((int2(0) /* unsupported "
+        "float4 fetchedDirect = textures[0].Load(int3((int2(0, 0) /* unsupported "
         "HLSL GLSL buffer block access offsetBlock: no target-side fallback "
-        "declaration emitted */ + int2(0) /* unsupported HLSL GLSL buffer block "
+        "declaration emitted */ + int2(0, 0) /* unsupported HLSL GLSL buffer block "
         "access offsetBlock: no target-side fallback declaration emitted */), 0));"
         in hlsl
     )
     assert (
-        "float4 fetchedCall = textures[0].Load(int3((int2(0) /* unsupported "
+        "float4 fetchedCall = textures[0].Load(int3((int2(0, 0) /* unsupported "
         "HLSL GLSL buffer block function call readPixel: target function omitted */ "
-        "+ int2(0) /* unsupported HLSL GLSL buffer block function call readOffset: "
+        "+ int2(0, 0) /* unsupported HLSL GLSL buffer block function call readOffset: "
         "target function omitted */), 0));" in hlsl
     )
     assert "SampleLevel(samplers[0], 0 /* unsupported HLSL GLSL buffer" not in hlsl
@@ -14411,7 +15825,7 @@ def test_codegen_mixed_ssbo_unsupported_projected_compare_calls_infer_types():
         };
 
         struct UnsupportedProjectedShadowBlock {
-            bool flag;
+            double flag;
             vec2 uv;
             vec3 uvq;
             float depth;
@@ -14460,37 +15874,37 @@ def test_codegen_mixed_ssbo_unsupported_projected_compare_calls_infer_types():
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert (
-        "float4 projectedCall = colorMap.SampleGrad(linearSampler, (float3(0) "
+        "float4 projectedCall = colorMap.SampleGrad(linearSampler, (float3(0.0, 0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUvq: target "
-        "function omitted */).xy / (float3(0) /* unsupported HLSL GLSL buffer "
-        "block function call readUvq: target function omitted */).z, float2(0) "
+        "function omitted */).xy / (float3(0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer "
+        "block function call readUvq: target function omitted */).z, float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access shadowBlock: no target-side "
-        "fallback declaration emitted */, float2(0) /* unsupported HLSL GLSL "
+        "fallback declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL "
         "buffer block access shadowBlock: no target-side fallback declaration "
-        "emitted */, int2(0) /* unsupported HLSL GLSL buffer block function call "
+        "emitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block function call "
         "readOffset: target function omitted */);" in hlsl
     )
     assert (
-        "float compareCall = shadowMap.SampleCmpGrad(compareSampler, float2(0) "
+        "float compareCall = shadowMap.SampleCmpGrad(compareSampler, float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
         "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
-        "call readDepth: target function omitted */, float2(0) /* unsupported "
+        "call readDepth: target function omitted */, float2(0.0, 0.0) /* unsupported "
         "HLSL GLSL buffer block access shadowBlock: no target-side fallback "
-        "declaration emitted */, float2(0) /* unsupported HLSL GLSL buffer block "
+        "declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "access shadowBlock: no target-side fallback declaration emitted */, "
-        "int2(0) /* unsupported HLSL GLSL buffer block function call readOffset: "
+        "int2(0, 0) /* unsupported HLSL GLSL buffer block function call readOffset: "
         "target function omitted */);" in hlsl
     )
     assert (
         "float compareProjCall = shadowMap.SampleCmpGrad(compareSampler, "
-        "(float3(0) /* unsupported HLSL GLSL buffer block function call readUvq: "
-        "target function omitted */).xy / (float3(0) /* unsupported HLSL GLSL "
+        "(float3(0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block function call readUvq: "
+        "target function omitted */).xy / (float3(0.0, 0.0, 0.0) /* unsupported HLSL GLSL "
         "buffer block function call readUvq: target function omitted */).z, 0 "
         "/* unsupported HLSL GLSL buffer block function call readDepth: target "
-        "function omitted */, float2(0) /* unsupported HLSL GLSL buffer block "
+        "function omitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "access shadowBlock: no target-side fallback declaration emitted */, "
-        "float2(0) /* unsupported HLSL GLSL buffer block access shadowBlock: "
-        "no target-side fallback declaration emitted */, int2(0) /* unsupported "
+        "float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block access shadowBlock: "
+        "no target-side fallback declaration emitted */, int2(0, 0) /* unsupported "
         "HLSL GLSL buffer block function call readOffset: target function omitted */);"
         in hlsl
     )
@@ -14574,7 +15988,7 @@ def test_codegen_mixed_ssbo_unsupported_gather_compare_calls_infer_types():
         };
 
         struct UnsupportedGatherCompareBlock {
-            bool flag;
+            double flag;
             vec2 uv;
             vec3 uvLayer;
             float depth;
@@ -14623,30 +16037,30 @@ def test_codegen_mixed_ssbo_unsupported_gather_compare_calls_infer_types():
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert (
-        "float4 planarCall = shadowMap.GatherCmp(compareSampler, float2(0) "
+        "float4 planarCall = shadowMap.GatherCmp(compareSampler, float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
         "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
         "call readDepth: target function omitted */);" in hlsl
     )
     assert (
-        "float4 planarOffsetCall = shadowMap.GatherCmp(compareSampler, float2(0) "
+        "float4 planarOffsetCall = shadowMap.GatherCmp(compareSampler, float2(0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUv: target "
         "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
-        "call readDepth: target function omitted */, int2(0) /* unsupported "
+        "call readDepth: target function omitted */, int2(0, 0) /* unsupported "
         "HLSL GLSL buffer block function call readOffset: target function omitted */);"
         in hlsl
     )
     assert (
-        "float4 arrayCall = shadowArray.GatherCmp(compareSampler, float3(0) "
+        "float4 arrayCall = shadowArray.GatherCmp(compareSampler, float3(0.0, 0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUvLayer: target "
         "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
         "call readDepth: target function omitted */);" in hlsl
     )
     assert (
-        "float4 arrayOffsetCall = shadowArray.GatherCmp(compareSampler, float3(0) "
+        "float4 arrayOffsetCall = shadowArray.GatherCmp(compareSampler, float3(0.0, 0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readUvLayer: target "
         "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
-        "call readDepth: target function omitted */, int2(0) /* unsupported "
+        "call readDepth: target function omitted */, int2(0, 0) /* unsupported "
         "HLSL GLSL buffer block function call readOffset: target function omitted */);"
         in hlsl
     )
@@ -14722,7 +16136,7 @@ def test_codegen_mixed_ssbo_unsupported_gather_compare_calls_infer_types():
     assert "textureGatherCompareOffset(" not in glsl
 
 
-def test_codegen_mixed_ssbo_unsupported_cube_gather_compare_calls_infer_types():
+def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():
     crossgl = """
     shader CubeGatherCompareFallbacks {
         samplerCubeShadow shadowCube;
@@ -14781,47 +16195,49 @@ def test_codegen_mixed_ssbo_unsupported_cube_gather_compare_calls_infer_types():
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
 
+    assert "RWByteAddressBuffer cubeBlock : register(u106);" in hlsl
+    assert "float3 readDirection(RWByteAddressBuffer localBlock)" in hlsl
+    assert "float readDepth(RWByteAddressBuffer localBlock)" in hlsl
     assert (
-        "float4 cubeCall = shadowCube.GatherCmp(compareSampler, float3(0) "
-        "/* unsupported HLSL GLSL buffer block function call readDirection: "
-        "target function omitted */, 0 /* unsupported HLSL GLSL buffer block "
-        "function call readDepth: target function omitted */);" in hlsl
+        "float4 cubeDirect = shadowCube.GatherCmp(compareSampler, "
+        "asfloat(cubeBlock.Load3(0)), asfloat(cubeBlock.Load(32)));" in hlsl
+    )
+    assert (
+        "float4 cubeCall = shadowCube.GatherCmp(compareSampler, "
+        "readDirection(cubeBlock), readDepth(cubeBlock));" in hlsl
+    )
+    assert (
+        "float4 arrayDirect = shadowCubeArray.GatherCmp(compareSampler, "
+        "asfloat(cubeBlock.Load4(16)), asfloat(cubeBlock.Load(32)));" in hlsl
     )
     assert (
         "float4 arrayCall = shadowCubeArray.GatherCmp(compareSampler, "
-        "float4(0) /* unsupported HLSL GLSL buffer block function call "
-        "readCubeLayer: target function omitted */, 0 /* unsupported HLSL "
-        "GLSL buffer block function call readDepth: target function omitted */);"
-        in hlsl
+        "readCubeLayer(cubeBlock), readDepth(cubeBlock));" in hlsl
     )
     assert (
         hlsl.count(
             "/* unsupported DirectX texture gather compare: "
             "textureGatherCompareOffset offsets require 2D or 2D-array textures */ "
-            "float4(0.0)"
+            "float4(0.0, 0.0, 0.0, 0.0)"
         )
         == 4
     )
-    assert "GatherCmp(compareSampler, 0 /* unsupported HLSL GLSL buffer" not in hlsl
-    assert "readOffset: target function omitted" not in hlsl
+    assert "unsupported HLSL GLSL buffer block" not in hlsl
     assert "cubeBlock.direction" not in hlsl
     assert "cubeBlock.cubeLayer" not in hlsl
     assert "cubeBlock.offset" not in hlsl
 
+    assert "device uchar* cubeBlock [[buffer(106)]]" in metal
+    assert "float3 readDirection(device uchar* localBlock)" in metal
+    assert "float readDepth(device uchar* localBlock)" in metal
     assert (
         "float4 cubeCall = shadowCube.gather_compare(compareSampler, "
-        "float3(0) /* unsupported Metal GLSL buffer block function call "
-        "readDirection: target function omitted */, 0 /* unsupported Metal "
-        "GLSL buffer block function call readDepth: target function omitted */);"
-        in metal
+        "readDirection(cubeBlock), readDepth(cubeBlock));" in metal
     )
     assert (
         "float4 arrayCall = shadowCubeArray.gather_compare(compareSampler, "
-        "(float4(0) /* unsupported Metal GLSL buffer block function call "
-        "readCubeLayer: target function omitted */).xyz, uint((float4(0) "
-        "/* unsupported Metal GLSL buffer block function call readCubeLayer: "
-        "target function omitted */).w), 0 /* unsupported Metal GLSL buffer "
-        "block function call readDepth: target function omitted */);" in metal
+        "(readCubeLayer(cubeBlock)).xyz, uint((readCubeLayer(cubeBlock)).w), "
+        "readDepth(cubeBlock));" in metal
     )
     assert (
         metal.count(
@@ -14831,10 +16247,7 @@ def test_codegen_mixed_ssbo_unsupported_cube_gather_compare_calls_infer_types():
         )
         == 4
     )
-    assert (
-        "gather_compare(compareSampler, 0 /* unsupported Metal GLSL buffer" not in metal
-    )
-    assert "readOffset: target function omitted" not in metal
+    assert "unsupported Metal GLSL buffer block" not in metal
     assert "cubeBlock.direction" not in metal
     assert "cubeBlock.cubeLayer" not in metal
     assert "cubeBlock.offset" not in metal
@@ -14874,7 +16287,7 @@ def test_codegen_mixed_ssbo_unsupported_query_and_atomic_args_infer_types():
         };
 
         struct UnsupportedQueryAtomicBlock {
-            bool flag;
+            double flag;
             vec2 uv;
             vec3 uvLayer;
             vec4 cubeLayer;
@@ -14944,36 +16357,36 @@ def test_codegen_mixed_ssbo_unsupported_query_and_atomic_args_infer_types():
     )
     assert (
         "float2 lodDirect = float2(layerMap.CalculateLevelOfDetailUnclamped"
-        "(linearSampler, (float3(0) /* unsupported HLSL GLSL buffer block "
+        "(linearSampler, (float3(0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "access queryBlock: no target-side fallback declaration emitted */).xy), "
-        "layerMap.CalculateLevelOfDetail(linearSampler, (float3(0) "
+        "layerMap.CalculateLevelOfDetail(linearSampler, (float3(0.0, 0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block access queryBlock: no target-side "
         "fallback declaration emitted */).xy));" in hlsl
     )
     assert (
         "float2 lodCall = float2(cubeArray.CalculateLevelOfDetailUnclamped"
-        "(linearSampler, (float4(0) /* unsupported HLSL GLSL buffer block "
+        "(linearSampler, (float4(0.0, 0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block "
         "function call readCubeLayer: target function omitted */).xyz), "
-        "cubeArray.CalculateLevelOfDetail(linearSampler, (float4(0) "
+        "cubeArray.CalculateLevelOfDetail(linearSampler, (float4(0.0, 0.0, 0.0, 0.0) "
         "/* unsupported HLSL GLSL buffer block function call readCubeLayer: "
         "target function omitted */).xyz));" in hlsl
     )
     assert (
-        "uint atomicDirect = imageAtomicAdd_uimage2D(counters, int2(0) "
+        "uint atomicDirect = imageAtomicAdd_uimage2D(counters, int2(0, 0) "
         "/* unsupported HLSL GLSL buffer block access queryBlock: no target-side "
         "fallback declaration emitted */, 0u /* unsupported HLSL GLSL buffer "
         "block access queryBlock: no target-side fallback declaration emitted */);"
         in hlsl
     )
     assert (
-        "uint atomicCall = imageAtomicAdd_uimage2D(counters, int2(0) "
+        "uint atomicCall = imageAtomicAdd_uimage2D(counters, int2(0, 0) "
         "/* unsupported HLSL GLSL buffer block function call readPixel: target "
         "function omitted */, 0u /* unsupported HLSL GLSL buffer block function "
         "call readAmount: target function omitted */);" in hlsl
     )
     assert (
         "uint swapDirect = imageAtomicCompSwap_uimage2DArray(layerCounters, "
-        "int3(0) /* unsupported HLSL GLSL buffer block access queryBlock: "
+        "int3(0, 0, 0) /* unsupported HLSL GLSL buffer block access queryBlock: "
         "no target-side fallback declaration emitted */, 0u /* unsupported "
         "HLSL GLSL buffer block access queryBlock: no target-side fallback "
         "declaration emitted */, 0u /* unsupported HLSL GLSL buffer block "
@@ -14981,7 +16394,7 @@ def test_codegen_mixed_ssbo_unsupported_query_and_atomic_args_infer_types():
     )
     assert (
         "uint swapCall = imageAtomicCompSwap_uimage2DArray(layerCounters, "
-        "int3(0) /* unsupported HLSL GLSL buffer block function call "
+        "int3(0, 0, 0) /* unsupported HLSL GLSL buffer block function call "
         "readPixelLayer: target function omitted */, 0u /* unsupported HLSL "
         "GLSL buffer block access queryBlock: no target-side fallback "
         "declaration emitted */, 0u /* unsupported HLSL GLSL buffer block "
@@ -15101,7 +16514,7 @@ def test_codegen_mixed_ssbo_unsupported_image_format_args_infer_types():
         };
 
         struct UnsupportedImageFormatBlock {
-            bool flag;
+            double flag;
             ivec2 pixel;
             ivec3 pixelLayer;
             float scalarValue;
@@ -15170,45 +16583,45 @@ def test_codegen_mixed_ssbo_unsupported_image_format_args_infer_types():
     assert "RWTexture2D<uint> unsignedScalar : register(u2);" in hlsl
     assert "RWTexture2DArray<uint2> unsignedLayers : register(u3);" in hlsl
     assert (
-        "float scalarDirect = scalarFloat[int2(0) /* unsupported HLSL GLSL "
+        "float scalarDirect = scalarFloat[int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block access imageBlock: no target-side fallback declaration "
         "emitted */];" in hlsl
     )
     assert (
-        "float scalarCall = scalarFloat[int2(0) /* unsupported HLSL GLSL "
+        "float scalarCall = scalarFloat[int2(0, 0) /* unsupported HLSL GLSL "
         "buffer block function call readPixel: target function omitted */];" in hlsl
     )
     assert (
-        "float2 rgDirect = rgFloat[int2(0) /* unsupported HLSL GLSL buffer "
+        "float2 rgDirect = rgFloat[int2(0, 0) /* unsupported HLSL GLSL buffer "
         "block access imageBlock: no target-side fallback declaration emitted */];"
         in hlsl
     )
     assert (
-        "uint2 unsignedRgCall = unsignedLayers[int3(0) /* unsupported HLSL "
+        "uint2 unsignedRgCall = unsignedLayers[int3(0, 0, 0) /* unsupported HLSL "
         "GLSL buffer block function call readPixelLayer: target function "
         "omitted */];" in hlsl
     )
     assert (
-        "rgFloat[int2(0) /* unsupported HLSL GLSL buffer block access imageBlock: "
+        "rgFloat[int2(0, 0) /* unsupported HLSL GLSL buffer block access imageBlock: "
         "no target-side fallback declaration emitted */] = float2(0 "
         "/* unsupported HLSL GLSL buffer block access imageBlock: no target-side "
         "fallback declaration emitted */, 0.0);" in hlsl
     )
     assert (
-        "rgFloat[int2(0) /* unsupported HLSL GLSL buffer block function call "
-        "readPixel: target function omitted */] = float2(0) /* unsupported "
+        "rgFloat[int2(0, 0) /* unsupported HLSL GLSL buffer block function call "
+        "readPixel: target function omitted */] = float2(0.0, 0.0) /* unsupported "
         "HLSL GLSL buffer block function call readRg: target function omitted */;"
         in hlsl
     )
     assert (
-        "unsignedLayers[int3(0) /* unsupported HLSL GLSL buffer block access "
+        "unsignedLayers[int3(0, 0, 0) /* unsupported HLSL GLSL buffer block access "
         "imageBlock: no target-side fallback declaration emitted */] = "
         "uint2(0u /* unsupported HLSL GLSL buffer block access imageBlock: "
         "no target-side fallback declaration emitted */, 0u);" in hlsl
     )
     assert (
-        "unsignedLayers[int3(0) /* unsupported HLSL GLSL buffer block function "
-        "call readPixelLayer: target function omitted */] = uint2(0) "
+        "unsignedLayers[int3(0, 0, 0) /* unsupported HLSL GLSL buffer block function "
+        "call readPixelLayer: target function omitted */] = uint2(0u, 0u) "
         "/* unsupported HLSL GLSL buffer block function call readUnsignedRg: "
         "target function omitted */;" in hlsl
     )
@@ -15426,6 +16839,728 @@ def test_codegen_mixed_ssbo_fixed_block_array_call_propagated_conflict_is_reject
         match="Conflicting fixed resource array sizes for 'fixedBlocks': 2 and 3",
     ):
         MetalCodeGen().generate(shader_ast)
+
+
+def test_codegen_mixed_ssbo_fixed_only_scalar_vector_matrix_blocks_lower_to_offsets():
+    code = """
+    #version 450 core
+    layout(std430, binding = 116) buffer FixedPlainBlock {
+        uint count;
+        vec3 axis;
+        mat2 transform;
+    } fixedPlain;
+
+    void main() {
+        uint count = fixedPlain.count;
+        vec3 axis = fixedPlain.axis;
+        mat2 transform = fixedPlain.transform;
+        fixedPlain.count = count + 1u;
+        fixedPlain.axis = axis;
+        fixedPlain.transform = transform;
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    assert "unsupported GLSL SSBO block FixedPlainBlock" not in crossgl
+    assert "struct FixedPlainBlock" in crossgl
+    assert (
+        "FixedPlainBlock fixedPlain @glsl_buffer_block(std430) @binding(116);"
+        in crossgl
+    )
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer fixedPlain : register(u116);" in hlsl
+    assert "struct FixedPlainBlock" not in hlsl
+    assert "uint count = fixedPlain.Load(0);" in hlsl
+    assert "float3 axis = asfloat(fixedPlain.Load3(16));" in hlsl
+    assert (
+        "float2x2 transform = float2x2(asfloat(fixedPlain.Load2(32)), "
+        "asfloat(fixedPlain.Load2(40)));" in hlsl
+    )
+    assert "fixedPlain.Store(0, (count + 1u));" in hlsl
+    assert "fixedPlain.Store3(16, asuint(axis));" in hlsl
+    assert "fixedPlain.Store2(32, asuint(transform[0]));" in hlsl
+    assert "fixedPlain.Store2(40, asuint(transform[1]));" in hlsl
+    assert "unsupported HLSL GLSL buffer block" not in hlsl
+
+    assert "device uchar* fixedPlain [[buffer(116)]]" in metal
+    assert "struct FixedPlainBlock" not in metal
+    assert (
+        "uint count = (*reinterpret_cast<const device uint*>(fixedPlain + 0));" in metal
+    )
+    assert (
+        "float3 axis = float3((*reinterpret_cast<const device float*>"
+        "(fixedPlain + 16)), (*reinterpret_cast<const device float*>"
+        "(fixedPlain + 20)), (*reinterpret_cast<const device float*>"
+        "(fixedPlain + 24)));" in metal
+    )
+    assert (
+        "float2x2 transform = float2x2(float2((*reinterpret_cast<const device "
+        "float*>(fixedPlain + 32)), (*reinterpret_cast<const device float*>"
+        "(fixedPlain + 36))), float2((*reinterpret_cast<const device float*>"
+        "(fixedPlain + 40)), (*reinterpret_cast<const device float*>"
+        "(fixedPlain + 44))));" in metal
+    )
+    assert "(*reinterpret_cast<device uint*>(fixedPlain + 0)) = count + 1u;" in metal
+    assert "(*reinterpret_cast<device float*>(fixedPlain + 16))" in metal
+    assert "(*reinterpret_cast<device float*>(fixedPlain + 32))" in metal
+    assert "unsupported Metal GLSL buffer block" not in metal
+
+    assert "layout(std430, binding = 116) buffer FixedPlainBlock" in glsl
+    assert "} fixedPlain;" in glsl
+    assert "fixedPlain.transform = transform;" in glsl
+
+
+def test_codegen_mixed_ssbo_std140_blocks_lower_to_explicit_offsets():
+    code = """
+    #version 450 core
+    layout(std140, binding = 118) buffer Std140Block {
+        uint count;
+        mat2 basis;
+        float weights[3];
+        float values[];
+    } std140Block;
+
+    void main() {
+        uint i = std140Block.count;
+        mat2 basis = std140Block.basis;
+        float weight = std140Block.weights[2];
+        float value = std140Block.values[i];
+        std140Block.basis = basis;
+        std140Block.weights[1] = weight;
+        std140Block.values[i] = value;
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    assert "unsupported GLSL SSBO block Std140Block" not in crossgl
+    assert (
+        "Std140Block std140Block @glsl_buffer_block(std140) @binding(118);" in crossgl
+    )
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer std140Block : register(u118);" in hlsl
+    assert "uint i = std140Block.Load(0);" in hlsl
+    assert (
+        "float2x2 basis = float2x2(asfloat(std140Block.Load2(16)), "
+        "asfloat(std140Block.Load2(32)));" in hlsl
+    )
+    assert "float weight = asfloat(std140Block.Load(80));" in hlsl
+    assert "float value = asfloat(std140Block.Load((96 + i * 16)));" in hlsl
+    assert "std140Block.Store2(16, asuint(basis[0]));" in hlsl
+    assert "std140Block.Store2(32, asuint(basis[1]));" in hlsl
+    assert "std140Block.Store(64, asuint(weight));" in hlsl
+    assert "std140Block.Store((96 + i * 16), asuint(value));" in hlsl
+    assert "unsupported HLSL GLSL buffer block" not in hlsl
+
+    assert "device uchar* std140Block [[buffer(118)]]" in metal
+    assert "uint i = (*reinterpret_cast<const device uint*>(std140Block + 0));" in metal
+    assert (
+        "float2x2 basis = float2x2(float2((*reinterpret_cast<const device "
+        "float*>(std140Block + 16)), (*reinterpret_cast<const device float*>"
+        "(std140Block + 20))), float2((*reinterpret_cast<const device float*>"
+        "(std140Block + 32)), (*reinterpret_cast<const device float*>"
+        "(std140Block + 36))));" in metal
+    )
+    assert (
+        "float weight = (*reinterpret_cast<const device float*>"
+        "(std140Block + 80));" in metal
+    )
+    assert (
+        "float value = (*reinterpret_cast<const device float*>"
+        "(std140Block + (96 + i * 16)));" in metal
+    )
+    assert "(*reinterpret_cast<device float*>(std140Block + 16))" in metal
+    assert "(*reinterpret_cast<device float*>(std140Block + 32))" in metal
+    assert "(*reinterpret_cast<device float*>(std140Block + 64)) = weight;" in metal
+    assert (
+        "(*reinterpret_cast<device float*>(std140Block + (96 + i * 16))) = value;"
+        in metal
+    )
+    assert "unsupported Metal GLSL buffer block" not in metal
+
+    assert "layout(std140, binding = 118) buffer Std140Block" in glsl
+    assert "float weights[3];" in glsl
+    assert "float values[];" in glsl
+    assert "std140Block.weights[1] = weight;" in glsl
+
+
+def test_codegen_mixed_ssbo_uint_atomics_lower_to_byteaddress_and_device_atomics():
+    code = """
+    #version 450 core
+    layout(std430, binding = 17) buffer AtomicBlock {
+        uint counter;
+        uint bins[4];
+    } atomicBlock;
+
+    void main() {
+        uint oldCounter = atomicAdd(atomicBlock.counter, 1u);
+        uint oldBin = atomicExchange(atomicBlock.bins[2], oldCounter);
+        uint minBin = atomicMin(atomicBlock.bins[0], 2u);
+        uint maxBin = atomicMax(atomicBlock.bins[0], minBin);
+        uint andBin = atomicAnd(atomicBlock.bins[1], 15u);
+        uint orBin = atomicOr(atomicBlock.bins[1], andBin);
+        uint xorBin = atomicXor(atomicBlock.bins[2], orBin);
+        uint casBin = atomicCompSwap(atomicBlock.bins[3], xorBin, 7u);
+        atomicAdd(atomicBlock.bins[1], casBin);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    assert "AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(17);" in crossgl
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer atomicBlock : register(u17);" in hlsl
+    assert (
+        "uint __crossgl_byteaddress_atomic_add_uint(RWByteAddressBuffer buffer, "
+        "uint offset, uint value)" in hlsl
+    )
+    assert "buffer.InterlockedAdd(offset, value, original);" in hlsl
+    assert (
+        "uint __crossgl_byteaddress_atomic_exchange_uint("
+        "RWByteAddressBuffer buffer, uint offset, uint value)" in hlsl
+    )
+    assert "buffer.InterlockedExchange(offset, value, original);" in hlsl
+    assert (
+        "uint oldCounter = __crossgl_byteaddress_atomic_add_uint("
+        "atomicBlock, 0, 1u);" in hlsl
+    )
+    assert (
+        "uint oldBin = __crossgl_byteaddress_atomic_exchange_uint("
+        "atomicBlock, 12, oldCounter);" in hlsl
+    )
+    assert (
+        "uint minBin = __crossgl_byteaddress_atomic_min_uint("
+        "atomicBlock, 4, 2u);" in hlsl
+    )
+    assert (
+        "uint maxBin = __crossgl_byteaddress_atomic_max_uint("
+        "atomicBlock, 4, minBin);" in hlsl
+    )
+    assert (
+        "uint andBin = __crossgl_byteaddress_atomic_and_uint("
+        "atomicBlock, 8, 15u);" in hlsl
+    )
+    assert (
+        "uint orBin = __crossgl_byteaddress_atomic_or_uint("
+        "atomicBlock, 8, andBin);" in hlsl
+    )
+    assert (
+        "uint xorBin = __crossgl_byteaddress_atomic_xor_uint("
+        "atomicBlock, 12, orBin);" in hlsl
+    )
+    assert (
+        "uint casBin = __crossgl_byteaddress_atomic_compare_exchange_uint("
+        "atomicBlock, 16, xorBin, 7u);" in hlsl
+    )
+    assert "__crossgl_byteaddress_atomic_add_uint(atomicBlock, 8, casBin);" in hlsl
+    assert "atomicAdd(atomicBlock.Load" not in hlsl
+    assert "atomicExchange(atomicBlock.Load" not in hlsl
+
+    assert "device uchar* atomicBlock [[buffer(17)]]" in metal
+    assert (
+        "uint oldCounter = atomic_fetch_add_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 0), "
+        "1u, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint oldBin = atomic_exchange_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 12), "
+        "oldCounter, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint minBin = atomic_fetch_min_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 4), "
+        "2u, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint maxBin = atomic_fetch_max_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 4), "
+        "minBin, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint andBin = atomic_fetch_and_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 8), "
+        "15u, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint orBin = atomic_fetch_or_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 8), "
+        "andBin, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint xorBin = atomic_fetch_xor_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 12), "
+        "orBin, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint casBin = __crossgl_buffer_atomic_compare_exchange_uint("
+        "atomicBlock, 16, xorBin, 7u);" in metal
+    )
+    assert (
+        "while (!atomic_compare_exchange_weak_explicit("
+        "target, &original, value, memory_order_relaxed, memory_order_relaxed) "
+        "&& original == compareValue);" in metal
+    )
+    assert (
+        "atomic_fetch_add_explicit("
+        "reinterpret_cast<device atomic_uint*>(atomicBlock + 8), "
+        "casBin, memory_order_relaxed);" in metal
+    )
+    assert "atomicAdd((*reinterpret_cast" not in metal
+    assert "atomicExchange((*reinterpret_cast" not in metal
+
+    assert "layout(std430, binding = 17) buffer AtomicBlock" in glsl
+    assert "uint oldCounter = atomicAdd(atomicBlock.counter, 1u);" in glsl
+    assert "uint oldBin = atomicExchange(atomicBlock.bins[2], oldCounter);" in glsl
+    assert "uint minBin = atomicMin(atomicBlock.bins[0], 2u);" in glsl
+    assert "uint maxBin = atomicMax(atomicBlock.bins[0], minBin);" in glsl
+    assert "uint andBin = atomicAnd(atomicBlock.bins[1], 15u);" in glsl
+    assert "uint orBin = atomicOr(atomicBlock.bins[1], andBin);" in glsl
+    assert "uint xorBin = atomicXor(atomicBlock.bins[2], orBin);" in glsl
+    assert "uint casBin = atomicCompSwap(atomicBlock.bins[3], xorBin, 7u);" in glsl
+    assert "atomicAdd(atomicBlock.bins[1], casBin);" in glsl
+
+
+def test_codegen_mixed_ssbo_int_atomics_lower_to_byteaddress_and_device_atomics():
+    code = """
+    #version 450 core
+    layout(std430, binding = 18) buffer SignedAtomicBlock {
+        int counter;
+        int bins[4];
+    } signedAtomicBlock;
+
+    void main() {
+        int oldCounter = atomicAdd(signedAtomicBlock.counter, -1);
+        int oldBin = atomicExchange(signedAtomicBlock.bins[2], oldCounter);
+        int minBin = atomicMin(signedAtomicBlock.bins[0], -2);
+        int maxBin = atomicMax(signedAtomicBlock.bins[0], minBin);
+        int andBin = atomicAnd(signedAtomicBlock.bins[1], 15);
+        int orBin = atomicOr(signedAtomicBlock.bins[1], andBin);
+        int xorBin = atomicXor(signedAtomicBlock.bins[2], orBin);
+        int casBin = atomicCompSwap(signedAtomicBlock.bins[3], xorBin, -7);
+        atomicAdd(signedAtomicBlock.bins[1], casBin);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    assert (
+        "SignedAtomicBlock signedAtomicBlock "
+        "@glsl_buffer_block(std430) @binding(18);" in crossgl
+    )
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer signedAtomicBlock : register(u18);" in hlsl
+    assert (
+        "int __crossgl_byteaddress_atomic_add_int(RWByteAddressBuffer buffer, "
+        "uint offset, int value)" in hlsl
+    )
+    assert "buffer.InterlockedAdd(offset, asuint(value), original);" in hlsl
+    assert "return asint(original);" in hlsl
+    assert (
+        "int __crossgl_byteaddress_atomic_min_int(RWByteAddressBuffer buffer, "
+        "uint offset, int value)" in hlsl
+    )
+    assert "buffer.InterlockedMin(offset, value, original);" in hlsl
+    assert (
+        "int __crossgl_byteaddress_atomic_compare_exchange_int("
+        "RWByteAddressBuffer buffer, uint offset, int compareValue, int value)" in hlsl
+    )
+    assert (
+        "buffer.InterlockedCompareExchange("
+        "offset, asuint(compareValue), asuint(value), original);" in hlsl
+    )
+    assert (
+        "int oldCounter = __crossgl_byteaddress_atomic_add_int("
+        "signedAtomicBlock, 0, -1);" in hlsl
+    )
+    assert (
+        "int oldBin = __crossgl_byteaddress_atomic_exchange_int("
+        "signedAtomicBlock, 12, oldCounter);" in hlsl
+    )
+    assert (
+        "int minBin = __crossgl_byteaddress_atomic_min_int("
+        "signedAtomicBlock, 4, -2);" in hlsl
+    )
+    assert (
+        "int maxBin = __crossgl_byteaddress_atomic_max_int("
+        "signedAtomicBlock, 4, minBin);" in hlsl
+    )
+    assert (
+        "int andBin = __crossgl_byteaddress_atomic_and_int("
+        "signedAtomicBlock, 8, 15);" in hlsl
+    )
+    assert (
+        "int orBin = __crossgl_byteaddress_atomic_or_int("
+        "signedAtomicBlock, 8, andBin);" in hlsl
+    )
+    assert (
+        "int xorBin = __crossgl_byteaddress_atomic_xor_int("
+        "signedAtomicBlock, 12, orBin);" in hlsl
+    )
+    assert (
+        "int casBin = __crossgl_byteaddress_atomic_compare_exchange_int("
+        "signedAtomicBlock, 16, xorBin, -7);" in hlsl
+    )
+    assert "__crossgl_byteaddress_atomic_add_int(signedAtomicBlock, 8, casBin);" in hlsl
+
+    assert "device uchar* signedAtomicBlock [[buffer(18)]]" in metal
+    assert (
+        "int oldCounter = atomic_fetch_add_explicit("
+        "reinterpret_cast<device atomic_int*>(signedAtomicBlock + 0), "
+        "-1, memory_order_relaxed);" in metal
+    )
+    assert (
+        "int oldBin = atomic_exchange_explicit("
+        "reinterpret_cast<device atomic_int*>(signedAtomicBlock + 12), "
+        "oldCounter, memory_order_relaxed);" in metal
+    )
+    assert (
+        "int minBin = atomic_fetch_min_explicit("
+        "reinterpret_cast<device atomic_int*>(signedAtomicBlock + 4), "
+        "-2, memory_order_relaxed);" in metal
+    )
+    assert (
+        "int casBin = __crossgl_buffer_atomic_compare_exchange_int("
+        "signedAtomicBlock, 16, xorBin, -7);" in metal
+    )
+    assert (
+        "atomic_fetch_add_explicit("
+        "reinterpret_cast<device atomic_int*>(signedAtomicBlock + 8), "
+        "casBin, memory_order_relaxed);" in metal
+    )
+
+    assert "layout(std430, binding = 18) buffer SignedAtomicBlock" in glsl
+    assert "int oldCounter = atomicAdd(signedAtomicBlock.counter, (-1));" in glsl
+    assert "int oldBin = atomicExchange(signedAtomicBlock.bins[2], oldCounter);" in glsl
+    assert "int minBin = atomicMin(signedAtomicBlock.bins[0], (-2));" in glsl
+    assert "int maxBin = atomicMax(signedAtomicBlock.bins[0], minBin);" in glsl
+    assert "int andBin = atomicAnd(signedAtomicBlock.bins[1], 15);" in glsl
+    assert "int orBin = atomicOr(signedAtomicBlock.bins[1], andBin);" in glsl
+    assert "int xorBin = atomicXor(signedAtomicBlock.bins[2], orBin);" in glsl
+    assert (
+        "int casBin = atomicCompSwap(signedAtomicBlock.bins[3], xorBin, (-7));" in glsl
+    )
+    assert "atomicAdd(signedAtomicBlock.bins[1], casBin);" in glsl
+
+
+def test_codegen_mixed_ssbo_runtime_array_atomics_lower_dynamic_offsets():
+    code = """
+    #version 450 core
+    layout(std430, binding = 19) buffer RuntimeAtomicBlock {
+        uint count;
+        uint values[];
+    } runtimeAtomicBlock;
+    layout(std430, binding = 20) buffer RuntimeSignedAtomicBlock {
+        int count;
+        int values[];
+    } runtimeSignedAtomicBlock;
+
+    void main() {
+        uint i = runtimeAtomicBlock.count;
+        uint oldValue = atomicAdd(runtimeAtomicBlock.values[i], 1u);
+        uint swapped = atomicCompSwap(runtimeAtomicBlock.values[i + 1u], oldValue, 7u);
+        int j = runtimeSignedAtomicBlock.count;
+        int oldSigned = atomicMin(runtimeSignedAtomicBlock.values[j], -2);
+        int exchanged = atomicExchange(runtimeSignedAtomicBlock.values[j + 1], oldSigned);
+        atomicAdd(runtimeSignedAtomicBlock.values[j], exchanged);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    assert (
+        "RuntimeAtomicBlock runtimeAtomicBlock "
+        "@glsl_buffer_block(std430) @binding(19);" in crossgl
+    )
+    assert (
+        "RuntimeSignedAtomicBlock runtimeSignedAtomicBlock "
+        "@glsl_buffer_block(std430) @binding(20);" in crossgl
+    )
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer runtimeAtomicBlock : register(u19);" in hlsl
+    assert "RWByteAddressBuffer runtimeSignedAtomicBlock : register(u20);" in hlsl
+    assert "uint i = runtimeAtomicBlock.Load(0);" in hlsl
+    assert (
+        "uint oldValue = __crossgl_byteaddress_atomic_add_uint("
+        "runtimeAtomicBlock, (4 + i * 4), 1u);" in hlsl
+    )
+    assert (
+        "uint swapped = __crossgl_byteaddress_atomic_compare_exchange_uint("
+        "runtimeAtomicBlock, (4 + (i + 1u) * 4), oldValue, 7u);" in hlsl
+    )
+    assert "int j = asint(runtimeSignedAtomicBlock.Load(0));" in hlsl
+    assert (
+        "int oldSigned = __crossgl_byteaddress_atomic_min_int("
+        "runtimeSignedAtomicBlock, (4 + j * 4), -2);" in hlsl
+    )
+    assert (
+        "int exchanged = __crossgl_byteaddress_atomic_exchange_int("
+        "runtimeSignedAtomicBlock, (4 + (j + 1) * 4), oldSigned);" in hlsl
+    )
+    assert (
+        "__crossgl_byteaddress_atomic_add_int("
+        "runtimeSignedAtomicBlock, (4 + j * 4), exchanged);" in hlsl
+    )
+
+    assert "device uchar* runtimeAtomicBlock [[buffer(19)]]" in metal
+    assert "device uchar* runtimeSignedAtomicBlock [[buffer(20)]]" in metal
+    assert (
+        "uint oldValue = atomic_fetch_add_explicit("
+        "reinterpret_cast<device atomic_uint*>(runtimeAtomicBlock + (4 + i * 4)), "
+        "1u, memory_order_relaxed);" in metal
+    )
+    assert (
+        "uint swapped = __crossgl_buffer_atomic_compare_exchange_uint("
+        "runtimeAtomicBlock, (4 + (i + 1u) * 4), oldValue, 7u);" in metal
+    )
+    assert (
+        "int oldSigned = atomic_fetch_min_explicit("
+        "reinterpret_cast<device atomic_int*>("
+        "runtimeSignedAtomicBlock + (4 + j * 4)), -2, memory_order_relaxed);" in metal
+    )
+    assert (
+        "int exchanged = atomic_exchange_explicit("
+        "reinterpret_cast<device atomic_int*>("
+        "runtimeSignedAtomicBlock + (4 + (j + 1) * 4)), "
+        "oldSigned, memory_order_relaxed);" in metal
+    )
+    assert (
+        "atomic_fetch_add_explicit("
+        "reinterpret_cast<device atomic_int*>("
+        "runtimeSignedAtomicBlock + (4 + j * 4)), "
+        "exchanged, memory_order_relaxed);" in metal
+    )
+
+    assert "layout(std430, binding = 19) buffer RuntimeAtomicBlock" in glsl
+    assert "layout(std430, binding = 20) buffer RuntimeSignedAtomicBlock" in glsl
+    assert "uint oldValue = atomicAdd(runtimeAtomicBlock.values[i], 1u);" in glsl
+    assert (
+        "uint swapped = atomicCompSwap("
+        "runtimeAtomicBlock.values[(i + 1u)], oldValue, 7u);" in glsl
+    )
+    assert (
+        "int oldSigned = atomicMin(runtimeSignedAtomicBlock.values[j], (-2));" in glsl
+    )
+    assert (
+        "int exchanged = atomicExchange("
+        "runtimeSignedAtomicBlock.values[(j + 1)], oldSigned);" in glsl
+    )
+    assert "atomicAdd(runtimeSignedAtomicBlock.values[j], exchanged);" in glsl
+
+
+def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics():
+    code = """
+    #version 450 core
+    layout(std430, binding = 21) readonly buffer ReadAtomicBlock {
+        uint value;
+    } readAtomicBlock;
+    layout(std430, binding = 22) buffer FloatAtomicBlock {
+        float value;
+    } floatAtomicBlock;
+    layout(std430, binding = 23) buffer VectorAtomicBlock {
+        uvec2 value;
+    } vectorAtomicBlock;
+    layout(std430, binding = 24) buffer MatrixAtomicBlock {
+        mat2 value;
+    } matrixAtomicBlock;
+
+    void main() {
+        uint readonlyOld = atomicAdd(readAtomicBlock.value, 1u);
+        float floatOld = atomicAdd(floatAtomicBlock.value, 1.0);
+        uint vectorOld = atomicAdd(vectorAtomicBlock.value, 1u);
+        float matrixOld = atomicAdd(matrixAtomicBlock.value, 1.0);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert (
+        "uint readonlyOld = /* unsupported HLSL GLSL buffer block atomic: "
+        "atomicAdd cannot write readonly ByteAddressBuffer */ 0u;" in hlsl
+    )
+    assert (
+        "float floatOld = /* unsupported HLSL GLSL buffer block atomic: "
+        "atomicAdd currently supports only int or uint buffer members */ 0;" in hlsl
+    )
+    assert (
+        "uint vectorOld = /* unsupported HLSL GLSL buffer block atomic: "
+        "atomicAdd requires a scalar int or uint buffer member */ 0u;" in hlsl
+    )
+    assert (
+        "float matrixOld = /* unsupported HLSL GLSL buffer block atomic: "
+        "atomicAdd requires a scalar int or uint buffer member */ 0;" in hlsl
+    )
+    assert "Interlocked" not in hlsl
+    assert "__crossgl_byteaddress_atomic" not in hlsl
+
+    assert (
+        "uint readonlyOld = /* unsupported Metal GLSL buffer block atomic: "
+        "atomicAdd cannot write readonly device buffer */ 0u;" in metal
+    )
+    assert (
+        "float floatOld = /* unsupported Metal GLSL buffer block atomic: "
+        "atomicAdd currently supports only int or uint buffer members */ 0;" in metal
+    )
+    assert (
+        "uint vectorOld = /* unsupported Metal GLSL buffer block atomic: "
+        "atomicAdd requires a scalar int or uint buffer member */ 0u;" in metal
+    )
+    assert (
+        "float matrixOld = /* unsupported Metal GLSL buffer block atomic: "
+        "atomicAdd requires a scalar int or uint buffer member */ 0;" in metal
+    )
+    assert "atomic_fetch_" not in metal
+    assert "__crossgl_buffer_atomic" not in metal
+
+    assert "uint readonlyOld = atomicAdd(readAtomicBlock.value, 1u);" in glsl
+    assert "float floatOld = atomicAdd(floatAtomicBlock.value, 1.0);" in glsl
+    assert "uint vectorOld = atomicAdd(vectorAtomicBlock.value, 1u);" in glsl
+    assert "float matrixOld = atomicAdd(matrixAtomicBlock.value, 1.0);" in glsl
+
+
+def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets():
+    code = """
+    #version 300 es
+    #extension GL_ARB_separate_shader_objects : enable
+    precision highp float;
+
+    void main() { }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    assert "#version 300 es" in crossgl
+    assert "#extension GL_ARB_separate_shader_objects : enable" in crossgl
+    assert "precision highp float;" in crossgl
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "#version" not in hlsl
+    assert "#extension" not in hlsl
+    assert "precision highp float" not in hlsl
+
+    assert "#version" not in metal
+    assert "#extension" not in metal
+    assert "precision highp float" not in metal
+    assert "#include <metal_stdlib>" in metal
+
+    assert "#version 300 es" in glsl
+    assert "#extension GL_ARB_separate_shader_objects : enable" in glsl
+    assert "precision highp float;" in glsl
+
+
+def test_codegen_mixed_ssbo_fixed_only_blocks_lower_to_explicit_offsets():
+    code = """
+    #version 450 core
+    layout(std430, binding = 97) buffer FixedOnlyBlock {
+        uint count;
+        vec3 axis;
+        mat2 transform;
+        float weights[3];
+    } fixedOnly;
+
+    void main() {
+        uint count = fixedOnly.count;
+        vec3 axis = fixedOnly.axis;
+        mat2 transform = fixedOnly.transform;
+        float weight = fixedOnly.weights[2];
+        fixedOnly.count = count + 1u;
+        fixedOnly.axis = axis;
+        fixedOnly.transform = transform;
+        fixedOnly.weights[1] = weight;
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    metal = MetalCodeGen().generate(shader_ast)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "RWByteAddressBuffer fixedOnly : register(u97);" in hlsl
+    assert "struct FixedOnlyBlock" not in hlsl
+    assert "uint count = fixedOnly.Load(0);" in hlsl
+    assert "float3 axis = asfloat(fixedOnly.Load3(16));" in hlsl
+    assert (
+        "float2x2 transform = float2x2(asfloat(fixedOnly.Load2(32)), "
+        "asfloat(fixedOnly.Load2(40)));" in hlsl
+    )
+    assert "float weight = asfloat(fixedOnly.Load(56));" in hlsl
+    assert "fixedOnly.Store(0, (count + 1u));" in hlsl
+    assert "fixedOnly.Store3(16, asuint(axis));" in hlsl
+    assert "fixedOnly.Store2(32, asuint(transform[0]));" in hlsl
+    assert "fixedOnly.Store2(40, asuint(transform[1]));" in hlsl
+    assert "fixedOnly.Store(52, asuint(weight));" in hlsl
+    assert "unsupported HLSL GLSL buffer block" not in hlsl
+
+    assert "device uchar* fixedOnly [[buffer(97)]]" in metal
+    assert "struct FixedOnlyBlock" not in metal
+    assert (
+        "uint count = (*reinterpret_cast<const device uint*>(fixedOnly + 0));" in metal
+    )
+    assert (
+        "float3 axis = float3((*reinterpret_cast<const device float*>"
+        "(fixedOnly + 16)), (*reinterpret_cast<const device float*>"
+        "(fixedOnly + 20)), (*reinterpret_cast<const device float*>"
+        "(fixedOnly + 24)));" in metal
+    )
+    assert (
+        "float2x2 transform = float2x2(float2((*reinterpret_cast<const device "
+        "float*>(fixedOnly + 32)), (*reinterpret_cast<const device float*>"
+        "(fixedOnly + 36))), float2((*reinterpret_cast<const device float*>"
+        "(fixedOnly + 40)), (*reinterpret_cast<const device float*>"
+        "(fixedOnly + 44))));" in metal
+    )
+    assert (
+        "float weight = (*reinterpret_cast<const device float*>(fixedOnly + 56));"
+        in metal
+    )
+    assert "(*reinterpret_cast<device uint*>(fixedOnly + 0)) = count + 1u;" in metal
+    assert "(*reinterpret_cast<device float*>(fixedOnly + 16))" in metal
+    assert "(*reinterpret_cast<device float*>(fixedOnly + 32))" in metal
+    assert "(*reinterpret_cast<device float*>(fixedOnly + 52)) = weight;" in metal
+    assert "unsupported Metal GLSL buffer block" not in metal
+
+    assert "layout(std430, binding = 97) buffer FixedOnlyBlock" in glsl
+    assert "} fixedOnly;" in glsl
+    assert "fixedOnly.weights[1] = weight;" in glsl
 
 
 def test_codegen_mixed_ssbo_hlsl_vector_layout_uses_byte_address_methods():
@@ -15852,7 +17987,7 @@ def test_codegen_mixed_ssbo_hlsl_dynamic_indices_into_fixed_arrays():
     assert "float2 o = asfloat(fixedDynamicBlock.Load2((8 + i * 8)));" in hlsl
     assert (
         "fixedDynamicBlock.Store2((8 + i * 8), "
-        "asuint((asfloat(fixedDynamicBlock.Load2((8 + i * 8))) + float2(1.0))));"
+        "asuint((asfloat(fixedDynamicBlock.Load2((8 + i * 8))) + float2(1.0, 1.0))));"
         in hlsl
     )
 

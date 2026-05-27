@@ -4,6 +4,13 @@ import re
 from typing import List, Optional, Tuple, Union
 
 from .array_utils import parse_array_type, detect_array_element_type
+from .image_access_contracts import (
+    collect_function_image_access_requirements,
+    collect_function_parameter_names,
+    image_access_diagnostic_name,
+    image_access_requirement_label,
+    image_access_satisfies_requirement,
+)
 from ..ast import (
     AssignmentNode,
     ArrayAccessNode,
@@ -23,7 +30,10 @@ from ..ast import (
     LoopNode,
     MatchNode,
     MemberAccessNode,
+    MeshOpNode,
     RangeNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
     ReturnNode,
     ShaderNode,
     StructNode,
@@ -31,6 +41,7 @@ from ..ast import (
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    WaveOpNode,
     WhileNode,
     WildcardPatternNode,
 )
@@ -90,8 +101,12 @@ class VulkanSPIRVCodeGen:
         self.pointer_types = {}
         self.function_types = {}
         self.array_types = {}
+        self.layout_array_types = {}
+        self.layout_struct_types = {}
+        self.layout_struct_source_types = {}
         self.resource_types = {}
         self.resource_image_types = {}
+        self.ray_query_types = {}
 
         self.required_capabilities = set()
         self.global_variables = {}
@@ -102,6 +117,8 @@ class VulkanSPIRVCodeGen:
         self.vector_constants = {}
         self.composite_constants = {}
         self.resource_type_metadata = {}
+        self.structured_buffer_metadata = {}
+        self.storage_buffer_access_metadata = {}
         self.precise_global_variables = set()
         self.precise_local_variables = set()
         self.no_contraction_ids = set()
@@ -109,12 +126,19 @@ class VulkanSPIRVCodeGen:
 
         self.functions = {}
         self.function_signatures = {}
+        self.function_parameter_names = {}
+        self.function_image_access_requirements = {}
+        self.function_storage_buffer_access_requirements = {}
+        self.inline_storage_buffer_functions = {}
         self.function_resource_array_params = {}
         self.function_resource_array_type_hints = {}
+        self.function_storage_image_pointer_params = {}
         self.function_execution_models = {}
         self.current_execution_model = None
+        self.current_function_id = None
         self.current_stage = None
         self.current_return_type = None
+        self.mesh_output_counts_by_function = {}
 
         self.glsl_std450_id = None
         self.main_fn_id = None
@@ -125,6 +149,8 @@ class VulkanSPIRVCodeGen:
         self.loop_continue_labels = []
         self.defined_functions = set()
         self.current_struct_members = {}
+        self.cbuffer_variables = {}
+        self.cbuffer_members = {}
 
         self.inputs = []
         self.outputs = []
@@ -315,6 +341,9 @@ class VulkanSPIRVCodeGen:
         if cache_key in self.resource_types:
             return self.resource_types[cache_key]
 
+        if info["kind"] == "acceleration_structure":
+            return self.register_acceleration_structure_type(type_name)
+
         if info["kind"] == "sampler":
             id_value = self.get_id()
             self.emit(f"%{id_value} = OpTypeSampler")
@@ -390,6 +419,32 @@ class VulkanSPIRVCodeGen:
 
         return spirv_id
 
+    def register_layout_struct_type(
+        self,
+        source_type: SpirvId,
+        layout: str,
+        members: List[Tuple[SpirvId, str]],
+    ) -> SpirvId:
+        """Create a layout-specific struct clone for block-layout decorations."""
+        key = (source_type.id, layout)
+        if key in self.layout_struct_types:
+            return self.layout_struct_types[key]
+
+        id_value = self.get_id()
+        member_types = " ".join([f"%{member[0].id}" for member in members])
+        self.emit(f"%{id_value} = OpTypeStruct {member_types}")
+
+        type_name = f"{source_type.type.base_type}_{layout}_{source_type.id}"
+        self.emit(f'OpName %{id_value} "{type_name}"')
+        for i, (_, member_name) in enumerate(members):
+            self.emit(f'OpMemberName %{id_value} {i} "{member_name}"')
+
+        spirv_id = SpirvId(id_value, SpirvType(type_name), type_name)
+        self.layout_struct_types[key] = spirv_id
+        self.layout_struct_source_types[id_value] = source_type
+        self.current_struct_members[type_name] = members
+        return spirv_id
+
     def register_function_type(
         self, return_type: SpirvId, param_types: List[SpirvId]
     ) -> SpirvId:
@@ -409,6 +464,42 @@ class VulkanSPIRVCodeGen:
         spirv_type = SpirvType(f"fn_{return_type.type.base_type}")
         spirv_id = SpirvId(id_value, spirv_type)
         self.function_types[key] = spirv_id
+        return spirv_id
+
+    def register_ray_query_type(self, type_name: str = "RayQuery") -> SpirvId:
+        """Create and register the opaque SPIR-V ray-query type."""
+        cache_key = re.sub(r"\s+", "", str(type_name))
+        if cache_key in self.ray_query_types:
+            return self.ray_query_types[cache_key]
+
+        self.require_capability("RayQueryKHR")
+        self.require_extension("SPV_KHR_ray_query")
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpTypeRayQueryKHR")
+
+        spirv_id = SpirvId(id_value, SpirvType(cache_key), cache_key)
+        self.ray_query_types[cache_key] = spirv_id
+        return spirv_id
+
+    def register_acceleration_structure_type(self, type_name: str) -> SpirvId:
+        """Create and register the opaque SPIR-V acceleration-structure type."""
+        cache_key = (str(type_name), "acceleration_structure")
+        if cache_key in self.resource_types:
+            return self.resource_types[cache_key]
+
+        self.require_capability("RayQueryKHR")
+        self.require_extension("SPV_KHR_ray_query")
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpTypeAccelerationStructureKHR")
+
+        spirv_id = SpirvId(id_value, SpirvType(str(type_name)), str(type_name))
+        metadata = {
+            "kind": "acceleration_structure",
+            "type_name": str(type_name),
+        }
+        self.resource_type_metadata[spirv_id.id] = metadata
+        self.resource_types[cache_key] = spirv_id
+        self.resource_types[str(type_name)] = spirv_id
         return spirv_id
 
     def register_constant(
@@ -532,31 +623,61 @@ class VulkanSPIRVCodeGen:
 
     def store_to_variable(self, variable_id: SpirvId, value_id: SpirvId):
         """Store a value to a variable."""
+        metadata = self.storage_buffer_access_metadata_for_pointer(variable_id)
+        if metadata is not None and metadata.get("readonly"):
+            self.emit("; WARNING: storage buffer store requires a writable buffer")
+            return
+
+        target_type = self.pointer_pointee_type(variable_id)
+        if self.type_contains_runtime_array(target_type):
+            self.emit(
+                "; WARNING: runtime-array aggregate values cannot be stored "
+                "as SPIR-V values"
+            )
+            return
+
         value_id = self.convert_value_for_store(variable_id, value_id)
         self.emit(f"OpStore %{variable_id.id} %{value_id.id}")
 
     def load_from_variable(self, variable_id: SpirvId, result_type: SpirvId) -> SpirvId:
         """Load a value from a variable."""
+        storage_metadata = self.storage_buffer_access_metadata_for_pointer(variable_id)
+        if storage_metadata is not None and storage_metadata.get("writeonly"):
+            self.emit("; WARNING: storage buffer load requires a readable buffer")
+            return self.default_value_for_type(result_type)
+
+        if self.type_contains_runtime_array(result_type):
+            return self.runtime_array_aggregate_fallback(
+                "runtime-array aggregate values cannot be loaded as SPIR-V values"
+            )
+
         id_value = self.get_id()
         self.emit(f"%{id_value} = OpLoad %{result_type.id} %{variable_id.id}")
 
         spirv_id = SpirvId(id_value, result_type.type)
         self.value_types[id_value] = result_type
+        resource_metadata = self.resource_metadata_for_pointer(variable_id)
+        if resource_metadata is not None:
+            self.resource_type_metadata[id_value] = resource_metadata
         return spirv_id
 
     def convert_value_for_store(
         self, variable_id: SpirvId, value_id: SpirvId
     ) -> SpirvId:
         """Convert a stored value to the pointer's known pointee type when possible."""
+        target_type = self.pointer_pointee_type(variable_id)
+        if target_type is None:
+            return value_id
+
+        return self.convert_value_to_type(value_id, target_type)
+
+    def pointer_pointee_type(self, variable_id: SpirvId) -> Optional[SpirvId]:
         target_type = self.variable_value_types.get(variable_id.id)
         if target_type is None and variable_id.type.storage_class:
             target_type = self.find_registered_type_by_base(
                 variable_id.type.base_type.replace("ptr_", "", 1)
             )
-        if target_type is None:
-            return value_id
-
-        return self.convert_value_to_type(value_id, target_type)
+        return target_type
 
     def convert_value_to_type(self, value_id: SpirvId, target_type: SpirvId) -> SpirvId:
         """Convert scalar values to a compatible scalar or vector target type."""
@@ -569,6 +690,13 @@ class VulkanSPIRVCodeGen:
             and source_type.type.base_type == target_type.type.base_type
         ):
             return value_id
+
+        if source_type is not None:
+            aggregate_value = self.convert_aggregate_value_to_type(
+                value_id, source_type, target_type
+            )
+            if aggregate_value is not None:
+                return aggregate_value
 
         target_vector = self.vector_component_type_and_count(target_type.type.base_type)
         source_vector = self.vector_component_type_and_count(value_id.type.base_type)
@@ -608,6 +736,106 @@ class VulkanSPIRVCodeGen:
         if self.normalize_primitive_name(converted.type.base_type) != target_vector[0]:
             return value_id
         return self.splat_scalar_to_vector(converted, target_type)
+
+    def value_has_type(self, value_id: SpirvId, target_type: SpirvId) -> bool:
+        value_type = self.value_types.get(
+            value_id.id
+        ) or self.find_registered_type_by_base(value_id.type.base_type)
+        if value_type is None:
+            return value_id.type.base_type == target_type.type.base_type
+        return (
+            value_type.id == target_type.id
+            or value_type.type.base_type == target_type.type.base_type
+        )
+
+    def aggregate_canonical_key(self, type_id: SpirvId):
+        source_type = self.layout_struct_source_types.get(type_id.id)
+        if source_type is not None:
+            return ("struct", source_type.id)
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, size = array_info
+            return ("array", self.aggregate_canonical_key(element_type), size)
+
+        if type_id.type.base_type in self.current_struct_members:
+            return ("struct", type_id.id)
+
+        return ("type", type_id.id)
+
+    def aggregate_types_are_layout_compatible(
+        self, source_type: SpirvId, target_type: SpirvId
+    ) -> bool:
+        source_is_struct = source_type.type.base_type in self.current_struct_members
+        target_is_struct = target_type.type.base_type in self.current_struct_members
+        source_is_array = self.array_type_info_from_type(source_type) is not None
+        target_is_array = self.array_type_info_from_type(target_type) is not None
+        if not (
+            (source_is_struct and target_is_struct)
+            or (source_is_array and target_is_array)
+        ):
+            return False
+        return self.aggregate_canonical_key(
+            source_type
+        ) == self.aggregate_canonical_key(target_type)
+
+    def convert_aggregate_value_to_type(
+        self, value_id: SpirvId, source_type: SpirvId, target_type: SpirvId
+    ) -> Optional[SpirvId]:
+        if self.type_contains_runtime_array(
+            source_type
+        ) or self.type_contains_runtime_array(target_type):
+            return None
+
+        if not self.aggregate_types_are_layout_compatible(source_type, target_type):
+            return None
+
+        source_array = self.array_type_info_from_type(source_type)
+        target_array = self.array_type_info_from_type(target_type)
+        if source_array is not None or target_array is not None:
+            if source_array is None or target_array is None:
+                return None
+            source_element_type, source_size = source_array
+            target_element_type, target_size = target_array
+            if source_size is None or target_size is None or source_size != target_size:
+                return None
+
+            elements = []
+            for index in range(int(target_size)):
+                source_element = self.composite_extract(
+                    value_id, source_element_type, index
+                )
+                target_element = self.convert_value_to_type(
+                    source_element, target_element_type
+                )
+                if not self.value_has_type(target_element, target_element_type):
+                    return None
+                elements.append(target_element)
+            return self.composite_construct(target_type, elements)
+
+        source_members = self.current_struct_members.get(source_type.type.base_type)
+        target_members = self.current_struct_members.get(target_type.type.base_type)
+        if source_members is None or target_members is None:
+            return None
+        if len(source_members) != len(target_members):
+            return None
+
+        values = []
+        for index, (
+            (source_member_type, source_name),
+            (target_member_type, target_name),
+        ) in enumerate(zip(source_members, target_members)):
+            if source_name != target_name:
+                return None
+            source_member = self.composite_extract(value_id, source_member_type, index)
+            target_member = self.convert_value_to_type(
+                source_member, target_member_type
+            )
+            if not self.value_has_type(target_member, target_member_type):
+                return None
+            values.append(target_member)
+
+        return self.composite_construct(target_type, values)
 
     def promoted_numeric_type_name(self, type_names: List[str]) -> Optional[str]:
         numeric_types = {"int", "uint", "float", "double"}
@@ -856,6 +1084,16 @@ class VulkanSPIRVCodeGen:
         ptr_type = self.register_pointer_type(member_type, storage_class)
         access = self.access_chain(base_pointer, [index], ptr_type)
         self.variable_value_types[access.id] = member_type
+        metadata = self.structured_buffer_metadata_for_pointer(base_pointer)
+        if metadata is not None and metadata.get("_access_path") in {
+            "element",
+            "member",
+        }:
+            self.structured_buffer_metadata[access.id] = {
+                **metadata,
+                "_access_path": "member",
+            }
+        self.propagate_storage_buffer_access_metadata(base_pointer, access)
         return access
 
     def create_function(
@@ -1294,22 +1532,57 @@ class VulkanSPIRVCodeGen:
         return {
             "imageLoad",
             "imageStore",
+            "imageAtomicAdd",
+            "imageAtomicMin",
+            "imageAtomicMax",
+            "imageAtomicAnd",
+            "imageAtomicOr",
+            "imageAtomicXor",
+            "imageAtomicExchange",
+            "imageAtomicCompSwap",
+            "atomicAdd",
+            "atomicMin",
+            "atomicMax",
+            "atomicAnd",
+            "atomicOr",
+            "atomicXor",
+            "atomicExchange",
+            "atomicCompSwap",
+            "buffer_load",
+            "buffer_store",
             "texture",
             "texture2D",
             "textureCube",
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
             "textureCompare",
             "textureCompareLod",
+            "textureCompareLodOffset",
             "textureCompareGrad",
+            "textureCompareGradOffset",
             "textureCompareOffset",
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
             "textureGatherCompare",
             "textureGatherCompareOffset",
             "textureLod",
+            "textureLodOffset",
             "textureGrad",
+            "textureGradOffset",
             "textureOffset",
             "textureGather",
             "textureGatherOffset",
             "textureGatherOffsets",
             "texelFetch",
+            "texelFetchOffset",
             "textureSize",
             "imageSize",
             "textureSamples",
@@ -1317,6 +1590,33 @@ class VulkanSPIRVCodeGen:
             "textureQueryLevels",
             "textureQueryLod",
         }
+
+    def image_atomic_function_names(self):
+        return {
+            "imageAtomicAdd",
+            "imageAtomicMin",
+            "imageAtomicMax",
+            "imageAtomicAnd",
+            "imageAtomicOr",
+            "imageAtomicXor",
+            "imageAtomicExchange",
+            "imageAtomicCompSwap",
+        }
+
+    def buffer_atomic_function_names(self):
+        return {
+            "atomicAdd",
+            "atomicMin",
+            "atomicMax",
+            "atomicAnd",
+            "atomicOr",
+            "atomicXor",
+            "atomicExchange",
+            "atomicCompSwap",
+        }
+
+    def buffer_function_names(self):
+        return {"buffer_load", "buffer_store"}
 
     def resource_query_size_result_type(self, metadata) -> SpirvId:
         dim = metadata.get("dim", "2D") if metadata else "2D"
@@ -1552,6 +1852,92 @@ class VulkanSPIRVCodeGen:
 
         return sampled_image_id, coord_id, extra_args, metadata
 
+    def is_scalar_numeric_value(self, value_id: SpirvId) -> bool:
+        value_type = self.value_types.get(
+            value_id.id
+        ) or self.find_registered_type_by_base(value_id.type.base_type)
+        if value_type is None:
+            return False
+        if self.vector_component_type_and_count(value_type.type.base_type) is not None:
+            return False
+        return self.normalize_primitive_name(value_type.type.base_type) in {
+            "int",
+            "uint",
+            "float",
+            "double",
+        }
+
+    def texture_bias_operand(
+        self, function_name: str, bias_id: SpirvId
+    ) -> Optional[str]:
+        if not self.is_scalar_numeric_value(bias_id):
+            self.emit(f"; WARNING: {function_name} requires a scalar numeric bias")
+            return None
+        if self.requires_explicit_lod_sampling():
+            self.emit(
+                f"; WARNING: {function_name} bias is not valid for explicit-lod "
+                "SPIR-V sampling"
+            )
+            return None
+        return f"Bias %{bias_id.id}"
+
+    def projected_coordinate_axes(self, metadata) -> int:
+        dim = metadata.get("dim", "2D") if metadata else "2D"
+        return {
+            "1D": 1,
+            "Buffer": 1,
+            "2D": 2,
+            "Rect": 2,
+            "3D": 3,
+            "Cube": 3,
+        }.get(dim, 2)
+
+    def project_texture_coordinate(
+        self, function_name: str, coord_id: SpirvId, metadata
+    ) -> Optional[SpirvId]:
+        vector_info = self.vector_component_type_and_count(coord_id.type.base_type)
+        if vector_info is None:
+            self.emit(
+                f"; WARNING: {function_name} requires a projected vector coordinate"
+            )
+            return None
+
+        component_type_name, source_count = vector_info
+        if component_type_name not in {"float", "double"}:
+            self.emit(
+                f"; WARNING: {function_name} requires a floating-point projected coordinate"
+            )
+            return None
+
+        axis_count = self.projected_coordinate_axes(metadata)
+        output_count = axis_count + (1 if metadata and metadata.get("arrayed") else 0)
+        if source_count < output_count + 1:
+            self.emit(
+                f"; WARNING: {function_name} requires a projection component after "
+                "the texture coordinate"
+            )
+            return None
+
+        component_type = self.register_primitive_type(component_type_name)
+        projection = self.composite_extract(coord_id, component_type, source_count - 1)
+        components = []
+        for index in range(axis_count):
+            component = self.composite_extract(coord_id, component_type, index)
+            components.append(
+                self.binary_operation("/", component_type, component, projection)
+            )
+
+        if metadata and metadata.get("arrayed"):
+            components.append(
+                self.composite_extract(coord_id, component_type, axis_count)
+            )
+
+        if len(components) == 1:
+            return components[0]
+
+        result_type = self.register_vector_type(component_type, len(components))
+        return self.composite_construct(result_type, components)
+
     def requires_explicit_lod_sampling(self) -> bool:
         return self.current_execution_model in {"GLCompute", "MeshEXT", "TaskEXT"}
 
@@ -1559,9 +1945,481 @@ class VulkanSPIRVCodeGen:
         lod_id = self.register_constant(0.0, self.register_primitive_type("float"))
         return f"Lod %{lod_id.id}"
 
+    def call_image_atomic_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        if len(args) < 3:
+            self.emit(
+                f"; WARNING: {function_name} requires image, coordinate, "
+                "and value operands"
+            )
+            return self.register_constant(0, self.register_primitive_type("uint"))
+
+        image_pointer = args[0]
+        coord_id = args[1]
+        metadata = self.resource_metadata_for_pointer(image_pointer)
+        if not metadata or metadata.get("kind") != "storage_image":
+            self.emit(
+                f"; WARNING: {function_name} requires a storage image pointer operand"
+            )
+            return self.register_constant(0, self.register_primitive_type("uint"))
+
+        component_type_name = metadata.get("component_type", "uint")
+        result_type = self.register_primitive_type(component_type_name)
+        if metadata.get("readonly") or metadata.get("writeonly"):
+            self.emit(f"; WARNING: {function_name} requires a read-write storage image")
+            return self.default_value_for_type(result_type)
+
+        if component_type_name not in {"int", "uint"}:
+            self.emit(f"; WARNING: {function_name} requires an integer storage image")
+            return self.register_constant(0, self.register_primitive_type("uint"))
+
+        if int(metadata.get("component_count", 1)) != 1:
+            self.emit(
+                f"; WARNING: {function_name} requires a scalar storage image format"
+            )
+            return self.register_constant(0, self.register_primitive_type("uint"))
+
+        value_arg_index = 2
+        if metadata.get("multisampled"):
+            if len(args) < 4:
+                self.emit(f"; WARNING: {function_name} requires a sample operand")
+                return self.register_constant(
+                    0, self.register_primitive_type(component_type_name)
+                )
+            sample_id = args[2]
+            value_arg_index = 3
+        else:
+            sample_id = self.register_constant(0, self.register_primitive_type("uint"))
+
+        if function_name == "imageAtomicCompSwap":
+            if len(args) <= value_arg_index + 1:
+                self.emit(
+                    f"; WARNING: {function_name} requires compare and value operands"
+                )
+                return self.register_constant(
+                    0, self.register_primitive_type(component_type_name)
+                )
+            comparator_id = args[value_arg_index]
+            value_id = args[value_arg_index + 1]
+        else:
+            value_id = args[value_arg_index]
+            comparator_id = None
+
+        value_id = self.convert_value_to_type(value_id, result_type)
+        if comparator_id is not None:
+            comparator_id = self.convert_value_to_type(comparator_id, result_type)
+
+        pointer_type = self.register_pointer_type(result_type, "Image")
+        texel_pointer_id = self.get_id()
+        self.emit(
+            f"%{texel_pointer_id} = OpImageTexelPointer %{pointer_type.id} "
+            f"%{image_pointer.id} %{coord_id.id} %{sample_id.id}"
+        )
+        self.variable_value_types[texel_pointer_id] = result_type
+
+        atomic_operation = {
+            "imageAtomicAdd": "OpAtomicIAdd",
+            "imageAtomicAnd": "OpAtomicAnd",
+            "imageAtomicOr": "OpAtomicOr",
+            "imageAtomicXor": "OpAtomicXor",
+            "imageAtomicExchange": "OpAtomicExchange",
+        }.get(function_name)
+        if atomic_operation is None and function_name == "imageAtomicMin":
+            atomic_operation = (
+                "OpAtomicSMin" if component_type_name == "int" else "OpAtomicUMin"
+            )
+        if atomic_operation is None and function_name == "imageAtomicMax":
+            atomic_operation = (
+                "OpAtomicSMax" if component_type_name == "int" else "OpAtomicUMax"
+            )
+
+        scope = self.spirv_scope_constant("Device")
+        semantics = self.spirv_memory_semantics_constant()
+        id_value = self.get_id()
+        if function_name == "imageAtomicCompSwap":
+            self.emit(
+                f"%{id_value} = OpAtomicCompareExchange %{result_type.id} "
+                f"%{texel_pointer_id} %{scope.id} %{semantics.id} %{semantics.id} "
+                f"%{value_id.id} %{comparator_id.id}"
+            )
+        else:
+            self.emit(
+                f"%{id_value} = {atomic_operation} %{result_type.id} "
+                f"%{texel_pointer_id} %{scope.id} %{semantics.id} %{value_id.id}"
+            )
+
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
+
+    def default_value_for_buffer_atomic_failure(
+        self,
+        function_name: str,
+        args: List[SpirvId],
+        target_type: Optional[SpirvId] = None,
+    ) -> SpirvId:
+        value_index = 2 if function_name == "atomicCompSwap" and len(args) > 2 else 1
+        if len(args) > value_index:
+            value_type = self.value_types.get(args[value_index].id)
+            if value_type is None:
+                value_type = self.find_registered_type_by_base(
+                    args[value_index].type.base_type
+                )
+            if value_type is not None:
+                return self.default_value_for_type(value_type)
+
+        if target_type is not None:
+            return self.default_value_for_type(target_type)
+
+        return self.register_constant(0, self.register_primitive_type("uint"))
+
+    def call_buffer_atomic_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        if len(args) < 2:
+            self.emit(f"; WARNING: {function_name} requires target and value operands")
+            return self.register_constant(0, self.register_primitive_type("uint"))
+
+        target_pointer = args[0]
+        target_type = self.variable_value_types.get(target_pointer.id)
+        if target_type is None and target_pointer.type.storage_class:
+            target_type = self.find_registered_type_by_base(
+                target_pointer.type.base_type.replace("ptr_", "", 1)
+            )
+        if target_type is None:
+            self.emit(f"; WARNING: {function_name} requires an addressable target")
+            return self.default_value_for_buffer_atomic_failure(function_name, args)
+
+        metadata = self.storage_buffer_access_metadata_for_pointer(target_pointer)
+        if metadata is None:
+            self.emit(f"; WARNING: {function_name} requires a storage buffer target")
+            return self.default_value_for_buffer_atomic_failure(
+                function_name, args, target_type
+            )
+        if metadata.get("readonly") or metadata.get("writeonly"):
+            self.emit(
+                f"; WARNING: {function_name} requires a read-write storage buffer"
+            )
+            return self.default_value_for_buffer_atomic_failure(
+                function_name, args, target_type
+            )
+
+        type_name = self.normalize_primitive_name(target_type.type.base_type)
+        if self.vector_type_info_from_type(target_type) is not None:
+            self.emit(
+                f"; WARNING: {function_name} requires a scalar int or uint buffer member"
+            )
+            return self.default_value_for_buffer_atomic_failure(
+                function_name, args, target_type
+            )
+        if self.matrix_type_info_from_type(target_type) is not None:
+            self.emit(
+                f"; WARNING: {function_name} requires a scalar int or uint buffer member"
+            )
+            return self.default_value_for_buffer_atomic_failure(
+                function_name, args, target_type
+            )
+        if type_name not in {"int", "uint"}:
+            self.emit(
+                f"; WARNING: {function_name} currently supports only int or uint "
+                "buffer members"
+            )
+            return self.default_value_for_buffer_atomic_failure(
+                function_name, args, target_type
+            )
+
+        if function_name == "atomicCompSwap":
+            if len(args) < 3:
+                self.emit(
+                    f"; WARNING: {function_name} requires compare and value operands"
+                )
+                return self.default_value_for_buffer_atomic_failure(
+                    function_name, args, target_type
+                )
+            comparator_id = self.convert_value_to_type(args[1], target_type)
+            value_id = self.convert_value_to_type(args[2], target_type)
+        else:
+            comparator_id = None
+            value_id = self.convert_value_to_type(args[1], target_type)
+
+        atomic_operation = {
+            "atomicAdd": "OpAtomicIAdd",
+            "atomicAnd": "OpAtomicAnd",
+            "atomicOr": "OpAtomicOr",
+            "atomicXor": "OpAtomicXor",
+            "atomicExchange": "OpAtomicExchange",
+        }.get(function_name)
+        if atomic_operation is None and function_name == "atomicMin":
+            atomic_operation = "OpAtomicSMin" if type_name == "int" else "OpAtomicUMin"
+        if atomic_operation is None and function_name == "atomicMax":
+            atomic_operation = "OpAtomicSMax" if type_name == "int" else "OpAtomicUMax"
+
+        scope = self.spirv_scope_constant("Device")
+        semantics = self.spirv_memory_semantics_constant()
+        id_value = self.get_id()
+        if function_name == "atomicCompSwap":
+            self.emit(
+                f"%{id_value} = OpAtomicCompareExchange %{target_type.id} "
+                f"%{target_pointer.id} %{scope.id} %{semantics.id} %{semantics.id} "
+                f"%{value_id.id} %{comparator_id.id}"
+            )
+        else:
+            self.emit(
+                f"%{id_value} = {atomic_operation} %{target_type.id} "
+                f"%{target_pointer.id} %{scope.id} %{semantics.id} %{value_id.id}"
+            )
+
+        self.value_types[id_value] = target_type
+        return SpirvId(id_value, target_type.type)
+
+    def projected_texture_function_names(self):
+        return {
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+        }
+
+    def projected_shadow_function_names(self):
+        return {
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+        }
+
+    def projected_texture_operand_counts(self, function_name: str) -> int:
+        return {
+            "textureProj": 0,
+            "textureProjOffset": 1,
+            "textureProjLod": 1,
+            "textureProjLodOffset": 2,
+            "textureProjGrad": 2,
+            "textureProjGradOffset": 3,
+        }[function_name]
+
+    def projected_shadow_operand_counts(self, function_name: str) -> int:
+        return {
+            "textureCompareProj": 0,
+            "textureCompareProjOffset": 1,
+            "textureCompareProjLod": 1,
+            "textureCompareProjLodOffset": 2,
+            "textureCompareProjGrad": 2,
+            "textureCompareProjGradOffset": 3,
+        }[function_name]
+
+    def projected_texture_image_operands(
+        self, function_name: str, extra_args: List[SpirvId]
+    ) -> Optional[str]:
+        if function_name == "textureProj":
+            if extra_args:
+                return self.texture_bias_operand(function_name, extra_args[0])
+            if self.requires_explicit_lod_sampling():
+                return self.default_lod_operand()
+            return ""
+
+        if function_name == "textureProjOffset":
+            offset_operand = self.image_offset_operand(extra_args[0])
+            if len(extra_args) >= 2:
+                bias_operand = self.texture_bias_operand(function_name, extra_args[1])
+                if bias_operand is None:
+                    return None
+                return self.image_operands(offset_operand, bias_operand)
+            if self.requires_explicit_lod_sampling():
+                return self.image_operands(self.default_lod_operand(), offset_operand)
+            return offset_operand
+
+        if function_name == "textureProjLod":
+            return f"Lod %{extra_args[0].id}"
+        if function_name == "textureProjLodOffset":
+            return self.image_operands(
+                f"Lod %{extra_args[0].id}", self.image_offset_operand(extra_args[1])
+            )
+        if function_name == "textureProjGrad":
+            return f"Grad %{extra_args[0].id} %{extra_args[1].id}"
+        return self.image_operands(
+            f"Grad %{extra_args[0].id} %{extra_args[1].id}",
+            self.image_offset_operand(extra_args[2]),
+        )
+
+    def call_projected_texture_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        sample_args = self.sampled_texture_operands(
+            function_name,
+            args,
+            self.projected_texture_operand_counts(function_name),
+        )
+        if sample_args is None:
+            return self.register_constant(0.0, self.register_primitive_type("float"))
+
+        sampled_image_id, coord_id, extra_args, metadata = sample_args
+        projected_coord = self.project_texture_coordinate(
+            function_name, coord_id, metadata
+        )
+        result_type = self.resource_access_result_type(metadata)
+        if "Offset" in function_name and metadata.get("dim") == "Cube":
+            self.emit(
+                f"; WARNING: {function_name} offsets are not valid for cube images"
+            )
+            return self.default_value_for_type(result_type)
+        if projected_coord is None:
+            return self.default_value_for_type(result_type)
+
+        image_operands = self.projected_texture_image_operands(
+            function_name, extra_args
+        )
+        if image_operands is None:
+            return self.default_value_for_type(result_type)
+
+        id_value = self.get_id()
+        opcode = (
+            "OpImageSampleExplicitLod"
+            if image_operands and ("Lod" in image_operands or "Grad" in image_operands)
+            else "OpImageSampleImplicitLod"
+        )
+        self.emit(
+            f"%{id_value} = {opcode} %{result_type.id} "
+            f"%{sampled_image_id.id} %{projected_coord.id}"
+            f"{(' ' + image_operands) if image_operands else ''}"
+        )
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
+
+    def projected_shadow_image_operands(
+        self, function_name: str, extra_args: List[SpirvId]
+    ) -> str:
+        if function_name == "textureCompareProj":
+            return (
+                self.default_lod_operand()
+                if self.requires_explicit_lod_sampling()
+                else ""
+            )
+        if function_name == "textureCompareProjOffset":
+            offset_operand = self.image_offset_operand(extra_args[0])
+            if self.requires_explicit_lod_sampling():
+                return self.image_operands(self.default_lod_operand(), offset_operand)
+            return offset_operand
+        if function_name == "textureCompareProjLod":
+            return f"Lod %{extra_args[0].id}"
+        if function_name == "textureCompareProjLodOffset":
+            return self.image_operands(
+                f"Lod %{extra_args[0].id}", self.image_offset_operand(extra_args[1])
+            )
+        if function_name == "textureCompareProjGrad":
+            return f"Grad %{extra_args[0].id} %{extra_args[1].id}"
+        return self.image_operands(
+            f"Grad %{extra_args[0].id} %{extra_args[1].id}",
+            self.image_offset_operand(extra_args[2]),
+        )
+
+    def call_projected_shadow_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        compare_args = self.shadow_compare_operands(
+            function_name,
+            args,
+            self.projected_shadow_operand_counts(function_name),
+        )
+        if compare_args is None:
+            return self.register_constant(0.0, self.register_primitive_type("float"))
+
+        sampled_image_id, coord_id, depth_id, extra_args = compare_args
+        metadata = self.resource_metadata_for_value(sampled_image_id)
+        projected_coord = self.project_texture_coordinate(
+            function_name, coord_id, metadata
+        )
+        result_type = self.register_primitive_type("float")
+        if "Offset" in function_name and metadata.get("dim") == "Cube":
+            self.emit(
+                f"; WARNING: {function_name} offsets are not valid for cube images"
+            )
+            return self.default_value_for_type(result_type)
+        if projected_coord is None:
+            return self.default_value_for_type(result_type)
+
+        image_operands = self.projected_shadow_image_operands(function_name, extra_args)
+        id_value = self.get_id()
+        opcode = (
+            "OpImageSampleDrefExplicitLod"
+            if image_operands and ("Lod" in image_operands or "Grad" in image_operands)
+            else "OpImageSampleDrefImplicitLod"
+        )
+        self.emit(
+            f"%{id_value} = {opcode} %{result_type.id} "
+            f"%{sampled_image_id.id} %{projected_coord.id} %{depth_id.id}"
+            f"{(' ' + image_operands) if image_operands else ''}"
+        )
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
+
     def call_resource_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
+        if function_name in self.image_atomic_function_names():
+            return self.call_image_atomic_function(function_name, args)
+        if function_name in self.buffer_atomic_function_names():
+            return self.call_buffer_atomic_function(function_name, args)
+        if function_name in self.projected_texture_function_names():
+            return self.call_projected_texture_function(function_name, args)
+        if function_name in self.projected_shadow_function_names():
+            return self.call_projected_shadow_function(function_name, args)
+
+        if function_name == "buffer_load":
+            if len(args) < 2:
+                self.emit("; WARNING: buffer_load requires buffer and index operands")
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            metadata = self.structured_buffer_metadata_for_pointer(args[0])
+            if metadata is not None and metadata.get("writeonly"):
+                self.emit("; WARNING: buffer_load requires a readable buffer")
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            element_pointer = self.structured_buffer_element_pointer(args[0], args[1])
+            if element_pointer is None:
+                self.emit("; WARNING: buffer_load requires a StructuredBuffer operand")
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+
+            element_type = self.variable_value_types[element_pointer.id]
+            return self.load_from_variable(element_pointer, element_type)
+
+        if function_name == "buffer_store":
+            if len(args) < 3:
+                self.emit(
+                    "; WARNING: buffer_store requires buffer, index, and value operands"
+                )
+                return None
+
+            metadata = self.structured_buffer_metadata_for_pointer(args[0])
+            if metadata is None:
+                self.emit(
+                    "; WARNING: buffer_store requires an RWStructuredBuffer operand"
+                )
+                return None
+            if metadata.get("readonly"):
+                self.emit("; WARNING: buffer_store requires an RWStructuredBuffer")
+                return None
+
+            element_pointer = self.structured_buffer_element_pointer(args[0], args[1])
+            if element_pointer is None:
+                self.emit(
+                    "; WARNING: buffer_store requires an RWStructuredBuffer operand"
+                )
+                return None
+
+            self.store_to_variable(element_pointer, args[2])
+            return None
+
         if function_name == "imageLoad":
             if len(args) < 2:
                 self.emit("; WARNING: imageLoad requires image and coordinate operands")
@@ -1577,6 +2435,11 @@ class VulkanSPIRVCodeGen:
                     0.0, self.register_primitive_type("float")
                 )
 
+            result_type = self.resource_access_result_type(metadata)
+            if metadata.get("writeonly"):
+                self.emit("; WARNING: imageLoad requires a readable storage image")
+                return self.default_value_for_type(result_type)
+
             image_operands = ""
             if metadata.get("multisampled"):
                 if len(args) < 3:
@@ -1586,7 +2449,6 @@ class VulkanSPIRVCodeGen:
                     )
                 image_operands = f" Sample %{args[2].id}"
 
-            result_type = self.resource_access_result_type(metadata)
             id_value = self.get_id()
             self.emit(
                 f"%{id_value} = OpImageRead %{result_type.id} "
@@ -1606,6 +2468,9 @@ class VulkanSPIRVCodeGen:
             metadata = self.resource_metadata_for_value(image_id)
             if not metadata or metadata.get("kind") != "storage_image":
                 self.emit("; WARNING: imageStore requires a storage image operand")
+                return None
+            if metadata.get("readonly"):
+                self.emit("; WARNING: imageStore requires a writable storage image")
                 return None
 
             image_operands = ""
@@ -1629,9 +2494,15 @@ class VulkanSPIRVCodeGen:
                     0.0, self.register_primitive_type("float")
                 )
 
-            sampled_image_id, coord_id, _, metadata = sample_args
+            sampled_image_id, coord_id, extra_args, metadata = sample_args
 
             result_type = self.resource_access_result_type(metadata)
+            bias_operand = None
+            if extra_args:
+                bias_operand = self.texture_bias_operand(function_name, extra_args[0])
+                if bias_operand is None:
+                    return self.default_value_for_type(result_type)
+
             id_value = self.get_id()
             if self.requires_explicit_lod_sampling():
                 self.emit(
@@ -1643,6 +2514,7 @@ class VulkanSPIRVCodeGen:
                 self.emit(
                     f"%{id_value} = OpImageSampleImplicitLod %{result_type.id} "
                     f"%{sampled_image_id.id} %{coord_id.id}"
+                    f"{(' ' + bias_operand) if bias_operand else ''}"
                 )
             self.value_types[id_value] = result_type
             return SpirvId(id_value, result_type.type)
@@ -1650,13 +2522,17 @@ class VulkanSPIRVCodeGen:
         if function_name in {
             "textureCompare",
             "textureCompareLod",
+            "textureCompareLodOffset",
             "textureCompareGrad",
+            "textureCompareGradOffset",
             "textureCompareOffset",
         }:
             extra_arg_count = {
                 "textureCompare": 0,
                 "textureCompareLod": 1,
+                "textureCompareLodOffset": 2,
                 "textureCompareGrad": 2,
+                "textureCompareGradOffset": 3,
                 "textureCompareOffset": 1,
             }[function_name]
             compare_args = self.shadow_compare_operands(
@@ -1705,11 +2581,25 @@ class VulkanSPIRVCodeGen:
                     f"%{sampled_image_id.id} %{coord_id.id} %{depth_id.id} "
                     f"Lod %{extra_args[0].id}"
                 )
-            else:
+            elif function_name == "textureCompareLodOffset":
+                offset_operand = self.image_offset_operand(extra_args[1])
+                self.emit(
+                    f"%{id_value} = OpImageSampleDrefExplicitLod %{result_type.id} "
+                    f"%{sampled_image_id.id} %{coord_id.id} %{depth_id.id} "
+                    f"{self.image_operands(f'Lod %{extra_args[0].id}', offset_operand)}"
+                )
+            elif function_name == "textureCompareGrad":
                 self.emit(
                     f"%{id_value} = OpImageSampleDrefExplicitLod %{result_type.id} "
                     f"%{sampled_image_id.id} %{coord_id.id} %{depth_id.id} "
                     f"Grad %{extra_args[0].id} %{extra_args[1].id}"
+                )
+            else:
+                offset_operand = self.image_offset_operand(extra_args[2])
+                self.emit(
+                    f"%{id_value} = OpImageSampleDrefExplicitLod %{result_type.id} "
+                    f"%{sampled_image_id.id} %{coord_id.id} %{depth_id.id} "
+                    f"{self.image_operands(f'Grad %{extra_args[0].id} %{extra_args[1].id}', offset_operand)}"
                 )
 
             self.value_types[id_value] = result_type
@@ -1753,6 +2643,12 @@ class VulkanSPIRVCodeGen:
             offset_id = extra_args[0]
 
             result_type = self.resource_access_result_type(metadata)
+            bias_operand = None
+            if len(extra_args) >= 2:
+                bias_operand = self.texture_bias_operand(function_name, extra_args[1])
+                if bias_operand is None:
+                    return self.default_value_for_type(result_type)
+
             id_value = self.get_id()
             offset_operand = self.image_offset_operand(offset_id)
             if self.requires_explicit_lod_sampling():
@@ -1764,7 +2660,8 @@ class VulkanSPIRVCodeGen:
             else:
                 self.emit(
                     f"%{id_value} = OpImageSampleImplicitLod %{result_type.id} "
-                    f"%{sampled_image_id.id} %{coord_id.id} {offset_operand}"
+                    f"%{sampled_image_id.id} %{coord_id.id} "
+                    f"{self.image_operands(offset_operand, bias_operand)}"
                 )
             self.value_types[id_value] = result_type
             return SpirvId(id_value, result_type.type)
@@ -1815,8 +2712,11 @@ class VulkanSPIRVCodeGen:
                 offset_id,
             )
 
-        if function_name == "texelFetch":
-            sample_args = self.sampled_texture_operands(function_name, args, 1)
+        if function_name in {"texelFetch", "texelFetchOffset"}:
+            required_extra_count = 1 if function_name == "texelFetch" else 2
+            sample_args = self.sampled_texture_operands(
+                function_name, args, required_extra_count
+            )
             if sample_args is None:
                 return self.register_constant(
                     0.0, self.register_primitive_type("float")
@@ -1824,6 +2724,12 @@ class VulkanSPIRVCodeGen:
 
             sampled_image_id, coord_id, extra_args, metadata = sample_args
             operand_id = extra_args[0]
+            offset_id = extra_args[1] if function_name == "texelFetchOffset" else None
+
+            if metadata.get("dim") == "Cube":
+                self.emit(f"; WARNING: {function_name} is not valid for cube images")
+                result_type = self.resource_access_result_type(metadata)
+                return self.default_value_for_type(result_type)
 
             image_id = self.extract_image_from_sampled_image(sampled_image_id, metadata)
             if image_id is None:
@@ -1831,12 +2737,28 @@ class VulkanSPIRVCodeGen:
                     0.0, self.register_primitive_type("float")
                 )
 
+            if metadata.get("multisampled") and offset_id is not None:
+                self.emit(
+                    "; WARNING: texelFetchOffset is not valid for multisample images"
+                )
+                result_type = self.resource_access_result_type(metadata)
+                return self.default_value_for_type(result_type)
+
             result_type = self.resource_access_result_type(metadata)
             id_value = self.get_id()
-            image_operand = "Sample" if metadata.get("multisampled") else "Lod"
+            image_operand = (
+                f"Sample %{operand_id.id}"
+                if metadata.get("multisampled")
+                else f"Lod %{operand_id.id}"
+            )
+            if offset_id is not None:
+                image_operand = self.image_operands(
+                    image_operand,
+                    self.image_offset_operand(offset_id),
+                )
             self.emit(
                 f"%{id_value} = OpImageFetch %{result_type.id} "
-                f"%{image_id.id} %{coord_id.id} {image_operand} %{operand_id.id}"
+                f"%{image_id.id} %{coord_id.id} {image_operand}"
             )
             self.value_types[id_value] = result_type
             return SpirvId(id_value, result_type.type)
@@ -1980,8 +2902,18 @@ class VulkanSPIRVCodeGen:
             self.value_types[id_value] = result_type
             return SpirvId(id_value, result_type.type)
 
-        if function_name in {"textureLod", "textureGrad"}:
-            required_arg_count = 3 if function_name == "textureLod" else 4
+        if function_name in {
+            "textureLod",
+            "textureLodOffset",
+            "textureGrad",
+            "textureGradOffset",
+        }:
+            required_arg_count = {
+                "textureLod": 3,
+                "textureLodOffset": 4,
+                "textureGrad": 4,
+                "textureGradOffset": 5,
+            }[function_name]
             extra_arg_count = required_arg_count - 2
             sample_args = self.sampled_texture_operands(
                 function_name, args, extra_arg_count
@@ -1994,8 +2926,18 @@ class VulkanSPIRVCodeGen:
             sampled_image_id, coord_id, extra_args, metadata = sample_args
             if function_name == "textureLod":
                 image_operands = f"Lod %{extra_args[0].id}"
-            else:
+            elif function_name == "textureLodOffset":
+                image_operands = self.image_operands(
+                    f"Lod %{extra_args[0].id}",
+                    self.image_offset_operand(extra_args[1]),
+                )
+            elif function_name == "textureGrad":
                 image_operands = f"Grad %{extra_args[0].id} %{extra_args[1].id}"
+            else:
+                image_operands = self.image_operands(
+                    f"Grad %{extra_args[0].id} %{extra_args[1].id}",
+                    self.image_offset_operand(extra_args[2]),
+                )
 
             result_type = self.resource_access_result_type(metadata)
             id_value = self.get_id()
@@ -2011,9 +2953,20 @@ class VulkanSPIRVCodeGen:
     def resource_offset_argument_indices(self, function_name: str):
         return {
             "textureOffset": {2, 3},
+            "textureProjOffset": {2, 3},
+            "textureProjLodOffset": {3, 4},
+            "textureProjGradOffset": {4, 5},
+            "textureLodOffset": {3, 4},
+            "textureGradOffset": {4, 5},
             "textureGatherOffset": {2, 3},
             "textureGatherOffsets": {2, 3, 4, 5, 6},
+            "texelFetchOffset": {3, 4},
             "textureCompareOffset": {3, 4},
+            "textureCompareProjOffset": {3, 4},
+            "textureCompareProjLodOffset": {4, 5},
+            "textureCompareProjGradOffset": {5, 6},
+            "textureCompareLodOffset": {4, 5},
+            "textureCompareGradOffset": {5, 6},
             "textureGatherCompareOffset": {3, 4},
         }.get(function_name, set())
 
@@ -2085,6 +3038,21 @@ class VulkanSPIRVCodeGen:
             if offset_constant is not None:
                 return offset_constant
 
+        if function_name in self.image_atomic_function_names() and arg_index == 0:
+            pointer_arg = self.variable_pointer_from_expression(arg)
+            if pointer_arg is not None:
+                return pointer_arg
+
+        if function_name in self.buffer_atomic_function_names() and arg_index == 0:
+            pointer_arg = self.variable_pointer_from_expression(arg)
+            if pointer_arg is not None:
+                return pointer_arg
+
+        if function_name in self.buffer_function_names() and arg_index == 0:
+            pointer_arg = self.variable_pointer_from_expression(arg)
+            if pointer_arg is not None:
+                return pointer_arg
+
         resource_array_params = self.function_resource_array_params.get(
             function_name, set()
         )
@@ -2139,6 +3107,881 @@ class VulkanSPIRVCodeGen:
         if result_type is None:
             result_type = self.register_primitive_type("float")
         return self.default_value_for_type(result_type)
+
+    def represented_ir_diagnostic_default_value(
+        self, category: str, operation: str
+    ) -> SpirvId:
+        result_type = self.represented_ir_diagnostic_result_type(category, operation)
+        result_type_label = self.diagnostic_type_label(result_type)
+        self.emit(
+            f"; WARNING: SPIR-V backend does not lower {category} operation "
+            f"{operation} yet; using a default {result_type_label} value"
+        )
+        return self.default_value_for_type(result_type)
+
+    def diagnostic_type_label(self, type_id: SpirvId) -> str:
+        vector_info = self.vector_component_type_and_count(type_id.type.base_type)
+        if vector_info is not None:
+            component_type, count = vector_info
+            vector_prefixes = {
+                "float": "vec",
+                "double": "dvec",
+                "int": "ivec",
+                "uint": "uvec",
+                "bool": "bvec",
+            }
+            return f"{vector_prefixes.get(component_type, 'vec')}{count}"
+        return type_id.type.base_type
+
+    def represented_ir_diagnostic_result_type(
+        self, category: str, operation: str
+    ) -> SpirvId:
+        if category == "ray tracing" and operation == "ReportHit":
+            return self.register_primitive_type("bool")
+
+        if category == "ray query":
+            if operation == "Proceed":
+                return self.register_primitive_type("bool")
+            getter_info = self.ray_query_state_getter_info(operation)
+            if getter_info is not None:
+                _, result_kind = getter_info
+                return self.ray_query_result_type_for_kind(result_kind)
+            getter_info = self.ray_query_candidate_getter_info(operation)
+            if getter_info is not None:
+                _, result_kind = getter_info
+                return self.ray_query_result_type_for_kind(result_kind)
+            getter_info = self.ray_query_intersection_getter_info(operation)
+            if getter_info is not None:
+                _, result_kind, _ = getter_info
+                return self.ray_query_result_type_for_kind(result_kind)
+            return self.register_primitive_type("uint")
+
+        return self.register_primitive_type("uint")
+
+    def ray_query_pointer_from_expression(self, expr) -> Optional[SpirvId]:
+        query_pointer = self.variable_pointer_from_expression(expr)
+        if query_pointer is None:
+            return None
+
+        query_type = self.pointer_pointee_type(query_pointer)
+        if query_type is None:
+            return None
+
+        if not self.is_ray_query_type_name(query_type.type.base_type):
+            return None
+
+        return query_pointer
+
+    def ray_query_intersection_selector(self, operation: str) -> Optional[int]:
+        if operation.startswith("Candidate"):
+            return 0
+        if operation.startswith("Committed"):
+            return 1
+        return None
+
+    def ray_query_intersection_constant(self, operation: str) -> Optional[SpirvId]:
+        selector = self.ray_query_intersection_selector(operation)
+        if selector is None:
+            return None
+
+        return self.register_constant(selector, self.register_primitive_type("uint"))
+
+    def ray_query_result_type_for_kind(self, result_kind: str) -> SpirvId:
+        if result_kind == "bool":
+            return self.register_primitive_type("bool")
+        if result_kind == "float":
+            return self.register_primitive_type("float")
+        if result_kind == "vec2":
+            return self.register_vector_type(self.register_primitive_type("float"), 2)
+        if result_kind == "vec3":
+            return self.register_vector_type(self.register_primitive_type("float"), 3)
+        if result_kind == "vec3_array3":
+            vec3_type = self.register_vector_type(
+                self.register_primitive_type("float"), 3
+            )
+            return self.register_array_type(vec3_type, 3)
+        if result_kind == "mat4x3":
+            column_type = self.register_vector_type(
+                self.register_primitive_type("float"), 3
+            )
+            return self.register_matrix_type(column_type, 4)
+        return self.register_primitive_type("uint")
+
+    def ray_query_state_getter_info(self, operation: str):
+        getters = {
+            "RayTMin": ("OpRayQueryGetRayTMinKHR", "float"),
+            "RayFlags": ("OpRayQueryGetRayFlagsKHR", "uint"),
+            "WorldRayOrigin": ("OpRayQueryGetWorldRayOriginKHR", "vec3"),
+            "WorldRayDirection": ("OpRayQueryGetWorldRayDirectionKHR", "vec3"),
+        }
+        return getters.get(operation)
+
+    def ray_query_state_getter_operations(self):
+        return {
+            "RayTMin",
+            "RayFlags",
+            "WorldRayOrigin",
+            "WorldRayDirection",
+        }
+
+    def ray_query_candidate_getter_info(self, operation: str):
+        getters = {
+            "CandidateAABBOpaque": (
+                "OpRayQueryGetIntersectionCandidateAABBOpaqueKHR",
+                "bool",
+            ),
+        }
+        return getters.get(operation)
+
+    def ray_query_candidate_getter_operations(self):
+        return {
+            "CandidateAABBOpaque",
+        }
+
+    def ray_query_intersection_getter_info(self, operation: str):
+        getters = {
+            "CandidateType": ("OpRayQueryGetIntersectionTypeKHR", "uint"),
+            "CommittedType": ("OpRayQueryGetIntersectionTypeKHR", "uint"),
+            "CandidateRayT": ("OpRayQueryGetIntersectionTKHR", "float"),
+            "CommittedRayT": ("OpRayQueryGetIntersectionTKHR", "float"),
+            "CandidatePrimitiveIndex": (
+                "OpRayQueryGetIntersectionPrimitiveIndexKHR",
+                "uint",
+            ),
+            "CommittedPrimitiveIndex": (
+                "OpRayQueryGetIntersectionPrimitiveIndexKHR",
+                "uint",
+            ),
+            "CandidateInstanceID": (
+                "OpRayQueryGetIntersectionInstanceIdKHR",
+                "uint",
+            ),
+            "CommittedInstanceID": (
+                "OpRayQueryGetIntersectionInstanceIdKHR",
+                "uint",
+            ),
+            "CandidateInstanceCustomIndex": (
+                "OpRayQueryGetIntersectionInstanceCustomIndexKHR",
+                "uint",
+            ),
+            "CommittedInstanceCustomIndex": (
+                "OpRayQueryGetIntersectionInstanceCustomIndexKHR",
+                "uint",
+            ),
+            "CandidateInstanceShaderBindingTableRecordOffset": (
+                "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR",
+                "uint",
+            ),
+            "CommittedInstanceShaderBindingTableRecordOffset": (
+                "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR",
+                "uint",
+            ),
+            "CandidateObjectRayOrigin": (
+                "OpRayQueryGetIntersectionObjectRayOriginKHR",
+                "vec3",
+            ),
+            "CommittedObjectRayOrigin": (
+                "OpRayQueryGetIntersectionObjectRayOriginKHR",
+                "vec3",
+            ),
+            "CandidateObjectRayDirection": (
+                "OpRayQueryGetIntersectionObjectRayDirectionKHR",
+                "vec3",
+            ),
+            "CommittedObjectRayDirection": (
+                "OpRayQueryGetIntersectionObjectRayDirectionKHR",
+                "vec3",
+            ),
+            "CandidateGeometryIndex": (
+                "OpRayQueryGetIntersectionGeometryIndexKHR",
+                "uint",
+            ),
+            "CommittedGeometryIndex": (
+                "OpRayQueryGetIntersectionGeometryIndexKHR",
+                "uint",
+            ),
+            "CandidateTriangleBarycentrics": (
+                "OpRayQueryGetIntersectionBarycentricsKHR",
+                "vec2",
+            ),
+            "CommittedTriangleBarycentrics": (
+                "OpRayQueryGetIntersectionBarycentricsKHR",
+                "vec2",
+            ),
+            "CandidateTriangleFrontFace": (
+                "OpRayQueryGetIntersectionFrontFaceKHR",
+                "bool",
+            ),
+            "CommittedTriangleFrontFace": (
+                "OpRayQueryGetIntersectionFrontFaceKHR",
+                "bool",
+            ),
+            "CandidateTriangleNormal": ("", "vec3"),
+            "CommittedTriangleNormal": ("", "vec3"),
+            "CandidateTriangleArea": ("", "float"),
+            "CommittedTriangleArea": ("", "float"),
+            "CandidateTriangleCentroid": ("", "vec3"),
+            "CommittedTriangleCentroid": ("", "vec3"),
+            "CandidateTriangleVertexPositions": (
+                "OpRayQueryGetIntersectionTriangleVertexPositionsKHR",
+                "vec3_array3",
+            ),
+            "CommittedTriangleVertexPositions": (
+                "OpRayQueryGetIntersectionTriangleVertexPositionsKHR",
+                "vec3_array3",
+            ),
+            "CandidateObjectToWorld": (
+                "OpRayQueryGetIntersectionObjectToWorldKHR",
+                "mat4x3",
+            ),
+            "CommittedObjectToWorld": (
+                "OpRayQueryGetIntersectionObjectToWorldKHR",
+                "mat4x3",
+            ),
+            "CandidateObjectToWorld3x4": (
+                "OpRayQueryGetIntersectionObjectToWorldKHR",
+                "mat4x3",
+            ),
+            "CommittedObjectToWorld3x4": (
+                "OpRayQueryGetIntersectionObjectToWorldKHR",
+                "mat4x3",
+            ),
+            "CandidateWorldToObject": (
+                "OpRayQueryGetIntersectionWorldToObjectKHR",
+                "mat4x3",
+            ),
+            "CommittedWorldToObject": (
+                "OpRayQueryGetIntersectionWorldToObjectKHR",
+                "mat4x3",
+            ),
+            "CandidateWorldToObject3x4": (
+                "OpRayQueryGetIntersectionWorldToObjectKHR",
+                "mat4x3",
+            ),
+            "CommittedWorldToObject3x4": (
+                "OpRayQueryGetIntersectionWorldToObjectKHR",
+                "mat4x3",
+            ),
+        }
+        getter = getters.get(operation)
+        if getter is None:
+            return None
+
+        selector = self.ray_query_intersection_selector(operation)
+        if selector is None:
+            return None
+
+        opcode, result_kind = getter
+        return opcode, result_kind, selector
+
+    def ray_query_intersection_getter_operations(self):
+        return {
+            "CandidateType",
+            "CommittedType",
+            "CandidateRayT",
+            "CommittedRayT",
+            "CandidatePrimitiveIndex",
+            "CommittedPrimitiveIndex",
+            "CandidateInstanceID",
+            "CommittedInstanceID",
+            "CandidateInstanceCustomIndex",
+            "CommittedInstanceCustomIndex",
+            "CandidateInstanceShaderBindingTableRecordOffset",
+            "CommittedInstanceShaderBindingTableRecordOffset",
+            "CandidateObjectRayOrigin",
+            "CommittedObjectRayOrigin",
+            "CandidateObjectRayDirection",
+            "CommittedObjectRayDirection",
+            "CandidateGeometryIndex",
+            "CommittedGeometryIndex",
+            "CandidateTriangleBarycentrics",
+            "CommittedTriangleBarycentrics",
+            "CandidateTriangleFrontFace",
+            "CommittedTriangleFrontFace",
+            "CandidateTriangleNormal",
+            "CommittedTriangleNormal",
+            "CandidateTriangleArea",
+            "CommittedTriangleArea",
+            "CandidateTriangleCentroid",
+            "CommittedTriangleCentroid",
+            "CandidateTriangleVertexPositions",
+            "CommittedTriangleVertexPositions",
+            "CandidateObjectToWorld",
+            "CommittedObjectToWorld",
+            "CandidateObjectToWorld3x4",
+            "CommittedObjectToWorld3x4",
+            "CandidateWorldToObject",
+            "CommittedWorldToObject",
+            "CandidateWorldToObject3x4",
+            "CommittedWorldToObject3x4",
+        }
+
+    def process_ray_query_state_getter(
+        self, query_pointer: SpirvId, operation: str
+    ) -> SpirvId:
+        getter_info = self.ray_query_state_getter_info(operation)
+        if getter_info is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        opcode, result_kind = getter_info
+        result_type = self.ray_query_result_type_for_kind(result_kind)
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = {opcode} %{result_type.id} %{query_pointer.id}")
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
+
+    def process_ray_query_candidate_getter(
+        self, query_pointer: SpirvId, operation: str
+    ) -> SpirvId:
+        getter_info = self.ray_query_candidate_getter_info(operation)
+        if getter_info is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        opcode, result_kind = getter_info
+        result_type = self.ray_query_result_type_for_kind(result_kind)
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = {opcode} %{result_type.id} %{query_pointer.id}")
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
+
+    def process_ray_query_intersection_getter(
+        self, query_pointer: SpirvId, operation: str
+    ) -> SpirvId:
+        getter_info = self.ray_query_intersection_getter_info(operation)
+        if getter_info is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        if operation in {"CandidateTriangleNormal", "CommittedTriangleNormal"}:
+            return self.process_ray_query_triangle_normal_getter(
+                query_pointer, operation
+            )
+        if operation in {"CandidateTriangleArea", "CommittedTriangleArea"}:
+            return self.process_ray_query_triangle_area_getter(query_pointer, operation)
+        if operation in {"CandidateTriangleCentroid", "CommittedTriangleCentroid"}:
+            return self.process_ray_query_triangle_centroid_getter(
+                query_pointer, operation
+            )
+
+        opcode, result_kind, _ = getter_info
+        if operation in {
+            "CandidateTriangleVertexPositions",
+            "CommittedTriangleVertexPositions",
+        }:
+            self.require_capability("RayQueryPositionFetchKHR")
+            self.require_extension("SPV_KHR_ray_tracing_position_fetch")
+
+        intersection = self.ray_query_intersection_constant(operation)
+        if intersection is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        result_type = self.ray_query_result_type_for_kind(result_kind)
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = {opcode} %{result_type.id} "
+            f"%{query_pointer.id} %{intersection.id}"
+        )
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
+
+    def emit_glsl_std450_instruction(
+        self, instruction: str, result_type: SpirvId, args: List[SpirvId]
+    ) -> SpirvId:
+        if self.glsl_std450_id is None:
+            self.glsl_std450_id = self.get_id()
+            self.emit(f'%{self.glsl_std450_id} = OpExtInstImport "GLSL.std.450"')
+
+        id_value = self.get_id()
+        arg_list = " ".join(f"%{arg.id}" for arg in args)
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} "
+            f"%{self.glsl_std450_id} {instruction} {arg_list}"
+        )
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
+
+    def ray_query_triangle_vertices(
+        self, query_pointer: SpirvId, operation: str
+    ) -> Optional[Tuple[SpirvId, SpirvId, SpirvId, SpirvId]]:
+        intersection = self.ray_query_intersection_constant(operation)
+        if intersection is None:
+            return None
+
+        self.require_capability("RayQueryPositionFetchKHR")
+        self.require_extension("SPV_KHR_ray_tracing_position_fetch")
+
+        vec3_type = self.ray_query_result_type_for_kind("vec3")
+        positions_type = self.ray_query_result_type_for_kind("vec3_array3")
+        positions_id = self.get_id()
+        self.emit(
+            f"%{positions_id} = "
+            f"OpRayQueryGetIntersectionTriangleVertexPositionsKHR "
+            f"%{positions_type.id} %{query_pointer.id} %{intersection.id}"
+        )
+        self.value_types[positions_id] = positions_type
+        positions = SpirvId(positions_id, positions_type.type)
+
+        p0 = self.composite_extract(positions, vec3_type, 0)
+        p1 = self.composite_extract(positions, vec3_type, 1)
+        p2 = self.composite_extract(positions, vec3_type, 2)
+        return vec3_type, p0, p1, p2
+
+    def ray_query_triangle_edges(
+        self, query_pointer: SpirvId, operation: str
+    ) -> Optional[Tuple[SpirvId, SpirvId, SpirvId]]:
+        vertices = self.ray_query_triangle_vertices(query_pointer, operation)
+        if vertices is None:
+            return None
+
+        vec3_type, p0, p1, p2 = vertices
+        edge0 = self.binary_operation("-", vec3_type, p1, p0)
+        edge1 = self.binary_operation("-", vec3_type, p2, p0)
+        return vec3_type, edge0, edge1
+
+    def process_ray_query_triangle_normal_getter(
+        self, query_pointer: SpirvId, operation: str
+    ) -> SpirvId:
+        edges = self.ray_query_triangle_edges(query_pointer, operation)
+        if edges is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        vec3_type, edge0, edge1 = edges
+        cross = self.emit_glsl_std450_instruction("Cross", vec3_type, [edge0, edge1])
+        return self.emit_glsl_std450_instruction("Normalize", vec3_type, [cross])
+
+    def process_ray_query_triangle_area_getter(
+        self, query_pointer: SpirvId, operation: str
+    ) -> SpirvId:
+        edges = self.ray_query_triangle_edges(query_pointer, operation)
+        if edges is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        vec3_type, edge0, edge1 = edges
+        float_type = self.ray_query_result_type_for_kind("float")
+        cross = self.emit_glsl_std450_instruction("Cross", vec3_type, [edge0, edge1])
+        double_area = self.emit_glsl_std450_instruction("Length", float_type, [cross])
+        half = self.register_constant(0.5, float_type)
+        return self.binary_operation("*", float_type, double_area, half)
+
+    def process_ray_query_triangle_centroid_getter(
+        self, query_pointer: SpirvId, operation: str
+    ) -> SpirvId:
+        vertices = self.ray_query_triangle_vertices(query_pointer, operation)
+        if vertices is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        vec3_type, p0, p1, p2 = vertices
+        float_type = self.ray_query_result_type_for_kind("float")
+        p0_plus_p1 = self.binary_operation("+", vec3_type, p0, p1)
+        total = self.binary_operation("+", vec3_type, p0_plus_p1, p2)
+        three = self.register_constant(3.0, float_type)
+        return self.binary_operation("/", vec3_type, total, three)
+
+    def format_expected_argument_counts(self, expected_counts) -> str:
+        return " or ".join(str(count) for count in sorted(expected_counts))
+
+    def registered_value_type(self, value_id: SpirvId) -> Optional[SpirvId]:
+        return self.value_types.get(value_id.id) or self.find_registered_type_by_base(
+            value_id.type.base_type
+        )
+
+    def acceleration_structure_value_from_expression(self, expr) -> Optional[SpirvId]:
+        value = self.process_expression(expr)
+        if value is None:
+            self.emit(
+                "; WARNING: SPIR-V RayQuery.TraceRayInline acceleration structure "
+                "argument could not be evaluated"
+            )
+            return None
+
+        value_type = self.registered_value_type(value)
+        type_name = (
+            value_type.type.base_type
+            if value_type is not None
+            else value.type.base_type
+        )
+        if not self.is_acceleration_structure_type_name(type_name):
+            self.emit(
+                "; WARNING: SPIR-V RayQuery.TraceRayInline acceleration structure "
+                f"argument must be accelerationStructureEXT, got {type_name}"
+            )
+            return None
+
+        return value
+
+    def ray_query_uint_operand(self, expr, role: str) -> Optional[SpirvId]:
+        value = self.process_expression(expr)
+        if value is None:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                "could not be evaluated"
+            )
+            return None
+
+        value_type = self.registered_value_type(value) or self.ensure_registered_type(
+            value.type
+        )
+        if self.vector_component_type_and_count(value_type.type.base_type) is not None:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                "must be a 32-bit integer scalar"
+            )
+            return None
+
+        component_type = self.normalize_primitive_name(value_type.type.base_type)
+        if component_type not in {"int", "uint"}:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                f"must be a 32-bit integer scalar, got {component_type}"
+            )
+            return None
+
+        return self.convert_value_to_type(value, self.register_primitive_type("uint"))
+
+    def ray_query_float_operand(
+        self, expr, role: str, operation: str = "TraceRayInline"
+    ) -> Optional[SpirvId]:
+        value = self.process_expression(expr)
+        if value is None:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.{operation} {role} argument "
+                "could not be evaluated"
+            )
+            return None
+
+        value_type = self.registered_value_type(value) or self.ensure_registered_type(
+            value.type
+        )
+        if self.vector_component_type_and_count(value_type.type.base_type) is not None:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.{operation} {role} argument "
+                "must be a 32-bit floating-point scalar"
+            )
+            return None
+
+        component_type = self.normalize_primitive_name(value_type.type.base_type)
+        if component_type not in {"float", "double", "int", "uint"}:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.{operation} {role} argument "
+                f"must be a 32-bit floating-point scalar, got {component_type}"
+            )
+            return None
+
+        return self.convert_value_to_type(value, self.register_primitive_type("float"))
+
+    def ray_query_vec3_operand(self, expr, role: str) -> Optional[SpirvId]:
+        value = self.process_expression(expr)
+        if value is None:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                "could not be evaluated"
+            )
+            return None
+
+        float_type = self.register_primitive_type("float")
+        vec3_type = self.register_vector_type(float_type, 3)
+        value = self.convert_value_to_type(value, vec3_type)
+        vector_info = self.vector_component_type_and_count(value.type.base_type)
+        if vector_info != ("float", 3):
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.TraceRayInline {role} argument "
+                "must be a 32-bit floating-point vec3"
+            )
+            return None
+
+        return value
+
+    def ray_desc_member_expression(
+        self, ray_desc_expr, field_names
+    ) -> Optional[MemberAccessNode]:
+        ray_desc_pointer = self.variable_pointer_from_expression(ray_desc_expr)
+        if ray_desc_pointer is None:
+            self.emit(
+                "; WARNING: SPIR-V RayQuery.TraceRayInline RayDesc argument "
+                "must be an addressable value"
+            )
+            return None
+
+        ray_desc_type = self.pointer_pointee_type(ray_desc_pointer)
+        members = self.current_struct_members.get(
+            ray_desc_type.type.base_type if ray_desc_type is not None else None, []
+        )
+        available_names = {member_name for _, member_name in members}
+        for field_name in field_names:
+            if field_name in available_names:
+                return MemberAccessNode(ray_desc_expr, field_name)
+
+        expected = "/".join(field_names)
+        self.emit(
+            "; WARNING: SPIR-V RayQuery.TraceRayInline RayDesc argument "
+            f"does not provide {expected}"
+        )
+        return None
+
+    def ray_query_initialize_argument_expressions(self, arguments):
+        if len(arguments) == 7:
+            return tuple(arguments)
+
+        acceleration, ray_flags, cull_mask, ray_desc = arguments
+        origin = self.ray_desc_member_expression(
+            ray_desc, ("Origin", "origin", "rayOrigin", "RayOrigin")
+        )
+        tmin = self.ray_desc_member_expression(
+            ray_desc, ("TMin", "tMin", "Tmin", "tmin")
+        )
+        direction = self.ray_desc_member_expression(
+            ray_desc, ("Direction", "direction", "rayDirection", "RayDirection")
+        )
+        tmax = self.ray_desc_member_expression(
+            ray_desc, ("TMax", "tMax", "Tmax", "tmax")
+        )
+        if None in {origin, tmin, direction, tmax}:
+            return None
+        return acceleration, ray_flags, cull_mask, origin, tmin, direction, tmax
+
+    def process_ray_query_initialize(self, query_pointer: SpirvId, arguments) -> None:
+        expressions = self.ray_query_initialize_argument_expressions(arguments)
+        if expressions is None:
+            return None
+
+        (
+            acceleration_expr,
+            ray_flags_expr,
+            cull_mask_expr,
+            origin_expr,
+            tmin_expr,
+            direction_expr,
+            tmax_expr,
+        ) = expressions
+
+        acceleration = self.acceleration_structure_value_from_expression(
+            acceleration_expr
+        )
+        ray_flags = self.ray_query_uint_operand(ray_flags_expr, "ray flags")
+        cull_mask = self.ray_query_uint_operand(cull_mask_expr, "cull mask")
+        origin = self.ray_query_vec3_operand(origin_expr, "origin")
+        tmin = self.ray_query_float_operand(tmin_expr, "Tmin")
+        direction = self.ray_query_vec3_operand(direction_expr, "direction")
+        tmax = self.ray_query_float_operand(tmax_expr, "Tmax")
+
+        if None in {acceleration, ray_flags, cull_mask, origin, tmin, direction, tmax}:
+            return None
+
+        self.emit(
+            f"OpRayQueryInitializeKHR %{query_pointer.id} %{acceleration.id} "
+            f"%{ray_flags.id} %{cull_mask.id} %{origin.id} %{tmin.id} "
+            f"%{direction.id} %{tmax.id}"
+        )
+        return None
+
+    def ray_query_method_names(self):
+        return (
+            {
+                "Abort",
+                "CommitNonOpaqueTriangleHit",
+                "CommitProceduralPrimitiveHit",
+                "ConfirmIntersection",
+                "Proceed",
+                "GenerateIntersection",
+                "Terminate",
+                "TraceRayInline",
+            }
+            | self.ray_query_state_getter_operations()
+            | self.ray_query_candidate_getter_operations()
+            | (self.ray_query_intersection_getter_operations())
+        )
+
+    def ray_query_call_from_function_call(self, expr) -> Optional[RayQueryOpNode]:
+        if not isinstance(expr, FunctionCallNode):
+            return None
+
+        func_expr = getattr(expr, "function", getattr(expr, "name", None))
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+
+        operation = str(getattr(func_expr, "member", ""))
+        if operation not in self.ray_query_method_names():
+            return None
+
+        return RayQueryOpNode(
+            operation,
+            getattr(func_expr, "object", getattr(func_expr, "object_expr", None)),
+            getattr(expr, "arguments", getattr(expr, "args", [])),
+        )
+
+    def process_ray_query_operation(self, expr: RayQueryOpNode) -> SpirvId:
+        operation = expr.operation
+        arguments = getattr(expr, "args", getattr(expr, "arguments", [])) or []
+
+        supported_argument_counts = {
+            "Proceed": 0,
+            "Abort": 0,
+            "Terminate": 0,
+            "ConfirmIntersection": 0,
+            "CommitNonOpaqueTriangleHit": 0,
+            "GenerateIntersection": 1,
+            "CommitProceduralPrimitiveHit": 1,
+            "TraceRayInline": {4, 7},
+        }
+        for getter_operation in self.ray_query_state_getter_operations():
+            supported_argument_counts[getter_operation] = 0
+        for getter_operation in self.ray_query_candidate_getter_operations():
+            supported_argument_counts[getter_operation] = 0
+        for getter_operation in self.ray_query_intersection_getter_operations():
+            supported_argument_counts[getter_operation] = 0
+        if operation not in supported_argument_counts:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        expected_counts = supported_argument_counts[operation]
+        if isinstance(expected_counts, int):
+            expected_counts = {expected_counts}
+        if len(arguments) not in expected_counts:
+            self.emit(
+                f"; WARNING: SPIR-V RayQuery.{operation} requires "
+                f"{self.format_expected_argument_counts(expected_counts)} arguments"
+            )
+            if operation == "TraceRayInline":
+                return None
+            return self.default_value_for_type(
+                self.represented_ir_diagnostic_result_type("ray query", operation)
+            )
+
+        query_pointer = self.ray_query_pointer_from_expression(expr.query_expr)
+        if query_pointer is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        self.require_capability("RayQueryKHR")
+        self.require_extension("SPV_KHR_ray_query")
+
+        if operation == "TraceRayInline":
+            return self.process_ray_query_initialize(query_pointer, arguments)
+
+        if operation in {"Abort", "Terminate"}:
+            self.emit(f"OpRayQueryTerminateKHR %{query_pointer.id}")
+            return None
+
+        if operation in {"ConfirmIntersection", "CommitNonOpaqueTriangleHit"}:
+            self.emit(f"OpRayQueryConfirmIntersectionKHR %{query_pointer.id}")
+            return None
+
+        if operation in {"GenerateIntersection", "CommitProceduralPrimitiveHit"}:
+            hit_t = self.ray_query_float_operand(
+                arguments[0], "hit distance", operation=operation
+            )
+            if hit_t is None:
+                return None
+            self.emit(
+                f"OpRayQueryGenerateIntersectionKHR %{query_pointer.id} %{hit_t.id}"
+            )
+            return None
+
+        if operation == "Proceed":
+            result_type = self.register_primitive_type("bool")
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpRayQueryProceedKHR %{result_type.id} "
+                f"%{query_pointer.id}"
+            )
+            self.value_types[id_value] = result_type
+            return SpirvId(id_value, result_type.type)
+
+        if operation in self.ray_query_state_getter_operations():
+            return self.process_ray_query_state_getter(query_pointer, operation)
+
+        if operation in self.ray_query_candidate_getter_operations():
+            return self.process_ray_query_candidate_getter(query_pointer, operation)
+
+        if operation in self.ray_query_intersection_getter_operations():
+            return self.process_ray_query_intersection_getter(query_pointer, operation)
+
+        return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+    def process_mesh_operation(self, expr: MeshOpNode) -> Optional[SpirvId]:
+        """Process represented mesh/task shader intrinsics."""
+        operation = expr.operation
+        if operation == "DispatchMesh":
+            return self.process_dispatch_mesh_operation(expr)
+        if operation != "SetMeshOutputCounts":
+            return self.represented_ir_diagnostic_default_value(
+                "mesh shader", operation
+            )
+
+        if self.current_execution_model != "MeshEXT":
+            return self.represented_ir_diagnostic_default_value(
+                "mesh shader", operation
+            )
+
+        arguments = getattr(expr, "arguments", []) or []
+        if len(arguments) != 2:
+            self.emit(
+                "; WARNING: SPIR-V mesh SetMeshOutputCounts requires exactly "
+                "2 arguments"
+            )
+            return self.register_constant(0, self.register_primitive_type("uint"))
+
+        uint_type = self.register_primitive_type("uint")
+        vertex_count = self.process_expression(arguments[0])
+        primitive_count = self.process_expression(arguments[1])
+        if vertex_count is None or primitive_count is None:
+            self.emit(
+                "; WARNING: SPIR-V mesh SetMeshOutputCounts requires count operands"
+            )
+            return self.register_constant(0, uint_type)
+
+        vertex_count = self.convert_value_to_type(vertex_count, uint_type)
+        primitive_count = self.convert_value_to_type(primitive_count, uint_type)
+
+        self.require_capability("MeshShadingEXT")
+        self.require_extension("SPV_EXT_mesh_shader")
+        self.emit(f"OpSetMeshOutputsEXT %{vertex_count.id} %{primitive_count.id}")
+
+        if self.current_function_id is not None:
+            previous_vertices, previous_primitives = (
+                self.mesh_output_counts_by_function.get(
+                    self.current_function_id, (None, None)
+                )
+            )
+            observed_vertices = self.literal_int_argument(arguments[0])
+            observed_primitives = self.literal_int_argument(arguments[1])
+            self.mesh_output_counts_by_function[self.current_function_id] = (
+                self.max_optional_int(previous_vertices, observed_vertices),
+                self.max_optional_int(previous_primitives, observed_primitives),
+            )
+
+        return self.register_constant(0, uint_type)
+
+    def process_dispatch_mesh_operation(self, expr: MeshOpNode) -> Optional[SpirvId]:
+        """Lower task-shader DispatchMesh to the SPIR-V mesh-task terminator."""
+        operation = expr.operation
+        if self.current_execution_model != "TaskEXT":
+            return self.represented_ir_diagnostic_default_value(
+                "mesh shader", operation
+            )
+
+        arguments = getattr(expr, "arguments", []) or []
+        if len(arguments) != 3:
+            self.emit(
+                "; WARNING: SPIR-V mesh DispatchMesh requires exactly 3 arguments"
+            )
+            return self.register_constant(0, self.register_primitive_type("uint"))
+
+        uint_type = self.register_primitive_type("uint")
+        group_counts = []
+        for argument in arguments:
+            group_count = self.process_expression(argument)
+            if group_count is None:
+                self.emit(
+                    "; WARNING: SPIR-V mesh DispatchMesh requires group-count operands"
+                )
+                return self.register_constant(0, uint_type)
+            group_counts.append(self.convert_value_to_type(group_count, uint_type))
+
+        self.require_capability("MeshShadingEXT")
+        self.require_extension("SPV_EXT_mesh_shader")
+        self.emit(
+            "OpEmitMeshTasksEXT "
+            + " ".join(f"%{group_count.id}" for group_count in group_counts)
+        )
+        return None
 
     def flatten_vector_constructor_args(
         self,
@@ -2289,11 +4132,541 @@ class VulkanSPIRVCodeGen:
             self.convert_vector_constructor_scalar(arg, component_type, function_name)
         ]
 
+    def spirv_scope_constant(self, scope: str) -> SpirvId:
+        scope_values = {
+            "CrossDevice": 0,
+            "Device": 1,
+            "Workgroup": 2,
+            "Subgroup": 3,
+            "Invocation": 4,
+        }
+        return self.register_constant(
+            scope_values[scope], self.register_primitive_type("uint")
+        )
+
+    def spirv_memory_semantics_constant(self, *semantics: str) -> SpirvId:
+        semantic_values = {
+            "AcquireRelease": 0x8,
+            "UniformMemory": 0x40,
+            "WorkgroupMemory": 0x100,
+            "ImageMemory": 0x800,
+        }
+        value = 0
+        for semantic in semantics:
+            value |= semantic_values[semantic]
+        return self.register_constant(value, self.register_primitive_type("uint"))
+
+    def call_synchronization_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        if args or function_name not in {
+            "allMemoryBarrier",
+            "barrier",
+            "groupMemoryBarrier",
+            "workgroupBarrier",
+            "memoryBarrier",
+            "memoryBarrierBuffer",
+            "memoryBarrierImage",
+            "memoryBarrierShared",
+        }:
+            return None
+
+        if function_name in {"barrier", "workgroupBarrier"}:
+            workgroup_scope = self.spirv_scope_constant("Workgroup")
+            workgroup_semantics = self.spirv_memory_semantics_constant(
+                "AcquireRelease", "WorkgroupMemory"
+            )
+            self.emit(
+                f"OpControlBarrier %{workgroup_scope.id} %{workgroup_scope.id} "
+                f"%{workgroup_semantics.id}"
+            )
+            return self.register_constant(0, self.register_primitive_type("int"))
+
+        if function_name in {"groupMemoryBarrier", "memoryBarrierShared"}:
+            scope = self.spirv_scope_constant("Workgroup")
+            semantics = self.spirv_memory_semantics_constant(
+                "AcquireRelease", "WorkgroupMemory"
+            )
+        elif function_name == "memoryBarrierBuffer":
+            scope = self.spirv_scope_constant("Device")
+            semantics = self.spirv_memory_semantics_constant(
+                "AcquireRelease", "UniformMemory"
+            )
+        elif function_name == "memoryBarrierImage":
+            scope = self.spirv_scope_constant("Device")
+            semantics = self.spirv_memory_semantics_constant(
+                "AcquireRelease", "ImageMemory"
+            )
+        else:
+            scope = self.spirv_scope_constant("Device")
+            semantics = self.spirv_memory_semantics_constant(
+                "AcquireRelease", "UniformMemory", "WorkgroupMemory", "ImageMemory"
+            )
+
+        self.emit(f"OpMemoryBarrier %{scope.id} %{semantics.id}")
+        return self.register_constant(0, self.register_primitive_type("int"))
+
+    def require_group_non_uniform(self, capability: Optional[str] = None):
+        self.require_capability("GroupNonUniform")
+        if capability is not None:
+            self.require_capability(capability)
+
+    def require_group_non_uniform_partitioned_nv(self):
+        self.require_capability("GroupNonUniformPartitionedNV")
+        self.require_extension("SPV_NV_shader_subgroup_partitioned")
+
+    def subgroup_scope_id(self) -> SpirvId:
+        self.require_group_non_uniform()
+        return self.spirv_scope_constant("Subgroup")
+
+    def wave_result_default(self, operation: str, args: List[SpirvId]) -> SpirvId:
+        if operation in {
+            "WaveActiveAllTrue",
+            "WaveActiveAnyTrue",
+            "WaveIsFirstLane",
+        }:
+            return self.default_value_for_type(self.register_primitive_type("bool"))
+        if operation in {"WaveActiveBallot", "WaveMatch"}:
+            uint_type = self.register_primitive_type("uint")
+            return self.default_value_for_type(self.register_vector_type(uint_type, 4))
+        if operation in {"WaveGetLaneCount", "WaveGetLaneIndex"}:
+            return self.default_value_for_type(self.register_primitive_type("uint"))
+        if args:
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
+        return self.default_value_for_type(self.register_primitive_type("uint"))
+
+    def call_wave_operation(
+        self, operation: str, argument_exprs: List
+    ) -> Optional[SpirvId]:
+        args = []
+        for argument in argument_exprs:
+            value = self.process_expression(argument)
+            if value is None:
+                self.emit(f"; WARNING: Failed to evaluate argument for {operation}")
+                value = self.default_value_for_type(
+                    self.register_primitive_type("uint")
+                )
+            args.append(value)
+
+        if operation == "WaveGetLaneCount":
+            if args:
+                self.emit("; WARNING: WaveGetLaneCount takes no arguments")
+                return self.wave_result_default(operation, args)
+            builtin = self.ensure_compute_builtin("gl_SubgroupSize")
+            return self.get_variable_value(builtin) if builtin is not None else None
+
+        if operation == "WaveGetLaneIndex":
+            if args:
+                self.emit("; WARNING: WaveGetLaneIndex takes no arguments")
+                return self.wave_result_default(operation, args)
+            builtin = self.ensure_compute_builtin("gl_SubgroupInvocationID")
+            return self.get_variable_value(builtin) if builtin is not None else None
+
+        if operation == "WaveIsFirstLane":
+            if args:
+                self.emit("; WARNING: WaveIsFirstLane takes no arguments")
+                return self.wave_result_default(operation, args)
+            self.require_group_non_uniform("GroupNonUniformVote")
+            bool_type = self.register_primitive_type("bool")
+            scope = self.subgroup_scope_id()
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpGroupNonUniformElect %{bool_type.id} %{scope.id}"
+            )
+            spirv_id = SpirvId(id_value, bool_type.type)
+            self.value_types[id_value] = bool_type
+            return spirv_id
+
+        if operation in {
+            "WaveActiveSum",
+            "WaveActiveProduct",
+            "WaveActiveMin",
+            "WaveActiveMax",
+            "WaveActiveBitAnd",
+            "WaveActiveBitOr",
+            "WaveActiveBitXor",
+            "WavePrefixSum",
+            "WavePrefixProduct",
+        }:
+            return self.call_group_non_uniform_arithmetic(operation, args)
+
+        if operation in {"WaveActiveAllTrue", "WaveActiveAnyTrue"}:
+            return self.call_group_non_uniform_vote(operation, args)
+
+        if operation == "WaveActiveBallot":
+            return self.call_group_non_uniform_ballot(operation, args)
+
+        if operation == "WaveReadLaneAt":
+            return self.call_group_non_uniform_broadcast(operation, args)
+
+        if operation == "WaveReadLaneFirst":
+            return self.call_group_non_uniform_broadcast_first(operation, args)
+
+        if operation == "WaveMatch":
+            return self.call_group_non_uniform_partition(args)
+
+        if operation in {
+            "WaveMultiPrefixSum",
+            "WaveMultiPrefixProduct",
+            "WaveMultiPrefixBitAnd",
+            "WaveMultiPrefixBitOr",
+            "WaveMultiPrefixBitXor",
+        }:
+            return self.call_group_non_uniform_partitioned_arithmetic(operation, args)
+
+        if operation in {
+            "QuadReadAcrossX",
+            "QuadReadAcrossY",
+            "QuadReadAcrossDiagonal",
+            "QuadReadLaneAt",
+        }:
+            return self.call_group_non_uniform_quad(operation, argument_exprs, args)
+
+        self.emit(f"; WARNING: {operation} is not supported by the SPIR-V backend yet")
+        return self.wave_result_default(operation, args)
+
+    def call_group_non_uniform_arithmetic(
+        self, operation: str, args: List[SpirvId]
+    ) -> SpirvId:
+        if len(args) != 1:
+            self.emit(f"; WARNING: {operation} requires exactly one argument")
+            return self.wave_result_default(operation, args)
+
+        result_type = self.ensure_registered_type(args[0].type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        group_operation = (
+            "ExclusiveScan"
+            if operation in {"WavePrefixSum", "WavePrefixProduct"}
+            else "Reduce"
+        )
+
+        arithmetic_ops = {
+            "WaveActiveSum": {
+                "float": "OpGroupNonUniformFAdd",
+                "double": "OpGroupNonUniformFAdd",
+                "int": "OpGroupNonUniformIAdd",
+                "uint": "OpGroupNonUniformIAdd",
+            },
+            "WavePrefixSum": {
+                "float": "OpGroupNonUniformFAdd",
+                "double": "OpGroupNonUniformFAdd",
+                "int": "OpGroupNonUniformIAdd",
+                "uint": "OpGroupNonUniformIAdd",
+            },
+            "WaveActiveProduct": {
+                "float": "OpGroupNonUniformFMul",
+                "double": "OpGroupNonUniformFMul",
+                "int": "OpGroupNonUniformIMul",
+                "uint": "OpGroupNonUniformIMul",
+            },
+            "WavePrefixProduct": {
+                "float": "OpGroupNonUniformFMul",
+                "double": "OpGroupNonUniformFMul",
+                "int": "OpGroupNonUniformIMul",
+                "uint": "OpGroupNonUniformIMul",
+            },
+            "WaveActiveMin": {
+                "float": "OpGroupNonUniformFMin",
+                "double": "OpGroupNonUniformFMin",
+                "int": "OpGroupNonUniformSMin",
+                "uint": "OpGroupNonUniformUMin",
+            },
+            "WaveActiveMax": {
+                "float": "OpGroupNonUniformFMax",
+                "double": "OpGroupNonUniformFMax",
+                "int": "OpGroupNonUniformSMax",
+                "uint": "OpGroupNonUniformUMax",
+            },
+            "WaveActiveBitAnd": {
+                "int": "OpGroupNonUniformBitwiseAnd",
+                "uint": "OpGroupNonUniformBitwiseAnd",
+            },
+            "WaveActiveBitOr": {
+                "int": "OpGroupNonUniformBitwiseOr",
+                "uint": "OpGroupNonUniformBitwiseOr",
+            },
+            "WaveActiveBitXor": {
+                "int": "OpGroupNonUniformBitwiseXor",
+                "uint": "OpGroupNonUniformBitwiseXor",
+            },
+        }
+        opcode = arithmetic_ops[operation].get(component_type)
+        if opcode is None:
+            self.emit(
+                f"; WARNING: {operation} requires a compatible arithmetic or "
+                f"bitwise operand; got {result_type.type.base_type}"
+            )
+            return self.wave_result_default(operation, args)
+
+        self.require_group_non_uniform("GroupNonUniformArithmetic")
+        scope = self.subgroup_scope_id()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = {opcode} %{result_type.id} %{scope.id} "
+            f"{group_operation} %{args[0].id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_group_non_uniform_vote(
+        self, operation: str, args: List[SpirvId]
+    ) -> SpirvId:
+        if len(args) != 1:
+            self.emit(f"; WARNING: {operation} requires exactly one bool argument")
+            return self.wave_result_default(operation, args)
+
+        bool_type = self.register_primitive_type("bool")
+        if args[0].type.base_type != "bool":
+            self.emit(f"; WARNING: {operation} requires a scalar bool argument")
+            return self.wave_result_default(operation, args)
+
+        self.require_group_non_uniform("GroupNonUniformVote")
+        scope = self.subgroup_scope_id()
+        opcode = (
+            "OpGroupNonUniformAll"
+            if operation == "WaveActiveAllTrue"
+            else "OpGroupNonUniformAny"
+        )
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = {opcode} %{bool_type.id} %{scope.id} %{args[0].id}")
+
+        spirv_id = SpirvId(id_value, bool_type.type)
+        self.value_types[id_value] = bool_type
+        return spirv_id
+
+    def call_group_non_uniform_ballot(
+        self, operation: str, args: List[SpirvId]
+    ) -> SpirvId:
+        uint_type = self.register_primitive_type("uint")
+        ballot_type = self.register_vector_type(uint_type, 4)
+        if len(args) != 1:
+            self.emit(f"; WARNING: {operation} requires exactly one bool argument")
+            return self.wave_result_default(operation, args)
+
+        if args[0].type.base_type != "bool":
+            self.emit(f"; WARNING: {operation} requires a scalar bool argument")
+            return self.wave_result_default(operation, args)
+
+        self.require_group_non_uniform("GroupNonUniformBallot")
+        scope = self.subgroup_scope_id()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpGroupNonUniformBallot %{ballot_type.id} "
+            f"%{scope.id} %{args[0].id}"
+        )
+
+        spirv_id = SpirvId(id_value, ballot_type.type)
+        self.value_types[id_value] = ballot_type
+        return spirv_id
+
+    def call_group_non_uniform_broadcast(
+        self, operation: str, args: List[SpirvId]
+    ) -> SpirvId:
+        if len(args) != 2:
+            self.emit(f"; WARNING: {operation} requires value and lane arguments")
+            return self.wave_result_default(operation, args)
+
+        result_type = self.ensure_registered_type(args[0].type)
+        lane = self.convert_wave_lane_operand(operation, args[1])
+        if lane is None:
+            return self.wave_result_default(operation, args)
+
+        self.require_group_non_uniform("GroupNonUniformShuffle")
+        scope = self.subgroup_scope_id()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpGroupNonUniformBroadcast %{result_type.id} "
+            f"%{scope.id} %{args[0].id} %{lane.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_group_non_uniform_broadcast_first(
+        self, operation: str, args: List[SpirvId]
+    ) -> SpirvId:
+        if len(args) != 1:
+            self.emit(f"; WARNING: {operation} requires exactly one argument")
+            return self.wave_result_default(operation, args)
+
+        result_type = self.ensure_registered_type(args[0].type)
+        self.require_group_non_uniform("GroupNonUniformBallot")
+        scope = self.subgroup_scope_id()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpGroupNonUniformBroadcastFirst %{result_type.id} "
+            f"%{scope.id} %{args[0].id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_group_non_uniform_partition(self, args: List[SpirvId]) -> SpirvId:
+        if len(args) != 1:
+            self.emit("; WARNING: WaveMatch requires exactly one argument")
+            return self.wave_result_default("WaveMatch", args)
+
+        uint_type = self.register_primitive_type("uint")
+        result_type = self.register_vector_type(uint_type, 4)
+        self.require_group_non_uniform_partitioned_nv()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpGroupNonUniformPartitionNV %{result_type.id} "
+            f"%{args[0].id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_group_non_uniform_partitioned_arithmetic(
+        self, operation: str, args: List[SpirvId]
+    ) -> SpirvId:
+        if len(args) != 2:
+            self.emit(f"; WARNING: {operation} requires value and ballot arguments")
+            return self.wave_result_default(operation, args)
+
+        result_type = self.ensure_registered_type(args[0].type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        arithmetic_ops = {
+            "WaveMultiPrefixSum": {
+                "float": "OpGroupNonUniformFAdd",
+                "double": "OpGroupNonUniformFAdd",
+                "int": "OpGroupNonUniformIAdd",
+                "uint": "OpGroupNonUniformIAdd",
+            },
+            "WaveMultiPrefixProduct": {
+                "float": "OpGroupNonUniformFMul",
+                "double": "OpGroupNonUniformFMul",
+                "int": "OpGroupNonUniformIMul",
+                "uint": "OpGroupNonUniformIMul",
+            },
+            "WaveMultiPrefixBitAnd": {
+                "int": "OpGroupNonUniformBitwiseAnd",
+                "uint": "OpGroupNonUniformBitwiseAnd",
+            },
+            "WaveMultiPrefixBitOr": {
+                "int": "OpGroupNonUniformBitwiseOr",
+                "uint": "OpGroupNonUniformBitwiseOr",
+            },
+            "WaveMultiPrefixBitXor": {
+                "int": "OpGroupNonUniformBitwiseXor",
+                "uint": "OpGroupNonUniformBitwiseXor",
+            },
+        }
+        opcode = arithmetic_ops[operation].get(component_type)
+        if opcode is None:
+            self.emit(
+                f"; WARNING: {operation} requires a compatible arithmetic or "
+                f"bitwise operand; got {result_type.type.base_type}"
+            )
+            return self.wave_result_default(operation, args)
+
+        if self.vector_component_type_and_count(args[1].type.base_type) != ("uint", 4):
+            self.emit(f"; WARNING: {operation} requires a uvec4 ballot argument")
+            return self.wave_result_default(operation, args)
+
+        self.require_group_non_uniform("GroupNonUniformArithmetic")
+        self.require_group_non_uniform_partitioned_nv()
+        scope = self.subgroup_scope_id()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = {opcode} %{result_type.id} %{scope.id} "
+            f"PartitionedExclusiveScanNV %{args[0].id} %{args[1].id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def convert_wave_lane_operand(
+        self, operation: str, lane: SpirvId
+    ) -> Optional[SpirvId]:
+        if self.vector_component_type_and_count(lane.type.base_type) is not None:
+            self.emit(f"; WARNING: {operation} requires a scalar lane index")
+            return None
+
+        uint_type = self.register_primitive_type("uint")
+        converted = self.convert_scalar_to_type(lane, uint_type)
+        if converted.type.base_type != "uint":
+            self.emit(f"; WARNING: {operation} requires an integer lane index")
+            return None
+        return converted
+
+    def call_group_non_uniform_quad(
+        self, operation: str, argument_exprs: List, args: List[SpirvId]
+    ) -> SpirvId:
+        if operation in {
+            "QuadReadAcrossX",
+            "QuadReadAcrossY",
+            "QuadReadAcrossDiagonal",
+        }:
+            if len(args) != 1:
+                self.emit(f"; WARNING: {operation} requires exactly one argument")
+                return self.wave_result_default(operation, args)
+
+            directions = {
+                "QuadReadAcrossX": 0,
+                "QuadReadAcrossY": 1,
+                "QuadReadAcrossDiagonal": 2,
+            }
+            result_type = self.ensure_registered_type(args[0].type)
+            direction = self.register_constant(
+                directions[operation], self.register_primitive_type("uint")
+            )
+            self.require_group_non_uniform("GroupNonUniformQuad")
+            scope = self.subgroup_scope_id()
+            id_value = self.get_id()
+            self.emit(
+                f"%{id_value} = OpGroupNonUniformQuadSwap %{result_type.id} "
+                f"%{scope.id} %{args[0].id} %{direction.id}"
+            )
+
+            spirv_id = SpirvId(id_value, result_type.type)
+            self.value_types[id_value] = result_type
+            return spirv_id
+
+        if len(args) != 2:
+            self.emit("; WARNING: QuadReadLaneAt requires value and lane arguments")
+            return self.wave_result_default(operation, args)
+
+        result_type = self.ensure_registered_type(args[0].type)
+        lane_value = self.literal_integer_value(argument_exprs[1], "uint")
+        if lane_value is None or not 0 <= lane_value <= 3:
+            self.emit(
+                "; WARNING: QuadReadLaneAt requires a literal lane index "
+                "between 0 and 3"
+            )
+            return self.wave_result_default(operation, args)
+
+        lane = self.register_constant(lane_value, self.register_primitive_type("uint"))
+        self.require_group_non_uniform("GroupNonUniformQuad")
+        scope = self.subgroup_scope_id()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpGroupNonUniformQuadBroadcast %{result_type.id} "
+            f"%{scope.id} %{args[0].id} %{lane.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
     def call_builtin_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         """Call a built-in function."""
         function_name = {"frac": "fract"}.get(function_name, function_name)
+        synchronization_call = self.call_synchronization_function(function_name, args)
+        if synchronization_call is not None:
+            return synchronization_call
+
         if function_name == "mix" and len(args) == 3:
             bool_mix = self.call_bool_mix_function(args)
             if bool_mix is not None:
@@ -2821,7 +5194,9 @@ class VulkanSPIRVCodeGen:
                 continue
             if re.match(r"%\d+ = OpLabel$", stripped):
                 return False
-            return stripped.startswith(("OpBranch", "OpReturn", "OpKill"))
+            return stripped.startswith(
+                ("OpBranch", "OpReturn", "OpKill", "OpEmitMeshTasksEXT")
+            )
         return False
 
     def normalize_primitive_name(self, type_name: str) -> str:
@@ -3008,6 +5383,9 @@ class VulkanSPIRVCodeGen:
         if type_str in sampler_info:
             return sampler_info[type_str]
 
+        if self.is_acceleration_structure_type_name(type_str):
+            return {"kind": "acceleration_structure"}
+
         image_match = re.fullmatch(r"([iu]?image)(2D|3D|Cube)(MS)?(Array)?", type_str)
         if image_match:
             prefix, dim, ms_suffix, array_suffix = image_match.groups()
@@ -3033,6 +5411,36 @@ class VulkanSPIRVCodeGen:
 
     def is_resource_type_name(self, type_str: str) -> bool:
         return self.resource_type_info(type_str) is not None
+
+    def is_acceleration_structure_type_name(self, type_str: str) -> bool:
+        compact = re.sub(r"\s+", "", str(type_str))
+        return compact in {
+            "accelerationStructureEXT",
+            "AccelerationStructure",
+            "RaytracingAccelerationStructure",
+            "acceleration_structure",
+        }
+
+    def is_ray_query_type_name(self, type_str: str) -> bool:
+        compact = re.sub(r"\s+", "", str(type_str))
+        return compact == "RayQuery" or compact.startswith("RayQuery<")
+
+    def structured_buffer_type_info(self, type_str: str):
+        type_str = re.sub(r"\s+", "", str(type_str))
+        match = re.fullmatch(r"(StructuredBuffer|RWStructuredBuffer)<(.+)>", type_str)
+        if not match:
+            return None
+
+        buffer_kind, element_type_name = match.groups()
+        return {
+            "kind": "structured_buffer",
+            "buffer_kind": buffer_kind,
+            "element_type_name": element_type_name,
+            "readonly": buffer_kind == "StructuredBuffer",
+        }
+
+    def is_structured_buffer_type_name(self, type_str: str) -> bool:
+        return self.structured_buffer_type_info(type_str) is not None
 
     def spirv_image_format_map(self):
         return {
@@ -3110,13 +5518,30 @@ class VulkanSPIRVCodeGen:
         return self.register_vector_type(component_type, component_count)
 
     def resource_metadata_for_value(self, value_id: SpirvId):
+        metadata = self.resource_type_metadata.get(value_id.id)
+        if metadata is not None:
+            return metadata
+
         result_type = self.value_types.get(value_id.id)
         if result_type is not None:
             metadata = self.resource_type_metadata.get(result_type.id)
             if metadata is not None:
                 return metadata
 
-        return self.resource_type_metadata.get(value_id.id)
+        return None
+
+    def resource_metadata_for_pointer(self, pointer_id: SpirvId):
+        metadata = self.resource_type_metadata.get(pointer_id.id)
+        if metadata is not None:
+            return metadata
+
+        pointee_type = self.variable_value_types.get(pointer_id.id)
+        if pointee_type is not None:
+            metadata = self.resource_type_metadata.get(pointee_type.id)
+            if metadata is not None:
+                return metadata
+
+        return self.resource_metadata_for_value(pointer_id)
 
     def attribute_value_to_string(self, value):
         if value is None:
@@ -3128,6 +5553,30 @@ class VulkanSPIRVCodeGen:
         if hasattr(value, "name") and value.name is not None:
             return str(value.name)
         return str(value)
+
+    def literal_int_argument(self, value) -> Optional[int]:
+        """Return a literal integer value when an AST argument is constant."""
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, UnaryOpNode) and getattr(value, "op", None) == "-":
+            operand = self.literal_int_argument(value.operand)
+            return -operand if operand is not None else None
+        value_text = self.attribute_value_to_string(value)
+        if value_text is None:
+            return None
+        try:
+            return int(str(value_text), 0)
+        except ValueError:
+            return None
+
+    def max_optional_int(self, first: Optional[int], second: Optional[int]):
+        if first is None:
+            return second
+        if second is None:
+            return first
+        return max(first, second)
 
     def explicit_image_format(self, node) -> Optional[str]:
         if not hasattr(node, "attributes"):
@@ -3184,6 +5633,30 @@ class VulkanSPIRVCodeGen:
 
         return self.map_crossgl_type(type_name)
 
+    def storage_buffer_parameter_type_name(self, param) -> Optional[str]:
+        param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        if param_type is None:
+            return None
+
+        type_name = self.type_name_from_value(param_type)
+        if self.is_structured_buffer_type_name(type_name):
+            return type_name
+        if self.has_attribute(param, "glsl_buffer_block"):
+            return type_name
+        return None
+
+    def function_storage_buffer_parameters(self, function_node) -> set:
+        return {
+            getattr(param, "name", None)
+            for param in getattr(
+                function_node, "parameters", getattr(function_node, "params", [])
+            )
+            if self.storage_buffer_parameter_type_name(param) is not None
+        } - {None}
+
+    def function_has_storage_buffer_parameters(self, function_node) -> bool:
+        return bool(self.function_storage_buffer_parameters(function_node))
+
     def format_array_size(self, size):
         if size is None:
             return None
@@ -3198,8 +5671,11 @@ class VulkanSPIRVCodeGen:
             self.matrix_types,
             self.struct_types,
             self.array_types,
+            self.layout_struct_types,
+            self.layout_array_types,
             self.resource_types,
             self.resource_image_types,
+            self.ray_query_types,
         ]:
             for type_id in type_dict.values():
                 if type_id.type.base_type == base_type:
@@ -3213,8 +5689,11 @@ class VulkanSPIRVCodeGen:
             self.matrix_types,
             self.struct_types,
             self.array_types,
+            self.layout_struct_types,
+            self.layout_array_types,
             self.resource_types,
             self.resource_image_types,
+            self.ray_query_types,
         ]:
             for type_id in type_dict.values():
                 if type_id.id == id_value:
@@ -3276,6 +5755,9 @@ class VulkanSPIRVCodeGen:
         registered_type = self.find_registered_type_by_base(type_str)
         if registered_type:
             return registered_type
+
+        if self.is_ray_query_type_name(type_str):
+            return self.register_ray_query_type(type_str)
 
         if self.is_resource_type_name(type_str):
             return self.register_resource_type(type_str)
@@ -3362,6 +5844,768 @@ class VulkanSPIRVCodeGen:
 
         return self.register_struct_type(struct_node.name, members)
 
+    def process_cbuffer_declaration(self, cbuffer_node: StructNode) -> SpirvId:
+        """Emit a CrossGL cbuffer as a SPIR-V Uniform block."""
+        members = []
+        for member in getattr(cbuffer_node, "members", []) or []:
+            member_type_source = getattr(
+                member,
+                "member_type",
+                getattr(member, "var_type", getattr(member, "vtype", None)),
+            )
+            if member_type_source is None:
+                continue
+            member_type = self.map_crossgl_type(member_type_source)
+            members.append((member_type, member.name))
+
+        cbuffer_type = self.register_struct_type(cbuffer_node.name, members)
+        self.decorate_cbuffer_type(cbuffer_type, members)
+
+        var_id = self.create_variable(cbuffer_type, "Uniform", cbuffer_node.name)
+        descriptor_set, binding = self.resource_descriptor_slot(cbuffer_node)
+        self.decorations.append(
+            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+        )
+        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+
+        self.global_variables[cbuffer_node.name] = var_id
+        self.cbuffer_variables[cbuffer_node.name] = var_id
+        self.uniform_buffers.append(var_id)
+        for member_index, (member_type, member_name) in enumerate(members):
+            if member_name in self.cbuffer_members:
+                raise ValueError(f"Ambiguous SPIR-V cbuffer member {member_name}")
+            self.cbuffer_members[member_name] = (var_id, member_type, member_index)
+
+        return var_id
+
+    def process_structured_buffer_declaration(
+        self, node: VariableNode, type_name: str
+    ) -> SpirvId:
+        """Emit a StructuredBuffer/RWStructuredBuffer as a Vulkan BufferBlock."""
+        metadata = self.structured_buffer_type_info(type_name)
+        if metadata is None:
+            raise ValueError(f"Invalid SPIR-V structured buffer type {type_name}")
+        memory_flags = self.storage_buffer_memory_flags(
+            node, default_readonly=metadata.get("readonly", False)
+        )
+
+        element_type = self.map_crossgl_type(metadata["element_type_name"])
+        self.decorate_storage_buffer_nested_type(element_type)
+        runtime_array_type = self.register_array_type(element_type, None)
+        self.decorations.append(
+            f"OpDecorate %{runtime_array_type.id} "
+            f"ArrayStride {self.storage_array_stride(element_type)}"
+        )
+
+        block_name = f"{node.name}Buffer"
+        block_type = self.register_struct_type(
+            block_name,
+            [(runtime_array_type, node.name)],
+        )
+        self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
+        self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 Offset 0")
+        self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
+
+        var_id = self.create_variable(block_type, "Uniform", node.name)
+        descriptor_set, binding = self.resource_descriptor_slot(node)
+        self.decorations.append(
+            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+        )
+        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+
+        buffer_metadata = {
+            **metadata,
+            **memory_flags,
+            "element_type": element_type,
+            "runtime_array_type": runtime_array_type,
+            "block_type": block_type,
+            "member_index": 0,
+        }
+        self.global_variables[node.name] = var_id
+        self.structured_buffer_metadata[var_id.id] = buffer_metadata
+        self.structured_buffer_metadata[block_type.id] = buffer_metadata
+        return var_id
+
+    def is_glsl_buffer_block_node(self, node: VariableNode) -> bool:
+        qualifiers = {
+            str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
+        }
+        return "buffer" in qualifiers or self.has_attribute(node, "glsl_buffer_block")
+
+    def glsl_buffer_block_layout(self, node: VariableNode) -> str:
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "glsl_buffer_block":
+                continue
+            arguments = getattr(attr, "arguments", None)
+            if arguments is None:
+                arguments = getattr(attr, "args", [])
+            if not arguments:
+                continue
+            layout = self.attribute_value_to_string(arguments[0])
+            if layout is not None:
+                return str(layout).lower()
+        return "std430"
+
+    def process_glsl_buffer_block_declaration(
+        self, node: VariableNode, type_name: str
+    ) -> SpirvId:
+        """Emit a GLSL-style buffer block or buffer-qualified array variable."""
+        layout = self.glsl_buffer_block_layout(node)
+        base_type_name = self.array_base_type_name(type_name)
+        is_named_block = base_type_name in self.struct_types
+        outer_array = self.split_outer_array_type(type_name)
+        if is_named_block and outer_array is not None and outer_array[1] is None:
+            self.require_capability("RuntimeDescriptorArray")
+            self.require_extension("SPV_EXT_descriptor_indexing")
+
+        if is_named_block:
+            value_type = self.map_crossgl_type(type_name)
+            block_type = self.struct_types[base_type_name]
+            if layout != "std430":
+                value_type = self.storage_layout_type(value_type, layout)
+                block_type = self.storage_layout_type(block_type, layout)
+            block_members = self.current_struct_members.get(base_type_name, [])
+            block_members = self.current_struct_members.get(
+                block_type.type.base_type, block_members
+            )
+            variable_member_name = None
+            variable_member_type = None
+        else:
+            variable_member_name = node.name
+            variable_member_type = self.map_crossgl_type(
+                getattr(node, "var_type", getattr(node, "vtype", "float"))
+            )
+            if layout != "std430":
+                variable_member_type = self.storage_layout_type(
+                    variable_member_type, layout
+                )
+            block_type = self.register_struct_type(
+                (
+                    f"{node.name}Buffer"
+                    if layout == "std430"
+                    else f"{node.name}Buffer_{layout}"
+                ),
+                [(variable_member_type, variable_member_name)],
+            )
+            value_type = block_type
+            block_members = [(variable_member_type, variable_member_name)]
+
+        self.decorate_storage_buffer_block_type(block_type, layout)
+        memory_flags = self.storage_buffer_memory_flags(node)
+        self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
+
+        var_id = self.create_variable(value_type, "Uniform", node.name)
+        descriptor_set, binding = self.resource_descriptor_slot(node)
+        self.decorations.append(
+            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+        )
+        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+
+        self.global_variables[node.name] = var_id
+        self.register_glsl_buffer_access_metadata(node, var_id, value_type, block_type)
+        self.register_single_array_storage_buffer_metadata(
+            node,
+            var_id,
+            block_type,
+            block_members,
+            variable_member_name,
+            variable_member_type,
+        )
+        return var_id
+
+    def register_single_array_storage_buffer_metadata(
+        self,
+        node: VariableNode,
+        var_id: SpirvId,
+        block_type: SpirvId,
+        block_members: List[Tuple[SpirvId, str]],
+        variable_member_name: Optional[str],
+        variable_member_type: Optional[SpirvId],
+    ):
+        if len(block_members) != 1:
+            return
+
+        member_type, member_name = block_members[0]
+        array_info = self.array_type_info_from_type(member_type)
+        if array_info is None:
+            return
+
+        element_type, _ = array_info
+        memory_flags = self.storage_buffer_memory_flags(node)
+        metadata = {
+            "kind": "structured_buffer",
+            "buffer_kind": (
+                "StructuredBuffer"
+                if memory_flags.get("readonly")
+                else "RWStructuredBuffer"
+            ),
+            "element_type_name": element_type.type.base_type,
+            **memory_flags,
+            "element_type": element_type,
+            "runtime_array_type": member_type,
+            "block_type": block_type,
+            "member_index": 0,
+            "member_name": variable_member_name or member_name,
+        }
+        self.structured_buffer_metadata[var_id.id] = metadata
+        self.structured_buffer_metadata[block_type.id] = metadata
+        if variable_member_type is not None:
+            self.structured_buffer_metadata[variable_member_type.id] = metadata
+
+    def register_glsl_buffer_access_metadata(
+        self,
+        node: VariableNode,
+        var_id: SpirvId,
+        value_type: SpirvId,
+        block_type: SpirvId,
+    ):
+        memory_flags = self.storage_buffer_memory_flags(node)
+        metadata = {
+            "kind": "glsl_buffer_block",
+            **memory_flags,
+            "block_type": block_type,
+        }
+        self.storage_buffer_access_metadata[var_id.id] = metadata
+        self.storage_buffer_access_metadata[block_type.id] = metadata
+        if value_type.id != block_type.id:
+            self.storage_buffer_access_metadata[value_type.id] = metadata
+
+    def storage_buffer_is_readonly(self, node: VariableNode) -> bool:
+        return self.storage_buffer_memory_flags(node).get("readonly", False)
+
+    def storage_buffer_is_writeonly(self, node: VariableNode) -> bool:
+        return self.storage_buffer_memory_flags(node).get("writeonly", False)
+
+    def resource_memory_qualifier_names(self, node) -> set:
+        supported = {
+            "coherent",
+            "globallycoherent",
+            "volatile",
+            "restrict",
+            "readonly",
+            "read",
+            "writeonly",
+            "write",
+            "readwrite",
+            "read_write",
+            "access::read",
+            "access::write",
+            "access::read_write",
+        }
+        aliases = {
+            "read": "readonly",
+            "write": "writeonly",
+            "read_write": "readwrite",
+            "access::read": "readonly",
+            "access::write": "writeonly",
+            "access::read_write": "readwrite",
+        }
+        qualifiers = set()
+
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            qualifier = str(qualifier).lower()
+            if qualifier in supported:
+                qualifiers.add(aliases.get(qualifier, qualifier))
+
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+
+            attr_name = str(attr_name).lower()
+            if attr_name in supported:
+                qualifiers.add(aliases.get(attr_name, attr_name))
+
+            if attr_name != "access":
+                continue
+
+            arguments = getattr(attr, "arguments", None)
+            if arguments is None:
+                arguments = getattr(attr, "args", [])
+            if not arguments:
+                continue
+
+            access_name = self.attribute_value_to_string(arguments[0])
+            if access_name is None:
+                continue
+            access_name = str(access_name).lower()
+            if access_name in supported:
+                qualifiers.add(aliases.get(access_name, access_name))
+
+        if "globallycoherent" in qualifiers:
+            qualifiers.add("coherent")
+
+        return qualifiers
+
+    def resource_memory_qualifier_flags(self, node) -> dict:
+        qualifiers = self.resource_memory_qualifier_names(node)
+        readwrite = "readwrite" in qualifiers
+        return {
+            "readonly": "readonly" in qualifiers and not readwrite,
+            "writeonly": "writeonly" in qualifiers and not readwrite,
+            "coherent": "coherent" in qualifiers,
+            "volatile": "volatile" in qualifiers,
+            "restrict": "restrict" in qualifiers,
+            "readwrite": readwrite,
+        }
+
+    def storage_buffer_memory_flags(
+        self, node: VariableNode, default_readonly: bool = False
+    ) -> dict:
+        flags = self.resource_memory_qualifier_flags(node)
+        if (
+            default_readonly
+            and not flags.get("writeonly")
+            and not flags.get("readwrite")
+        ):
+            flags["readonly"] = True
+        return flags
+
+    def resource_memory_decoration_names(self, flags: dict) -> List[str]:
+        decorations = []
+        if flags.get("readonly"):
+            decorations.append("NonWritable")
+        if flags.get("writeonly"):
+            decorations.append("NonReadable")
+        if flags.get("coherent"):
+            decorations.append("Coherent")
+        if flags.get("volatile"):
+            decorations.append("Volatile")
+        if flags.get("restrict"):
+            decorations.append("Restrict")
+        return decorations
+
+    def decorate_storage_buffer_member_memory_qualifiers(
+        self, block_type: SpirvId, flags: dict
+    ):
+        decoration_names = self.resource_memory_decoration_names(flags)
+        if not decoration_names:
+            return
+
+        members = self.current_struct_members.get(block_type.type.base_type, [])
+        for member_index in range(len(members)):
+            for decoration_name in decoration_names:
+                self.decorations.append(
+                    f"OpMemberDecorate %{block_type.id} "
+                    f"{member_index} {decoration_name}"
+                )
+
+    def decorate_resource_variable_memory_qualifiers(
+        self, var_id: SpirvId, metadata: dict
+    ):
+        for decoration_name in self.resource_memory_decoration_names(metadata):
+            self.decorations.append(f"OpDecorate %{var_id.id} {decoration_name}")
+
+    def metadata_with_resource_memory_qualifiers(self, metadata: dict, node) -> dict:
+        return {
+            **metadata,
+            **self.resource_memory_qualifier_flags(node),
+        }
+
+    def resource_metadata_for_declared_type(self, type_id: SpirvId):
+        metadata = self.resource_type_metadata.get(type_id.id)
+        if metadata is not None:
+            return metadata
+
+        element_type = self.array_element_type_from_type(type_id)
+        while element_type is not None:
+            metadata = self.resource_type_metadata.get(element_type.id)
+            if metadata is not None:
+                return metadata
+            element_type = self.array_element_type_from_type(element_type)
+
+        return None
+
+    def register_declared_resource_metadata(
+        self, node: VariableNode, var_id: SpirvId, type_id: SpirvId
+    ):
+        metadata = self.resource_metadata_for_declared_type(type_id)
+        if metadata is None or metadata.get("kind") != "storage_image":
+            return
+
+        metadata = self.metadata_with_resource_memory_qualifiers(metadata, node)
+        self.resource_type_metadata[var_id.id] = metadata
+        self.decorate_resource_variable_memory_qualifiers(var_id, metadata)
+
+    def decorate_cbuffer_type(
+        self, cbuffer_type: SpirvId, members: List[Tuple[SpirvId, str]]
+    ):
+        self.decorations.append(f"OpDecorate %{cbuffer_type.id} Block")
+
+        offset = 0
+        for member_index, (member_type, _) in enumerate(members):
+            offset = self.align_to(offset, self.uniform_layout_alignment(member_type))
+            self.decorations.append(
+                f"OpMemberDecorate %{cbuffer_type.id} {member_index} Offset {offset}"
+            )
+            if self.uniform_layout_contains_matrix(member_type):
+                self.decorations.append(
+                    f"OpMemberDecorate %{cbuffer_type.id} {member_index} ColMajor"
+                )
+                self.decorations.append(
+                    f"OpMemberDecorate %{cbuffer_type.id} {member_index} MatrixStride 16"
+                )
+            self.decorate_uniform_array_strides(member_type)
+            offset += self.uniform_layout_size(member_type)
+
+    def align_to(self, value: int, alignment: int) -> int:
+        if alignment <= 1:
+            return value
+        return ((value + alignment - 1) // alignment) * alignment
+
+    def uniform_layout_alignment(self, type_id: SpirvId) -> int:
+        if self.matrix_type_info_from_type(type_id) is not None:
+            return 16
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, _ = array_info
+            return max(16, self.uniform_layout_alignment(element_type))
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            return max(
+                16,
+                max(
+                    (
+                        self.uniform_layout_alignment(member_type)
+                        for member_type, _ in struct_members
+                    ),
+                    default=1,
+                ),
+            )
+
+        vector_info = self.vector_type_info_from_type(type_id)
+        if vector_info is not None:
+            _, component_count = vector_info
+            return 8 if component_count == 2 else 16
+
+        return 4
+
+    def uniform_layout_size(self, type_id: SpirvId) -> int:
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is not None:
+            _, column_count = matrix_info
+            return 16 * column_count
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, size = array_info
+            stride = self.uniform_array_stride(element_type)
+            return stride * int(size or 1)
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            offset = 0
+            for member_type, _ in struct_members:
+                alignment = self.uniform_layout_alignment(member_type)
+                offset = self.align_to(offset, alignment)
+                offset += self.uniform_layout_size(member_type)
+            return self.align_to(offset, self.uniform_layout_alignment(type_id))
+
+        vector_info = self.vector_type_info_from_type(type_id)
+        if vector_info is not None:
+            component_type, component_count = vector_info
+            component_size = self.uniform_scalar_size(component_type)
+            return self.align_to(component_size * component_count, 16)
+
+        return self.uniform_scalar_size(type_id)
+
+    def uniform_scalar_size(self, type_id: SpirvId) -> int:
+        return (
+            8
+            if self.normalize_primitive_name(type_id.type.base_type) == "double"
+            else 4
+        )
+
+    def uniform_array_stride(self, element_type: SpirvId) -> int:
+        return self.align_to(self.uniform_layout_size(element_type), 16)
+
+    def uniform_layout_contains_matrix(self, type_id: SpirvId) -> bool:
+        if self.matrix_type_info_from_type(type_id) is not None:
+            return True
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, _ = array_info
+            return self.uniform_layout_contains_matrix(element_type)
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            return any(
+                self.uniform_layout_contains_matrix(member_type)
+                for member_type, _ in struct_members
+            )
+
+        return False
+
+    def decorate_uniform_array_strides(self, type_id: SpirvId):
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is None:
+            return
+
+        element_type, _ = array_info
+        stride = self.uniform_array_stride(element_type)
+        self.decorations.append(f"OpDecorate %{type_id.id} ArrayStride {stride}")
+        self.decorate_uniform_array_strides(element_type)
+
+    def storage_layout_type(self, type_id: SpirvId, layout: str) -> SpirvId:
+        if layout == "std430":
+            return type_id
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, size = array_info
+            return self.register_layout_array_type(
+                self.storage_layout_type(element_type, layout), size, layout
+            )
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            cloned_members = [
+                (self.storage_layout_type(member_type, layout), member_name)
+                for member_type, member_name in struct_members
+            ]
+            return self.register_layout_struct_type(type_id, layout, cloned_members)
+
+        return type_id
+
+    def decorate_storage_buffer_block_type(
+        self, block_type: SpirvId, layout: str = "std430"
+    ):
+        self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
+        for member_index, (member_type, _) in enumerate(
+            self.current_struct_members.get(block_type.type.base_type, [])
+        ):
+            offset = self.storage_struct_member_offset(block_type, member_index, layout)
+            self.decorations.append(
+                f"OpMemberDecorate %{block_type.id} {member_index} Offset {offset}"
+            )
+            matrix_stride = self.storage_matrix_stride_for_member(member_type, layout)
+            if matrix_stride is not None:
+                self.decorations.append(
+                    f"OpMemberDecorate %{block_type.id} {member_index} ColMajor"
+                )
+                self.decorations.append(
+                    f"OpMemberDecorate %{block_type.id} {member_index} "
+                    f"MatrixStride {matrix_stride}"
+                )
+            self.decorate_storage_buffer_nested_type(member_type, layout)
+
+    def decorate_storage_buffer_nested_type(
+        self, type_id: SpirvId, layout: str = "std430"
+    ):
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            for member_index, (member_type, _) in enumerate(struct_members):
+                offset = self.storage_struct_member_offset(
+                    type_id, member_index, layout
+                )
+                self.decorations.append(
+                    f"OpMemberDecorate %{type_id.id} {member_index} Offset {offset}"
+                )
+                matrix_stride = self.storage_matrix_stride_for_member(
+                    member_type, layout
+                )
+                if matrix_stride is not None:
+                    self.decorations.append(
+                        f"OpMemberDecorate %{type_id.id} {member_index} ColMajor"
+                    )
+                    self.decorations.append(
+                        f"OpMemberDecorate %{type_id.id} {member_index} "
+                        f"MatrixStride {matrix_stride}"
+                    )
+                self.decorate_storage_buffer_nested_type(member_type, layout)
+            return
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, _ = array_info
+            self.decorations.append(
+                f"OpDecorate %{type_id.id} "
+                f"ArrayStride {self.storage_array_stride(element_type, layout)}"
+            )
+            self.decorate_storage_buffer_nested_type(element_type, layout)
+
+    def storage_struct_member_offset(
+        self,
+        struct_type: SpirvId,
+        target_member_index: int,
+        layout: str = "std430",
+    ) -> int:
+        offset = 0
+        for member_index, (member_type, _) in enumerate(
+            self.current_struct_members.get(struct_type.type.base_type, [])
+        ):
+            offset = self.align_to(
+                offset, self.storage_layout_alignment(member_type, layout)
+            )
+            if member_index == target_member_index:
+                return offset
+            offset += self.storage_layout_size(member_type, layout)
+        return offset
+
+    def storage_layout_alignment(self, type_id: SpirvId, layout: str = "std430") -> int:
+        if layout == "std140":
+            return self.uniform_layout_alignment(type_id)
+        if layout == "scalar":
+            return self.scalar_layout_alignment(type_id)
+
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is not None:
+            column_type, _ = matrix_info
+            return self.storage_layout_alignment(column_type, layout)
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, _ = array_info
+            return self.storage_layout_alignment(element_type, layout)
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            return max(
+                (
+                    self.storage_layout_alignment(member_type, layout)
+                    for member_type, _ in struct_members
+                ),
+                default=1,
+            )
+
+        vector_info = self.vector_type_info_from_type(type_id)
+        if vector_info is not None:
+            _, component_count = vector_info
+            if component_count == 2:
+                return 8
+            if component_count in {3, 4}:
+                return 16
+
+        return self.uniform_scalar_size(type_id)
+
+    def storage_layout_size(self, type_id: SpirvId, layout: str = "std430") -> int:
+        if layout == "std140":
+            return self.uniform_layout_size(type_id)
+        if layout == "scalar":
+            return self.scalar_layout_size(type_id)
+
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is not None:
+            column_type, column_count = matrix_info
+            return self.storage_array_stride(column_type, layout) * column_count
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, size = array_info
+            return self.storage_array_stride(element_type, layout) * int(size or 1)
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            offset = 0
+            max_alignment = 1
+            for member_type, _ in struct_members:
+                alignment = self.storage_layout_alignment(member_type, layout)
+                max_alignment = max(max_alignment, alignment)
+                offset = self.align_to(offset, alignment)
+                offset += self.storage_layout_size(member_type, layout)
+            return self.align_to(offset, max_alignment)
+
+        vector_info = self.vector_type_info_from_type(type_id)
+        if vector_info is not None:
+            component_type, component_count = vector_info
+            return self.uniform_scalar_size(component_type) * component_count
+
+        return self.uniform_scalar_size(type_id)
+
+    def storage_array_stride(
+        self, element_type: SpirvId, layout: str = "std430"
+    ) -> int:
+        if layout == "std140":
+            return self.uniform_array_stride(element_type)
+        if layout == "scalar":
+            return self.scalar_array_stride(element_type)
+
+        return self.align_to(
+            self.storage_layout_size(element_type, layout),
+            self.storage_layout_alignment(element_type, layout),
+        )
+
+    def scalar_layout_alignment(self, type_id: SpirvId) -> int:
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is not None:
+            column_type, _ = matrix_info
+            return self.scalar_layout_alignment(column_type)
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, _ = array_info
+            return self.scalar_layout_alignment(element_type)
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            return max(
+                (
+                    self.scalar_layout_alignment(member_type)
+                    for member_type, _ in struct_members
+                ),
+                default=1,
+            )
+
+        vector_info = self.vector_type_info_from_type(type_id)
+        if vector_info is not None:
+            component_type, _ = vector_info
+            return self.uniform_scalar_size(component_type)
+
+        return self.uniform_scalar_size(type_id)
+
+    def scalar_layout_size(self, type_id: SpirvId) -> int:
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is not None:
+            column_type, column_count = matrix_info
+            return self.scalar_array_stride(column_type) * column_count
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, size = array_info
+            return self.scalar_array_stride(element_type) * int(size or 1)
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            offset = 0
+            max_alignment = 1
+            for member_type, _ in struct_members:
+                alignment = self.scalar_layout_alignment(member_type)
+                max_alignment = max(max_alignment, alignment)
+                offset = self.align_to(offset, alignment)
+                offset += self.scalar_layout_size(member_type)
+            return self.align_to(offset, max_alignment)
+
+        vector_info = self.vector_type_info_from_type(type_id)
+        if vector_info is not None:
+            component_type, component_count = vector_info
+            return self.uniform_scalar_size(component_type) * component_count
+
+        return self.uniform_scalar_size(type_id)
+
+    def scalar_array_stride(self, element_type: SpirvId) -> int:
+        return self.align_to(
+            self.scalar_layout_size(element_type),
+            self.scalar_layout_alignment(element_type),
+        )
+
+    def storage_matrix_stride_for_member(
+        self, type_id: SpirvId, layout: str = "std430"
+    ) -> Optional[int]:
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is not None:
+            column_type, _ = matrix_info
+            return self.storage_array_stride(column_type, layout)
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, _ = array_info
+            return self.storage_matrix_stride_for_member(element_type, layout)
+
+        return None
+
     def process_function_node(self, function_node, stage=None):
         """Process a CrossGL function definition."""
         return_type = self.map_crossgl_type(function_node.return_type)
@@ -3376,6 +6620,9 @@ class VulkanSPIRVCodeGen:
         resource_array_param_indices = set()
         param_type_hints = self.function_resource_array_type_hints.get(
             function_node.name, {}
+        )
+        storage_image_pointer_params = self.function_storage_image_pointer_params.get(
+            function_node.name, set()
         )
         for param in getattr(
             function_node, "parameters", getattr(function_node, "params", [])
@@ -3394,7 +6641,13 @@ class VulkanSPIRVCodeGen:
                 param_type = self.map_crossgl_type("float")
 
             param_value_types.append(param_type)
-            if self.is_resource_array_type(param_type):
+            param_resource_metadata = self.resource_type_metadata.get(param_type.id)
+            is_storage_image_param = (
+                param_resource_metadata is not None
+                and param_resource_metadata.get("kind") == "storage_image"
+                and param_name in storage_image_pointer_params
+            )
+            if self.is_resource_array_type(param_type) or is_storage_image_param:
                 resource_array_param_indices.add(len(param_types))
                 param_type = self.register_pointer_type(param_type, "UniformConstant")
 
@@ -3417,10 +6670,15 @@ class VulkanSPIRVCodeGen:
             self.local_variables[param_name] = param_id
             if i in resource_array_param_indices:
                 self.variable_value_types[param_id.id] = param_value_types[i]
+            self.register_declared_resource_metadata(
+                param, param_id, param_value_types[i]
+            )
 
         self.begin_block()
 
         previous_execution_model = self.current_execution_model
+        previous_function_id = self.current_function_id
+        self.current_function_id = function_id.id
         if self.current_execution_model is None:
             execution_models = self.function_execution_models.get(
                 function_node.name, set()
@@ -3432,12 +6690,16 @@ class VulkanSPIRVCodeGen:
 
         self.process_statements(function_node.body)
 
-        if self.convert_type_node_to_string(function_node.return_type) == "void":
+        if (
+            self.convert_type_node_to_string(function_node.return_type) == "void"
+            and not self.current_block_has_terminator()
+        ):
             self.create_return()
 
         self.end_function()
 
         self.current_execution_model = previous_execution_model
+        self.current_function_id = previous_function_id
         self.current_stage = previous_stage
         self.current_return_type = previous_return_type
         self.local_variables.clear()
@@ -3501,6 +6763,13 @@ class VulkanSPIRVCodeGen:
         """Process a local CrossGL variable declaration."""
         var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
         var_type = self.map_resource_type_with_format(var_type_source, node)
+        if self.type_contains_runtime_array(var_type):
+            self.emit(
+                f"; WARNING: local variable {node.name} has a runtime-array "
+                "aggregate type that cannot be materialized in SPIR-V"
+            )
+            return
+
         var_id = self.create_variable(var_type, "Function", node.name)
         self.local_variables[node.name] = var_id
         is_precise = self.has_attribute(node, "precise")
@@ -3524,6 +6793,12 @@ class VulkanSPIRVCodeGen:
         """Process a module-scope CrossGL variable declaration."""
         var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
         var_type_name = self.type_name_from_value(var_type_source)
+        if self.is_glsl_buffer_block_node(node):
+            return self.process_glsl_buffer_block_declaration(node, var_type_name)
+
+        if self.is_structured_buffer_type_name(var_type_name):
+            return self.process_structured_buffer_declaration(node, var_type_name)
+
         var_type = self.map_resource_type_with_format(var_type_source, node)
         storage_class = self.infer_global_storage_class(
             node, default_storage_class, var_type_name
@@ -3552,6 +6827,7 @@ class VulkanSPIRVCodeGen:
                     f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
                 )
                 self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+                self.register_declared_resource_metadata(node, var_id, var_type)
 
         self.global_variables[node.name] = var_id
         if self.has_attribute(node, "precise"):
@@ -3596,7 +6872,7 @@ class VulkanSPIRVCodeGen:
         return binding
 
     def reserve_explicit_resource_bindings(self, ast: ShaderNode):
-        for node in self.global_resource_nodes(ast):
+        for node in self.global_descriptor_binding_nodes(ast):
             explicit_binding = self.explicit_interface_integer_attribute(
                 node, "binding"
             )
@@ -3611,6 +6887,29 @@ class VulkanSPIRVCodeGen:
                     f"binding {explicit_binding}"
                 )
             self.reserved_resource_bindings.add(key)
+
+    def global_descriptor_binding_nodes(self, ast: ShaderNode):
+        yield from self.global_resource_nodes(ast)
+        yield from self.global_structured_buffer_nodes(ast)
+        yield from getattr(ast, "cbuffers", []) or []
+
+    def global_structured_buffer_nodes(self, ast: ShaderNode):
+        nodes = list(getattr(ast, "global_variables", []) or [])
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            nodes.extend(getattr(stage, "local_variables", []) or [])
+
+        seen = set()
+        for node in nodes:
+            node_id = id(node)
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
+            type_name = self.type_name_from_value(type_source)
+            if self.is_structured_buffer_type_name(
+                type_name
+            ) or self.is_glsl_buffer_block_node(node):
+                yield node
 
     def global_resource_nodes(self, ast: ShaderNode):
         nodes = list(getattr(ast, "global_variables", []) or [])
@@ -3997,6 +7296,723 @@ class VulkanSPIRVCodeGen:
             return callee
         return None
 
+    def collect_function_image_access_requirements_for_ast(self, ast):
+        functions = self.collect_ast_functions(ast)
+        self.function_parameter_names = collect_function_parameter_names(functions)
+        return collect_function_image_access_requirements(
+            functions,
+            self.function_parameter_names,
+            self.walk_ast_nodes,
+            self.function_call_name,
+            self.expression_name,
+        )
+
+    def buffer_operation_access_requirement(self, func_name):
+        if func_name == "buffer_load":
+            return "read"
+        if func_name == "buffer_store":
+            return "write"
+        if func_name in self.buffer_atomic_function_names():
+            return "read_write"
+        return None
+
+    def storage_buffer_parameter_root_name(self, expr, storage_buffer_parameters):
+        if isinstance(expr, str):
+            return expr if expr in storage_buffer_parameters else None
+        if isinstance(expr, (IdentifierNode, VariableNode)):
+            name = getattr(expr, "name", None)
+            return name if name in storage_buffer_parameters else None
+        if isinstance(expr, ArrayAccessNode):
+            return self.storage_buffer_parameter_root_name(
+                getattr(expr, "array", getattr(expr, "array_expr", None)),
+                storage_buffer_parameters,
+            )
+        if isinstance(expr, MemberAccessNode):
+            return self.storage_buffer_parameter_root_name(
+                getattr(expr, "object", getattr(expr, "object_expr", None)),
+                storage_buffer_parameters,
+            )
+        return None
+
+    def function_storage_buffer_parameter_indices(self, function_node) -> set:
+        return {
+            index
+            for index, param in enumerate(
+                getattr(
+                    function_node, "parameters", getattr(function_node, "params", [])
+                )
+            )
+            if self.storage_buffer_parameter_type_name(param) is not None
+        }
+
+    def scan_storage_buffer_access_path_indices(
+        self,
+        expr,
+        func_name,
+        storage_buffer_parameters,
+        callee_storage_buffer_parameter_indices,
+        requirements,
+        visited,
+    ):
+        if isinstance(expr, ArrayAccessNode):
+            self.scan_storage_buffer_requirement_node(
+                getattr(expr, "index", getattr(expr, "index_expr", None)),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            self.scan_storage_buffer_access_path_indices(
+                getattr(expr, "array", getattr(expr, "array_expr", None)),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+        elif isinstance(expr, MemberAccessNode):
+            self.scan_storage_buffer_access_path_indices(
+                getattr(expr, "object", getattr(expr, "object_expr", None)),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+
+    def merge_storage_buffer_access_requirement_for_parameter(
+        self, requirements, func_name, parameter_name, required_access
+    ):
+        if parameter_name is None:
+            return
+        current = requirements[func_name].get(parameter_name)
+        requirements[func_name][parameter_name] = (
+            self.merge_resource_access_requirement(current, required_access)
+        )
+
+    def scan_storage_buffer_requirement_expression(
+        self,
+        expr,
+        func_name,
+        storage_buffer_parameters,
+        callee_storage_buffer_parameter_indices,
+        requirements,
+        visited,
+    ):
+        if expr is None or isinstance(expr, (str, int, float, bool)):
+            return
+
+        if isinstance(expr, FunctionCallNode):
+            callee_name = self.function_call_name(expr)
+            args = getattr(expr, "arguments", getattr(expr, "args", []))
+            required_access = self.buffer_operation_access_requirement(callee_name)
+            if required_access is not None and args:
+                target_name = self.storage_buffer_parameter_root_name(
+                    args[0], storage_buffer_parameters
+                )
+                self.merge_storage_buffer_access_requirement_for_parameter(
+                    requirements, func_name, target_name, required_access
+                )
+                self.scan_storage_buffer_access_path_indices(
+                    args[0],
+                    func_name,
+                    storage_buffer_parameters,
+                    callee_storage_buffer_parameter_indices,
+                    requirements,
+                    visited,
+                )
+                for arg in args[1:]:
+                    self.scan_storage_buffer_requirement_node(
+                        arg,
+                        func_name,
+                        storage_buffer_parameters,
+                        callee_storage_buffer_parameter_indices,
+                        requirements,
+                        visited,
+                    )
+                return
+
+            storage_buffer_indices = callee_storage_buffer_parameter_indices.get(
+                callee_name, set()
+            )
+            for arg_index, arg in enumerate(args):
+                if (
+                    arg_index in storage_buffer_indices
+                    and self.storage_buffer_parameter_root_name(
+                        arg, storage_buffer_parameters
+                    )
+                    is not None
+                ):
+                    self.scan_storage_buffer_access_path_indices(
+                        arg,
+                        func_name,
+                        storage_buffer_parameters,
+                        callee_storage_buffer_parameter_indices,
+                        requirements,
+                        visited,
+                    )
+                    continue
+                self.scan_storage_buffer_requirement_node(
+                    arg,
+                    func_name,
+                    storage_buffer_parameters,
+                    callee_storage_buffer_parameter_indices,
+                    requirements,
+                    visited,
+                )
+            return
+
+        target_name = self.storage_buffer_parameter_root_name(
+            expr, storage_buffer_parameters
+        )
+        if target_name is not None:
+            self.merge_storage_buffer_access_requirement_for_parameter(
+                requirements, func_name, target_name, "read"
+            )
+            self.scan_storage_buffer_access_path_indices(
+                expr,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        if isinstance(expr, ArrayAccessNode):
+            self.scan_storage_buffer_requirement_node(
+                getattr(expr, "array", getattr(expr, "array_expr", None)),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            self.scan_storage_buffer_requirement_node(
+                getattr(expr, "index", getattr(expr, "index_expr", None)),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+        if isinstance(expr, MemberAccessNode):
+            self.scan_storage_buffer_requirement_node(
+                getattr(expr, "object", getattr(expr, "object_expr", None)),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        if isinstance(expr, BinaryOpNode):
+            self.scan_storage_buffer_requirement_node(
+                expr.left,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            self.scan_storage_buffer_requirement_node(
+                expr.right,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+        if isinstance(expr, UnaryOpNode):
+            self.scan_storage_buffer_requirement_node(
+                expr.operand,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+        if isinstance(expr, TernaryOpNode):
+            for child in (expr.condition, expr.true_expr, expr.false_expr):
+                self.scan_storage_buffer_requirement_node(
+                    child,
+                    func_name,
+                    storage_buffer_parameters,
+                    callee_storage_buffer_parameter_indices,
+                    requirements,
+                    visited,
+                )
+            return
+        if isinstance(expr, ArrayLiteralNode):
+            for element in getattr(expr, "elements", []):
+                self.scan_storage_buffer_requirement_node(
+                    element,
+                    func_name,
+                    storage_buffer_parameters,
+                    callee_storage_buffer_parameter_indices,
+                    requirements,
+                    visited,
+                )
+
+    def scan_storage_buffer_assignment_target_requirement(
+        self,
+        target,
+        operator,
+        func_name,
+        storage_buffer_parameters,
+        callee_storage_buffer_parameter_indices,
+        requirements,
+        visited,
+    ):
+        target_name = self.storage_buffer_parameter_root_name(
+            target, storage_buffer_parameters
+        )
+        if target_name is not None:
+            required_access = "write" if operator == "=" else "read_write"
+            self.merge_storage_buffer_access_requirement_for_parameter(
+                requirements, func_name, target_name, required_access
+            )
+            self.scan_storage_buffer_access_path_indices(
+                target,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        self.scan_storage_buffer_requirement_node(
+            target,
+            func_name,
+            storage_buffer_parameters,
+            callee_storage_buffer_parameter_indices,
+            requirements,
+            visited,
+        )
+
+    def scan_storage_buffer_requirement_node(
+        self,
+        node,
+        func_name,
+        storage_buffer_parameters,
+        callee_storage_buffer_parameter_indices,
+        requirements,
+        visited,
+    ):
+        if node is None or isinstance(node, (str, int, float, bool)):
+            return
+        if isinstance(node, dict):
+            for value in node.values():
+                self.scan_storage_buffer_requirement_node(
+                    value,
+                    func_name,
+                    storage_buffer_parameters,
+                    callee_storage_buffer_parameter_indices,
+                    requirements,
+                    visited,
+                )
+            return
+        if isinstance(node, (list, tuple, set)):
+            for value in node:
+                self.scan_storage_buffer_requirement_node(
+                    value,
+                    func_name,
+                    storage_buffer_parameters,
+                    callee_storage_buffer_parameter_indices,
+                    requirements,
+                    visited,
+                )
+            return
+
+        node_id = id(node)
+        if node_id in visited:
+            return
+        visited.add(node_id)
+
+        if isinstance(node, AssignmentNode):
+            target = getattr(
+                node, "target", getattr(node, "left", getattr(node, "name", None))
+            )
+            operator = getattr(node, "operator", "=")
+            self.scan_storage_buffer_assignment_target_requirement(
+                target,
+                operator,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            self.scan_storage_buffer_requirement_node(
+                getattr(node, "value", getattr(node, "right", None)),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        if isinstance(node, ReturnNode):
+            self.scan_storage_buffer_requirement_node(
+                getattr(node, "value", None),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        if isinstance(node, VariableNode):
+            self.scan_storage_buffer_requirement_node(
+                getattr(node, "initial_value", None),
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        if isinstance(
+            node,
+            (
+                ArrayAccessNode,
+                ArrayLiteralNode,
+                BinaryOpNode,
+                FunctionCallNode,
+                MemberAccessNode,
+                TernaryOpNode,
+                UnaryOpNode,
+            ),
+        ):
+            self.scan_storage_buffer_requirement_expression(
+                node,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        if hasattr(node, "expression"):
+            self.scan_storage_buffer_requirement_node(
+                node.expression,
+                func_name,
+                storage_buffer_parameters,
+                callee_storage_buffer_parameter_indices,
+                requirements,
+                visited,
+            )
+            return
+
+        if hasattr(node, "__dict__"):
+            for field_name, child in vars(node).items():
+                if field_name in {"annotations", "parent"}:
+                    continue
+                self.scan_storage_buffer_requirement_node(
+                    child,
+                    func_name,
+                    storage_buffer_parameters,
+                    callee_storage_buffer_parameter_indices,
+                    requirements,
+                    visited,
+                )
+
+    def collect_function_storage_buffer_access_requirements_for_ast(self, ast):
+        functions = self.collect_ast_functions(ast)
+        function_parameter_names = collect_function_parameter_names(functions)
+        parameter_sets = {
+            func_name: set(param_names)
+            for func_name, param_names in function_parameter_names.items()
+        }
+        requirements = {
+            getattr(func, "name", None): {}
+            for func in functions
+            if getattr(func, "name", None)
+        }
+        storage_buffer_parameter_sets = {
+            getattr(func, "name", None): self.function_storage_buffer_parameters(func)
+            for func in functions
+            if getattr(func, "name", None)
+        }
+        storage_buffer_parameter_indices = {
+            getattr(func, "name", None): self.function_storage_buffer_parameter_indices(
+                func
+            )
+            for func in functions
+            if getattr(func, "name", None)
+        }
+
+        for func in functions:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+
+            self.scan_storage_buffer_requirement_node(
+                getattr(func, "body", []),
+                func_name,
+                storage_buffer_parameter_sets.get(func_name, set()),
+                storage_buffer_parameter_indices,
+                requirements,
+                set(),
+            )
+
+        changed = True
+        while changed:
+            changed = False
+            for func in functions:
+                func_name = getattr(func, "name", None)
+                if not func_name:
+                    continue
+
+                parameter_set = parameter_sets.get(func_name, set())
+                if not parameter_set:
+                    continue
+
+                for node in self.walk_ast_nodes(getattr(func, "body", [])):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+
+                    callee_name = self.function_call_name(node)
+                    callee_requirements = requirements.get(callee_name)
+                    if not callee_requirements:
+                        continue
+
+                    callee_parameters = function_parameter_names.get(callee_name, [])
+                    args = getattr(node, "arguments", getattr(node, "args", []))
+                    for callee_param, required_access in callee_requirements.items():
+                        try:
+                            index = callee_parameters.index(callee_param)
+                        except ValueError:
+                            continue
+                        if index >= len(args):
+                            continue
+
+                        target_name = self.expression_name(args[index])
+                        if target_name not in parameter_set:
+                            continue
+
+                        current = requirements[func_name].get(target_name)
+                        merged = self.merge_resource_access_requirement(
+                            current, required_access
+                        )
+                        if merged != current:
+                            requirements[func_name][target_name] = merged
+                            changed = True
+
+        return {name: reqs for name, reqs in requirements.items() if reqs}
+
+    def merge_resource_access_requirement(self, current, incoming):
+        if incoming is None:
+            return current
+        if current is None or current == incoming:
+            return incoming
+        return "read_write"
+
+    def storage_image_access_for_expression(self, expr):
+        name = self.expression_name(expr)
+        if name is None:
+            return None
+
+        pointer = self.local_variables.get(name) or self.global_variables.get(name)
+        metadata = (
+            self.resource_metadata_for_pointer(pointer) if pointer is not None else None
+        )
+        if metadata is None:
+            return None
+        if metadata.get("kind") != "storage_image":
+            return None
+        if metadata.get("readonly"):
+            return "read"
+        if metadata.get("writeonly"):
+            return "write"
+        if metadata.get("readwrite"):
+            return "read_write"
+        return None
+
+    def storage_buffer_access_for_expression(self, expr):
+        name = self.expression_name(expr)
+        if name is None:
+            return None
+
+        pointer = self.local_variables.get(name) or self.global_variables.get(name)
+        metadata = (
+            self.storage_buffer_access_metadata_for_pointer(pointer)
+            if pointer is not None
+            else None
+        )
+        if metadata is None:
+            return None
+        if metadata.get("readonly"):
+            return "read"
+        if metadata.get("writeonly"):
+            return "write"
+        if metadata.get("readwrite"):
+            return "read_write"
+        return None
+
+    def expression_debug_name(self, expr) -> str:
+        name = self.expression_name(expr)
+        return name if name is not None else str(expr)
+
+    def validate_function_image_access_arguments(self, func_name, args) -> bool:
+        callee_requirements = self.function_image_access_requirements.get(func_name)
+        if not callee_requirements:
+            return True
+
+        param_names = self.function_parameter_names.get(func_name, [])
+        for index, param_name in enumerate(param_names):
+            required_access = callee_requirements.get(param_name)
+            if required_access is None or index >= len(args):
+                continue
+
+            actual_access = self.storage_image_access_for_expression(args[index])
+            if image_access_satisfies_requirement(required_access, actual_access):
+                continue
+
+            required_label = image_access_requirement_label(required_access)
+            actual_label = image_access_diagnostic_name(actual_access)
+            self.emit(
+                f"; WARNING: function call '{func_name}' requires {required_label} "
+                "storage image access for argument "
+                f"{self.expression_debug_name(args[index])} passed to parameter "
+                f"{param_name}: got {actual_label}"
+            )
+            return False
+
+        return True
+
+    def validate_function_storage_buffer_access_arguments(
+        self, func_name, args
+    ) -> bool:
+        callee_requirements = self.function_storage_buffer_access_requirements.get(
+            func_name
+        )
+        if not callee_requirements:
+            return True
+
+        param_names = self.function_parameter_names.get(func_name, [])
+        for index, param_name in enumerate(param_names):
+            required_access = callee_requirements.get(param_name)
+            if required_access is None or index >= len(args):
+                continue
+
+            actual_access = self.storage_buffer_access_for_expression(args[index])
+            if image_access_satisfies_requirement(required_access, actual_access):
+                continue
+
+            required_label = image_access_requirement_label(required_access)
+            actual_label = image_access_diagnostic_name(actual_access)
+            self.emit(
+                f"; WARNING: function call '{func_name}' requires {required_label} "
+                "storage buffer access for argument "
+                f"{self.expression_debug_name(args[index])} passed to parameter "
+                f"{param_name}: got {actual_label}"
+            )
+            return False
+
+        return True
+
+    def collect_inline_storage_buffer_functions(self, ast):
+        return {
+            func.name: func
+            for func in self.collect_ast_functions(ast)
+            if getattr(func, "name", None)
+            and self.function_has_storage_buffer_parameters(func)
+        }
+
+    def default_value_for_function(self, function_node) -> Optional[SpirvId]:
+        return_type = self.map_crossgl_type(function_node.return_type)
+        if return_type.type.base_type == "void":
+            return None
+        return self.default_value_for_type(return_type)
+
+    def inline_storage_buffer_function_call(self, function_node, call_args):
+        func_name = getattr(function_node, "name", "unknown")
+        if not self.validate_function_storage_buffer_access_arguments(
+            func_name, call_args
+        ):
+            return self.default_value_for_function(function_node)
+
+        parameters = getattr(
+            function_node, "parameters", getattr(function_node, "params", [])
+        )
+        if len(call_args) < len(parameters):
+            self.emit(
+                f"; WARNING: function call '{func_name}' requires "
+                f"{len(parameters)} arguments"
+            )
+            return self.default_value_for_function(function_node)
+
+        previous_locals = self.local_variables.copy()
+        previous_precise_locals = set(self.precise_local_variables)
+        previous_return_type = self.current_return_type
+        self.current_return_type = self.map_crossgl_type(function_node.return_type)
+
+        try:
+            for index, param in enumerate(parameters):
+                param_name = getattr(param, "name", f"param{index}")
+                if self.storage_buffer_parameter_type_name(param) is not None:
+                    pointer_arg = self.variable_pointer_from_expression(
+                        call_args[index]
+                    )
+                    if pointer_arg is None:
+                        self.emit(
+                            f"; WARNING: function call '{func_name}' requires a "
+                            f"storage buffer argument for parameter {param_name}"
+                        )
+                        return self.default_value_for_function(function_node)
+                    self.local_variables[param_name] = pointer_arg
+                    continue
+
+                arg_value = self.process_call_argument(
+                    func_name, call_args[index], index
+                )
+                if arg_value is None:
+                    self.emit(f"; WARNING: Failed to evaluate argument for {func_name}")
+                    return self.default_value_for_function(function_node)
+                self.local_variables[param_name] = arg_value
+
+            result = self.inline_function_body(function_node)
+            if result is not None:
+                return result
+            return self.default_value_for_function(function_node)
+        finally:
+            self.local_variables = previous_locals
+            self.precise_local_variables = previous_precise_locals
+            self.current_return_type = previous_return_type
+
+    def inline_function_body(self, function_node) -> Optional[SpirvId]:
+        body = getattr(function_node, "body", [])
+        statements = (
+            body.statements
+            if hasattr(body, "statements")
+            else body if isinstance(body, list) else [body]
+        )
+
+        for stmt in statements:
+            if isinstance(stmt, ReturnNode):
+                if getattr(stmt, "value", None) is None:
+                    return None
+                if isinstance(stmt.value, ArrayLiteralNode):
+                    return self.process_array_literal(
+                        stmt.value, self.current_return_type
+                    )
+                return self.process_expression(stmt.value)
+
+            self.process_statement(stmt)
+
+        return None
+
     def collect_function_execution_models(self, ast):
         functions = {
             getattr(func, "name", None): func
@@ -4036,6 +8052,10 @@ class VulkanSPIRVCodeGen:
             "geometry",
             "tessellation_control",
             "tessellation_evaluation",
+            "mesh",
+            "task",
+            "object",
+            "amplification",
         }
         for func in getattr(ast, "functions", []):
             qualifier = self.get_function_qualifier(func)
@@ -4053,6 +8073,74 @@ class VulkanSPIRVCodeGen:
             function_name: models
             for function_name, models in execution_models.items()
             if models
+        }
+
+    def collect_storage_image_pointer_parameters(self, ast):
+        functions = {
+            getattr(func, "name", None): func
+            for func in self.collect_ast_functions(ast)
+        }
+        functions = {name: func for name, func in functions.items() if name}
+        parameter_names = {
+            func_name: [
+                getattr(param, "name", None)
+                for param in getattr(func, "parameters", getattr(func, "params", []))
+            ]
+            for func_name, func in functions.items()
+        }
+        parameter_name_sets = {
+            func_name: {name for name in names if name}
+            for func_name, names in parameter_names.items()
+        }
+
+        pointer_params = {func_name: set() for func_name in functions}
+        for func_name, func in functions.items():
+            for call in self.walk_ast_nodes(getattr(func, "body", [])):
+                if not isinstance(call, FunctionCallNode):
+                    continue
+                if (
+                    self.function_call_name(call)
+                    not in self.image_atomic_function_names()
+                ):
+                    continue
+                args = getattr(call, "arguments", getattr(call, "args", []))
+                if not args:
+                    continue
+                arg_name = self.expression_name(args[0])
+                if arg_name in parameter_name_sets[func_name]:
+                    pointer_params[func_name].add(arg_name)
+
+        changed = True
+        while changed:
+            changed = False
+            for caller_name, func in functions.items():
+                caller_params = parameter_name_sets[caller_name]
+                for call in self.walk_ast_nodes(getattr(func, "body", [])):
+                    if not isinstance(call, FunctionCallNode):
+                        continue
+                    callee_name = self.function_call_name(call)
+                    if callee_name not in functions:
+                        continue
+                    callee_pointer_params = pointer_params.get(callee_name, set())
+                    if not callee_pointer_params:
+                        continue
+
+                    args = getattr(call, "arguments", getattr(call, "args", []))
+                    callee_params = parameter_names.get(callee_name, [])
+                    for index, arg in enumerate(args):
+                        if index >= len(callee_params):
+                            continue
+                        if callee_params[index] not in callee_pointer_params:
+                            continue
+                        arg_name = self.expression_name(arg)
+                        if arg_name not in caller_params:
+                            continue
+                        if arg_name not in pointer_params[caller_name]:
+                            pointer_params[caller_name].add(arg_name)
+                            changed = True
+
+        return {
+            func_name: params for func_name, params in pointer_params.items() if params
         }
 
     def collect_resource_array_parameter_type_hints(self, ast):
@@ -4192,6 +8280,85 @@ class VulkanSPIRVCodeGen:
                 return self.load_from_variable(variable_id, var_type)
         return variable_id
 
+    def cbuffer_member_pointer(self, name: str) -> Optional[SpirvId]:
+        member_info = self.cbuffer_members.get(name)
+        if member_info is None:
+            return None
+
+        cbuffer_var, member_type, member_index = member_info
+        int_type = self.primitive_types["int"]
+        index = self.register_constant(member_index, int_type)
+        ptr_type = self.register_pointer_type(member_type, "Uniform")
+        access = self.access_chain(cbuffer_var, [index], ptr_type)
+        self.variable_value_types[access.id] = member_type
+        return access
+
+    def structured_buffer_metadata_for_pointer(self, pointer_id: SpirvId):
+        metadata = self.structured_buffer_metadata.get(pointer_id.id)
+        if metadata is not None:
+            return metadata
+
+        pointee_type = self.variable_value_types.get(pointer_id.id)
+        if pointee_type is not None:
+            return self.structured_buffer_metadata.get(pointee_type.id)
+
+        return None
+
+    def storage_buffer_access_metadata_for_pointer(self, pointer_id: SpirvId):
+        if pointer_id is None:
+            return None
+
+        metadata = self.storage_buffer_access_metadata.get(pointer_id.id)
+        if metadata is not None:
+            return metadata
+
+        metadata = self.structured_buffer_metadata_for_pointer(pointer_id)
+        if metadata is not None:
+            return metadata
+
+        pointee_type = self.variable_value_types.get(pointer_id.id)
+        if pointee_type is not None:
+            return self.storage_buffer_access_metadata.get(pointee_type.id)
+
+        return None
+
+    def propagate_storage_buffer_access_metadata(
+        self, source_pointer: SpirvId, target_pointer: SpirvId
+    ):
+        metadata = self.storage_buffer_access_metadata_for_pointer(source_pointer)
+        if metadata is not None:
+            self.storage_buffer_access_metadata[target_pointer.id] = metadata
+
+    def structured_buffer_element_pointer(
+        self, buffer_pointer: SpirvId, index_id: SpirvId
+    ) -> Optional[SpirvId]:
+        metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
+        if metadata is None:
+            return None
+
+        pointee_type = self.variable_value_types.get(buffer_pointer.id)
+        descriptor_array = self.array_type_info_from_type(pointee_type)
+        block_type = metadata.get("block_type")
+        if (
+            descriptor_array is not None
+            and block_type is not None
+            and descriptor_array[0] is not None
+            and descriptor_array[0].id == block_type.id
+        ):
+            return None
+
+        element_type = metadata["element_type"]
+        int_type = self.primitive_types["int"]
+        member_index = self.register_constant(metadata.get("member_index", 0), int_type)
+        ptr_type = self.register_pointer_type(
+            element_type, buffer_pointer.type.storage_class or "Uniform"
+        )
+        access = self.access_chain(buffer_pointer, [member_index, index_id], ptr_type)
+        self.variable_value_types[access.id] = element_type
+        access_metadata = {**metadata, "_access_path": "element"}
+        self.structured_buffer_metadata[access.id] = access_metadata
+        return access
+
     def variable_pointer_from_expression(self, expr) -> Optional[SpirvId]:
         if isinstance(expr, IdentifierNode):
             name = expr.name
@@ -4217,6 +8384,7 @@ class VulkanSPIRVCodeGen:
         return (
             self.local_variables.get(name)
             or self.global_variables.get(name)
+            or self.cbuffer_member_pointer(name)
             or self.ensure_compute_builtin(name)
         )
 
@@ -4224,9 +8392,9 @@ class VulkanSPIRVCodeGen:
         if array_type is None:
             return None
 
-        for (element_type_id, _), arr_type_id in self.array_types.items():
-            if arr_type_id.id == array_type.id:
-                return self.find_registered_type_by_id(element_type_id)
+        array_info = self.array_type_info_from_type(array_type)
+        if array_info is not None:
+            return array_info[0]
 
         return None
 
@@ -4237,8 +8405,40 @@ class VulkanSPIRVCodeGen:
         for (element_type_id, size), arr_type_id in self.array_types.items():
             if arr_type_id.id == array_type.id:
                 return self.find_registered_type_by_id(element_type_id), size
+        for (element_type_id, size, _), arr_type_id in self.layout_array_types.items():
+            if arr_type_id.id == array_type.id:
+                return self.find_registered_type_by_id(element_type_id), size
 
         return None
+
+    def type_contains_runtime_array(
+        self, type_id: Optional[SpirvId], seen: Optional[set] = None
+    ) -> bool:
+        if type_id is None:
+            return False
+        if seen is None:
+            seen = set()
+        if type_id.id in seen:
+            return False
+        seen.add(type_id.id)
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, size = array_info
+            return size is None or self.type_contains_runtime_array(element_type, seen)
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is not None:
+            return any(
+                self.type_contains_runtime_array(member_type, seen)
+                for member_type, _ in struct_members
+            )
+
+        return False
+
+    def runtime_array_aggregate_fallback(self, reason: str) -> SpirvId:
+        self.emit(f"; WARNING: {reason}")
+        return self.register_constant(0.0, self.register_primitive_type("float"))
 
     def vector_type_info_from_type(self, vector_type: Optional[SpirvId]):
         if vector_type is None:
@@ -4268,6 +8468,11 @@ class VulkanSPIRVCodeGen:
             return self.register_constant(0, type_id)
         if primitive_name == "bool":
             return self.register_constant(False, type_id)
+        if self.type_contains_runtime_array(type_id):
+            return self.runtime_array_aggregate_fallback(
+                "runtime-array aggregate default values cannot be materialized "
+                "in SPIR-V"
+            )
 
         vector_info = self.vector_type_info_from_type(type_id)
         if vector_info is not None:
@@ -4530,6 +8735,12 @@ class VulkanSPIRVCodeGen:
             if array_variable is None:
                 return None
 
+            structured_access = self.structured_buffer_element_pointer(
+                array_variable, index
+            )
+            if structured_access is not None:
+                return structured_access
+
             array_type = self.variable_value_types.get(array_variable.id)
             element_type = self.array_element_type_from_type(array_type)
             if element_type is None:
@@ -4541,6 +8752,7 @@ class VulkanSPIRVCodeGen:
             ptr_type = self.register_pointer_type(element_type, storage_class)
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
+            self.propagate_storage_buffer_access_metadata(array_variable, access)
             return access
         return None
 
@@ -4560,6 +8772,14 @@ class VulkanSPIRVCodeGen:
                 array_variable = addressable_array
 
         if array_variable is not None:
+            structured_access = self.structured_buffer_element_pointer(
+                array_variable, index
+            )
+            if structured_access is not None:
+                return structured_access, self.variable_value_types.get(
+                    structured_access.id
+                )
+
             array_type = self.variable_value_types.get(array_variable.id)
             element_type = self.array_element_type_from_type(array_type)
             if element_type is None:
@@ -4571,6 +8791,7 @@ class VulkanSPIRVCodeGen:
             ptr_type = self.register_pointer_type(element_type, storage_class)
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
+            self.propagate_storage_buffer_access_metadata(array_variable, access)
             return access, element_type
 
         array = self.process_expression(array_expr)
@@ -4591,12 +8812,14 @@ class VulkanSPIRVCodeGen:
             ptr_type = self.register_pointer_type(element_type, storage_class)
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
+            self.propagate_storage_buffer_access_metadata(array_variable, access)
             return access, element_type
 
         storage_class = array.type.storage_class or "Function"
         ptr_type = self.register_pointer_type(element_type, storage_class)
         access = self.access_chain(array, [index], ptr_type)
         self.variable_value_types[access.id] = element_type
+        self.propagate_storage_buffer_access_metadata(array, access)
         return access, element_type
 
     def process_assignment(self, node: AssignmentNode):
@@ -5584,6 +9807,10 @@ class VulkanSPIRVCodeGen:
                 return self.get_variable_value(var_id)
             elif expr in self.global_variables:
                 return self.get_variable_value(self.global_variables[expr])
+            elif expr in self.cbuffer_members:
+                member_pointer = self.cbuffer_member_pointer(expr)
+                if member_pointer is not None:
+                    return self.get_variable_value(member_pointer)
             else:
                 builtin_component = self.process_dotted_compute_builtin(expr)
                 if builtin_component is not None:
@@ -5635,6 +9862,10 @@ class VulkanSPIRVCodeGen:
                 return self.get_variable_value(var_id)
             elif expr.name in self.global_variables:
                 return self.get_variable_value(self.global_variables[expr.name])
+            elif expr.name in self.cbuffer_members:
+                member_pointer = self.cbuffer_member_pointer(expr.name)
+                if member_pointer is not None:
+                    return self.get_variable_value(member_pointer)
             else:
                 builtin = self.ensure_compute_builtin(expr.name)
                 if builtin is not None:
@@ -5718,7 +9949,25 @@ class VulkanSPIRVCodeGen:
                 result_type, condition, true_value, false_value
             )
 
+        elif isinstance(expr, WaveOpNode):
+            return self.call_wave_operation(expr.operation, expr.arguments)
+
+        elif isinstance(expr, RayTracingOpNode):
+            return self.represented_ir_diagnostic_default_value(
+                "ray tracing", expr.operation
+            )
+
+        elif isinstance(expr, RayQueryOpNode):
+            return self.process_ray_query_operation(expr)
+
+        elif isinstance(expr, MeshOpNode):
+            return self.process_mesh_operation(expr)
+
         elif isinstance(expr, FunctionCallNode):
+            ray_query_call = self.ray_query_call_from_function_call(expr)
+            if ray_query_call is not None:
+                return self.process_ray_query_operation(ray_query_call)
+
             callee_expr = getattr(expr, "function", getattr(expr, "name", None))
             callee_name = None
             if hasattr(callee_expr, "name"):
@@ -5736,6 +9985,14 @@ class VulkanSPIRVCodeGen:
                 return self.unsupported_lambda_default_value(
                     f"call to {callee_name or 'unknown callee'}",
                     result_type,
+                )
+
+            inline_storage_buffer_function = self.inline_storage_buffer_functions.get(
+                callee_name
+            )
+            if inline_storage_buffer_function is not None:
+                return self.inline_storage_buffer_function_call(
+                    inline_storage_buffer_function, expr.args
                 )
 
             # Evaluate arguments
@@ -5774,6 +10031,16 @@ class VulkanSPIRVCodeGen:
                 self.emit("; WARNING: Unsupported callee expression in SPIR-V backend")
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
+
+            if not self.validate_function_image_access_arguments(
+                callee_name, expr.args
+            ):
+                result_type = None
+                if callee_name in self.function_signatures:
+                    result_type = self.function_signatures[callee_name][0]
+                if result_type is None or result_type.type.base_type == "void":
+                    return None
+                return self.default_value_for_type(result_type)
 
             if (
                 callee_name in self.resource_function_names()
@@ -5877,6 +10144,12 @@ class VulkanSPIRVCodeGen:
             "gl_NumWorkGroups": ("uvec3", "NumWorkgroups", "Input"),
             "gl_LocalInvocationIndex": ("uint", "LocalInvocationIndex", "Input"),
             "gl_WorkGroupSize": ("uvec3", "WorkgroupSize", "Constant"),
+            "gl_SubgroupSize": ("uint", "SubgroupSize", "Input"),
+            "gl_SubgroupInvocationID": (
+                "uint",
+                "SubgroupLocalInvocationId",
+                "Input",
+            ),
         }
         return builtins.get(name)
 
@@ -5889,6 +10162,8 @@ class VulkanSPIRVCodeGen:
             return None
 
         type_name, builtin_name, storage_class = info
+        if builtin_name.startswith("Subgroup"):
+            self.require_group_non_uniform()
         type_id = self.map_crossgl_type(type_name)
         if storage_class == "Constant":
             builtin_id = self.register_workgroup_size_builtin(
@@ -5979,6 +10254,30 @@ class VulkanSPIRVCodeGen:
         self.array_types[key] = spirv_id
         return spirv_id
 
+    def register_layout_array_type(
+        self, element_type: SpirvId, size: Optional[int], layout: str
+    ) -> SpirvId:
+        """Create a layout-specific array clone for distinct ArrayStride values."""
+        key = (element_type.id, size, layout)
+        if key in self.layout_array_types:
+            return self.layout_array_types[key]
+
+        id_value = self.get_id()
+        if size is not None:
+            size_const = self.register_constant(
+                size, self.register_primitive_type("int")
+            )
+            self.emit(f"%{id_value} = OpTypeArray %{element_type.id} %{size_const.id}")
+        else:
+            self.emit(f"%{id_value} = OpTypeRuntimeArray %{element_type.id}")
+
+        type_name = (
+            f"array_{element_type.type.base_type}_{size if size else 'rt'}_{layout}"
+        )
+        spirv_id = SpirvId(id_value, SpirvType(type_name), type_name)
+        self.layout_array_types[key] = spirv_id
+        return spirv_id
+
     def determine_array_element_type(self, array_id: "SpirvId") -> Optional["SpirvId"]:
         """Determine the element type of an array based on its SpirvId.
 
@@ -6061,6 +10360,10 @@ class VulkanSPIRVCodeGen:
             "geometry": "Geometry",
             "tessellation_control": "TessellationControl",
             "tessellation_evaluation": "TessellationEvaluation",
+            "mesh": "MeshEXT",
+            "task": "TaskEXT",
+            "object": "TaskEXT",
+            "amplification": "TaskEXT",
         }
         return stage_map.get(stage_name or "fragment", "Fragment")
 
@@ -6078,6 +10381,91 @@ class VulkanSPIRVCodeGen:
             int(config.get("local_size_z", 1)),
         )
 
+    def stage_attribute_value(self, stage, attribute_name: str):
+        """Return the first argument for a stage entry-point attribute."""
+        entry_point = getattr(stage, "entry_point", None)
+        for attr in getattr(entry_point, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != attribute_name:
+                continue
+            arguments = getattr(attr, "arguments", None)
+            if arguments is None:
+                arguments = getattr(attr, "args", [])
+            if arguments:
+                return arguments[0]
+        return None
+
+    def stage_layout_value(self, stage, attribute_name: str):
+        """Return the first argument for a stage layout qualifier."""
+        for layout in getattr(stage, "layout_qualifiers", []) or []:
+            for entry in getattr(layout, "entries", []) or []:
+                if str(getattr(entry, "name", "")).lower() != attribute_name:
+                    continue
+                arguments = getattr(entry, "arguments", None)
+                if arguments is None:
+                    arguments = getattr(entry, "args", [])
+                if arguments:
+                    return arguments[0]
+        return None
+
+    def mesh_stage_limit(self, stage, attribute_name: str) -> Optional[int]:
+        """Return a literal mesh output limit from function or layout metadata."""
+        for value in (
+            self.stage_attribute_value(stage, attribute_name),
+            self.stage_layout_value(stage, attribute_name),
+        ):
+            limit = self.literal_int_argument(value)
+            if limit is not None:
+                return max(0, limit)
+        return None
+
+    def mesh_stage_topology_mode(self, stage) -> str:
+        """Return the SPIR-V mesh output-topology execution mode."""
+        topology = self.stage_attribute_value(stage, "outputtopology")
+        topology_name = self.attribute_value_to_string(topology)
+        if topology_name is None:
+            for layout in getattr(stage, "layout_qualifiers", []) or []:
+                if getattr(layout, "direction", None) != "out":
+                    continue
+                for entry in getattr(layout, "entries", []) or []:
+                    entry_name = str(getattr(entry, "name", "")).lower()
+                    if entry_name in {"point", "points", "line", "lines"}:
+                        topology_name = entry_name
+                        break
+                    if entry_name in {"triangle", "triangles"}:
+                        topology_name = entry_name
+                        break
+                if topology_name is not None:
+                    break
+
+        topology_modes = {
+            "point": "OutputPoints",
+            "points": "OutputPoints",
+            "line": "OutputLinesEXT",
+            "lines": "OutputLinesEXT",
+            "triangle": "OutputTrianglesEXT",
+            "triangles": "OutputTrianglesEXT",
+        }
+        normalized = str(topology_name or "triangle").lower()
+        if normalized not in topology_modes:
+            raise ValueError(
+                "SPIR-V mesh stage outputtopology must be point, line, or "
+                f"triangle: {topology_name}"
+            )
+        return topology_modes[normalized]
+
+    def mesh_stage_output_limits(self, function_id: SpirvId, stage) -> Tuple[int, int]:
+        """Return OutputVertices and OutputPrimitivesEXT execution-mode limits."""
+        observed_vertices, observed_primitives = (
+            self.mesh_output_counts_by_function.get(function_id.id, (None, None))
+        )
+        max_vertices = self.mesh_stage_limit(stage, "max_vertices")
+        max_primitives = self.mesh_stage_limit(stage, "max_primitives")
+        if observed_vertices is not None:
+            max_vertices = max(observed_vertices, max_vertices or 0)
+        if observed_primitives is not None:
+            max_primitives = max(observed_primitives, max_primitives or 0)
+        return max(1, max_vertices or 1), max(1, max_primitives or 1)
+
     def emit_entry_point(
         self, execution_model: str, function_id: SpirvId, name: str, stage=None
     ):
@@ -6092,7 +10480,7 @@ class VulkanSPIRVCodeGen:
         )
         if execution_model == "Fragment":
             self.emit(f"OpExecutionMode %{function_id.id} OriginUpperLeft")
-        elif execution_model == "GLCompute":
+        elif execution_model in {"GLCompute", "MeshEXT", "TaskEXT"}:
             x, y, z = self.compute_local_size(stage)
             if self.requires_compute_derivatives:
                 x = max(2, x + (x % 2))
@@ -6100,10 +10488,40 @@ class VulkanSPIRVCodeGen:
             self.emit(f"OpExecutionMode %{function_id.id} LocalSize {x} {y} {z}")
             if self.requires_compute_derivatives:
                 self.emit(f"OpExecutionMode %{function_id.id} DerivativeGroupQuadsKHR")
+            if execution_model in {"MeshEXT", "TaskEXT"}:
+                self.require_capability("MeshShadingEXT")
+                self.require_extension("SPV_EXT_mesh_shader")
+            if execution_model == "MeshEXT":
+                max_vertices, max_primitives = self.mesh_stage_output_limits(
+                    function_id, stage
+                )
+                self.emit(
+                    f"OpExecutionMode %{function_id.id} OutputVertices {max_vertices}"
+                )
+                self.emit(
+                    f"OpExecutionMode %{function_id.id} "
+                    f"OutputPrimitivesEXT {max_primitives}"
+                )
+                self.emit(
+                    f"OpExecutionMode %{function_id.id} "
+                    f"{self.mesh_stage_topology_mode(stage)}"
+                )
+
+    def spirv_module_version(self) -> str:
+        if "MeshShadingEXT" in self.required_capabilities:
+            return "1.4"
+        if any(
+            capability.startswith("GroupNonUniform")
+            for capability in self.required_capabilities
+        ):
+            return "1.3"
+        return "1.0"
 
     def ordered_module_lines(self) -> List[str]:
         """Return SPIR-V assembly lines in logical module-layout order."""
         header_lines = self.code_lines[:3]
+        if len(header_lines) > 1:
+            header_lines[1] = f"; Version: {self.spirv_module_version()}"
         bound_line = f"; Bound: {self.next_id}"
         raw_lines = self.code_lines[4:]
 
@@ -6270,12 +10688,30 @@ class VulkanSPIRVCodeGen:
 
         for struct in ast.structs:
             self.process_crossgl_struct(struct)
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            for struct in getattr(stage, "local_structs", []) or []:
+                self.process_crossgl_struct(struct)
 
         self.function_resource_array_type_hints = (
             self.collect_resource_array_parameter_type_hints(ast)
         )
+        self.function_image_access_requirements = (
+            self.collect_function_image_access_requirements_for_ast(ast)
+        )
+        self.function_storage_buffer_access_requirements = (
+            self.collect_function_storage_buffer_access_requirements_for_ast(ast)
+        )
+        self.inline_storage_buffer_functions = (
+            self.collect_inline_storage_buffer_functions(ast)
+        )
         self.function_execution_models = self.collect_function_execution_models(ast)
+        self.function_storage_image_pointer_params = (
+            self.collect_storage_image_pointer_parameters(ast)
+        )
         self.reserve_explicit_resource_bindings(ast)
+
+        for cbuffer in getattr(ast, "cbuffers", []) or []:
+            self.process_cbuffer_declaration(cbuffer)
 
         for var in getattr(ast, "global_variables", []):
             self.process_global_variable_declaration(var)
@@ -6292,12 +10728,18 @@ class VulkanSPIRVCodeGen:
                 "geometry",
                 "tessellation_control",
                 "tessellation_evaluation",
+                "mesh",
+                "task",
+                "object",
+                "amplification",
             ]:
                 top_level_entries.append((func, qualifier))
             else:
                 helper_functions.append(func)
 
         for func in self.order_functions_by_dependencies(helper_functions):
+            if func.name in self.inline_storage_buffer_functions:
+                continue
             self.process_function_node(func)
 
         entry_points = []
@@ -6317,6 +10759,9 @@ class VulkanSPIRVCodeGen:
                 ]
                 for func in self.order_functions_by_dependencies(local_functions):
                     if id(func) not in processed_local_functions:
+                        if func.name in self.inline_storage_buffer_functions:
+                            processed_local_functions.add(id(func))
+                            continue
                         self.process_function_node(func, stage=stage)
                         processed_local_functions.add(id(func))
 

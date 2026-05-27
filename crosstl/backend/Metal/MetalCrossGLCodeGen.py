@@ -548,6 +548,19 @@ class MetalToCrossGLConverter:
                 return storage_type
         return self.map_type(type_to_map)
 
+    def address_space_qualifier_prefix(self, var):
+        if self.structured_buffer_pointer_type(var):
+            return ""
+
+        qualifiers = [
+            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
+        ]
+        address_spaces = []
+        for qualifier in ("threadgroup", "thread", "device", "constant"):
+            if qualifier in qualifiers and qualifier not in address_spaces:
+                address_spaces.append(qualifier)
+        return f"{' '.join(address_spaces)} " if address_spaces else ""
+
     def format_decl(self, var, include_semantic=False):
         alignas_prefix = ""
         if hasattr(var, "alignas") and var.alignas:
@@ -560,13 +573,14 @@ class MetalToCrossGLConverter:
             alignas_prefix = " ".join(parts) + " "
         type_str = f"{self.map_variable_type(var)}{self.format_array_suffix(var)}"
         const_str = "const " if hasattr(var, "is_const") and var.is_const else ""
+        address_space = self.address_space_qualifier_prefix(var)
         semantic = (
             self.map_semantic(getattr(var, "attributes", None))
             if include_semantic
             else ""
         )
         access = self.storage_texture_access_attribute(var)
-        parts = [alignas_prefix + const_str + type_str, var.name]
+        parts = [alignas_prefix + const_str + address_space + type_str, var.name]
         if semantic:
             parts.append(semantic)
         if access:
@@ -738,10 +752,7 @@ class MetalToCrossGLConverter:
             return expr
         elif isinstance(expr, VariableNode):
             if expr.vtype:
-                const_str = (
-                    "const " if hasattr(expr, "is_const") and expr.is_const else ""
-                )
-                return f"{const_str}{self.map_variable_type(expr)}{self.format_array_suffix(expr)} {expr.name}"
+                return self.format_decl(expr, include_semantic=False)
             else:
                 return expr.name
         elif isinstance(expr, AssignmentNode):
