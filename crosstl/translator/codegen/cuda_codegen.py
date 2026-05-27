@@ -3681,6 +3681,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         else:
             return None
 
+        coordinate_diagnostic = self.texture_coordinate_rank_diagnostic(
+            "textureGather",
+            texture_type,
+            raw_args[coordinate_index],
+        )
+        if coordinate_diagnostic is not None:
+            return coordinate_diagnostic
+
         texture_name = args[0]
         coord = args[coordinate_index]
         gather_args = (

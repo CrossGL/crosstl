@@ -2252,6 +2252,77 @@ def test_native_hip_pitched_array_memory_copy_parses_and_compiles_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_mipmapped_array_lifecycle_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP mipmapped-array allocation, level lookup, and cleanup."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void mipmapped_array_lifecycle(size_t width_elems) {
+        hipMipmappedArray_t allocated_mipmapped_array;
+        hipMipmappedArray_t created_mipmapped_array;
+        hipArray_t allocated_level;
+        hipArray_t created_level;
+        hipChannelFormatDesc channel_desc;
+        HIP_ARRAY3D_DESCRIPTOR array3d_desc;
+        hipExtent extent = make_hipExtent(width_elems, 4, 1);
+
+        hipMallocMipmappedArray(
+            &allocated_mipmapped_array, &channel_desc, extent, 4,
+            hipArrayDefault
+        );
+        hipMipmappedArrayCreate(&created_mipmapped_array, &array3d_desc, 3);
+        hipGetMipmappedArrayLevel(
+            &allocated_level, allocated_mipmapped_array, 1
+        );
+        hipMipmappedArrayGetLevel(&created_level, created_mipmapped_array, 2);
+        hipMipmappedArrayDestroy(created_mipmapped_array);
+        hipFreeMipmappedArray(allocated_mipmapped_array);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    expected_fragments = (
+        "// Function: mipmapped_array_lifecycle",
+        "void mipmapped_array_lifecycle(u32 width_elems)",
+        "var allocated_mipmapped_array: hipMipmappedArray_t;",
+        "var created_mipmapped_array: hipMipmappedArray_t;",
+        "var allocated_level: ptr<void>;",
+        "var created_level: ptr<void>;",
+        "var channel_desc: hipChannelFormatDesc;",
+        "var array3d_desc: HIP_ARRAY3D_DESCRIPTOR;",
+        "var extent: hipExtent = make_hipExtent(width_elems, 4, 1);",
+        "// HIP mipmapped array allocate: output: allocated_mipmapped_array, "
+        "desc: channel_desc, extent: extent, levels: 4, "
+        "flags: hipArrayDefault",
+        "// HIP mipmapped array create: output: created_mipmapped_array, "
+        "descriptor: array3d_desc, levels: 3",
+        "// HIP mipmapped array get level: output: allocated_level, "
+        "mipmapped array: allocated_mipmapped_array, level: 1",
+        "// HIP mipmapped array get level: output: created_level, "
+        "mipmapped array: created_mipmapped_array, level: 2",
+        "// HIP free mipmapped array: created_mipmapped_array",
+        "// HIP free mipmapped array: allocated_mipmapped_array",
+    )
+    for expected in expected_fragments:
+        assert expected in crossgl
+
+    raw_calls = (
+        "hipMallocMipmappedArray",
+        "hipMipmappedArrayCreate",
+        "hipGetMipmappedArrayLevel",
+        "hipMipmappedArrayGetLevel",
+        "hipMipmappedArrayDestroy",
+        "hipFreeMipmappedArray",
+    )
+    for raw_call in raw_calls:
+        assert f"{raw_call}(" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_driver_memory_memset_parses_and_compiles_if_available(
     tmp_path,
 ):

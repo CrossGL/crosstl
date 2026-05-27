@@ -4847,6 +4847,61 @@ class TestCudaCodeGen:
         assert "textureProjGradOffset(" not in cuda_code
         assert "texelFetchOffset(" not in cuda_code
 
+    def test_texture_gather_coordinate_shapes_emit_cuda_helpers_or_diagnostics(self):
+        """Test CUDA textureGather rejects known invalid coordinate ranks."""
+        source_code = """
+        shader GatherCoordinateShapes {
+            sampler2d colorMap;
+            Texture2D<float4> typedColor;
+            sampler querySampler;
+
+            void gatherShapes(float u, vec2 uv, vec3 uvw) {
+                vec4 valid = textureGather(colorMap, uv);
+                vec4 validSampler = textureGather(colorMap, querySampler, uv, 1);
+                vec4 validTyped = textureGather(typedColor, uv, 2);
+                vec4 badScalar = textureGather(colorMap, u);
+                vec4 badSamplerScalar = textureGather(colorMap, querySampler, u, 1);
+                vec4 badVec3 = textureGather(colorMap, uvw, 2);
+                vec4 badTypedVec3 = textureGather(typedColor, uvw, 3);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float4 valid = tex2Dgather<float4>(colorMap, uv.x, uv.y);" in cuda_code
+        assert (
+            "float4 validSampler = "
+            "tex2Dgather<float4>(colorMap, uv.x, uv.y, 1);" in cuda_code
+        )
+        assert (
+            "float4 validTyped = "
+            "tex2Dgather<float4>(typedColor, uv.x, uv.y, 2);" in cuda_code
+        )
+        for name in (
+            "badScalar",
+            "badSamplerScalar",
+            "badVec3",
+            "badTypedVec3",
+        ):
+            assert (
+                f"float4 {name} = /* unsupported CUDA sampled resource call: "
+                "textureGather coordinate rank on sampler2D */ "
+                "make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
+            ) in cuda_code
+        assert "tex2Dgather<float4>(colorMap, u.x, u.y)" not in cuda_code
+        assert "tex2Dgather<float4>(colorMap, uvw.x, uvw.y, 2)" not in cuda_code
+        assert "tex2Dgather<float4>(typedColor, uvw.x, uvw.y, 3)" not in cuda_code
+        assert "textureGather(" not in cuda_code
+
     def test_typed_hlsl_unsupported_sampled_calls_emit_cuda_diagnostics(self, tmp_path):
         """Test CUDA diagnostics normalize typed HLSL sampled Texture aliases."""
         source_code = """
