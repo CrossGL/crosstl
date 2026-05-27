@@ -1246,11 +1246,11 @@ def test_glsl_fragment_blend_support_layout_qualifiers():
         crosstl.translator.parse(code), "fragment"
     )
 
-    assert "layout(blend_support_multiply, blend_support_screen) out;" in fragment_code
     assert (
-        "layout(location = 0, blend_support_colordodge) out highp vec4 "
-        "outputColour;" in fragment_code
+        "layout(blend_support_colordodge, blend_support_multiply, "
+        "blend_support_screen) out;" in fragment_code
     )
+    assert "layout(location = 0) out highp vec4 outputColour;" in fragment_code
     assert "outputColour = vec4(1.0);" in fragment_code
 
 

@@ -157,14 +157,12 @@ def test_parse_fragment_blend_support_layout_roundtrip():
     glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
 
     assert "#extension GL_KHR_blend_equation_advanced : enable" in glsl
-    assert "layout(blend_support_multiply, blend_support_screen) out;" in glsl
     assert (
-        "layout(location = 0, blend_support_colordodge) out highp vec4 "
-        "outputColour;" in glsl
+        "layout(blend_support_colordodge, blend_support_multiply, "
+        "blend_support_screen) out;" in glsl
     )
-    assert (
-        "layout(location = 1, blend_support_multiply) out vec4 overlayColour;" in glsl
-    )
+    assert "layout(location = 0) out highp vec4 outputColour;" in glsl
+    assert "layout(location = 1) out vec4 overlayColour;" in glsl
     assert "outputColour = vec4(1.0);" in glsl
     assert "overlayColour = vec4(0.25);" in glsl
     assert "fragColor" not in glsl

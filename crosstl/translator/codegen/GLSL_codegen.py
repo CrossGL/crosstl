@@ -1133,6 +1133,7 @@ class GLSLCodeGen:
         self.stage_io_declarations = {}
         self.flattened_stage_variables = set()
         self.fragment_output_member_layout_maps = {}
+        self.fragment_blend_support_layout_parts = []
         self.current_function_return_type = None
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
@@ -1306,6 +1307,11 @@ class GLSLCodeGen:
         stage_local_interface_vars = self.deduplicate_stage_interface_declarations(
             collect_stage_local_variables(
                 ast, target_stage, self.is_stage_local_interface_variable
+            )
+        )
+        self.fragment_blend_support_layout_parts = (
+            self.glsl_fragment_output_blend_support_layout_parts(
+                global_vars + stage_local_interface_vars
             )
         )
         self.task_payload_shared_variables = (
@@ -2264,8 +2270,34 @@ class GLSLCodeGen:
 
         for attr in getattr(func, "attributes", []) or []:
             add_if_blend_support(attr)
+        for attr_name in getattr(self, "fragment_blend_support_layout_parts", []):
+            if attr_name not in seen:
+                seen.add(attr_name)
+                parts.append(attr_name)
         for attr in self.glsl_stage_layout_entries(stage_layout_qualifiers, "out"):
             add_if_blend_support(attr)
+
+        return parts
+
+    def glsl_fragment_output_blend_support_layout_parts(self, nodes):
+        parts = []
+        seen = set()
+
+        for node in nodes:
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(node, "qualifiers", []) or []
+            }
+            if "out" not in qualifiers:
+                continue
+            for attr in getattr(node, "attributes", []) or []:
+                attr_name = self.glsl_stage_control_attribute_name(attr)
+                if attr_name not in self.GLSL_BLEND_SUPPORT_LAYOUT_NAMES:
+                    continue
+                if getattr(attr, "arguments", []) or attr_name in seen:
+                    continue
+                seen.add(attr_name)
+                parts.append(attr_name)
 
         return parts
 
@@ -4627,6 +4659,8 @@ class GLSLCodeGen:
             if normalized.startswith("glsl_"):
                 normalized = normalized[len("glsl_") :]
             normalized = normalized.replace("-", "_")
+            if normalized in self.GLSL_BLEND_SUPPORT_LAYOUT_NAMES:
+                continue
             if normalized in self.GLSL_BARE_LAYOUT_ATTRIBUTE_NAMES:
                 arguments = getattr(attr, "arguments", []) or []
                 if arguments:

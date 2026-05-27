@@ -2305,3 +2305,100 @@ def test_native_hip_stream_priority_capture_info_parses_and_compiles_if_availabl
         assert f"{raw_call}(" not in crossgl
 
     compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
+def test_native_hip_capture_to_graph_generic_node_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP capture-to-graph and generic graph-node APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void capture_to_graph_generic_node_smoke(hipStream_t stream) {
+        hipGraph_t graph;
+        hipGraph_t captured_graph;
+        hipGraphExec_t exec;
+        hipGraphNode_t generic_node;
+        hipGraphNodeParams node_params;
+        hipGraphInstantiateParams instantiate_params;
+        unsigned long long exec_flags = 0;
+
+        hipGraphCreate(&graph, 0);
+        hipStreamBeginCaptureToGraph(
+            stream,
+            graph,
+            NULL,
+            NULL,
+            0,
+            hipStreamCaptureModeGlobal
+        );
+        hipStreamEndCapture(stream, &captured_graph);
+        hipGraphAddNode(&generic_node, graph, NULL, 0, &node_params);
+        hipGraphNodeSetParams(generic_node, &node_params);
+        hipGraphInstantiateWithParams(&exec, graph, &instantiate_params);
+        hipGraphUpload(exec, stream);
+        hipGraphExecGetFlags(exec, &exec_flags);
+        hipGraphExecNodeSetParams(exec, generic_node, &node_params);
+        hipGraphLaunch(exec, stream);
+        hipGraphDestroyNode(generic_node);
+        hipGraphExecDestroy(exec);
+        hipGraphDestroy(captured_graph);
+        hipGraphDestroy(graph);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    expected_fragments = (
+        "// Function: capture_to_graph_generic_node_smoke",
+        "void capture_to_graph_generic_node_smoke(hipStream_t stream)",
+        "var graph: hipGraph_t;",
+        "var captured_graph: hipGraph_t;",
+        "var exec: hipGraphExec_t;",
+        "var generic_node: hipGraphNode_t;",
+        "var node_params: hipGraphNodeParams;",
+        "var instantiate_params: hipGraphInstantiateParams;",
+        "var exec_flags: u64 = 0;",
+        "// HIP graph create: output: graph, flags: 0",
+        "// HIP stream begin capture to graph: stream: stream, graph: graph, "
+        "dependencies: NULL, dependency data: NULL, count: 0, "
+        "mode: hipStreamCaptureModeGlobal",
+        "// HIP stream end capture: stream: stream, graph output: captured_graph",
+        "// HIP graph add generic node: output: generic_node, graph: graph, "
+        "dependencies: NULL, count: 0, params: (&node_params)",
+        "// HIP graph generic node set params: node: generic_node, "
+        "params: (&node_params)",
+        "// HIP graph instantiate with params: output: exec, graph: graph, "
+        "params: (&instantiate_params)",
+        "// HIP graph upload: exec: exec, stream: stream",
+        "// HIP graph exec get flags: exec: exec, output: exec_flags",
+        "// HIP graph exec generic node set params: exec: exec, "
+        "node: generic_node, params: (&node_params)",
+        "// HIP graph launch: exec: exec, stream: stream",
+        "// HIP graph destroy node: generic_node",
+        "// HIP graph exec destroy: exec",
+        "// HIP graph destroy: captured_graph",
+        "// HIP graph destroy: graph",
+    )
+    for expected in expected_fragments:
+        assert expected in crossgl
+
+    raw_calls = (
+        "hipGraphCreate",
+        "hipStreamBeginCaptureToGraph",
+        "hipStreamEndCapture",
+        "hipGraphAddNode",
+        "hipGraphNodeSetParams",
+        "hipGraphInstantiateWithParams",
+        "hipGraphUpload",
+        "hipGraphExecGetFlags",
+        "hipGraphExecNodeSetParams",
+        "hipGraphLaunch",
+        "hipGraphDestroyNode",
+        "hipGraphExecDestroy",
+        "hipGraphDestroy",
+    )
+    for raw_call in raw_calls:
+        assert f"{raw_call}(" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)

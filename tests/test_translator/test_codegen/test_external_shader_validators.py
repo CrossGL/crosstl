@@ -1361,14 +1361,12 @@ def test_mixed_glsl_fragment_blend_support_validate_with_glslangvalidator(
         _mixed_glsl_ast(MIXED_GLSL_FRAGMENT_BLEND_SUPPORT_SHADER, "fragment")
     )
     assert "#extension GL_KHR_blend_equation_advanced : enable" in code
-    assert "layout(blend_support_multiply, blend_support_screen) out;" in code
     assert (
-        "layout(location = 0, blend_support_colordodge) out highp vec4 "
-        "outputColour;" in code
+        "layout(blend_support_colordodge, blend_support_multiply, "
+        "blend_support_screen) out;" in code
     )
-    assert (
-        "layout(location = 1, blend_support_multiply) out vec4 overlayColour;" in code
-    )
+    assert "layout(location = 0) out highp vec4 outputColour;" in code
+    assert "layout(location = 1) out vec4 overlayColour;" in code
     assert "outputColour = vec4(uv, 0.0, 1.0);" in code
     assert "overlayColour = vec4(0.25);" in code
     assert "fragColor" not in code

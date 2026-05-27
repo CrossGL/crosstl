@@ -8464,6 +8464,66 @@ class TestCudaCodeGen:
         assert "imageAtomicMax(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
+    def test_image_atomic_coordinate_shapes_emit_cuda_diagnostics(self):
+        """Test CUDA image atomic diagnostics distinguish bad coordinate ranks."""
+        source_code = """
+        shader ImageAtomicCoordinateShapes {
+            uimage1D lineCounters;
+            iimage2D signedImage;
+            uimage2DArray layerCounters;
+            iimage3D signedVolume;
+
+            void atomicCoordinateShapes(int x, ivec2 pixel, ivec3 voxel) {
+                uint validLine = imageAtomicAdd(lineCounters, x, 1);
+                uint badLine = imageAtomicAdd(lineCounters, pixel, 1);
+                int badSigned = imageAtomicMin(signedImage, x, 2);
+                uint badLayer = imageAtomicExchange(layerCounters, pixel, 3);
+                int badVolume = imageAtomicCompSwap(signedVolume, pixel, 4, 5);
+                uint validLayer = imageAtomicMax(layerCounters, voxel, 6);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "uint validLine = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicAdd on uimage1D */ 0u;" in cuda_code
+        )
+        assert (
+            "uint badLine = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicAdd coordinate rank on uimage1D */ 0u;" in cuda_code
+        )
+        assert (
+            "int badSigned = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicMin coordinate rank on iimage2D */ 0;" in cuda_code
+        )
+        assert (
+            "uint badLayer = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicExchange coordinate rank on uimage2DArray */ 0u;" in cuda_code
+        )
+        assert (
+            "int badVolume = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicCompSwap coordinate rank on iimage3D */ 0;" in cuda_code
+        )
+        assert (
+            "uint validLayer = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicMax on uimage2DArray */ 0u;" in cuda_code
+        )
+        assert "imageAtomicAdd(" not in cuda_code
+        assert "imageAtomicMin(" not in cuda_code
+        assert "imageAtomicExchange(" not in cuda_code
+        assert "imageAtomicCompSwap(" not in cuda_code
+        assert "imageAtomicMax(" not in cuda_code
+
     def test_resource_query_builtins_emit_cuda_metadata_helpers(self):
         """Test CUDA lowers resource queries through explicit metadata sidecars."""
         source_code = """
