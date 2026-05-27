@@ -6014,6 +6014,67 @@ def test_directx_tessellation_factor_vectors_emit_hlsl_arrays():
     assert "float2 inside : SV_InsideTessFactor;" not in generated
 
 
+@pytest.mark.parametrize(
+    ("patch_constant_members", "message"),
+    [
+        (
+            "ivec3 edges @ SV_TessFactor;\n"
+            "            float inside @ SV_InsideTessFactor;",
+            "SV_TessFactor.*floating-point",
+        ),
+        (
+            "uvec3 edges @ SV_TessFactor;\n"
+            "            float inside @ SV_InsideTessFactor;",
+            "SV_TessFactor.*floating-point",
+        ),
+        (
+            "vec3 edges @ SV_TessFactor;\n"
+            "            bool inside @ SV_InsideTessFactor;",
+            "SV_InsideTessFactor.*floating-point",
+        ),
+    ],
+)
+def test_directx_tessellation_factor_semantics_require_floating_members(
+    patch_constant_members, message
+):
+    code = f"""
+    shader invalid_tess_factor_member_type {{
+        struct HSInput {{
+            vec3 position @ POSITION;
+        }};
+
+        struct HSOutput {{
+            vec3 position @ POSITION;
+        }};
+
+        struct HSConstData {{
+            {patch_constant_members}
+        }};
+
+        tessellation_control {{
+            HSConstData HSConst(InputPatch<HSInput, 3> patch) {{
+                HSConstData constants;
+                return constants;
+            }}
+
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {{
+                HSOutput output;
+                return output;
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
 def test_directx_advanced_stage_signature_validation_rejects_partial_hlsl_shapes():
     geometry_code = """
     shader bad_geometry_signature {

@@ -9204,6 +9204,73 @@ def test_integer_image_atomics_emit_slang_interlocked_helpers():
         assert f"{operation}(image" not in generated_code
 
 
+def test_slangc_smoke_compiles_generated_image_atomics_if_available(tmp_path):
+    code = """
+    shader SlangImageAtomicCompileSmoke {
+        uimage2D counters @r32ui;
+        image2D signedCounters @r32i;
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                ivec2 pixel = ivec2(int(tid.x), 0);
+                uint oldAdd = imageAtomicAdd(counters, pixel, 1u);
+                uint oldExchange = imageAtomicExchange(counters, pixel, oldAdd + 1u);
+                uint oldSwap = imageAtomicCompSwap(counters, pixel, oldAdd, oldExchange);
+                int oldMin = imageAtomicMin(signedCounters, pixel, -1);
+                if (imageAtomicOr(counters, pixel, oldSwap) != 0u) {
+                    imageAtomicXor(counters, pixel, 3u);
+                }
+                imageStore(
+                    counters,
+                    pixel,
+                    oldAdd + oldExchange + oldSwap + uint(oldMin)
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture2D<uint> counters : register(u0);" in generated_code
+    assert "RWTexture2D<int> signedCounters : register(u1);" in generated_code
+    assert "uint cgl_imageAtomicAdd_original;" in generated_code
+    assert (
+        "InterlockedAdd(counters[pixel], 1u, cgl_imageAtomicAdd_original);"
+        in generated_code
+    )
+    assert (
+        "InterlockedExchange(counters[pixel], oldAdd + 1u, "
+        "cgl_imageAtomicExchange_original);" in generated_code
+    )
+    assert (
+        "InterlockedCompareExchange(counters[pixel], oldAdd, oldExchange, "
+        "cgl_imageAtomicCompSwap_original);" in generated_code
+    )
+    assert (
+        "InterlockedMin(signedCounters[pixel], -1, cgl_imageAtomicMin_original);"
+        in generated_code
+    )
+    assert (
+        "InterlockedOr(counters[pixel], oldSwap, cgl_imageAtomicOr_original);"
+        in generated_code
+    )
+    assert "if (cgl_imageAtomicOr_original != 0u)" in generated_code
+    assert (
+        "InterlockedXor(counters[pixel], 3u, cgl_imageAtomicXor_original);"
+        in generated_code
+    )
+    assert "imageAtomicAdd(counters" not in generated_code
+    assert "imageAtomicExchange(counters" not in generated_code
+    assert "imageAtomicCompSwap(counters" not in generated_code
+    assert "imageAtomicMin(signedCounters" not in generated_code
+    assert "imageAtomicOr(counters" not in generated_code
+    assert "imageAtomicXor(counters" not in generated_code
+
+    compile_generated_slang(generated_code, tmp_path, "compute")
+
+
 def test_integer_image_array_atomics_preserve_expression_indices():
     code = """
     shader AtomicImageArrays {

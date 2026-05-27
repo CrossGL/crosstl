@@ -2913,8 +2913,8 @@ class TestVulkanSPIRVCodeGen:
         report_result = gen.process_expression(RayTracingOpNode("ReportHit", [1.0, 0]))
         proceed_result = gen.process_expression(RayQueryOpNode("Proceed", "rq", []))
         ray_t_result = gen.process_expression(RayQueryOpNode("CommittedRayT", "rq", []))
-        triangle_positions_result = gen.process_expression(
-            RayQueryOpNode("CommittedTriangleVertexPositions", "rq", [])
+        triangle_normal_result = gen.process_expression(
+            RayQueryOpNode("CommittedTriangleNormal", "rq", [])
         )
         mesh_result = gen.process_expression(MeshOpNode("SetMeshOutputCounts", [3, 1]))
 
@@ -2924,7 +2924,7 @@ class TestVulkanSPIRVCodeGen:
         assert report_result.type.base_type == "bool"
         assert proceed_result.type.base_type == "bool"
         assert ray_t_result.type.base_type == "float"
-        assert triangle_positions_result.type.base_type == "uint"
+        assert triangle_normal_result.type.base_type == "uint"
         assert mesh_result.type.base_type == "uint"
         assert (
             "WARNING: SPIR-V backend does not lower ray tracing operation "
@@ -2936,7 +2936,7 @@ class TestVulkanSPIRVCodeGen:
         ) in spv_code
         assert (
             "WARNING: SPIR-V backend does not lower ray query operation "
-            "CommittedTriangleVertexPositions yet; using a default uint value"
+            "CommittedTriangleNormal yet; using a default uint value"
         ) in spv_code
         assert (
             "WARNING: SPIR-V backend does not lower mesh shader operation "
@@ -2973,9 +2973,9 @@ class TestVulkanSPIRVCodeGen:
                         RayQueryOpNode("CandidateRayT", "rq", []),
                     ),
                     VariableNode(
-                        "trianglePositionsToken",
+                        "triangleNormalToken",
                         PrimitiveType("uint"),
-                        RayQueryOpNode("CommittedTriangleVertexPositions", "rq", []),
+                        RayQueryOpNode("CommittedTriangleNormal", "rq", []),
                     ),
                     ExpressionStatementNode(MeshOpNode("SetMeshOutputCounts", [3, 1])),
                     ExpressionStatementNode(
@@ -3003,10 +3003,7 @@ class TestVulkanSPIRVCodeGen:
         assert "ReportHit yet; using a default bool value" in spv_code
         assert "Proceed yet; using a default bool value" in spv_code
         assert "CandidateRayT yet; using a default float value" in spv_code
-        assert (
-            "CommittedTriangleVertexPositions yet; using a default uint value"
-            in spv_code
-        )
+        assert "CommittedTriangleNormal yet; using a default uint value" in spv_code
         assert "SetMeshOutputCounts yet; using a default uint value" in spv_code
         assert "TraceRay yet; using a default uint value" in spv_code
         assert "Unknown expression type" not in spv_code
@@ -3621,6 +3618,77 @@ class TestVulkanSPIRVCodeGen:
             in spv_code
         )
         assert "OpRayQueryGetIntersectionCandidateAABBOpaqueKHR" not in spv_code
+
+    def test_ray_query_triangle_vertex_position_getters_emit_khr_instruction(
+        self, tmp_path
+    ):
+        source_code = """
+        shader RayQueryTriangleVertexPositions {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    vec3 candidatePositions[3] =
+                        rq.CandidateTriangleVertexPositions();
+                    vec3 committedPositions[3] =
+                        rq.CommittedTriangleVertexPositions();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        assert float_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        assert vec3_type is not None
+        assert re.search(
+            rf"%\d+ = OpTypeArray {re.escape(vec3_type.group(1))} %\d+",
+            spv_code,
+        )
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert "OpCapability RayQueryPositionFetchKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert 'OpExtension "SPV_KHR_ray_tracing_position_fetch"' in spv_code
+        assert (
+            spv_code.count("OpRayQueryGetIntersectionTriangleVertexPositionsKHR") == 2
+        )
+        assert "CandidateTriangleVertexPositions yet; using a default" not in spv_code
+        assert "CommittedTriangleVertexPositions yet; using a default" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_ray_query_triangle_vertex_position_getters_reject_arguments(self):
+        source_code = """
+        shader RayQueryTriangleVertexPositionsBadArgs {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    vec3 candidatePositions[3] =
+                        rq.CandidateTriangleVertexPositions(1);
+                    vec3 committedPositions[3] =
+                        rq.CommittedTriangleVertexPositions(1);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V RayQuery.CandidateTriangleVertexPositions requires "
+            "0 arguments"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V RayQuery.CommittedTriangleVertexPositions requires "
+            "0 arguments"
+        ) in spv_code
+        assert "OpRayQueryGetIntersectionTriangleVertexPositionsKHR" not in spv_code
 
     def test_ray_query_supported_operations_reject_unexpected_arguments(self):
         source_code = """

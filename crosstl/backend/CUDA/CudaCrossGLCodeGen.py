@@ -84,6 +84,7 @@ class CudaToCrossGLConverter:
     }
     CUDA_TEXTURE_CALL_TYPE_HINTS = {
         "tex1D": "sampler1D",
+        "tex1Dfetch": "sampler1D",
         "tex1DLod": "sampler1D",
         "tex1DGrad": "sampler1D",
         "tex2D": "sampler2D",
@@ -1521,6 +1522,8 @@ class CudaToCrossGLConverter:
             return None
 
         value_type = template_args[0] if template_args else None
+        if base_name == "tex1Dfetch":
+            return self.format_cuda_texture_fetch_call(args)
         if base_name in {"tex1D", "tex1DLod", "tex1DGrad"}:
             return self.format_cuda_texture_call(base_name, args, "vec1", 1)
         if base_name in {"tex2D", "tex2DLod", "tex2DGrad"}:
@@ -1643,6 +1646,16 @@ class CudaToCrossGLConverter:
         if component is not None:
             return f"textureGather({texture_name}, {coordinate}, {component})"
         return f"textureGather({texture_name}, {coordinate})"
+
+    def format_cuda_texture_fetch_call(self, args):
+        if len(args) == 2:
+            texture_name, coordinate = args
+            return f"texelFetch({texture_name}, {coordinate}, 0)"
+        return self.format_unsupported_cuda_resource_expression(
+            "texture",
+            "tex1Dfetch sparse residency",
+            "vec4<f32>(0.0, 0.0, 0.0, 0.0)",
+        )
 
     def format_cuda_surface_read(self, args, dimensions, value_type):
         if len(args) < dimensions + 1:

@@ -6059,6 +6059,9 @@ class HLSLCodeGen:
             return
 
         mapped_semantic = self.hlsl_canonical_semantic(semantic)
+        self.validate_hlsl_tess_factor_member_semantic_type(
+            struct_name, member_name, member_type, semantic, mapped_semantic
+        )
         expected_type = self.hlsl_output_builtin_semantic_type(mapped_semantic)
         if expected_type is None:
             return
@@ -6070,6 +6073,40 @@ class HLSLCodeGen:
                 f"DirectX struct '{struct_name}' semantic '{semantic}' maps to "
                 f"'{mapped_semantic}' and requires member '{member_name}' to "
                 f"have type {expected_type}, got {actual_type}"
+            )
+
+    def validate_hlsl_tess_factor_member_semantic_type(
+        self, struct_name, member_name, member_type, semantic, mapped_semantic=None
+    ):
+        if mapped_semantic is None:
+            mapped_semantic = self.hlsl_canonical_semantic(semantic)
+        if str(mapped_semantic).lower() not in {
+            "sv_tessfactor",
+            "sv_insidetessfactor",
+        }:
+            return
+
+        actual_type = self.map_type(member_type)
+        actual_base_type, array_suffix = split_array_type_suffix(actual_type)
+        floating_scalar_bases = ("min16float", "float", "half", "double")
+
+        if array_suffix:
+            valid_type = actual_base_type in floating_scalar_bases
+        else:
+            valid_type = False
+            for scalar_base in floating_scalar_bases:
+                if not actual_base_type.startswith(scalar_base):
+                    continue
+                suffix = actual_base_type[len(scalar_base) :]
+                valid_type = suffix in {"", "2", "3", "4"}
+                break
+
+        if not valid_type:
+            raise ValueError(
+                f"DirectX struct '{struct_name}' semantic '{semantic}' maps to "
+                f"'{mapped_semantic}' and requires member '{member_name}' to "
+                "have a floating-point scalar, vector, or scalar array type, "
+                f"got {actual_type}"
             )
 
     def hlsl_output_builtin_semantic_type(self, mapped_semantic):
@@ -7435,6 +7472,16 @@ class HLSLCodeGen:
                 continue
             mapped_semantic = self.semantic_map.get(semantic, semantic)
             semantic_key = str(mapped_semantic).lower()
+            member_type = getattr(member, "member_type", getattr(member, "vtype", None))
+            if member_type is None and hasattr(member, "element_type"):
+                member_type = member.element_type
+            self.validate_hlsl_tess_factor_member_semantic_type(
+                getattr(struct_node, "name", "<anonymous>"),
+                getattr(member, "name", "<anonymous>"),
+                member_type,
+                semantic,
+                mapped_semantic,
+            )
             count = self.hlsl_tess_factor_member_count(member)
             if count is not None:
                 counts[semantic_key] = counts.get(semantic_key, 0) + count

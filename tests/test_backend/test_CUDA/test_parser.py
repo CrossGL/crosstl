@@ -829,6 +829,38 @@ class TestCudaParser:
         assert body[2].value.args[2].member == "y"
         assert body[2].value.args[3:] == ["resident", "3"]
 
+    def test_cuda_texture_fetch_helper_parsing(self):
+        """Test CUDA tex1Dfetch helper overloads parse."""
+        code = """
+        void fetchOps(
+            texture<float4, cudaTextureType1D> lineTex,
+            cudaTextureObject_t objectTex,
+            bool* resident,
+            int x
+        ) {
+            float4 fetched = tex1Dfetch<float4>(lineTex, x);
+            float4 objectFetched = tex1Dfetch<float4>(objectTex, x);
+            float4 sparseFetched = tex1Dfetch<float4>(objectTex, x, resident);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        params = ast.functions[0].params
+        assert params[0].vtype == "texture<float4, cudaTextureType1D>"
+        assert params[1].vtype == "cudaTextureObject_t"
+        assert params[2].vtype == "bool *"
+
+        body = ast.functions[0].body
+        assert body[0].value.name == "tex1Dfetch<float4>"
+        assert body[0].value.args == ["lineTex", "x"]
+        assert body[1].value.name == "tex1Dfetch<float4>"
+        assert body[1].value.args == ["objectTex", "x"]
+        assert body[2].value.name == "tex1Dfetch<float4>"
+        assert body[2].value.args == ["objectTex", "x", "resident"]
+
     def test_qualified_resource_object_pointer_array_parsing(self):
         """Test global CUDA resource object pointer arrays with qualifiers parse."""
         code = """

@@ -1036,6 +1036,67 @@ def test_direct_atomic_op_nodes_reject_unsupported_targets_and_operations():
         codegen.generate_expression(AtomicOpNode("atomicInc", image, [pixel, value]))
 
 
+def test_direct_texture_op_nodes_emit_mojo_image_atomic_alias_helpers_without_ast_repr():
+    codegen = MojoCodeGen()
+    image = VariableNode("image", PrimitiveType("uimage2D"))
+    signed_image = VariableNode("signedImage", PrimitiveType("iimage2D"))
+    tex = VariableNode("tex", PrimitiveType("sampler2D"))
+    pixel = VariableNode("pixel", VectorType(PrimitiveType("int"), 2))
+    value = VariableNode("value", PrimitiveType("uint"))
+    replacement = VariableNode("replacement", PrimitiveType("uint"))
+    signed_value = VariableNode("signedValue", PrimitiveType("int"))
+
+    codegen.register_variable_type("image", "uimage2D")
+    codegen.register_variable_type("signedImage", "iimage2D")
+    codegen.register_variable_type("tex", "sampler2D")
+    codegen.register_variable_type("pixel", "ivec2")
+    codegen.register_variable_type("value", "uint")
+    codegen.register_variable_type("replacement", "uint")
+    codegen.register_variable_type("signedValue", "int")
+
+    add_call = codegen.generate_expression(TextureOpNode("Add", image, [pixel, value]))
+    compare_call = codegen.generate_expression(
+        TextureOpNode("InterlockedCompareExchange", image, [pixel, replacement, value])
+    )
+    signed_call = codegen.generate_expression(
+        TextureOpNode("atomicMin", signed_image, [pixel, signed_value])
+    )
+
+    assert add_call.startswith("_crossgl_image_atomic_add_UImage2D")
+    assert add_call.endswith("(image, pixel, value)")
+    assert compare_call.startswith("_crossgl_image_atomic_comp_swap_UImage2D")
+    assert compare_call.endswith("(image, pixel, replacement, value)")
+    assert signed_call.startswith("_crossgl_image_atomic_min_IImage2D")
+    assert signed_call.endswith("(signedImage, pixel, signedValue)")
+    assert "TextureOpNode(" not in add_call
+    assert (
+        codegen.expression_result_type(TextureOpNode("Add", image, [pixel, value]))
+        == "uint"
+    )
+    assert (
+        codegen.expression_result_type(
+            TextureOpNode("atomicMin", signed_image, [pixel, signed_value])
+        )
+        == "int"
+    )
+    helper_names = {
+        helper["name"] for helper in codegen.required_resource_builtin_helpers.values()
+    }
+    assert any(
+        name.startswith("_crossgl_image_atomic_add_UImage2D") for name in helper_names
+    )
+    assert any(
+        name.startswith("_crossgl_image_atomic_comp_swap_UImage2D")
+        for name in helper_names
+    )
+    assert any(
+        name.startswith("_crossgl_image_atomic_min_IImage2D") for name in helper_names
+    )
+
+    with pytest.raises(ValueError, match="Unsupported Mojo texture operation Add"):
+        codegen.generate_expression(TextureOpNode("Add", tex, [pixel, value]))
+
+
 def test_direct_buffer_op_nodes_emit_mojo_helpers_without_ast_repr():
     codegen = MojoCodeGen()
     values = VariableNode("values", PrimitiveType("StructuredBuffer<int>"))
@@ -3208,6 +3269,93 @@ def test_image_atomics_require_read_write_access_for_mojo_codegen():
 
     with pytest.raises(ValueError, match="image_atomic_add.*writeonly"):
         generate_code(parse_code(tokenize_code(writeonly_code)))
+
+
+def test_image_atomic_member_aliases_emit_mojo_helpers_and_compile_with_mojo(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+
+    code = """
+    uimage2D counters;
+    iimage2D signedCounters;
+
+    uint updateCounter(uimage2D image, ivec2 pixel, uint value, uint replacement) {
+        uint added = image.Add(pixel, value);
+        uint andValue = image.atomicAnd(pixel, value);
+        uint exchanged = image.InterlockedExchange(pixel, replacement);
+        uint swapped = image.CompareExchange(pixel, exchanged, value);
+        return swapped + added + andValue;
+    }
+
+    int updateSigned(iimage2D image, ivec2 pixel, int value, int replacement) {
+        int minValue = image.Min(pixel, value);
+        int maxValue = image.InterlockedMax(pixel, value);
+        int swapped = image.atomicCompareExchange(pixel, minValue, replacement);
+        return swapped + maxValue;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_image_atomic_add_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_and_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_exchange_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_comp_swap_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_min_IImage2D" in generated_code
+    assert "_crossgl_image_atomic_max_IImage2D" in generated_code
+    assert "_crossgl_image_atomic_comp_swap_IImage2D" in generated_code
+    assert "image.Add" not in generated_code
+    assert "image.atomicAnd" not in generated_code
+    assert "image.InterlockedExchange" not in generated_code
+    assert "image.CompareExchange" not in generated_code
+    assert "image.atomicCompareExchange" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "image_atomic_member_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_image_atomic_member_aliases_preserve_mojo_diagnostics():
+    readonly_code = """
+    readonly uniform uimage2D counters;
+
+    uint invalidReadonly(ivec2 pixel, uint value) {
+        return counters.Add(pixel, value);
+    }
+    """
+
+    with pytest.raises(ValueError, match="image_atomic_add.*readonly"):
+        generate_code(parse_code(tokenize_code(readonly_code)))
+
+    writeonly_code = """
+    writeonly uniform uimage2D counters;
+
+    uint invalidWriteonly(ivec2 pixel, uint value) {
+        return counters.InterlockedAdd(pixel, value);
+    }
+    """
+
+    with pytest.raises(ValueError, match="image_atomic_add.*writeonly"):
+        generate_code(parse_code(tokenize_code(writeonly_code)))
+
+    float_image_code = """
+    image2D colorImage;
+
+    int invalidFloatImage(ivec2 pixel, int value) {
+        return colorImage.atomicAdd(pixel, value);
+    }
+    """
+
+    with pytest.raises(ValueError, match="integer image required"):
+        generate_code(parse_code(tokenize_code(float_image_code)))
 
 
 def test_for_statement():

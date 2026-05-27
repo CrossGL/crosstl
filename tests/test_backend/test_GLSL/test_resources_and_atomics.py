@@ -239,6 +239,78 @@ def test_codegen_preserves_storage_image_parameter_memory_qualifiers():
     )
 
 
+def test_codegen_preserves_resource_array_parameter_qualifiers():
+    code = """
+    #version 460 core
+    layout(binding = 0) uniform sampler2D textures[4];
+    layout(r32ui, binding = 1) coherent restrict readonly uniform uimage2D counters[4];
+    layout(rgba32f, binding = 5) coherent volatile writeonly uniform image2D targets[4];
+
+    vec4 sampleLayer(sampler2D texs[4], int layer, vec2 uv) {
+        return texture(texs[layer], uv);
+    }
+
+    uint readCounter(coherent restrict readonly uimage2D images[4], int layer, ivec2 pixel) {
+        return imageLoad(images[layer], pixel).x;
+    }
+
+    void writeTarget(coherent volatile writeonly image2D images[4], int layer, ivec2 pixel, vec4 value) {
+        imageStore(images[layer], pixel, value);
+    }
+
+    void main() {
+        vec4 color = sampleLayer(textures, 1, vec2(0.5));
+        uint value = readCounter(counters, 1, ivec2(0));
+        writeTarget(targets, 1, ivec2(0), color + vec4(value));
+    }
+    """
+
+    output = generate_crossgl(code, "compute")
+
+    assert "sampler2D textures[4] @binding(0);" in output
+    assert (
+        "uimage2D counters[4] @binding(1) @r32ui @coherent @restrict @readonly;"
+        in output
+    )
+    assert (
+        "image2D targets[4] @binding(5) @rgba32f @coherent @volatile @writeonly;"
+        in output
+    )
+    assert "vec4 sampleLayer(sampler2D texs[4], int layer, vec2 uv)" in output
+    assert (
+        "uint readCounter(uimage2D images[4] @coherent @restrict @readonly, "
+        "int layer, ivec2 pixel)" in output
+    )
+    assert (
+        "void writeTarget(image2D images[4] @coherent @volatile @writeonly, "
+        "int layer, ivec2 pixel, vec4 value)" in output
+    )
+    assert "@readonly[4]" not in output
+    assert "@writeonly[4]" not in output
+
+    shader_ast = parse_crossgl(output)
+    regenerated_glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "layout(binding = 0) uniform sampler2D textures[4];" in regenerated_glsl
+    assert (
+        "layout(r32ui, binding = 1) coherent restrict readonly uniform uimage2D "
+        "counters[4];" in regenerated_glsl
+    )
+    assert (
+        "layout(rgba32f, binding = 5) coherent volatile writeonly uniform image2D "
+        "targets[4];" in regenerated_glsl
+    )
+    assert "vec4 sampleLayer(sampler2D texs[4], int layer, vec2 uv)" in regenerated_glsl
+    assert (
+        "uint readCounter(coherent restrict readonly uimage2D images[4], "
+        "int layer, ivec2 pixel)" in regenerated_glsl
+    )
+    assert (
+        "void writeTarget(coherent volatile writeonly image2D images[4], "
+        "int layer, ivec2 pixel, vec4 value)" in regenerated_glsl
+    )
+
+
 def test_parse_image_atomics_and_counters():
     code = """
     #version 450 core

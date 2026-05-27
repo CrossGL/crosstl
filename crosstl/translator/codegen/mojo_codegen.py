@@ -495,6 +495,7 @@ MOJO_IMAGE_ATOMIC_BUILTINS = {
 
 MOJO_ATOMIC_OP_ALIASES = {
     **MOJO_IMAGE_ATOMIC_BUILTINS,
+    "imageAtomicCompareExchange": "image_atomic_comp_swap",
     "atomicAdd": "image_atomic_add",
     "atomicMin": "image_atomic_min",
     "atomicMax": "image_atomic_max",
@@ -513,6 +514,14 @@ MOJO_ATOMIC_OP_ALIASES = {
     "Exchange": "image_atomic_exchange",
     "CompareExchange": "image_atomic_comp_swap",
     "CompSwap": "image_atomic_comp_swap",
+    "InterlockedAdd": "image_atomic_add",
+    "InterlockedMin": "image_atomic_min",
+    "InterlockedMax": "image_atomic_max",
+    "InterlockedAnd": "image_atomic_and",
+    "InterlockedOr": "image_atomic_or",
+    "InterlockedXor": "image_atomic_xor",
+    "InterlockedExchange": "image_atomic_exchange",
+    "InterlockedCompareExchange": "image_atomic_comp_swap",
 }
 
 MOJO_TYPED_BUFFER_RESOURCE_TYPES = {
@@ -3427,6 +3436,11 @@ class MojoCodeGen:
         if operation in MOJO_GENERIC_TEXTURE_BUILTINS:
             helper_base, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[operation]
             return self.generate_resource_builtin_call(args, helper_base, return_kind)
+        atomic_helper = MOJO_ATOMIC_OP_ALIASES.get(operation)
+        if atomic_helper is not None and resource_args:
+            resource_type = self.map_type(self.expression_result_type(resource_args[0]))
+            if self.is_image_resource_type(resource_type):
+                return self.generate_image_atomic_call(resource_args, atomic_helper)
         if operation in {"Load", "texelFetch"}:
             fetch_args = list(resource_args)
             if fetch_args:
@@ -5495,6 +5509,14 @@ class MojoCodeGen:
                     return "ivec2"
                 if size_type == "SIMD[DType.int32, 4]":
                     return "ivec3"
+            if operation in MOJO_ATOMIC_OP_ALIASES:
+                resource_type = self.map_type(
+                    self.expression_result_type(expr.texture_expr)
+                )
+                value_type = self.image_value_type(resource_type)
+                if value_type == "UInt32":
+                    return "uint"
+                return "int"
             return "vec4"
         if isinstance(expr, AtomicOpNode):
             resource_type = self.map_type(self.expression_result_type(expr.target))
@@ -5616,6 +5638,8 @@ class MojoCodeGen:
                 return "void"
             if member in {"GetDimensions", "textureSize"}:
                 return self.resource_size_result_type_name(resource_type)
+            if member in MOJO_ATOMIC_OP_ALIASES:
+                return self.image_result_type_name(resource_type)
             return None
 
         if member in {

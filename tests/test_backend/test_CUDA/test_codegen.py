@@ -2320,6 +2320,38 @@ class TestCudaCodeGen:
         )
         assert "tex2Dgather<float4>(" not in result
 
+    def test_cuda_texture_fetch_helpers_convert(self):
+        """Test CUDA tex1Dfetch helpers convert to CrossGL texelFetch."""
+        code = """
+        void fetchOps(
+            texture<float4, cudaTextureType1D> lineTex,
+            cudaTextureObject_t objectTex,
+            bool* resident,
+            int x
+        ) {
+            float4 fetched = tex1Dfetch<float4>(lineTex, x);
+            float4 objectFetched = tex1Dfetch<float4>(objectTex, x);
+            float4 sparseFetched = tex1Dfetch<float4>(objectTex, x, resident);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "sampler1D lineTex" in result
+        assert "sampler1D objectTex" in result
+        assert "var fetched: vec4<f32> = texelFetch(lineTex, x, 0);" in result
+        assert "var objectFetched: vec4<f32> = texelFetch(objectTex, x, 0);" in result
+        assert (
+            "var sparseFetched: vec4<f32> = "
+            "(/* cuda texture.tex1Dfetch sparse residency not directly "
+            "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));" in result
+        )
+        assert "tex1Dfetch<float4>(" not in result
+
     def test_qualified_resource_object_pointer_array_conversion(self):
         """Test qualified CUDA resource object arrays retain inferred shapes."""
         code = """

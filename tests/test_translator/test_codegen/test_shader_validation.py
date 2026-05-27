@@ -1730,6 +1730,72 @@ shader MetalThreadgroupAtomicBarrierValidation {
 """
 
 
+METAL_ATOMIC_POINTER_TARGETS_SHADER = """
+shader MetalAtomicPointerTargetValidation {
+    int bumpDevice(device atomic_int* counters, uint index, int delta) {
+        return atomic_fetch_add_explicit(
+            counters + index,
+            delta,
+            memory_order_relaxed
+        );
+    }
+
+    int reduceThreadgroup(
+        threadgroup atomic_int* counters,
+        uint index,
+        int value
+    ) {
+        return atomic_fetch_min_explicit(
+            counters[index],
+            value,
+            memory_order_relaxed
+        );
+    }
+
+    bool exchangeFlag(device atomic_bool* flags, uint index, bool value) {
+        return atomic_exchange_explicit(
+            flags + index,
+            value,
+            memory_order_relaxed
+        );
+    }
+
+    compute {
+        void main(
+            device atomic_int* counters @buffer(0),
+            device atomic_bool* flags @buffer(1),
+            uint index @gl_LocalInvocationIndex
+        ) {
+            shared atomic_int scratch[64];
+            atomic_store_explicit(scratch[index], 7, memory_order_relaxed);
+            atomic_store_explicit(counters[index], 0, memory_order_relaxed);
+            int oldDevice = bumpDevice(counters, index, 1);
+            int oldScratch = reduceThreadgroup(scratch, index, oldDevice);
+            int loaded = atomic_load_explicit(
+                counters + index,
+                memory_order_relaxed
+            );
+            bool wasSet = exchangeFlag(flags, index, true);
+            bool isSet = atomic_load_explicit(
+                flags + index,
+                memory_order_relaxed
+            );
+            atomic_store_explicit(
+                flags[index],
+                wasSet && isSet,
+                memory_order_relaxed
+            );
+            atomic_store_explicit(
+                counters[index],
+                oldScratch + loaded,
+                memory_order_relaxed
+            );
+        }
+    }
+}
+"""
+
+
 METAL_ATOMIC_COMPARE_EXCHANGE_SHADER = """
 shader MetalAtomicCompareExchangeValidation {
     bool claim(
@@ -5075,6 +5141,48 @@ def test_generated_metal_threadgroup_atomic_barriers_compile_with_metal(tmp_path
     )
     assert "atomic_exchange_explicit(&counters[index]," in code
     assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_atomic_pointer_targets_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "atomic_pointer_targets.metal"
+    output = tmp_path / "atomic_pointer_targets.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_ATOMIC_POINTER_TARGETS_SHADER),
+        "compute",
+    )
+    assert (
+        "return atomic_fetch_add_explicit(counters + index, delta, memory_order_relaxed);"
+        in code
+    )
+    assert (
+        "return atomic_fetch_min_explicit(&counters[index], value, memory_order_relaxed);"
+        in code
+    )
+    assert (
+        "return atomic_exchange_explicit(flags + index, value, memory_order_relaxed);"
+        in code
+    )
+    assert "atomic_store_explicit(&scratch[index], 7, memory_order_relaxed);" in code
+    assert "atomic_store_explicit(&counters[index], 0, memory_order_relaxed);" in code
+    assert (
+        "int loaded = atomic_load_explicit(counters + index, memory_order_relaxed);"
+        in code
+    )
+    assert (
+        "atomic_store_explicit(&flags[index], wasSet && isSet, memory_order_relaxed);"
+        in code
+    )
+    assert "atomic_fetch_add_explicit(&counters + index" not in code
+    assert "atomic_exchange_explicit(&flags + index" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

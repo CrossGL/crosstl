@@ -3261,7 +3261,7 @@ class TestCudaCodeGen:
             "int layerSamples = cgl_textureSamples_sampler2DMSArray"
             "(msLayers_metadata);" in cuda_code
         )
-        assert "float4 fetchRamp = tex1D(paramRamp, x);" in cuda_code
+        assert "float4 fetchRamp = tex1Dfetch(paramRamp, x);" in cuda_code
         assert (
             "float4 fetchLineLayer = tex1DLayered<float4>"
             "(lineLayers, pixel.x, pixel.y);" in cuda_code
@@ -5178,7 +5178,7 @@ class TestCudaCodeGen:
         assert "cudaSurfaceObject_t layerImage;" in cuda_code
         assert "cudaSurfaceObject_t counterLine;" in cuda_code
         assert "cudaSurfaceObject_t signedImage;" in cuda_code
-        assert "float4 fetchedLine = tex1D(lineTex, x);" in cuda_code
+        assert "float4 fetchedLine = tex1Dfetch(lineTex, x);" in cuda_code
         assert (
             "float4 fetchedLineLayer = tex1DLayered<float4>"
             "(lineLayers, pixel.x, pixel.y);" in cuda_code

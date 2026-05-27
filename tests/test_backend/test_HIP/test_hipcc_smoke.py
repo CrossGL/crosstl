@@ -1877,3 +1877,187 @@ def test_native_hip_pitched_array_memory_copy_parses_and_compiles_if_available(
         assert f"{raw_call}(" not in crossgl
 
     compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
+def test_native_hip_driver_memory_memset_parses_and_compiles_if_available(
+    tmp_path,
+):
+    """Smoke native HIP driver memory, pointer metadata, and memset APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void driver_memory_memset_smoke(
+        float* host,
+        hipStream_t stream,
+        size_t n
+    ) {
+        hipDeviceptr_t device_ptr;
+        hipDeviceptr_t pitched_device_ptr;
+        hipDeviceptr_t mapped_device_ptr;
+        hipDeviceptr_t base_ptr;
+        void* driver_host = NULL;
+        void* device_void = (void*)device_ptr;
+        void* attribute_data = NULL;
+        size_t pitch = 0;
+        size_t range_bytes = 0;
+        size_t bytes = n * sizeof(float);
+        hipPointerAttribute_t pointer_attrs;
+        hipPointer_attribute pointer_attribute = hipPointerAttributeMemoryType;
+        int pointer_attr_value = 0;
+
+        hipMemAlloc(&device_ptr, bytes);
+        hipMemAllocPitch(&pitched_device_ptr, &pitch, bytes, 4, 4);
+        hipMemAllocHost(&driver_host, bytes);
+        hipMemHostAlloc(&driver_host, bytes, hipHostMallocDefault);
+        hipMemHostGetDevicePointer(&mapped_device_ptr, driver_host, 0);
+        hipMemGetAddressRange(&base_ptr, &range_bytes, device_ptr);
+        hipMemcpyHtoD(device_ptr, host, bytes);
+        hipMemcpyHtoDAsync(device_ptr, host, bytes, stream);
+        hipMemcpyDtoH(host, device_ptr, bytes);
+        hipMemcpyDtoHAsync(host, device_ptr, bytes, stream);
+        hipMemcpyDtoD(pitched_device_ptr, device_ptr, bytes);
+        hipMemcpyDtoDAsync(pitched_device_ptr, device_ptr, bytes, stream);
+        hipPointerGetAttributes(&pointer_attrs, device_void);
+        hipDrvPointerGetAttributes(
+            1, &pointer_attribute, &attribute_data, device_ptr
+        );
+        hipPointerGetAttribute(
+            &pointer_attr_value, hipPointerAttributeMemoryType, device_void
+        );
+        hipPointerSetAttribute(
+            &pointer_attr_value, hipPointerAttributeMemoryType, device_void
+        );
+        hipMemPtrGetInfo(device_void, &range_bytes);
+        hipMemsetD8(device_ptr, 0, n);
+        hipMemsetD8Async(device_ptr, 1, n, stream);
+        hipMemsetD16(device_ptr, 0, n);
+        hipMemsetD16Async(device_ptr, 1, n, stream);
+        hipMemsetD32(device_ptr, 0, n);
+        hipMemsetD32Async(device_ptr, 1, n, stream);
+        hipMemsetD2D8(device_ptr, pitch, 0, n, 4);
+        hipMemsetD2D8Async(device_ptr, pitch, 1, n, 4, stream);
+        hipMemsetD2D16(device_ptr, pitch, 0, n, 4);
+        hipMemsetD2D16Async(device_ptr, pitch, 1, n, 4, stream);
+        hipMemsetD2D32(device_ptr, pitch, 0, n, 4);
+        hipMemsetD2D32Async(device_ptr, pitch, 1, n, 4, stream);
+        hipMemFreeHost(driver_host);
+        hipMemFree(pitched_device_ptr);
+        hipMemFree(device_ptr);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    expected_fragments = (
+        "// Function: driver_memory_memset_smoke",
+        "void driver_memory_memset_smoke(" "ptr<f32> host, hipStream_t stream, u32 n)",
+        "var device_ptr: hipDeviceptr_t;",
+        "var pitched_device_ptr: hipDeviceptr_t;",
+        "var mapped_device_ptr: hipDeviceptr_t;",
+        "var base_ptr: hipDeviceptr_t;",
+        "var driver_host: ptr<void> = NULL;",
+        "var device_void: ptr<void> = ptr<void>(device_ptr);",
+        "var attribute_data: ptr<void> = NULL;",
+        "var pitch: u32 = 0;",
+        "var range_bytes: u32 = 0;",
+        "var bytes: u32 = (n * sizeof(float));",
+        "var pointer_attrs: hipPointerAttribute_t;",
+        "var pointer_attribute: hipPointer_attribute = "
+        "hipPointerAttributeMemoryType;",
+        "var pointer_attr_value: i32 = 0;",
+        "// HIP driver memory allocate: output: device_ptr, bytes: bytes",
+        "// HIP driver pitched memory allocate: output: pitched_device_ptr, "
+        "pitch output: pitch, width: bytes, height: 4, element bytes: 4",
+        "// HIP driver host memory allocate: output: driver_host, bytes: bytes",
+        "// HIP driver host memory allocate: output: driver_host, bytes: bytes, "
+        "flags: hipHostMallocDefault",
+        "// HIP driver host device pointer: output: mapped_device_ptr, "
+        "host: driver_host, flags: 0",
+        "// HIP driver memory address range: base output: base_ptr, "
+        "size output: range_bytes, pointer: device_ptr",
+        "// HIP driver memory copy host to device: source: host, "
+        "destination: device_ptr, bytes: bytes",
+        "// HIP driver memory copy host to device: source: host, "
+        "destination: device_ptr, bytes: bytes, stream: stream",
+        "// HIP driver memory copy device to host: source: device_ptr, "
+        "destination: host, bytes: bytes",
+        "// HIP driver memory copy device to host: source: device_ptr, "
+        "destination: host, bytes: bytes, stream: stream",
+        "// HIP driver memory copy device to device: source: device_ptr, "
+        "destination: pitched_device_ptr, bytes: bytes",
+        "// HIP driver memory copy device to device: source: device_ptr, "
+        "destination: pitched_device_ptr, bytes: bytes, stream: stream",
+        "// HIP pointer attributes: output: pointer_attrs, pointer: device_void",
+        "// HIP driver pointer attributes: count: 1, "
+        "attributes: (&pointer_attribute), data: (&attribute_data), "
+        "pointer: device_ptr",
+        "// HIP pointer attribute: output: pointer_attr_value, "
+        "attribute: hipPointerAttributeMemoryType, pointer: device_void",
+        "// HIP pointer set attribute: value: pointer_attr_value, "
+        "attribute: hipPointerAttributeMemoryType, pointer: device_void",
+        "// HIP memory pointer info: pointer: device_void, " "size output: range_bytes",
+        "// HIP driver memory set 8-bit: pointer: device_ptr, value: 0, count: n",
+        "// HIP driver memory set 8-bit: pointer: device_ptr, value: 1, "
+        "count: n, stream: stream",
+        "// HIP driver memory set 16-bit: pointer: device_ptr, value: 0, count: n",
+        "// HIP driver memory set 16-bit: pointer: device_ptr, value: 1, "
+        "count: n, stream: stream",
+        "// HIP driver memory set 32-bit: pointer: device_ptr, value: 0, count: n",
+        "// HIP driver memory set 32-bit: pointer: device_ptr, value: 1, "
+        "count: n, stream: stream",
+        "// HIP driver 2D memory set 8-bit: pointer: device_ptr, "
+        "pitch: pitch, value: 0, width: n, height: 4",
+        "// HIP driver 2D memory set 8-bit: pointer: device_ptr, "
+        "pitch: pitch, value: 1, width: n, height: 4, stream: stream",
+        "// HIP driver 2D memory set 16-bit: pointer: device_ptr, "
+        "pitch: pitch, value: 0, width: n, height: 4",
+        "// HIP driver 2D memory set 16-bit: pointer: device_ptr, "
+        "pitch: pitch, value: 1, width: n, height: 4, stream: stream",
+        "// HIP driver 2D memory set 32-bit: pointer: device_ptr, "
+        "pitch: pitch, value: 0, width: n, height: 4",
+        "// HIP driver 2D memory set 32-bit: pointer: device_ptr, "
+        "pitch: pitch, value: 1, width: n, height: 4, stream: stream",
+        "// HIP driver host memory free: driver_host",
+        "// HIP driver memory free: pitched_device_ptr",
+        "// HIP driver memory free: device_ptr",
+    )
+    for expected in expected_fragments:
+        assert expected in crossgl
+
+    raw_calls = (
+        "hipMemAlloc",
+        "hipMemAllocPitch",
+        "hipMemAllocHost",
+        "hipMemHostAlloc",
+        "hipMemHostGetDevicePointer",
+        "hipMemGetAddressRange",
+        "hipMemcpyHtoD",
+        "hipMemcpyHtoDAsync",
+        "hipMemcpyDtoH",
+        "hipMemcpyDtoHAsync",
+        "hipMemcpyDtoD",
+        "hipMemcpyDtoDAsync",
+        "hipPointerGetAttributes",
+        "hipDrvPointerGetAttributes",
+        "hipPointerGetAttribute",
+        "hipPointerSetAttribute",
+        "hipMemPtrGetInfo",
+        "hipMemsetD8",
+        "hipMemsetD8Async",
+        "hipMemsetD16",
+        "hipMemsetD16Async",
+        "hipMemsetD32",
+        "hipMemsetD32Async",
+        "hipMemsetD2D8",
+        "hipMemsetD2D8Async",
+        "hipMemsetD2D16",
+        "hipMemsetD2D16Async",
+        "hipMemsetD2D32",
+        "hipMemsetD2D32Async",
+        "hipMemFreeHost",
+        "hipMemFree",
+    )
+    for raw_call in raw_calls:
+        assert f"{raw_call}(" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)

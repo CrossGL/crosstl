@@ -3193,6 +3193,11 @@ class VulkanSPIRVCodeGen:
             return self.register_vector_type(self.register_primitive_type("float"), 2)
         if result_kind == "vec3":
             return self.register_vector_type(self.register_primitive_type("float"), 3)
+        if result_kind == "vec3_array3":
+            vec3_type = self.register_vector_type(
+                self.register_primitive_type("float"), 3
+            )
+            return self.register_array_type(vec3_type, 3)
         if result_kind == "mat4x3":
             column_type = self.register_vector_type(
                 self.register_primitive_type("float"), 3
@@ -3309,6 +3314,14 @@ class VulkanSPIRVCodeGen:
                 "OpRayQueryGetIntersectionFrontFaceKHR",
                 "bool",
             ),
+            "CandidateTriangleVertexPositions": (
+                "OpRayQueryGetIntersectionTriangleVertexPositionsKHR",
+                "vec3_array3",
+            ),
+            "CommittedTriangleVertexPositions": (
+                "OpRayQueryGetIntersectionTriangleVertexPositionsKHR",
+                "vec3_array3",
+            ),
             "CandidateObjectToWorld": (
                 "OpRayQueryGetIntersectionObjectToWorldKHR",
                 "mat4x3",
@@ -3377,6 +3390,8 @@ class VulkanSPIRVCodeGen:
             "CommittedTriangleBarycentrics",
             "CandidateTriangleFrontFace",
             "CommittedTriangleFrontFace",
+            "CandidateTriangleVertexPositions",
+            "CommittedTriangleVertexPositions",
             "CandidateObjectToWorld",
             "CommittedObjectToWorld",
             "CandidateObjectToWorld3x4",
@@ -3423,6 +3438,13 @@ class VulkanSPIRVCodeGen:
             return self.represented_ir_diagnostic_default_value("ray query", operation)
 
         opcode, result_kind, _ = getter_info
+        if operation in {
+            "CandidateTriangleVertexPositions",
+            "CommittedTriangleVertexPositions",
+        }:
+            self.require_capability("RayQueryPositionFetchKHR")
+            self.require_extension("SPV_KHR_ray_tracing_position_fetch")
+
         intersection = self.ray_query_intersection_constant(operation)
         if intersection is None:
             return self.represented_ir_diagnostic_default_value("ray query", operation)

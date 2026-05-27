@@ -5634,6 +5634,114 @@ def test_metal_threadgroup_atomic_array_elements_use_address_arguments():
     assert "atomic_exchange_explicit(counters[index]" not in generated
 
 
+def test_metal_atomic_pointer_targets_cover_signed_and_bool_operations():
+    code = """
+    shader MetalAtomicPointerValidation {
+        int bumpDevice(device atomic_int* counters, uint index, int delta) {
+            return atomic_fetch_add_explicit(
+                counters + index,
+                delta,
+                memory_order_relaxed
+            );
+        }
+
+        int reduceThreadgroup(
+            threadgroup atomic_int* counters,
+            uint index,
+            int value
+        ) {
+            return atomic_fetch_min_explicit(
+                counters[index],
+                value,
+                memory_order_relaxed
+            );
+        }
+
+        bool exchangeFlag(device atomic_bool* flags, uint index, bool value) {
+            return atomic_exchange_explicit(
+                flags + index,
+                value,
+                memory_order_relaxed
+            );
+        }
+
+        compute {
+            void main(
+                device atomic_int* counters @buffer(0),
+                device atomic_bool* flags @buffer(1),
+                uint index @gl_LocalInvocationIndex
+            ) {
+                shared atomic_int scratch[64];
+                atomic_store_explicit(scratch[index], 7, memory_order_relaxed);
+                atomic_store_explicit(counters[index], 0, memory_order_relaxed);
+                int oldDevice = bumpDevice(counters, index, 1);
+                int oldScratch = reduceThreadgroup(scratch, index, oldDevice);
+                int loaded = atomic_load_explicit(
+                    counters + index,
+                    memory_order_relaxed
+                );
+                bool wasSet = exchangeFlag(flags, index, true);
+                bool isSet = atomic_load_explicit(
+                    flags + index,
+                    memory_order_relaxed
+                );
+                atomic_store_explicit(
+                    flags[index],
+                    wasSet && isSet,
+                    memory_order_relaxed
+                );
+                atomic_store_explicit(
+                    counters[index],
+                    oldScratch + loaded,
+                    memory_order_relaxed
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "int bumpDevice(device atomic_int* counters, uint index, int delta)"
+        in generated
+    )
+    assert (
+        "return atomic_fetch_add_explicit(counters + index, delta, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "return atomic_fetch_min_explicit(&counters[index], value, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "return atomic_exchange_explicit(flags + index, value, memory_order_relaxed);"
+        in generated
+    )
+    assert "threadgroup atomic_int scratch[64];" in generated
+    assert (
+        "atomic_store_explicit(&scratch[index], 7, memory_order_relaxed);" in generated
+    )
+    assert (
+        "atomic_store_explicit(&counters[index], 0, memory_order_relaxed);" in generated
+    )
+    assert (
+        "int loaded = atomic_load_explicit(counters + index, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&flags[index], wasSet && isSet, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&counters[index], oldScratch + loaded, memory_order_relaxed);"
+        in generated
+    )
+    assert "atomic_fetch_add_explicit(&counters + index" not in generated
+    assert "atomic_exchange_explicit(&flags + index" not in generated
+    assert "atomic_store_explicit(counters[index]" not in generated
+    assert "atomic_store_explicit(flags[index]" not in generated
+
+
 def test_metal_atomic_compare_exchange_addresses_targets_and_expected_values():
     code = """
     shader main {

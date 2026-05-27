@@ -5213,6 +5213,107 @@ def test_generic_struct_like_enum_variant_locals_infer_target_type_compile(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_generic_struct_like_enum_variant_assignment_and_call_targets_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    generic_type = GenericType("T")
+    choice_payload_type = NamedType("Choice", [payload_type])
+    omitted_variant_type = NamedType("Choice::Named")
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode(
+                "Named",
+                fields=[
+                    ("primary", generic_type),
+                    ("backup", generic_type),
+                ],
+            ),
+        ],
+    )
+    choice_enum.generic_params = [GenericParameterNode("T")]
+
+    ast = ShaderNode(
+        "GenericStructLikeEnumAssignmentAndCallTargets",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "identity_choice",
+                choice_payload_type,
+                [ParameterNode("choice", choice_payload_type)],
+                [ReturnNode(IdentifierNode("choice"))],
+            ),
+            FunctionNode(
+                "assign_omitted_variant",
+                choice_payload_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    VariableNode("selected", choice_payload_type),
+                    AssignmentNode(
+                        IdentifierNode("selected"),
+                        ConstructorNode(
+                            omitted_variant_type,
+                            [],
+                            named_arguments={
+                                "primary": IdentifierNode("payload"),
+                                "backup": IdentifierNode("payload"),
+                            },
+                        ),
+                    ),
+                    ReturnNode(IdentifierNode("selected")),
+                ],
+            ),
+            FunctionNode(
+                "call_with_omitted_variant",
+                choice_payload_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("identity_choice"),
+                            [
+                                ConstructorNode(
+                                    omitted_variant_type,
+                                    [],
+                                    named_arguments={
+                                        "primary": IdentifierNode("payload"),
+                                        "backup": IdentifierNode("payload"),
+                                    },
+                                )
+                            ],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "selected = Choice::<Payload>::Named { "
+        "primary: payload.clone(), backup: payload.clone() };"
+    ) in generated_code
+    assert (
+        "return identity_choice(Choice::<Payload>::Named { "
+        "primary: payload.clone(), backup: payload.clone() });"
+    ) in generated_code
+    assert "selected = Choice::Named" not in generated_code
+    assert "identity_choice(Choice::Named" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_struct_constructor_args_normalize_field_types_and_clone_non_copy_compile(
     tmp_path,
 ):

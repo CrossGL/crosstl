@@ -3284,7 +3284,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             texture_name = args[0]
             coord = args[1]
             if texture_type == "sampler1D":
-                return f"tex1D({texture_name}, {coord})"
+                return f"tex1Dfetch({texture_name}, {coord})"
             if texture_type == "sampler1DArray":
                 return (
                     f"tex1DLayered<float4>({texture_name}, "

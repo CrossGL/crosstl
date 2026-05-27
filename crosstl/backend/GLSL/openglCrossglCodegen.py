@@ -1191,6 +1191,16 @@ class GLSLToCrossGLConverter:
             return "[]"
         return ""
 
+    def generate_function_parameter(self, param):
+        if isinstance(param, tuple):  # (type, name)
+            param_type, param_name = param
+            return f"{self.convert_type(param_type)} {param_name}"
+        if isinstance(param, VariableNode):
+            return self.generate_variable_declaration(
+                param, array_before_attributes=True
+            )
+        return None
+
     def generate_function(self, node):
         """Render one GLSL function node as a CrossGL function block."""
         return_type = self.convert_type(node.return_type)
@@ -1198,11 +1208,9 @@ class GLSLToCrossGLConverter:
 
         params = []
         for param in node.params:
-            if isinstance(param, tuple):  # (type, name)
-                param_type, param_name = param
-                params.append(f"{self.convert_type(param_type)} {param_name}")
-            elif isinstance(param, VariableNode):
-                params.append(self.generate_variable_declaration(param))
+            param_decl = self.generate_function_parameter(param)
+            if param_decl is not None:
+                params.append(param_decl)
 
         params_str = ", ".join(params)
 
@@ -1752,7 +1760,7 @@ class GLSLToCrossGLConverter:
             name = name.name
         return name in self.RAY_QUERY_TRANSFORM_FUNCTIONS
 
-    def generate_variable_declaration(self, node):
+    def generate_variable_declaration(self, node, array_before_attributes=False):
         """Generate CrossGL code for a variable declaration
 
         Args:
@@ -1779,12 +1787,17 @@ class GLSLToCrossGLConverter:
             + self.image_resource_attribute_suffix(node)
             + self.variable_qualifier_attribute_suffix(node)
         )
+        declarator = (
+            f"{var_name}{array_suffix}{attributes}"
+            if array_before_attributes
+            else f"{var_name}{attributes}{array_suffix}"
+        )
 
         if getattr(node, "value", None) is not None:
             value = self.generate_expression(node.value)
-            return f"{prefix}{var_type} {var_name}{attributes}{array_suffix} = {value}"
+            return f"{prefix}{var_type} {declarator} = {value}"
 
-        return f"{prefix}{var_type} {var_name}{attributes}{array_suffix}"
+        return f"{prefix}{var_type} {declarator}"
 
     def generate_switch_statement(self, node):
         """Generate CrossGL code for a switch statement
