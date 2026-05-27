@@ -5513,6 +5513,158 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
         assert "imageStore(" not in cuda_code
 
+    def test_texture_coordinate_shapes_emit_cuda_helpers_or_diagnostics(self):
+        """Test CUDA texture sampling rejects known invalid coordinate ranks."""
+        source_code = """
+        shader TextureCoordinateShapes {
+            sampler1d lineTex;
+            sampler1darray lineLayers;
+            sampler2d tex;
+            sampler2darray layers;
+            sampler3d volume;
+            samplercube cubeTex;
+            samplercubearray cubeLayers;
+            Texture2D<float4> typedTex;
+
+            void sampleShapes(
+                float u,
+                vec2 uv,
+                vec3 uvw,
+                vec4 uvqw,
+                float du,
+                vec2 ddx2,
+                vec2 ddy2,
+                vec3 ddx3,
+                vec3 ddy3,
+                vec4 ddx4,
+                vec4 ddy4
+            ) {
+                vec4 line = texture(lineTex, u);
+                vec4 lineLod = textureLod(lineTex, u, 1.0);
+                vec4 lineGrad = textureGrad(lineTex, u, du, du);
+                vec4 lineLayer = texture(lineLayers, uv);
+                vec4 color = texture(tex, uv);
+                vec4 typedColor = texture(typedTex, uv);
+                vec4 colorLod = textureLod(tex, uv, 1.0);
+                vec4 colorGrad = textureGrad(tex, uv, ddx2, ddy2);
+                vec4 layer = texture(layers, uvw);
+                vec4 layerLod = textureLod(layers, uvw, 1.0);
+                vec4 layerGrad = textureGrad(layers, uvw, ddx2, ddy2);
+                vec4 volumeColor = texture(volume, uvw);
+                vec4 volumeLod = textureLod(volume, uvw, 1.0);
+                vec4 volumeGrad = textureGrad(volume, uvw, ddx3, ddy3);
+                vec4 cube = texture(cubeTex, uvw);
+                vec4 cubeLod = textureLod(cubeTex, uvw, 1.0);
+                vec4 cubeGrad = textureGrad(cubeTex, uvw, ddx3, ddy3);
+                vec4 cubeLayer = texture(cubeLayers, uvqw);
+                vec4 cubeLayerLod = textureLod(cubeLayers, uvqw, 1.0);
+                vec4 cubeLayerGrad = textureGrad(cubeLayers, uvqw, ddx4, ddy4);
+                vec4 badLine = texture(lineTex, uv);
+                vec4 badLineLayer = texture(lineLayers, u);
+                vec4 badTex = texture(tex, u);
+                vec4 badLayer = texture(layers, uv);
+                vec4 badVolume = texture(volume, uv);
+                vec4 badCube = texture(cubeTex, uv);
+                vec4 badCubeArray = texture(cubeLayers, uvw);
+                vec4 badTexLod = textureLod(tex, u, 1.0);
+                vec4 badTexGrad = textureGrad(tex, u, ddx2, ddy2);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float4 line = tex1D(lineTex, u);" in cuda_code
+        assert "float4 lineLod = tex1DLod(lineTex, u, 1.0);" in cuda_code
+        assert "float4 lineGrad = tex1DGrad(lineTex, u, du, du);" in cuda_code
+        assert (
+            "float4 lineLayer = tex1DLayered<float4>(lineLayers, uv.x, uv.y);"
+            in cuda_code
+        )
+        assert "float4 color = tex2D(tex, uv.x, uv.y);" in cuda_code
+        assert "float4 typedColor = tex2D(typedTex, uv.x, uv.y);" in cuda_code
+        assert "float4 colorLod = tex2DLod(tex, uv.x, uv.y, 1.0);" in cuda_code
+        assert "float4 colorGrad = tex2DGrad(tex, uv.x, uv.y, ddx2, ddy2);" in cuda_code
+        assert (
+            "float4 layer = tex2DLayered<float4>"
+            "(layers, uvw.x, uvw.y, uvw.z);" in cuda_code
+        )
+        assert (
+            "float4 layerLod = tex2DLayeredLod<float4>"
+            "(layers, uvw.x, uvw.y, uvw.z, 1.0);" in cuda_code
+        )
+        assert (
+            "float4 layerGrad = tex2DLayeredGrad<float4>"
+            "(layers, uvw.x, uvw.y, uvw.z, ddx2, ddy2);" in cuda_code
+        )
+        assert "float4 volumeColor = tex3D(volume, uvw.x, uvw.y, uvw.z);" in cuda_code
+        assert (
+            "float4 volumeLod = tex3DLod(volume, uvw.x, uvw.y, uvw.z, 1.0);"
+            in cuda_code
+        )
+        assert (
+            "float4 volumeGrad = tex3DGrad"
+            "(volume, uvw.x, uvw.y, uvw.z, ddx3, ddy3);" in cuda_code
+        )
+        assert "float4 cube = texCubemap(cubeTex, uvw.x, uvw.y, uvw.z);" in cuda_code
+        assert (
+            "float4 cubeLod = texCubemapLod(cubeTex, uvw.x, uvw.y, uvw.z, 1.0);"
+            in cuda_code
+        )
+        assert (
+            "float4 cubeGrad = texCubemapGrad"
+            "(cubeTex, uvw.x, uvw.y, uvw.z, ddx3, ddy3);" in cuda_code
+        )
+        assert (
+            "float4 cubeLayer = texCubemapLayered<float4>"
+            "(cubeLayers, uvqw.x, uvqw.y, uvqw.z, uvqw.w);" in cuda_code
+        )
+        assert (
+            "float4 cubeLayerLod = texCubemapLayeredLod<float4>"
+            "(cubeLayers, uvqw.x, uvqw.y, uvqw.z, uvqw.w, 1.0);" in cuda_code
+        )
+        assert (
+            "float4 cubeLayerGrad = texCubemapLayeredGrad<float4>"
+            "(cubeLayers, uvqw.x, uvqw.y, uvqw.z, uvqw.w, ddx4, ddy4);" in cuda_code
+        )
+        for name, func_name, texture_type in (
+            ("badLine", "texture", "sampler1D"),
+            ("badLineLayer", "texture", "sampler1DArray"),
+            ("badTex", "texture", "sampler2D"),
+            ("badLayer", "texture", "sampler2DArray"),
+            ("badVolume", "texture", "sampler3D"),
+            ("badCube", "texture", "samplerCube"),
+            ("badCubeArray", "texture", "samplerCubeArray"),
+            ("badTexLod", "textureLod", "sampler2D"),
+            ("badTexGrad", "textureGrad", "sampler2D"),
+        ):
+            assert (
+                f"float4 {name} = /* unsupported CUDA sampled resource call: "
+                f"{func_name} coordinate rank on {texture_type} */ "
+                "make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
+            ) in cuda_code
+        assert "tex1D(lineTex, uv)" not in cuda_code
+        assert "tex1DLayered<float4>(lineLayers, u." not in cuda_code
+        assert "tex2D(tex, u." not in cuda_code
+        assert "tex2DLayered<float4>(layers, uv.x, uv.y, uv.z)" not in cuda_code
+        assert "tex3D(volume, uv.x, uv.y, uv.z)" not in cuda_code
+        assert "texCubemap(cubeTex, uv.x, uv.y, uv.z)" not in cuda_code
+        assert (
+            "texCubemapLayered<float4>(cubeLayers, uvw.x, uvw.y, uvw.z, uvw.w)"
+            not in cuda_code
+        )
+        assert "texture(" not in cuda_code
+        assert "textureLod(" not in cuda_code
+        assert "textureGrad(" not in cuda_code
+
     def test_texel_fetch_coordinate_shapes_emit_cuda_helpers_or_diagnostics(self):
         """Test CUDA texelFetch lowers only coordinate shapes it can represent."""
         source_code = """

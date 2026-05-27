@@ -1019,6 +1019,115 @@ def test_native_hip_graph_event_nodes_parse_and_compile_if_available(tmp_path):
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_graph_external_semaphore_nodes_parse_and_compile_if_available(
+    tmp_path,
+):
+    """Smoke native HIP graph external semaphore signal/wait node APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void graph_external_semaphore_nodes_smoke(hipStream_t stream) {
+        hipGraph_t graph;
+        hipGraphExec_t exec;
+        hipGraphNode_t signal_node;
+        hipGraphNode_t wait_node;
+        hipGraphNode_t error_node;
+        hipExternalSemaphoreSignalNodeParams signal_params;
+        hipExternalSemaphoreWaitNodeParams wait_params;
+        char log[128];
+
+        hipGraphCreate(&graph, 0);
+        hipGraphAddExternalSemaphoresSignalNode(
+            &signal_node, graph, NULL, 0, &signal_params
+        );
+        hipGraphExternalSemaphoresSignalNodeGetParams(
+            signal_node, &signal_params
+        );
+        hipGraphExternalSemaphoresSignalNodeSetParams(
+            signal_node, &signal_params
+        );
+        hipGraphAddExternalSemaphoresWaitNode(
+            &wait_node, graph, &signal_node, 1, &wait_params
+        );
+        hipGraphExternalSemaphoresWaitNodeGetParams(wait_node, &wait_params);
+        hipGraphExternalSemaphoresWaitNodeSetParams(wait_node, &wait_params);
+        hipGraphInstantiate(&exec, graph, &error_node, log, 128);
+        hipGraphExecExternalSemaphoresSignalNodeSetParams(
+            exec, signal_node, &signal_params
+        );
+        hipGraphExecExternalSemaphoresWaitNodeSetParams(
+            exec, wait_node, &wait_params
+        );
+        hipGraphExecDestroy(exec);
+        hipGraphDestroyNode(wait_node);
+        hipGraphDestroyNode(signal_node);
+        hipGraphDestroy(graph);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    expected_fragments = (
+        "// Function: graph_external_semaphore_nodes_smoke",
+        "void graph_external_semaphore_nodes_smoke(hipStream_t stream)",
+        "var graph: hipGraph_t;",
+        "var exec: hipGraphExec_t;",
+        "var signal_node: hipGraphNode_t;",
+        "var wait_node: hipGraphNode_t;",
+        "var error_node: hipGraphNode_t;",
+        "var signal_params: hipExternalSemaphoreSignalNodeParams;",
+        "var wait_params: hipExternalSemaphoreWaitNodeParams;",
+        "var log: array<i8, 128>;",
+        "// HIP graph create: output: graph, flags: 0",
+        "// HIP graph add external semaphore signal node: "
+        "output: signal_node, graph: graph, dependencies: NULL, "
+        "count: 0, params: (&signal_params)",
+        "// HIP graph external semaphore signal node get params: "
+        "node: signal_node, params: (&signal_params)",
+        "// HIP graph external semaphore signal node set params: "
+        "node: signal_node, params: (&signal_params)",
+        "// HIP graph add external semaphore wait node: "
+        "output: wait_node, graph: graph, dependencies: (&signal_node), "
+        "count: 1, params: (&wait_params)",
+        "// HIP graph external semaphore wait node get params: "
+        "node: wait_node, params: (&wait_params)",
+        "// HIP graph external semaphore wait node set params: "
+        "node: wait_node, params: (&wait_params)",
+        "// HIP graph instantiate: output: exec, graph: graph, "
+        "error node output: error_node, log buffer: log, log bytes: 128",
+        "// HIP graph exec external semaphore signal node set params: "
+        "exec: exec, node: signal_node, params: (&signal_params)",
+        "// HIP graph exec external semaphore wait node set params: "
+        "exec: exec, node: wait_node, params: (&wait_params)",
+        "// HIP graph exec destroy: exec",
+        "// HIP graph destroy node: wait_node",
+        "// HIP graph destroy node: signal_node",
+        "// HIP graph destroy: graph",
+    )
+    for expected in expected_fragments:
+        assert expected in crossgl
+
+    raw_calls = (
+        "hipGraphCreate",
+        "hipGraphAddExternalSemaphoresSignalNode",
+        "hipGraphExternalSemaphoresSignalNodeGetParams",
+        "hipGraphExternalSemaphoresSignalNodeSetParams",
+        "hipGraphAddExternalSemaphoresWaitNode",
+        "hipGraphExternalSemaphoresWaitNodeGetParams",
+        "hipGraphExternalSemaphoresWaitNodeSetParams",
+        "hipGraphInstantiate",
+        "hipGraphExecExternalSemaphoresSignalNodeSetParams",
+        "hipGraphExecExternalSemaphoresWaitNodeSetParams",
+        "hipGraphExecDestroy",
+        "hipGraphDestroyNode",
+        "hipGraphDestroy",
+    )
+    for raw_call in raw_calls:
+        assert f"{raw_call}(" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_graph_memory_nodes_parse_and_compile_if_available(
     tmp_path,
 ):

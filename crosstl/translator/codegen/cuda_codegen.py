@@ -3114,6 +3114,32 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "sampler3D": 3,
         }.get(texture_type)
 
+    def expected_texture_coordinate_count(self, texture_type):
+        return {
+            "sampler1D": 1,
+            "sampler1DArray": 2,
+            "sampler2D": 2,
+            "sampler2DArray": 3,
+            "sampler3D": 3,
+            "samplerCube": 3,
+            "samplerCubeArray": 4,
+        }.get(texture_type)
+
+    def texture_coordinate_rank_diagnostic(self, func_name, texture_type, raw_coord):
+        expected_coord_count = self.expected_texture_coordinate_count(texture_type)
+        actual_coord_count = self.texel_fetch_coordinate_count(raw_coord)
+        if (
+            expected_coord_count is not None
+            and actual_coord_count is not None
+            and actual_coord_count != expected_coord_count
+        ):
+            return self.unsupported_sampled_resource_call(
+                f"{func_name} coordinate rank",
+                texture_type,
+                [],
+            )
+        return None
+
     def expected_image_coordinate_count(self, image_type):
         image_type = self.resource_base_type(image_type)
         if not isinstance(image_type, str):
@@ -3311,6 +3337,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return self.unsupported_multisample_resource_call(
                     func_name, texture_type, args
                 )
+            coordinate_diagnostic = self.texture_coordinate_rank_diagnostic(
+                func_name, texture_type, raw_args[1]
+            )
+            if coordinate_diagnostic is not None:
+                return coordinate_diagnostic
 
             texture_name = args[0]
             coord = args[1]
