@@ -1128,6 +1128,94 @@ def test_native_hip_graph_external_semaphore_nodes_parse_and_compile_if_availabl
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_graph_memory_user_objects_parse_and_compile_if_available(
+    tmp_path,
+):
+    """Smoke native HIP graph memory attributes and user-object APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void user_object_destructor(void* resource) {
+    }
+
+    void graph_memory_user_object_smoke() {
+        hipGraph_t graph;
+        hipUserObject_t user_object;
+        hipHostFn_t destructor = user_object_destructor;
+        void* resource = NULL;
+        size_t bytes = 0;
+        int device = 0;
+
+        hipGraphCreate(&graph, 0);
+        hipDeviceGetGraphMemAttribute(
+            device, hipGraphMemAttrUsedMemCurrent, &bytes
+        );
+        hipDeviceSetGraphMemAttribute(
+            device, hipGraphMemAttrUsedMemCurrent, &bytes
+        );
+        hipDeviceGraphMemTrim(device);
+        hipGraphDebugDotPrint(graph, "graph.dot", 0);
+        hipUserObjectCreate(&user_object, resource, destructor, 1, 0);
+        hipUserObjectRetain(user_object, 1);
+        hipGraphRetainUserObject(graph, user_object, 1, 0);
+        hipGraphReleaseUserObject(graph, user_object, 1);
+        hipUserObjectRelease(user_object, 1);
+        hipGraphDestroy(graph);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    expected_fragments = (
+        "// Function: user_object_destructor",
+        "void user_object_destructor(ptr<void> resource)",
+        "// Function: graph_memory_user_object_smoke",
+        "void graph_memory_user_object_smoke()",
+        "var graph: hipGraph_t;",
+        "var user_object: hipUserObject_t;",
+        "var destructor: hipHostFn_t = user_object_destructor;",
+        "var resource: ptr<void> = NULL;",
+        "var bytes: u32 = 0;",
+        "var device: i32 = 0;",
+        "// HIP graph create: output: graph, flags: 0",
+        "// HIP device graph memory get attribute: device: device, "
+        "attribute: hipGraphMemAttrUsedMemCurrent, output: bytes",
+        "// HIP device graph memory set attribute: device: device, "
+        "attribute: hipGraphMemAttrUsedMemCurrent, value: bytes",
+        "// HIP device graph memory trim: device: device",
+        '// HIP graph debug dot print: graph: graph, path: "graph.dot", flags: 0',
+        "// HIP user object create: output: user_object, resource: resource, "
+        "destructor: destructor, initial refcount: 1, flags: 0",
+        "// HIP user object retain: object: user_object, count: 1",
+        "// HIP graph retain user object: graph: graph, object: user_object, "
+        "count: 1, flags: 0",
+        "// HIP graph release user object: graph: graph, object: user_object, "
+        "count: 1",
+        "// HIP user object release: object: user_object, count: 1",
+        "// HIP graph destroy: graph",
+    )
+    for expected in expected_fragments:
+        assert expected in crossgl
+
+    raw_calls = (
+        "hipGraphCreate",
+        "hipDeviceGetGraphMemAttribute",
+        "hipDeviceSetGraphMemAttribute",
+        "hipDeviceGraphMemTrim",
+        "hipGraphDebugDotPrint",
+        "hipUserObjectCreate",
+        "hipUserObjectRetain",
+        "hipGraphRetainUserObject",
+        "hipGraphReleaseUserObject",
+        "hipUserObjectRelease",
+        "hipGraphDestroy",
+    )
+    for raw_call in raw_calls:
+        assert f"{raw_call}(" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_graph_memory_nodes_parse_and_compile_if_available(
     tmp_path,
 ):
