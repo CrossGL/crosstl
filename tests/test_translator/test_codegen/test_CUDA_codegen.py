@@ -4490,6 +4490,50 @@ class TestCudaCodeGen:
                     depth,
                     offset
                 );
+                float projected = textureCompareProj(shadowMap, uvw, depth);
+                float projectedOffset = textureCompareProjOffset(
+                    shadowMap,
+                    uvw,
+                    depth,
+                    offset
+                );
+                float projectedLod = textureCompareProjLod(
+                    shadowMap,
+                    uvw,
+                    depth,
+                    2.0
+                );
+                float projectedLodOffset = textureCompareProjLodOffset(
+                    shadowMap,
+                    uvw,
+                    depth,
+                    2.0,
+                    offset
+                );
+                float projectedGrad = textureCompareProjGrad(
+                    shadowMap,
+                    uvw,
+                    depth,
+                    ddx,
+                    ddy
+                );
+                float projectedGradOffset = textureCompareProjGradOffset(
+                    shadowMap,
+                    uvw,
+                    depth,
+                    ddx,
+                    ddy,
+                    offset
+                );
+                float projectedSum = textureCompareProj(shadowMap, uvw, depth) +
+                    textureCompareProjGradOffset(
+                        shadowMap,
+                        uvw,
+                        depth,
+                        ddx,
+                        ddy,
+                        offset
+                    );
             }
 
             compute {
@@ -4559,12 +4603,49 @@ class TestCudaCodeGen:
             "textureGatherCompareOffset on sampler2DShadow */ "
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
         )
+        assert (
+            "float projected = /* unsupported CUDA shadow resource call: "
+            "textureCompareProj on sampler2DShadow */ 0.0f;" in cuda_code
+        )
+        assert (
+            "float projectedOffset = /* unsupported CUDA shadow resource call: "
+            "textureCompareProjOffset on sampler2DShadow */ 0.0f;" in cuda_code
+        )
+        assert (
+            "float projectedLod = /* unsupported CUDA shadow resource call: "
+            "textureCompareProjLod on sampler2DShadow */ 0.0f;" in cuda_code
+        )
+        assert (
+            "float projectedLodOffset = /* unsupported CUDA shadow resource call: "
+            "textureCompareProjLodOffset on sampler2DShadow */ 0.0f;" in cuda_code
+        )
+        assert (
+            "float projectedGrad = /* unsupported CUDA shadow resource call: "
+            "textureCompareProjGrad on sampler2DShadow */ 0.0f;" in cuda_code
+        )
+        assert (
+            "float projectedGradOffset = /* unsupported CUDA shadow resource call: "
+            "textureCompareProjGradOffset on sampler2DShadow */ 0.0f;" in cuda_code
+        )
+        assert (
+            "float projectedSum = "
+            "(/* unsupported CUDA shadow resource call: "
+            "textureCompareProj on sampler2DShadow */ 0.0f + "
+            "/* unsupported CUDA shadow resource call: textureCompareProjGradOffset "
+            "on sampler2DShadow */ 0.0f);" in cuda_code
+        )
         assert "textureCompare(" not in cuda_code
         assert "textureCompareLod(" not in cuda_code
         assert "textureCompareGrad(" not in cuda_code
         assert "textureCompareOffset(" not in cuda_code
         assert "textureCompareLodOffset(" not in cuda_code
         assert "textureCompareGradOffset(" not in cuda_code
+        assert "textureCompareProj(" not in cuda_code
+        assert "textureCompareProjOffset(" not in cuda_code
+        assert "textureCompareProjLod(" not in cuda_code
+        assert "textureCompareProjLodOffset(" not in cuda_code
+        assert "textureCompareProjGrad(" not in cuda_code
+        assert "textureCompareProjGradOffset(" not in cuda_code
         assert "textureGatherCompare(" not in cuda_code
         assert "textureGatherCompareOffset(" not in cuda_code
         assert "texture(shadowMap" not in cuda_code

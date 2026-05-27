@@ -926,6 +926,99 @@ def test_native_hip_graph_dependency_queries_parse_and_compile_if_available(
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_graph_event_nodes_parse_and_compile_if_available(tmp_path):
+    """Smoke native HIP graph event record/wait node APIs."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void graph_event_nodes_smoke(hipStream_t stream) {
+        hipGraph_t graph;
+        hipGraphExec_t exec;
+        hipGraphNode_t record_node;
+        hipGraphNode_t wait_node;
+        hipGraphNode_t error_node;
+        hipEvent_t event;
+        char log[128];
+
+        hipEventCreateWithFlags(&event, hipEventDisableTiming);
+        hipGraphCreate(&graph, 0);
+        hipGraphAddEventRecordNode(&record_node, graph, NULL, 0, event);
+        hipGraphAddEventWaitNode(&wait_node, graph, &record_node, 1, event);
+        hipGraphEventRecordNodeGetEvent(record_node, &event);
+        hipGraphEventRecordNodeSetEvent(record_node, event);
+        hipGraphEventWaitNodeGetEvent(wait_node, &event);
+        hipGraphEventWaitNodeSetEvent(wait_node, event);
+        hipGraphInstantiate(&exec, graph, &error_node, log, 128);
+        hipGraphExecEventRecordNodeSetEvent(exec, record_node, event);
+        hipGraphExecEventWaitNodeSetEvent(exec, wait_node, event);
+        hipGraphExecDestroy(exec);
+        hipGraphDestroyNode(wait_node);
+        hipGraphDestroyNode(record_node);
+        hipGraphDestroy(graph);
+        hipEventDestroy(event);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    expected_fragments = (
+        "// Function: graph_event_nodes_smoke",
+        "void graph_event_nodes_smoke(hipStream_t stream)",
+        "var graph: hipGraph_t;",
+        "var exec: hipGraphExec_t;",
+        "var record_node: hipGraphNode_t;",
+        "var wait_node: hipGraphNode_t;",
+        "var error_node: hipGraphNode_t;",
+        "var event: hipEvent_t;",
+        "var log: array<i8, 128>;",
+        "// HIP event create: event, flags: hipEventDisableTiming",
+        "// HIP graph create: output: graph, flags: 0",
+        "// HIP graph add event record node: output: record_node, graph: graph, "
+        "dependencies: NULL, count: 0, event: event",
+        "// HIP graph add event wait node: output: wait_node, graph: graph, "
+        "dependencies: (&record_node), count: 1, event: event",
+        "// HIP graph event record node get event: node: record_node, output: event",
+        "// HIP graph event record node set event: node: record_node, event: event",
+        "// HIP graph event wait node get event: node: wait_node, output: event",
+        "// HIP graph event wait node set event: node: wait_node, event: event",
+        "// HIP graph instantiate: output: exec, graph: graph, "
+        "error node output: error_node, log buffer: log, log bytes: 128",
+        "// HIP graph exec event record node set event: exec: exec, "
+        "node: record_node, event: event",
+        "// HIP graph exec event wait node set event: exec: exec, "
+        "node: wait_node, event: event",
+        "// HIP graph exec destroy: exec",
+        "// HIP graph destroy node: wait_node",
+        "// HIP graph destroy node: record_node",
+        "// HIP graph destroy: graph",
+        "// HIP event destroy: event",
+    )
+    for expected in expected_fragments:
+        assert expected in crossgl
+
+    raw_calls = (
+        "hipEventCreateWithFlags",
+        "hipGraphCreate",
+        "hipGraphAddEventRecordNode",
+        "hipGraphAddEventWaitNode",
+        "hipGraphEventRecordNodeGetEvent",
+        "hipGraphEventRecordNodeSetEvent",
+        "hipGraphEventWaitNodeGetEvent",
+        "hipGraphEventWaitNodeSetEvent",
+        "hipGraphInstantiate",
+        "hipGraphExecEventRecordNodeSetEvent",
+        "hipGraphExecEventWaitNodeSetEvent",
+        "hipGraphExecDestroy",
+        "hipGraphDestroyNode",
+        "hipGraphDestroy",
+        "hipEventDestroy",
+    )
+    for raw_call in raw_calls:
+        assert f"{raw_call}(" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_graph_memory_nodes_parse_and_compile_if_available(
     tmp_path,
 ):

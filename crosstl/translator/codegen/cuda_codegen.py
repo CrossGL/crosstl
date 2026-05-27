@@ -2686,6 +2686,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if result_type is not None:
             return result_type
 
+        if func_name in self.cuda_shadow_scalar_diagnostic_calls() and raw_args:
+            resource_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            if self.is_shadow_resource_type(resource_type):
+                return "float"
+
         if func_name in self.cuda_sampled_diagnostic_float4_calls() and raw_args:
             resource_type = self.resource_base_type(
                 self.get_expression_type(raw_args[0])
@@ -2703,6 +2710,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.cuda_image_atomic_result_type(resource_type)
 
         return None
+
+    def cuda_shadow_scalar_diagnostic_calls(self):
+        """Return shadow compare calls that CUDA lowers to scalar diagnostics."""
+        return {
+            "textureCompareProj",
+            "textureCompareProjOffset",
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+        }
 
     def cuda_sampled_diagnostic_float4_calls(self):
         """Return sampled-resource calls that CUDA lowers to float4 diagnostics."""
@@ -3187,6 +3205,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 "textureCompareOffset",
                 "textureCompareLodOffset",
                 "textureCompareGradOffset",
+                "textureCompareProj",
+                "textureCompareProjOffset",
+                "textureCompareProjLod",
+                "textureCompareProjLodOffset",
+                "textureCompareProjGrad",
+                "textureCompareProjGradOffset",
                 "textureGatherCompare",
                 "textureGatherCompareOffset",
             }
