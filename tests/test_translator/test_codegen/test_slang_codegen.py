@@ -4538,6 +4538,74 @@ def test_structured_buffer_explicit_result_atomics_emit_slang_interlocked():
     assert "atomicAnd(counters" not in generated_code
 
 
+def test_structured_buffer_expression_atomics_in_loop_contexts_emit_diagnostics():
+    code = """
+    shader SlangStructuredBufferAtomicLoopContexts {
+        RWStructuredBuffer<uint> counters @binding(29);
+
+        compute {
+            void main(uint3 tid @gl_GlobalInvocationID) {
+                uint oldValue = 0u;
+                for (
+                    uint initOld = atomicAdd(counters[tid.x], 1u);
+                    initOld < 2u;
+                    initOld = initOld + 1u
+                ) {
+                    atomicAdd(counters[tid.x], 1u, oldValue);
+                }
+                for (
+                    uint i = 0u;
+                    atomicAdd(counters[tid.x], 1u) < 4u;
+                    i = atomicExchange(counters[tid.x], i)
+                ) {
+                    break;
+                }
+                while (atomicOr(counters[tid.x], 1u) != 0u) {
+                    break;
+                }
+                do {
+                    break;
+                } while (atomicAnd(counters[tid.x], 1u) != 0u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "atomicAdd expression-valued atomic cannot be used in "
+        "for-loop initializer context; use explicit original output argument"
+        in generated_code
+    )
+    assert (
+        "atomicAdd expression-valued atomic cannot be used in "
+        "for-loop condition context; use explicit original output argument"
+        in generated_code
+    )
+    assert (
+        "atomicExchange expression-valued atomic cannot be used in "
+        "for-loop update context; use explicit original output argument"
+        in generated_code
+    )
+    assert (
+        "atomicOr expression-valued atomic cannot be used in "
+        "while-loop condition context; use explicit original output argument"
+        in generated_code
+    )
+    assert (
+        "atomicAnd expression-valued atomic cannot be used in "
+        "do-while-loop condition context; use explicit original output argument"
+        in generated_code
+    )
+    assert "InterlockedAdd(counters[tid.x], 1u, oldValue);" in generated_code
+    assert "atomicAdd(counters" not in generated_code
+    assert "atomicExchange(counters" not in generated_code
+    assert "atomicOr(counters" not in generated_code
+    assert "atomicAnd(counters" not in generated_code
+    assert "cgl_atomic" not in generated_code
+
+
 def test_append_consume_structured_buffers_emit_slang_methods_and_uav_bindings():
     code = """
     shader SlangAppendConsumeStructuredBuffers {

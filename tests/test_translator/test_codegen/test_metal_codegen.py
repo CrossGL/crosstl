@@ -5513,6 +5513,104 @@ def test_metal_threadgroup_atomic_array_elements_use_address_arguments():
     assert "atomic_exchange_explicit(counters[index]" not in generated
 
 
+def test_metal_atomic_compare_exchange_addresses_targets_and_expected_values():
+    code = """
+    shader main {
+        bool claim(
+            threadgroup atomic_uint counters[64],
+            thread uint expectedValues[64],
+            uint index,
+            uint desired
+        ) {
+            return atomic_compare_exchange_weak_explicit(
+                counters[index],
+                expectedValues[index],
+                desired,
+                memory_order_relaxed,
+                memory_order_relaxed
+            );
+        }
+
+        bool claimPtr(
+            threadgroup atomic_uint* counters,
+            thread uint* expectedValues,
+            uint index,
+            uint desired
+        ) {
+            return atomic_compare_exchange_strong_explicit(
+                counters[index],
+                expectedValues[index],
+                desired,
+                memory_order_relaxed,
+                memory_order_relaxed
+            );
+        }
+
+        bool claimRaw(
+            threadgroup atomic_uint* counter,
+            thread uint* expected,
+            uint desired
+        ) {
+            return atomic_compare_exchange_weak_explicit(
+                counter,
+                expected,
+                desired,
+                memory_order_relaxed,
+                memory_order_relaxed
+            );
+        }
+
+        compute {
+            void main() {
+                shared atomic_uint counters[64];
+                uint expectedValues[64];
+                uint index = gl_LocalInvocationIndex;
+                expectedValues[index] = 0u;
+                atomic_store_explicit(counters[index], 0u, memory_order_relaxed);
+                bool helperClaimed = claim(counters, expectedValues, index, 1u);
+                bool pointerClaimed = claimPtr(counters, expectedValues, index, 2u);
+                uint expected = helperClaimed ? 1u : 0u;
+                bool claimed = atomic_compare_exchange_strong_explicit(
+                    counters[index],
+                    expected,
+                    2u,
+                    memory_order_relaxed,
+                    memory_order_relaxed
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "bool claim(threadgroup atomic_uint counters[64]" in generated
+    assert "bool claimPtr(threadgroup atomic_uint* counters" in generated
+    indexed_compare_exchange = (
+        "return atomic_compare_exchange_weak_explicit(&counters[index], "
+        "&expectedValues[index], desired, memory_order_relaxed, "
+        "memory_order_relaxed);"
+    )
+    assert generated.count(indexed_compare_exchange) == 2
+    assert (
+        "return atomic_compare_exchange_weak_explicit(counter, expected, "
+        "desired, memory_order_relaxed, memory_order_relaxed);"
+    ) in generated
+    assert (
+        "bool claimed = atomic_compare_exchange_weak_explicit(&counters[index], "
+        "&expected, 2u, memory_order_relaxed, memory_order_relaxed);"
+    ) in generated
+    assert (
+        "atomic_compare_exchange_weak_explicit(&counters[index], expectedValues[index]"
+        not in generated
+    )
+    assert (
+        "atomic_compare_exchange_weak_explicit(&counters[index], expected,"
+        not in generated
+    )
+    assert "atomic_compare_exchange_weak_explicit(&counter, &expected," not in generated
+    assert "atomic_compare_exchange_strong_explicit" not in generated
+
+
 def test_compute_builtin_semantics_roundtrip():
     code = """
     shader cs {

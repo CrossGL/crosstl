@@ -672,11 +672,12 @@
         "rust": {"status": "unknown"},
         "slang": {
           "status": "partial",
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, explicit-result and expression-valued structured-buffer atomics, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet.",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, explicit-result and expression-valued structured-buffer atomics, loop-context diagnostics for value-preserving atomic hoists, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_explicit_result_atomics_emit_slang_interlocked",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_expression_atomics_in_loop_contexts_emit_diagnostics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_append_consume_structured_buffers_emit_slang_methods_and_uav_bindings",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_append_consume_wrong_structured_buffer_kinds_emit_slang_diagnostics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffers_emit_slang_load_store_dimensions_and_bindings",
@@ -1765,14 +1766,16 @@
         },
         "metal": {
           "status": "supported",
-          "notes": "barrier/workgroupBarrier, groupMemoryBarrier, and memoryBarrierShared lower to threadgroup barriers; memoryBarrier, memoryBarrierBuffer, and deviceMemoryBarrier lower to device-memory barriers; memoryBarrierImage lowers to a texture-memory barrier; allMemoryBarrier lowers to combined device/threadgroup/texture flags; threadgroup atomic arrays use address-form atomic operations across helper/kernel barrier ordering; user-defined functions with the same names are preserved.",
+          "notes": "barrier/workgroupBarrier, groupMemoryBarrier, and memoryBarrierShared lower to threadgroup barriers; memoryBarrier, memoryBarrierBuffer, and deviceMemoryBarrier lower to device-memory barriers; memoryBarrierImage lowers to a texture-memory barrier; allMemoryBarrier lowers to combined device/threadgroup/texture flags; threadgroup atomic arrays use address-form atomic operations across helper/kernel barrier ordering; atomic compare-exchange lowers target and expected-value address forms to toolchain-compatible Metal intrinsics; user-defined functions with the same names are preserved.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_synchronization_builtins_lower_to_threadgroup_barriers",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_threadgroup_atomic_array_elements_use_address_arguments",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_atomic_compare_exchange_addresses_targets_and_expected_values",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_user_defined_synchronization_names_are_not_lowered",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_threadgroup_helper_barriers_compile_with_metal",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_threadgroup_atomic_barriers_compile_with_metal",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_atomic_compare_exchange_compile_with_metal",
             "tests/test_translator/test_codegen/test_external_shader_validators.py::def test_generated_metal_compute_synchronization_compiles_with_xcrun_metal"
           ]
         },

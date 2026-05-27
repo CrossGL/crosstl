@@ -1730,6 +1730,75 @@ shader MetalThreadgroupAtomicBarrierValidation {
 """
 
 
+METAL_ATOMIC_COMPARE_EXCHANGE_SHADER = """
+shader MetalAtomicCompareExchangeValidation {
+    bool claim(
+        threadgroup atomic_uint counters[64],
+        thread uint expectedValues[64],
+        uint index,
+        uint desired
+    ) {
+        return atomic_compare_exchange_weak_explicit(
+            counters[index],
+            expectedValues[index],
+            desired,
+            memory_order_relaxed,
+            memory_order_relaxed
+        );
+    }
+
+    bool claimPtr(
+        threadgroup atomic_uint* counters,
+        thread uint* expectedValues,
+        uint index,
+        uint desired
+    ) {
+        return atomic_compare_exchange_strong_explicit(
+            counters[index],
+            expectedValues[index],
+            desired,
+            memory_order_relaxed,
+            memory_order_relaxed
+        );
+    }
+
+    bool claimRaw(
+        threadgroup atomic_uint* counter,
+        thread uint* expected,
+        uint desired
+    ) {
+        return atomic_compare_exchange_weak_explicit(
+            counter,
+            expected,
+            desired,
+            memory_order_relaxed,
+            memory_order_relaxed
+        );
+    }
+
+    compute {
+        void main() {
+            shared atomic_uint counters[64];
+            uint expectedValues[64];
+            uint index = gl_LocalInvocationIndex;
+            expectedValues[index] = 0u;
+            atomic_store_explicit(counters[index], 0u, memory_order_relaxed);
+            bool helperClaimed = claim(counters, expectedValues, index, 1u);
+            bool pointerClaimed = claimPtr(counters, expectedValues, index, 2u);
+            uint expected = helperClaimed ? 1u : 0u;
+            bool claimed = atomic_compare_exchange_strong_explicit(
+                counters[index],
+                expected,
+                2u,
+                memory_order_relaxed,
+                memory_order_relaxed
+            );
+        }
+    }
+}
+"""
+
+
 METAL_ADDRESS_SPACE_PARAMETER_SHADER = """
 shader MetalAddressSpaceParameterValidation {
     struct Payload {
@@ -4881,6 +4950,36 @@ def test_generated_metal_threadgroup_atomic_barriers_compile_with_metal(tmp_path
     )
     assert "atomic_exchange_explicit(&counters[index]," in code
     assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_atomic_compare_exchange_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "atomic_compare_exchange.metal"
+    output = tmp_path / "atomic_compare_exchange.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_ATOMIC_COMPARE_EXCHANGE_SHADER),
+        "compute",
+    )
+    indexed_compare_exchange = (
+        "return atomic_compare_exchange_weak_explicit(&counters[index], "
+        "&expectedValues[index], desired, memory_order_relaxed, "
+        "memory_order_relaxed);"
+    )
+    assert code.count(indexed_compare_exchange) == 2
+    assert (
+        "bool claimed = atomic_compare_exchange_weak_explicit(&counters[index], "
+        "&expected, 2u, memory_order_relaxed, memory_order_relaxed);"
+    ) in code
+    assert "atomic_compare_exchange_weak_explicit(&counter, &expected," not in code
+    assert "atomic_compare_exchange_strong_explicit" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

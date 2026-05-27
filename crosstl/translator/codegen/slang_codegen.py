@@ -131,6 +131,7 @@ class SlangCodeGen:
         self.expression_prelude_stack = []
         self.expression_prelude_result_stack = []
         self.expression_temp_names = set()
+        self.structured_buffer_atomic_value_context_stack = []
         self.current_hull_output_rewrite = None
         self._generating = False
         self.semantic_map = {
@@ -208,6 +209,7 @@ class SlangCodeGen:
             self.expression_prelude_stack = []
             self.expression_prelude_result_stack = []
             self.expression_temp_names = set()
+            self.structured_buffer_atomic_value_context_stack = []
             self.reserve_explicit_slang_resource_declarations(ast)
 
         if isinstance(ast, list):
@@ -3759,7 +3761,16 @@ class SlangCodeGen:
             statement = f"{left} {node.operator} {right};"
         return self.statement_with_prelude(prelude, statement)
 
-    def generate_for_header_statement(self, node):
+    def generate_for_header_statement(self, node, atomic_value_context=None):
+        if atomic_value_context is not None:
+            self.structured_buffer_atomic_value_context_stack.append(
+                atomic_value_context
+            )
+            try:
+                return self.generate_for_header_statement(node)
+            finally:
+                self.structured_buffer_atomic_value_context_stack.pop()
+
         if isinstance(node, AssignmentNode):
             return self.generate_assignment(node)
         if isinstance(node, VariableNode):
@@ -3776,6 +3787,13 @@ class SlangCodeGen:
                 return f"{declaration} = {initial_expr}"
             return declaration
         return self.generate_expression(node)
+
+    def generate_loop_condition_expression(self, node, atomic_value_context):
+        self.structured_buffer_atomic_value_context_stack.append(atomic_value_context)
+        try:
+            return self.generate_expression(node)
+        finally:
+            self.structured_buffer_atomic_value_context_stack.pop()
 
     def slang_assignment_target_alias(self, target):
         hull_output_alias = self.slang_hull_output_array_alias(target)
@@ -4475,9 +4493,25 @@ class SlangCodeGen:
         return self.statement_with_prelude(prelude, result)
 
     def generate_for(self, node):
-        init = self.generate_for_header_statement(node.init) if node.init else ""
-        condition = self.generate_expression(node.condition) if node.condition else ""
-        update = self.generate_for_header_statement(node.update) if node.update else ""
+        init = (
+            self.generate_for_header_statement(
+                node.init, "for-loop initializer context"
+            )
+            if node.init
+            else ""
+        )
+        condition = (
+            self.generate_loop_condition_expression(
+                node.condition, "for-loop condition context"
+            )
+            if node.condition
+            else ""
+        )
+        update = (
+            self.generate_for_header_statement(node.update, "for-loop update context")
+            if node.update
+            else ""
+        )
 
         result = f"for ({init}; {condition}; {update})\n{{\n"
 
@@ -4516,7 +4550,9 @@ class SlangCodeGen:
         return result
 
     def generate_while(self, node):
-        condition = self.generate_expression(node.condition)
+        condition = self.generate_loop_condition_expression(
+            node.condition, "while-loop condition context"
+        )
         result = f"while ({condition})\n{{\n"
 
         self.indent_level += 1
@@ -4528,7 +4564,9 @@ class SlangCodeGen:
         return result
 
     def generate_do_while(self, node):
-        condition = self.generate_expression(node.condition)
+        condition = self.generate_loop_condition_expression(
+            node.condition, "do-while-loop condition context"
+        )
         result = "do\n{\n"
 
         self.indent_level += 1
@@ -5245,6 +5283,14 @@ class SlangCodeGen:
         self, func_name, intrinsic, target, value_args, element_type
     ):
         if not self.expression_prelude_active():
+            if self.structured_buffer_atomic_value_context_stack:
+                context = self.structured_buffer_atomic_value_context_stack[-1]
+                return self.unsupported_structured_buffer_call(
+                    func_name,
+                    "expression-valued atomic cannot be used in "
+                    f"{context}; use explicit original output argument",
+                    element_type,
+                )
             return self.unsupported_structured_buffer_call(
                 func_name,
                 "requires target, value, and original output outside "

@@ -24,13 +24,13 @@ implicitly supported.
 
    "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "546", "277", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "732", "146", "GLSL 4.60 specification; OpenGL registry"
-   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "499", "366", "Apple Metal resources; Metal Shading Language specification"
+   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "500", "366", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "397", "12", "SPIR-V unified specification; Khronos SPIR-V registry"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "284", "41", "CUDA C++ programming guide"
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "300", "11", "ROCm HIP documentation"
    "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "305", "33", "Mojo manual"
    "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "497", "35", "Rust reference"
-   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "316", "96", "Slang user guide"
+   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "317", "97", "Slang user guide"
 
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
@@ -251,7 +251,7 @@ need an audit before implementation work can be scoped accurately.
    "HIP", "resources", "Structured/storage buffers", "partial", ""
    "Mojo", "resources", "Structured/storage buffers", "partial", "StructuredBuffer, RWStructuredBuffer, append/consume buffers, and byte-address buffers lower to compile-smoke Mojo placeholder abstractions with load/store/dimensions helpers and deterministic invalid member/free-helper diagnostics; real GPU memory binding semantics remain incomplete."
    "Rust", "resources", "Structured/storage buffers", "unknown", ""
-   "Slang", "resources", "Structured/storage buffers", "partial", "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, explicit-result and expression-valued structured-buffer atomics, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet."
+   "Slang", "resources", "Structured/storage buffers", "partial", "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, explicit-result and expression-valued structured-buffer atomics, loop-context diagnostics for value-preserving atomic hoists, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet."
    "Vulkan SPIR-V", "resources", "Resource arrays", "unknown", ""
    "CUDA", "resources", "Resource arrays", "unknown", ""
    "HIP", "resources", "Resource arrays", "unknown", ""

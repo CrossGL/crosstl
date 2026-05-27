@@ -4413,10 +4413,57 @@ class MetalCodeGen:
             return None
 
         rendered_args = [self.generate_expression(arg) for arg in args]
-        atomic_name = self.expression_name(args[0])
-        if self.is_metal_atomic_value_type(self.local_variable_types.get(atomic_name)):
+        if self.metal_atomic_target_needs_address(args[0], rendered_args[0]):
             rendered_args[0] = f"&{rendered_args[0]}"
-        return f"{func_name}({', '.join(rendered_args)})"
+        if self.is_metal_atomic_compare_exchange_name(func_name) and len(args) >= 2:
+            if self.metal_compare_exchange_expected_needs_address(
+                args[1], rendered_args[1]
+            ):
+                rendered_args[1] = f"&{rendered_args[1]}"
+        return (
+            f"{self.metal_atomic_intrinsic_name(func_name)}({', '.join(rendered_args)})"
+        )
+
+    def metal_atomic_target_needs_address(self, arg, rendered_arg):
+        if self.is_metal_address_expression(arg, rendered_arg):
+            return False
+        target_type = self.expression_result_type(arg)
+        if self.metal_type_is_pointer_like(target_type):
+            return False
+        return self.is_metal_atomic_value_type(target_type)
+
+    def metal_compare_exchange_expected_needs_address(self, arg, rendered_arg):
+        if self.is_metal_address_expression(arg, rendered_arg):
+            return False
+        expected_type = self.expression_result_type(arg)
+        if self.metal_type_is_pointer_like(expected_type):
+            return False
+        if isinstance(arg, (ArrayAccessNode, MemberAccessNode)):
+            return True
+        return self.expression_name(arg) is not None
+
+    def is_metal_address_expression(self, arg, rendered_arg):
+        if isinstance(arg, UnaryOpNode) and getattr(arg, "operator", None) == "&":
+            return True
+        return str(rendered_arg).lstrip().startswith("&")
+
+    def metal_type_is_pointer_like(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return False
+        type_name = str(type_name).strip()
+        return type_name.endswith("*") or "[" in type_name
+
+    def is_metal_atomic_compare_exchange_name(self, func_name):
+        return func_name in {
+            "atomic_compare_exchange_weak_explicit",
+            "atomic_compare_exchange_strong_explicit",
+        }
+
+    def metal_atomic_intrinsic_name(self, func_name):
+        if func_name == "atomic_compare_exchange_strong_explicit":
+            return "atomic_compare_exchange_weak_explicit"
+        return func_name
 
     def is_metal_atomic_function_name(self, func_name):
         return func_name in {
