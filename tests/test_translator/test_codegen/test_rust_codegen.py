@@ -34,6 +34,7 @@ from crosstl.translator.ast import (
     ReturnNode,
     ShaderNode,
     StructMemberNode,
+    StructPatternNode,
     StructNode,
     EnumNode,
     EnumVariantNode,
@@ -4918,6 +4919,149 @@ def test_non_copy_generic_enum_variant_returns_and_match_arms_compile(tmp_path):
     assert "Choice::<Payload>::Pair(first.clone(), second.clone())" not in (
         generated_code
     )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_non_copy_generic_struct_like_enum_variants_and_guards_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    generic_type = GenericType("T")
+    choice_payload_type = NamedType("Choice", [payload_type])
+    named_variant_type = NamedType("Choice::<Payload>::Named")
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode(
+                "Named",
+                fields=[
+                    ("primary", generic_type),
+                    ("backup", generic_type),
+                ],
+            ),
+        ],
+    )
+    choice_enum.generic_params = [GenericParameterNode("T")]
+
+    ast = ShaderNode(
+        "NonCopyGenericStructLikeEnumReturns",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "duplicate_named",
+                choice_payload_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            named_variant_type,
+                            [],
+                            named_arguments={
+                                "primary": IdentifierNode("payload"),
+                                "backup": IdentifierNode("payload"),
+                            },
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "repack_guarded",
+                choice_payload_type,
+                [ParameterNode("choice", choice_payload_type)],
+                [
+                    ReturnNode(
+                        MatchNode(
+                            IdentifierNode("choice"),
+                            [
+                                MatchArmNode(
+                                    StructPatternNode(
+                                        "Choice::Named",
+                                        {
+                                            "primary": IdentifierPatternNode("primary"),
+                                            "backup": IdentifierPatternNode("backup"),
+                                        },
+                                    ),
+                                    BinaryOpNode(
+                                        MemberAccessNode(
+                                            IdentifierNode("primary"),
+                                            "count",
+                                        ),
+                                        ">",
+                                        LiteralNode(0, PrimitiveType("int")),
+                                    ),
+                                    [
+                                        ExpressionStatementNode(
+                                            ConstructorNode(
+                                                named_variant_type,
+                                                [],
+                                                named_arguments={
+                                                    "primary": IdentifierNode(
+                                                        "primary"
+                                                    ),
+                                                    "backup": IdentifierNode("backup"),
+                                                },
+                                            ),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                                MatchArmNode(
+                                    StructPatternNode(
+                                        "Choice::Named",
+                                        {
+                                            "primary": IdentifierPatternNode("primary"),
+                                            "backup": IdentifierPatternNode("backup"),
+                                        },
+                                    ),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            ConstructorNode(
+                                                named_variant_type,
+                                                [],
+                                                named_arguments={
+                                                    "primary": IdentifierNode("backup"),
+                                                    "backup": IdentifierNode("backup"),
+                                                },
+                                            ),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                            ],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "return Choice::<Payload>::Named { "
+        "primary: payload.clone(), backup: payload };"
+    ) in generated_code
+    assert (
+        "Choice::Named { primary, backup } if (primary.count > 0) =>"
+    ) in generated_code
+    assert (
+        "Choice::<Payload>::Named { primary: primary, backup: backup }"
+    ) in generated_code
+    assert (
+        "Choice::<Payload>::Named { primary: backup.clone(), backup: backup }"
+    ) in generated_code
+    assert "return match choice {" in generated_code
+    assert "return match choice.clone()" not in generated_code
+    assert "Choice::<Payload>::Named { primary: primary.clone()" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

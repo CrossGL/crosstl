@@ -3144,6 +3144,10 @@ class VulkanSPIRVCodeGen:
             if getter_info is not None:
                 _, result_kind = getter_info
                 return self.ray_query_result_type_for_kind(result_kind)
+            getter_info = self.ray_query_candidate_getter_info(operation)
+            if getter_info is not None:
+                _, result_kind = getter_info
+                return self.ray_query_result_type_for_kind(result_kind)
             getter_info = self.ray_query_intersection_getter_info(operation)
             if getter_info is not None:
                 _, result_kind, _ = getter_info
@@ -3211,6 +3215,20 @@ class VulkanSPIRVCodeGen:
             "RayFlags",
             "WorldRayOrigin",
             "WorldRayDirection",
+        }
+
+    def ray_query_candidate_getter_info(self, operation: str):
+        getters = {
+            "CandidateAABBOpaque": (
+                "OpRayQueryGetIntersectionCandidateAABBOpaqueKHR",
+                "bool",
+            ),
+        }
+        return getters.get(operation)
+
+    def ray_query_candidate_getter_operations(self):
+        return {
+            "CandidateAABBOpaque",
         }
 
     def ray_query_intersection_getter_info(self, operation: str):
@@ -3373,6 +3391,20 @@ class VulkanSPIRVCodeGen:
         self, query_pointer: SpirvId, operation: str
     ) -> SpirvId:
         getter_info = self.ray_query_state_getter_info(operation)
+        if getter_info is None:
+            return self.represented_ir_diagnostic_default_value("ray query", operation)
+
+        opcode, result_kind = getter_info
+        result_type = self.ray_query_result_type_for_kind(result_kind)
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = {opcode} %{result_type.id} %{query_pointer.id}")
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
+
+    def process_ray_query_candidate_getter(
+        self, query_pointer: SpirvId, operation: str
+    ) -> SpirvId:
+        getter_info = self.ray_query_candidate_getter_info(operation)
         if getter_info is None:
             return self.represented_ir_diagnostic_default_value("ray query", operation)
 
@@ -3614,6 +3646,7 @@ class VulkanSPIRVCodeGen:
                 "TraceRayInline",
             }
             | self.ray_query_state_getter_operations()
+            | self.ray_query_candidate_getter_operations()
             | (self.ray_query_intersection_getter_operations())
         )
 
@@ -3650,6 +3683,8 @@ class VulkanSPIRVCodeGen:
             "TraceRayInline": {4, 7},
         }
         for getter_operation in self.ray_query_state_getter_operations():
+            supported_argument_counts[getter_operation] = 0
+        for getter_operation in self.ray_query_candidate_getter_operations():
             supported_argument_counts[getter_operation] = 0
         for getter_operation in self.ray_query_intersection_getter_operations():
             supported_argument_counts[getter_operation] = 0
@@ -3711,6 +3746,9 @@ class VulkanSPIRVCodeGen:
 
         if operation in self.ray_query_state_getter_operations():
             return self.process_ray_query_state_getter(query_pointer, operation)
+
+        if operation in self.ray_query_candidate_getter_operations():
+            return self.process_ray_query_candidate_getter(query_pointer, operation)
 
         if operation in self.ray_query_intersection_getter_operations():
             return self.process_ray_query_intersection_getter(query_pointer, operation)

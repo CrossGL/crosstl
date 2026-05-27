@@ -2913,8 +2913,8 @@ class TestVulkanSPIRVCodeGen:
         report_result = gen.process_expression(RayTracingOpNode("ReportHit", [1.0, 0]))
         proceed_result = gen.process_expression(RayQueryOpNode("Proceed", "rq", []))
         ray_t_result = gen.process_expression(RayQueryOpNode("CommittedRayT", "rq", []))
-        aabb_opaque_result = gen.process_expression(
-            RayQueryOpNode("CandidateAABBOpaque", "rq", [])
+        triangle_positions_result = gen.process_expression(
+            RayQueryOpNode("CommittedTriangleVertexPositions", "rq", [])
         )
         mesh_result = gen.process_expression(MeshOpNode("SetMeshOutputCounts", [3, 1]))
 
@@ -2924,7 +2924,7 @@ class TestVulkanSPIRVCodeGen:
         assert report_result.type.base_type == "bool"
         assert proceed_result.type.base_type == "bool"
         assert ray_t_result.type.base_type == "float"
-        assert aabb_opaque_result.type.base_type == "uint"
+        assert triangle_positions_result.type.base_type == "uint"
         assert mesh_result.type.base_type == "uint"
         assert (
             "WARNING: SPIR-V backend does not lower ray tracing operation "
@@ -2936,7 +2936,7 @@ class TestVulkanSPIRVCodeGen:
         ) in spv_code
         assert (
             "WARNING: SPIR-V backend does not lower ray query operation "
-            "CandidateAABBOpaque yet; using a default uint value"
+            "CommittedTriangleVertexPositions yet; using a default uint value"
         ) in spv_code
         assert (
             "WARNING: SPIR-V backend does not lower mesh shader operation "
@@ -2973,9 +2973,9 @@ class TestVulkanSPIRVCodeGen:
                         RayQueryOpNode("CandidateRayT", "rq", []),
                     ),
                     VariableNode(
-                        "aabbOpaqueToken",
+                        "trianglePositionsToken",
                         PrimitiveType("uint"),
-                        RayQueryOpNode("CandidateAABBOpaque", "rq", []),
+                        RayQueryOpNode("CommittedTriangleVertexPositions", "rq", []),
                     ),
                     ExpressionStatementNode(MeshOpNode("SetMeshOutputCounts", [3, 1])),
                     ExpressionStatementNode(
@@ -3003,7 +3003,10 @@ class TestVulkanSPIRVCodeGen:
         assert "ReportHit yet; using a default bool value" in spv_code
         assert "Proceed yet; using a default bool value" in spv_code
         assert "CandidateRayT yet; using a default float value" in spv_code
-        assert "CandidateAABBOpaque yet; using a default uint value" in spv_code
+        assert (
+            "CommittedTriangleVertexPositions yet; using a default uint value"
+            in spv_code
+        )
         assert "SetMeshOutputCounts yet; using a default uint value" in spv_code
         assert "TraceRay yet; using a default uint value" in spv_code
         assert "Unknown expression type" not in spv_code
@@ -3573,6 +3576,51 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "OpRayQueryGetIntersectionObjectToWorldKHR" not in spv_code
         assert "OpRayQueryGetIntersectionWorldToObjectKHR" not in spv_code
+
+    def test_ray_query_candidate_aabb_opaque_getter_emits_khr_instruction(
+        self, tmp_path
+    ):
+        source_code = """
+        shader RayQueryCandidateAABBOpaque {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    bool aabbOpaque = rq.CandidateAABBOpaque();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert spv_code.count("OpRayQueryGetIntersectionCandidateAABBOpaqueKHR") == 1
+        assert "CandidateAABBOpaque yet; using a default" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_ray_query_candidate_aabb_opaque_getter_rejects_arguments(self):
+        source_code = """
+        shader RayQueryCandidateAABBOpaqueBadArgs {
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    bool aabbOpaque = rq.CandidateAABBOpaque(1);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V RayQuery.CandidateAABBOpaque requires 0 arguments"
+            in spv_code
+        )
+        assert "OpRayQueryGetIntersectionCandidateAABBOpaqueKHR" not in spv_code
 
     def test_ray_query_supported_operations_reject_unexpected_arguments(self):
         source_code = """

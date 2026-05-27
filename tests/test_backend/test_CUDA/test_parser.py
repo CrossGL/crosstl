@@ -1544,6 +1544,45 @@ class TestCudaParser:
             assert declaration.value.name.object == owner
             assert declaration.value.name.member == member
 
+    def test_cooperative_groups_async_copy_wait_parsing(self):
+        """Test parsing cooperative-groups async copy and wait collectives."""
+        code = """
+        namespace cg = cooperative_groups;
+
+        __global__ void kernel(int* shared, const int* global) {
+            auto block = cg::this_thread_block();
+            cg::memcpy_async(block, shared, global, sizeof(int) * block.size());
+            cg::wait(block);
+            cooperative_groups::wait_prior<1>(block);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        body = ast.kernels[0].body
+        async_copy = body[1]
+        wait = body[2]
+        wait_prior = body[3]
+
+        assert isinstance(async_copy, FunctionCallNode)
+        assert async_copy.name == "cg::memcpy_async"
+        assert async_copy.args[:3] == ["block", "shared", "global"]
+        assert isinstance(async_copy.args[3], BinaryOpNode)
+        assert isinstance(async_copy.args[3].right, FunctionCallNode)
+        assert isinstance(async_copy.args[3].right.name, MemberAccessNode)
+        assert async_copy.args[3].right.name.object == "block"
+        assert async_copy.args[3].right.name.member == "size"
+
+        assert isinstance(wait, FunctionCallNode)
+        assert wait.name == "cg::wait"
+        assert wait.args == ["block"]
+
+        assert isinstance(wait_prior, FunctionCallNode)
+        assert wait_prior.name == "cooperative_groups::wait_prior<1>"
+        assert wait_prior.args == ["block"]
+
     def test_fixed_arrays_and_initializer_lists_parsing(self):
         """Test fixed arrays and brace initializer lists"""
         code = """

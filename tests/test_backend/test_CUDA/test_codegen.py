@@ -675,6 +675,39 @@ class TestCudaCodeGen:
         assert "cooperative_groups::this_grid" not in result
         assert "cooperative_groups::coalesced_threads" not in result
 
+    def test_cooperative_groups_async_copy_wait_emit_diagnostics(self):
+        """Test cooperative-groups async copy and wait stay explicit."""
+        code = """
+        namespace cg = cooperative_groups;
+
+        __global__ void async_copy(int* shared, const int* global) {
+            auto block = cg::this_thread_block();
+            cg::memcpy_async(block, shared, global, sizeof(int) * block.size());
+            cg::memcpy_async(cg::this_thread_block(), shared, global, 16);
+            cg::wait(block);
+            cooperative_groups::wait(cg::this_thread_block());
+            cooperative_groups::wait_prior<1>(block);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert result.count("cooperative_groups thread_block.memcpy_async") == 2
+        assert "cooperative_groups thread_block.wait not directly supported" in result
+        assert (
+            "cooperative_groups thread_block.wait_prior not directly supported"
+            in result
+        )
+        assert "cg::memcpy_async" not in result
+        assert "cooperative_groups::wait" not in result
+        assert "wait_prior<1>" not in result
+        assert "None" not in result
+
     def test_inverse_trig_builtins_convert_to_crossgl(self):
         """Test CUDA inverse trig functions convert back to CrossGL names."""
         code = """

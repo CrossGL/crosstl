@@ -335,12 +335,25 @@ MOJO_RESOURCE_TYPE_MAPPING = {
     "uimage3D": "UImage3D",
 }
 
-MOJO_HLSL_RW_TEXTURE_TYPE_MAPPING = {
+MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING = {
     "RWTexture1D": ("Image1D", "IImage1D", "UImage1D"),
     "RWTexture1DArray": ("Image1DArray", "IImage1DArray", "UImage1DArray"),
     "RWTexture2D": ("Image2D", "IImage2D", "UImage2D"),
     "RWTexture2DArray": ("Image2DArray", "IImage2DArray", "UImage2DArray"),
     "RWTexture3D": ("Image3D", "IImage3D", "UImage3D"),
+    "RasterizerOrderedTexture1D": ("Image1D", "IImage1D", "UImage1D"),
+    "RasterizerOrderedTexture1DArray": (
+        "Image1DArray",
+        "IImage1DArray",
+        "UImage1DArray",
+    ),
+    "RasterizerOrderedTexture2D": ("Image2D", "IImage2D", "UImage2D"),
+    "RasterizerOrderedTexture2DArray": (
+        "Image2DArray",
+        "IImage2DArray",
+        "UImage2DArray",
+    ),
+    "RasterizerOrderedTexture3D": ("Image3D", "IImage3D", "UImage3D"),
 }
 
 MOJO_RESOURCE_SAMPLE_COORDS = {
@@ -1194,7 +1207,7 @@ class MojoCodeGen:
 
     def resource_type_alias(self, type_name):
         type_name = self.type_name(type_name)
-        rw_alias = self.rw_texture_resource_alias(type_name)
+        rw_alias = self.writable_texture_resource_alias(type_name)
         if rw_alias is not None:
             return rw_alias
 
@@ -1207,7 +1220,7 @@ class MojoCodeGen:
             return None
 
         base_type, generic_args = generic
-        rw_alias = self.rw_texture_resource_alias(
+        rw_alias = self.writable_texture_resource_alias(
             base_type, generic_args[0] if generic_args else None
         )
         if rw_alias is not None:
@@ -1220,8 +1233,10 @@ class MojoCodeGen:
             return mapped_base_type
         return None
 
-    def rw_texture_resource_alias(self, base_type, element_type=None):
-        image_aliases = MOJO_HLSL_RW_TEXTURE_TYPE_MAPPING.get(self.type_name(base_type))
+    def writable_texture_resource_alias(self, base_type, element_type=None):
+        image_aliases = MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING.get(
+            self.type_name(base_type)
+        )
         if image_aliases is None:
             return None
 

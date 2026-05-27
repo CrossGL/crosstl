@@ -389,7 +389,7 @@
         },
         "vulkan": {
           "status": "partial",
-          "notes": "Registers RayQuery types and acceleration-structure resources as SPIR-V KHR objects; lowers TraceRayInline, Proceed, CandidateRayT, CommittedRayT, abort/terminate, generated/procedural intersection commits, non-opaque/confirm intersection commits, ray state getters for RayTMin and RayFlags, world ray vector getters, candidate/committed object ray vector getters, object/world transform matrix getters, and intersection metadata getters for type, primitive index, instance ID, instance custom index, shader-binding-table record offset, geometry index, barycentrics, and triangle front-face to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, TraceRay, acceleration-structure arrays, candidate AABB opacity, and triangle vertex positions remain incomplete.",
+          "notes": "Registers RayQuery types and acceleration-structure resources as SPIR-V KHR objects; lowers TraceRayInline, Proceed, CandidateRayT, CommittedRayT, abort/terminate, generated/procedural intersection commits, non-opaque/confirm intersection commits, ray state getters for RayTMin and RayFlags, world ray vector getters, candidate/committed object ray vector getters, object/world transform matrix getters, candidate AABB opacity, and intersection metadata getters for type, primitive index, instance ID, instance custom index, shader-binding-table record offset, geometry index, barycentrics, and triangle front-face to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, TraceRay, acceleration-structure arrays, and triangle vertex positions remain incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_proceed_and_intersection_t_emit_khr_instructions",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_parsed_ray_query_generic_type_lowers_to_khr_instructions",
@@ -406,6 +406,8 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_world_and_object_ray_getters_reject_arguments",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_transform_getters_emit_khr_instructions",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_transform_getters_reject_arguments",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_candidate_aabb_opaque_getter_emits_khr_instruction",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_candidate_aabb_opaque_getter_rejects_arguments",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
           ]
@@ -668,7 +670,7 @@
         "rust": {"status": "unknown"},
         "slang": {
           "status": "partial",
-          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, explicit-result structured-buffer atomics, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet.",
+          "notes": "Covers StructuredBuffer/RWStructuredBuffer declarations, AppendStructuredBuffer/ConsumeStructuredBuffer native method lowering, ByteAddressBuffer/RWByteAddressBuffer scalar and vector method lowering, fixed resource arrays, explicit and automatic Slang/Vulkan binding metadata, load/store/dimensions helper lowering, expression-form dimensions helpers, explicit-result and expression-valued structured-buffer atomics, access-kind diagnostics, and Slang vector alias mapping inside buffer element types. GLSL buffer-block round-trips are not implemented yet.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_structured_buffer_store_to_readonly_buffer_emits_slang_diagnostic",
@@ -1531,12 +1533,14 @@
         "hip": {"status": "unknown"},
         "mojo": {
           "status": "partial",
-          "notes": "Storage image load/store and size operations lower to compile-smoke Mojo placeholder helpers for float, signed, unsigned, and multisample images; HLSL RWTexture aliases and member Load/Store/GetDimensions lower to those helpers. Access qualifiers and native image memory semantics are incomplete.",
+          "notes": "Storage image load/store and size operations lower to compile-smoke Mojo placeholder helpers for float, signed, unsigned, and multisample images; HLSL RWTexture and RasterizerOrderedTexture aliases plus member Load/Store/GetDimensions lower to those helpers. Access qualifiers and native image memory semantics are incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_query_and_image_placeholders_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multisample_resource_placeholders_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rw_texture_aliases_emit_mojo_image_helpers",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rw_texture_aliases_compile_with_mojo"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rw_texture_aliases_compile_with_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rasterizer_ordered_texture_aliases_emit_mojo_image_helpers",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_hlsl_rasterizer_ordered_texture_aliases_compile_with_mojo"
           ]
         },
         "rust": {"status": "unknown"},
@@ -1782,9 +1786,10 @@
         },
         "cuda": {
           "status": "supported",
-          "notes": "Native CUDA barrier and cooperative-groups thread-block sync forms round-trip to CrossGL workgroup barriers, with unsupported non-workgroup cooperative scopes emitted as expression-safe diagnostics.",
+          "notes": "Native CUDA barrier and cooperative-groups thread-block sync forms round-trip to CrossGL workgroup barriers, with unsupported non-workgroup cooperative scopes and cooperative-groups async copy/wait calls emitted as expression-safe diagnostics.",
           "evidence": [
             "tests/test_backend/test_CUDA/test_codegen.py::def test_cooperative_groups_sync_factory_and_member_aliases_convert",
+            "tests/test_backend/test_CUDA/test_codegen.py::def test_cooperative_groups_async_copy_wait_emit_diagnostics",
             "tests/test_backend/test_CUDA/test_codegen.py::def test_unsupported_cooperative_group_rank_is_expression_safe"
           ]
         },
@@ -1907,10 +1912,11 @@
         },
         "rust": {
           "status": "supported",
-          "notes": "Rust lowering covers literal/wildcard arms, guarded arms, identifier bindings, struct fields, enum path and payload patterns, generic enum matches, match expressions, scoped case bodies, and non-Copy generic enum payload move/clone planning.",
+          "notes": "Rust lowering covers literal/wildcard arms, guarded arms, identifier bindings, struct fields, enum path and payload patterns, generic enum matches, struct-like enum variants, match expressions, scoped case bodies, and non-Copy generic enum payload move/clone planning.",
           "evidence": [
             "tests/test_translator/test_codegen/test_rust_codegen.py::def test_generated_rust_rich_match_patterns_smoke_compile_with_rustc",
-            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_non_copy_generic_enum_variant_returns_and_match_arms_compile"
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_non_copy_generic_enum_variant_returns_and_match_arms_compile",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_non_copy_generic_struct_like_enum_variants_and_guards_compile"
           ]
         },
         "slang": {"status": "partial"}

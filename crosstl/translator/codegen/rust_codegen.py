@@ -2910,8 +2910,22 @@ class RustCodeGen:
                 pattern.type_name,
                 subject_type,
             )
+            variant_name = self.match_pattern_variant_name_for_subject(
+                pattern,
+                subject_type,
+            )
+            variant_field_types = (
+                self.resolve_enum_variant_field_types(subject_type, variant_name)
+                if variant_name is not None
+                else {}
+            )
             for field_name, field_pattern in pattern.field_patterns.items():
-                field_type = self.resolve_struct_member_type(pattern_type, field_name)
+                field_type = variant_field_types.get(field_name)
+                if field_type is None:
+                    field_type = self.resolve_struct_member_type(
+                        pattern_type,
+                        field_name,
+                    )
                 if field_type is None:
                     field_type = self.resolve_struct_member_type(
                         pattern.type_name,
@@ -3618,7 +3632,7 @@ class RustCodeGen:
                 return_context=True,
             )
         if isinstance(expr, ConstructorNode):
-            return self.generate_return_constructor_expression(expr)
+            return self.generate_return_constructor_expression(expr, target_type)
         if isinstance(expr, FunctionCallNode):
             function_call = self.generate_return_function_call_expression(
                 expr,
@@ -3644,7 +3658,7 @@ class RustCodeGen:
                 return_context=True,
             )
         if isinstance(expr, ConstructorNode):
-            return self.generate_return_constructor_expression(expr)
+            return self.generate_return_constructor_expression(expr, target_type)
         if isinstance(expr, FunctionCallNode):
             function_call = self.generate_return_function_call_expression(
                 expr,
@@ -3725,12 +3739,33 @@ class RustCodeGen:
 
         return None
 
-    def generate_return_constructor_expression(self, expr):
-        type_name = self.convert_type_node_to_string(expr.constructor_type)
+    def generate_return_constructor_expression(self, expr, target_type=None):
+        type_name = self.normalize_turbofish_type_name(
+            self.convert_type_node_to_string(expr.constructor_type)
+        )
         rust_type = self.map_type(type_name)
 
         named_arguments = getattr(expr, "named_arguments", {}) or {}
         if named_arguments:
+            variant_info = self.enum_variant_struct_constructor_info(
+                type_name,
+                target_type,
+            )
+            if variant_info is not None:
+                enum_type, variant_name, field_types = variant_info
+                constructor_path = self.enum_variant_call_path(enum_type, variant_name)
+                argument_values = list(named_arguments.values())
+                move_counts = self.return_move_place_counts(argument_values)
+                fields = []
+                for name, value in named_arguments.items():
+                    field_value = self.generate_return_argument_with_type(
+                        value,
+                        field_types.get(name),
+                        move_counts,
+                    )
+                    fields.append(f"{name}: {field_value}")
+                return f"{constructor_path} {{ {', '.join(fields)} }}"
+
             constructor_path = self.rust_constructor_path(rust_type)
             argument_values = list(named_arguments.values())
             move_counts = self.return_move_place_counts(argument_values)
@@ -4368,11 +4403,26 @@ class RustCodeGen:
         return f"[{', '.join(elements)}]"
 
     def generate_constructor_expression(self, expr):
-        type_name = self.convert_type_node_to_string(expr.constructor_type)
+        type_name = self.normalize_turbofish_type_name(
+            self.convert_type_node_to_string(expr.constructor_type)
+        )
         rust_type = self.map_type(type_name)
 
         named_arguments = getattr(expr, "named_arguments", {}) or {}
         if named_arguments:
+            variant_info = self.enum_variant_struct_constructor_info(type_name)
+            if variant_info is not None:
+                enum_type, variant_name, field_types = variant_info
+                constructor_path = self.enum_variant_call_path(enum_type, variant_name)
+                fields = []
+                for name, value in named_arguments.items():
+                    field_value = self.generate_constructor_argument_with_type(
+                        value,
+                        field_types.get(name),
+                    )
+                    fields.append(f"{name}: {field_value}")
+                return f"{constructor_path} {{ {', '.join(fields)} }}"
+
             constructor_path = self.rust_constructor_path(rust_type)
             fields = []
             for name, value in named_arguments.items():
@@ -5298,6 +5348,62 @@ class RustCodeGen:
             self.substitute_type_parameters(payload_type, substitutions)
             for payload_type in payload_types
         ]
+
+    def resolve_enum_variant_field_types(self, enum_type, variant_name):
+        if enum_type is None or variant_name is None:
+            return {}
+
+        enum_type = self.normalize_turbofish_type_name(enum_type)
+        exact_variants = self.enum_variant_field_types.get(enum_type)
+        if exact_variants is not None:
+            return dict(exact_variants.get(variant_name, {}))
+
+        enum_base, generic_args = self.generic_type_parts(enum_type)
+        variant_fields = self.enum_variant_field_types.get(enum_base, {}).get(
+            variant_name,
+        )
+        if not variant_fields:
+            return {}
+
+        generic_params = self.enum_generic_params.get(
+            enum_base,
+            self.struct_generic_params.get(enum_base, []),
+        )
+        substitutions = dict(zip(generic_params, generic_args))
+        return {
+            field_name: self.substitute_type_parameters(field_type, substitutions)
+            for field_name, field_type in variant_fields.items()
+        }
+
+    def enum_variant_struct_constructor_info(self, type_name, target_type=None):
+        if not isinstance(type_name, str) or "::" not in type_name:
+            return None
+
+        enum_path, variant_name = self.split_variant_path(
+            self.normalize_turbofish_type_name(type_name)
+        )
+        if enum_path is None or variant_name is None:
+            return None
+
+        enum_type = enum_path
+        enum_base, enum_args = self.generic_type_parts(enum_type)
+        target_type = self.normalize_turbofish_type_name(target_type)
+        target_base, target_args = (
+            self.generic_type_parts(target_type) if target_type else (None, [])
+        )
+        if target_base == enum_base and target_args and not enum_args:
+            enum_type = target_type
+            enum_base, enum_args = self.generic_type_parts(enum_type)
+
+        variants = self.enum_variant_names.get(enum_base, [])
+        if variant_name not in variants:
+            return None
+
+        field_types = self.resolve_enum_variant_field_types(enum_type, variant_name)
+        if not field_types:
+            return None
+
+        return enum_type, variant_name, field_types
 
     def enum_variant_call_path(self, enum_type, variant_name):
         rust_type = self.map_type(enum_type)
@@ -6924,7 +7030,14 @@ class RustCodeGen:
         return None
 
     def constructor_result_type(self, expr):
-        type_name = self.convert_type_node_to_string(expr.constructor_type)
+        type_name = self.normalize_turbofish_type_name(
+            self.convert_type_node_to_string(expr.constructor_type)
+        )
+        variant_info = self.enum_variant_struct_constructor_info(type_name)
+        if variant_info is not None:
+            enum_type, _variant_name, _field_types = variant_info
+            return enum_type
+
         base_type, existing_args = self.generic_type_parts(type_name)
         if existing_args or base_type not in self.struct_generic_params:
             return type_name

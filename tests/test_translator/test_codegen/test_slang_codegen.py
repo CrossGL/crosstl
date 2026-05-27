@@ -4404,14 +4404,27 @@ def test_structured_buffer_explicit_result_atomics_emit_slang_interlocked():
         RWStructuredBuffer<uint> attrReadOnlyCounters @access(read) @binding(27);
         RWStructuredBuffer<float> floatCounters @binding(28);
 
+        uint fetchOld(uint3 tid) {
+            return atomicExchange(counters[tid.x], 9u);
+        }
+
         compute {
             void main(uint3 tid @gl_GlobalInvocationID) {
                 uint oldValue;
                 int oldSigned;
+                uint cgl_atomicAdd_original = 0u;
                 atomicAdd(counters[tid.x], 1u, oldValue);
                 atomicCompareExchange(counters[tid.x], 2u, 3u, oldValue);
                 atomicMax(signedCounters[tid.x], -1, oldSigned);
-                uint missingOutput = atomicAdd(counters[tid.x], 1u);
+                uint returnedOld = atomicAdd(counters[tid.x], 1u);
+                uint returnedCompare = atomicCompareExchange(counters[tid.x], 2u, 3u);
+                uint combined = atomicOr(counters[tid.x], 4u) + 1u;
+                int returnedSigned = atomicMin(signedCounters[tid.x], -4);
+                oldValue = atomicExchange(counters[tid.x], 7u);
+                atomicXor(counters[tid.x], 8u);
+                if (atomicAnd(counters[tid.x], 1u) != 0u) {
+                    oldValue = fetchOld(tid);
+                }
                 uint readOnlyBlocked = atomicAdd(readOnlyCounters[tid.x], 1u, oldValue);
                 uint attrReadOnlyBlocked = atomicAdd(
                     attrReadOnlyCounters[tid.x],
@@ -4448,10 +4461,59 @@ def test_structured_buffer_explicit_result_atomics_emit_slang_interlocked():
         in generated_code
     )
     assert "InterlockedMax(signedCounters[tid.x], -1, oldSigned);" in generated_code
+    assert "uint fetchOld(uint3 tid)" in generated_code
+    assert "uint cgl_atomicExchange_original;" in generated_code
     assert (
-        "uint missingOutput = /* unsupported Slang structured buffer: atomicAdd "
-        "requires target, value, and original output */ 0u;" in generated_code
+        "InterlockedExchange(counters[tid.x], 9u, "
+        "cgl_atomicExchange_original);" in generated_code
     )
+    assert "return cgl_atomicExchange_original;" in generated_code
+    assert "uint cgl_atomicAdd_original = 0u;" in generated_code
+    assert "uint cgl_atomicAdd_original_1;" in generated_code
+    assert (
+        "InterlockedAdd(counters[tid.x], 1u, cgl_atomicAdd_original_1);"
+        in generated_code
+    )
+    assert "uint returnedOld = cgl_atomicAdd_original_1;" in generated_code
+    assert "uint cgl_atomicCompareExchange_original;" in generated_code
+    assert (
+        "InterlockedCompareExchange(counters[tid.x], 2u, 3u, "
+        "cgl_atomicCompareExchange_original);" in generated_code
+    )
+    assert (
+        "uint returnedCompare = cgl_atomicCompareExchange_original;" in generated_code
+    )
+    assert "uint cgl_atomicOr_original;" in generated_code
+    assert (
+        "InterlockedOr(counters[tid.x], 4u, cgl_atomicOr_original);" in generated_code
+    )
+    assert "uint combined = cgl_atomicOr_original + 1u;" in generated_code
+    assert "int cgl_atomicMin_original;" in generated_code
+    assert (
+        "InterlockedMin(signedCounters[tid.x], -4, cgl_atomicMin_original);"
+        in generated_code
+    )
+    assert "int returnedSigned = cgl_atomicMin_original;" in generated_code
+    assert generated_code.count("uint cgl_atomicExchange_original;") == 2
+    assert "uint cgl_atomicExchange_original_1;" not in generated_code
+    assert (
+        "InterlockedExchange(counters[tid.x], 7u, "
+        "cgl_atomicExchange_original);" in generated_code
+    )
+    assert "oldValue = cgl_atomicExchange_original;" in generated_code
+    assert "uint cgl_atomicXor_original;" in generated_code
+    assert (
+        "InterlockedXor(counters[tid.x], 8u, cgl_atomicXor_original);" in generated_code
+    )
+    assert "cgl_atomicXor_original;" not in [
+        line.strip() for line in generated_code.splitlines()
+    ]
+    assert "uint cgl_atomicAnd_original;" in generated_code
+    assert (
+        "InterlockedAnd(counters[tid.x], 1u, cgl_atomicAnd_original);" in generated_code
+    )
+    assert "if (cgl_atomicAnd_original != 0u)" in generated_code
+    assert "oldValue = fetchOld(tid);" in generated_code
     assert (
         "uint readOnlyBlocked = /* unsupported Slang structured buffer: "
         "atomicAdd requires RWStructuredBuffer resource */ 0u;" in generated_code
@@ -4469,6 +4531,11 @@ def test_structured_buffer_explicit_result_atomics_emit_slang_interlocked():
     assert "atomicAdd(counters" not in generated_code
     assert "atomicCompareExchange(counters" not in generated_code
     assert "atomicMax(signedCounters" not in generated_code
+    assert "atomicMin(signedCounters" not in generated_code
+    assert "atomicOr(counters" not in generated_code
+    assert "atomicExchange(counters" not in generated_code
+    assert "atomicXor(counters" not in generated_code
+    assert "atomicAnd(counters" not in generated_code
 
 
 def test_append_consume_structured_buffers_emit_slang_methods_and_uav_bindings():

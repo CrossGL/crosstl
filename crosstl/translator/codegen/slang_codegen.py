@@ -128,6 +128,9 @@ class SlangCodeGen:
         self.identifier_aliases = {}
         self.slang_resource_register_cursors = {}
         self.slang_used_resource_registers = {}
+        self.expression_prelude_stack = []
+        self.expression_prelude_result_stack = []
+        self.expression_temp_names = set()
         self.current_hull_output_rewrite = None
         self._generating = False
         self.semantic_map = {
@@ -202,6 +205,9 @@ class SlangCodeGen:
             self.identifier_aliases = {}
             self.slang_resource_register_cursors = {}
             self.slang_used_resource_registers = {}
+            self.expression_prelude_stack = []
+            self.expression_prelude_result_stack = []
+            self.expression_temp_names = set()
             self.reserve_explicit_slang_resource_declarations(ast)
 
         if isinstance(ast, list):
@@ -2111,6 +2117,8 @@ class SlangCodeGen:
         saved_shader_type = self.current_shader_type
         saved_identifier_aliases = self.identifier_aliases.copy()
         saved_hull_output_rewrite = self.current_hull_output_rewrite
+        saved_expression_temp_names = self.expression_temp_names
+        self.expression_temp_names = set()
         if hasattr(node, "return_type"):
             ret_type_name = self.convert_type_node_to_string(node.return_type)
             ret_type = self.convert_type(ret_type_name)
@@ -2307,6 +2315,7 @@ class SlangCodeGen:
         self.current_shader_type = saved_shader_type
         self.identifier_aliases = saved_identifier_aliases
         self.current_hull_output_rewrite = saved_hull_output_rewrite
+        self.expression_temp_names = saved_expression_temp_names
         return result
 
     def generate_compute_numthreads(self, execution_config=None):
@@ -3635,32 +3644,58 @@ class SlangCodeGen:
             for line in lines
         )
 
+    def expression_prelude_active(self):
+        return bool(self.expression_prelude_stack)
+
+    def add_expression_prelude(self, lines, result_name=None):
+        if not self.expression_prelude_stack:
+            return
+        self.expression_prelude_stack[-1].extend(lines)
+        if result_name:
+            self.expression_prelude_result_stack[-1].add(result_name)
+
+    def generate_expression_with_prelude(self, expr, expected_type=None):
+        self.expression_prelude_stack.append([])
+        self.expression_prelude_result_stack.append(set())
+        try:
+            if expected_type is None:
+                value = self.generate_expression(expr)
+            else:
+                value = self.generate_expression_with_expected(expr, expected_type)
+            prelude = self.expression_prelude_stack[-1]
+            result_names = self.expression_prelude_result_stack[-1]
+            return prelude, result_names, value
+        finally:
+            self.expression_prelude_stack.pop()
+            self.expression_prelude_result_stack.pop()
+
+    def statement_with_prelude(self, prelude, statement):
+        if not prelude:
+            return statement
+        statements = list(prelude)
+        if statement:
+            statements.append(statement)
+        return "\n".join(statements)
+
     def generate_statement(self, node):
         """Render a single CrossGL statement as Slang code."""
         if isinstance(node, ReturnNode):
             if node.value is None:
                 return "return;"
-            return (
-                "return "
-                f"{self.generate_expression_with_expected(node.value, self.current_function_return_type)};"
+            prelude, _results, value = self.generate_expression_with_prelude(
+                node.value, self.current_function_return_type
             )
+            return self.statement_with_prelude(prelude, f"return {value};")
         elif isinstance(node, AssignmentNode):
-            return self.generate_assignment(node) + ";"
+            return self.generate_assignment_statement(node)
         elif isinstance(node, ExpressionStatementNode):
-            return self.generate_expression(node.expression) + ";"
+            prelude, result_names, expr = self.generate_expression_with_prelude(
+                node.expression
+            )
+            statement = "" if prelude and expr in result_names else f"{expr};"
+            return self.statement_with_prelude(prelude, statement)
         elif isinstance(node, VariableNode):
-            initial_value = getattr(node, "initial_value", getattr(node, "value", None))
-            var_type = self.variable_declaration_type(node, initial_value)
-            self.register_variable_type(node.name, var_type, node)
-            declaration = self.format_declaration(var_type, node.name, node)
-            declaration = self.slang_declaration_qualifier_prefix(node) + declaration
-            if initial_value is not None:
-                initial_expr = self.generate_expression_with_expected(
-                    initial_value,
-                    self.initializer_expected_type(var_type),
-                )
-                return f"{declaration} = {initial_expr};"
-            return f"{declaration};"
+            return self.generate_variable_statement(node)
         elif isinstance(node, IfNode):
             return self.generate_if(node)
         elif isinstance(node, ForNode):
@@ -3680,7 +3715,25 @@ class SlangCodeGen:
         elif isinstance(node, ContinueNode):
             return "continue;"
         else:
-            return self.generate_expression(node) + ";"
+            prelude, result_names, expr = self.generate_expression_with_prelude(node)
+            statement = "" if prelude and expr in result_names else f"{expr};"
+            return self.statement_with_prelude(prelude, statement)
+
+    def generate_variable_statement(self, node):
+        initial_value = getattr(node, "initial_value", getattr(node, "value", None))
+        var_type = self.variable_declaration_type(node, initial_value)
+        self.register_variable_type(node.name, var_type, node)
+        declaration = self.format_declaration(var_type, node.name, node)
+        declaration = self.slang_declaration_qualifier_prefix(node) + declaration
+        if initial_value is not None:
+            prelude, _results, initial_expr = self.generate_expression_with_prelude(
+                initial_value,
+                self.initializer_expected_type(var_type),
+            )
+            return self.statement_with_prelude(
+                prelude, f"{declaration} = {initial_expr};"
+            )
+        return f"{declaration};"
 
     def generate_assignment(self, node):
         left = self.slang_assignment_target_alias(
@@ -3692,6 +3745,37 @@ class SlangCodeGen:
         if node.operator == "%=" and self.modulo_requires_fmod(node.left, node.right):
             return f"{left} = fmod({left}, {right})"
         return f"{left} {node.operator} {right}"
+
+    def generate_assignment_statement(self, node):
+        left = self.slang_assignment_target_alias(
+            node.left
+        ) or self.generate_expression(node.left)
+        prelude, _results, right = self.generate_expression_with_prelude(
+            node.right, self.expression_result_type(node.left)
+        )
+        if node.operator == "%=" and self.modulo_requires_fmod(node.left, node.right):
+            statement = f"{left} = fmod({left}, {right});"
+        else:
+            statement = f"{left} {node.operator} {right};"
+        return self.statement_with_prelude(prelude, statement)
+
+    def generate_for_header_statement(self, node):
+        if isinstance(node, AssignmentNode):
+            return self.generate_assignment(node)
+        if isinstance(node, VariableNode):
+            initial_value = getattr(node, "initial_value", getattr(node, "value", None))
+            var_type = self.variable_declaration_type(node, initial_value)
+            self.register_variable_type(node.name, var_type, node)
+            declaration = self.format_declaration(var_type, node.name, node)
+            declaration = self.slang_declaration_qualifier_prefix(node) + declaration
+            if initial_value is not None:
+                initial_expr = self.generate_expression_with_expected(
+                    initial_value,
+                    self.initializer_expected_type(var_type),
+                )
+                return f"{declaration} = {initial_expr}"
+            return declaration
+        return self.generate_expression(node)
 
     def slang_assignment_target_alias(self, target):
         hull_output_alias = self.slang_hull_output_array_alias(target)
@@ -3955,6 +4039,17 @@ class SlangCodeGen:
                 return self.slang_ray_query_method_return_type(operation)
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
+            if (
+                isinstance(func_name, str)
+                and func_name in self.structured_buffer_atomic_operations()
+                and getattr(expr, "args", None)
+            ):
+                buffer_type = self.structured_buffer_atomic_target_resource_type(
+                    expr.args[0]
+                )
+                if self.is_structured_buffer_resource_type(buffer_type):
+                    element_type = self.structured_buffer_element_type(buffer_type)
+                    return element_type if element_type in {"int", "uint"} else "uint"
             if func_name == "imageLoad" and getattr(expr, "args", None):
                 return self.image_resource_element_type(
                     self.image_resource_type(expr.args[0])
@@ -4356,7 +4451,7 @@ class SlangCodeGen:
         return self.generate_expression(index)
 
     def generate_if(self, node):
-        condition = self.generate_expression(
+        prelude, _results, condition = self.generate_expression_with_prelude(
             getattr(node, "condition", getattr(node, "if_condition", None))
         )
         result = f"if ({condition})\n{{\n"
@@ -4377,12 +4472,12 @@ class SlangCodeGen:
             self.indent_level -= 1
             result += self.indent() + "}"
 
-        return result
+        return self.statement_with_prelude(prelude, result)
 
     def generate_for(self, node):
-        init = self.generate_statement(node.init).rstrip(";") if node.init else ""
+        init = self.generate_for_header_statement(node.init) if node.init else ""
         condition = self.generate_expression(node.condition) if node.condition else ""
-        update = self.generate_statement(node.update).rstrip(";") if node.update else ""
+        update = self.generate_for_header_statement(node.update) if node.update else ""
 
         result = f"for ({init}; {condition}; {update})\n{{\n"
 
@@ -4445,7 +4540,9 @@ class SlangCodeGen:
         return result
 
     def generate_switch(self, node):
-        expression = self.generate_expression(node.expression)
+        prelude, _results, expression = self.generate_expression_with_prelude(
+            node.expression
+        )
         result = f"switch ({expression})\n{{\n"
 
         self.indent_level += 1
@@ -4466,10 +4563,12 @@ class SlangCodeGen:
         self.indent_level -= 1
 
         result += self.indent() + "}"
-        return result
+        return self.statement_with_prelude(prelude, result)
 
     def generate_match(self, node):
-        expression = self.generate_expression(getattr(node, "expression", None))
+        prelude, _results, expression = self.generate_expression_with_prelude(
+            getattr(node, "expression", None)
+        )
         result = f"switch ({expression})\n{{\n"
 
         arms = getattr(node, "arms", []) or []
@@ -4510,7 +4609,7 @@ class SlangCodeGen:
         self.indent_level -= 1
 
         result += self.indent() + "}"
-        return result
+        return self.statement_with_prelude(prelude, result)
 
     def is_supported_match_arm(self, arm):
         if getattr(arm, "guard", None) is not None:
@@ -5131,6 +5230,43 @@ class SlangCodeGen:
             return self.structured_buffer_atomic_target_resource_type(object_expr)
         return self.structured_buffer_resource_type(target)
 
+    def unique_expression_temp_name(self, base_name):
+        candidate = base_name
+        suffix = 1
+        used_names = set(self.user_symbol_names) | set(self.expression_temp_names)
+        used_names.update(name for name in self.variable_types if name)
+        while candidate in used_names:
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+        self.expression_temp_names.add(candidate)
+        return candidate
+
+    def structured_buffer_atomic_value_expression(
+        self, func_name, intrinsic, target, value_args, element_type
+    ):
+        if not self.expression_prelude_active():
+            return self.unsupported_structured_buffer_call(
+                func_name,
+                "requires target, value, and original output outside "
+                "statement expression context",
+                element_type,
+            )
+
+        original_name = self.unique_expression_temp_name(f"cgl_{func_name}_original")
+        target_expr = self.generate_expression(target)
+        value_exprs = [
+            self.generate_expression_with_expected(value_arg, element_type)
+            for value_arg in value_args
+        ]
+        self.add_expression_prelude(
+            [
+                f"{element_type} {original_name};",
+                f"{intrinsic}({', '.join([target_expr, *value_exprs, original_name])});",
+            ],
+            result_name=original_name,
+        )
+        return original_name
+
     def structured_buffer_atomic_expression(self, func_name, args):
         operation = self.structured_buffer_atomic_operations().get(func_name)
         if operation is None or not args:
@@ -5164,8 +5300,13 @@ class SlangCodeGen:
             )
 
         intrinsic, value_arg_count = operation
-        required_args = 1 + value_arg_count + 1
-        if len(args) != required_args:
+        expression_args = 1 + value_arg_count
+        explicit_result_args = expression_args + 1
+        if len(args) == expression_args:
+            return self.structured_buffer_atomic_value_expression(
+                func_name, intrinsic, target, args[1:], element_type
+            )
+        if len(args) != explicit_result_args:
             required_shape = (
                 "target, compare, value, and original output"
                 if value_arg_count == 2

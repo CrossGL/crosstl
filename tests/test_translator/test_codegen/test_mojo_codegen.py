@@ -1575,6 +1575,140 @@ def test_hlsl_rw_texture_aliases_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_hlsl_rasterizer_ordered_texture_aliases_emit_mojo_image_helpers():
+    code = """
+    RasterizerOrderedTexture1D<float> row;
+    RasterizerOrderedTexture1DArray<int> signedRows;
+    RasterizerOrderedTexture2D<uint> counters : register(u0, space3);
+    RasterizerOrderedTexture2DArray<float4> layers;
+    RasterizerOrderedTexture3D<int> volume;
+
+    float readRow(int pixel) {
+        return row.Load(pixel);
+    }
+    void writeRow(int pixel, float value) {
+        row.Store(pixel, value);
+    }
+    int readSigned(int2 pixelLayer) {
+        return signedRows.Load(pixelLayer);
+    }
+    void writeSigned(int2 pixelLayer, int value) {
+        signedRows.Store(pixelLayer, value);
+    }
+    uint readCounter(int2 pixel) {
+        return counters.Load(pixel);
+    }
+    void writeCounter(int2 pixel, uint value) {
+        counters.Store(pixel, value);
+    }
+    float4 readLayer(int4 pixelLayer) {
+        return layers.Load(pixelLayer);
+    }
+    void writeLayer(int4 pixelLayer, float4 value) {
+        layers.Store(pixelLayer, value);
+    }
+    int readVolume(int4 voxel) {
+        return volume.Load(voxel);
+    }
+    void writeVolume(int4 voxel, int value) {
+        volume.Store(voxel, value);
+    }
+    int2 queryCounters() {
+        return counters.GetDimensions();
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Image1D:" in generated_code
+    assert "struct IImage1DArray:" in generated_code
+    assert "struct UImage2D:" in generated_code
+    assert "struct Image2DArray:" in generated_code
+    assert "struct IImage3D:" in generated_code
+    assert "var row: Image1D = Image1D()" in generated_code
+    assert "var signedRows: IImage1DArray = IImage1DArray()" in generated_code
+    assert "var counters: UImage2D = UImage2D()" in generated_code
+    assert "var layers: Image2DArray = Image2DArray()" in generated_code
+    assert "var volume: IImage3D = IImage3D()" in generated_code
+    assert (
+        "# CrossGL resource metadata: name=counters kind=image set=3 "
+        "binding=0 binding_source=explicit register=u0" in generated_code
+    )
+    assert "return image_load(row, pixel)" in generated_code
+    assert "image_store(row, pixel, value)" in generated_code
+    assert "return image_load(signedRows, pixelLayer)" in generated_code
+    assert "image_store(signedRows, pixelLayer, value)" in generated_code
+    assert "return image_load(counters, pixel)" in generated_code
+    assert "image_store(counters, pixel, value)" in generated_code
+    assert "return image_load(layers, pixelLayer)" in generated_code
+    assert "image_store(layers, pixelLayer, value)" in generated_code
+    assert "return image_load(volume, voxel)" in generated_code
+    assert "image_store(volume, voxel, value)" in generated_code
+    assert "return image_size(counters)" in generated_code
+    assert "RasterizerOrderedTexture" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+    assert ".GetDimensions(" not in generated_code
+
+
+def test_hlsl_rasterizer_ordered_texture_aliases_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    RasterizerOrderedTexture1D<float> row;
+    RasterizerOrderedTexture1DArray<int> signedRows;
+    RasterizerOrderedTexture2D<uint> counters : register(u0, space3);
+    RasterizerOrderedTexture2DArray<float4> layers;
+    RasterizerOrderedTexture3D<int> volume;
+
+    float readRow(int pixel) {
+        return row.Load(pixel);
+    }
+    void writeRow(int pixel, float value) {
+        row.Store(pixel, value);
+    }
+    int readSigned(int2 pixelLayer) {
+        return signedRows.Load(pixelLayer);
+    }
+    void writeSigned(int2 pixelLayer, int value) {
+        signedRows.Store(pixelLayer, value);
+    }
+    uint readCounter(int2 pixel) {
+        return counters.Load(pixel);
+    }
+    void writeCounter(int2 pixel, uint value) {
+        counters.Store(pixel, value);
+    }
+    float4 readLayer(int4 pixelLayer) {
+        return layers.Load(pixelLayer);
+    }
+    void writeLayer(int4 pixelLayer, float4 value) {
+        layers.Store(pixelLayer, value);
+    }
+    int readVolume(int4 voxel) {
+        return volume.Load(voxel);
+    }
+    void writeVolume(int4 voxel, int value) {
+        volume.Store(voxel, value);
+    }
+    int2 queryCounters() {
+        return counters.GetDimensions();
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "hlsl_rasterizer_ordered_texture_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     code = """
     sampler2D colorMap;
