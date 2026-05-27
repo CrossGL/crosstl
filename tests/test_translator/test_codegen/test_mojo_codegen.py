@@ -3186,6 +3186,189 @@ def test_struct_resource_field_buffer_access_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_nested_struct_resource_array_containers_preserve_mojo_placeholders():
+    code = """
+    struct ResourceSet {
+        readonly RWStructuredBuffer<int> inputValues[2];
+        RWStructuredBuffer<int> outputValues[2];
+        RWByteAddressBuffer rawBuffers[2];
+    };
+
+    struct ResourceBundle {
+        ResourceSet resources;
+    };
+
+    ResourceBundle bundle;
+    ResourceBundle bundles[2];
+
+    int readNested(uint outer, int slot, uint index) {
+        return bundles[outer].resources.inputValues[slot].Load(index);
+    }
+
+    void writeNested(int slot, uint index, int value, uint offset, uint4 data) {
+        bundle.resources.outputValues[slot].Store(index, value);
+        bundle.resources.rawBuffers[slot].Store4(offset, data);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct ResourceSet:" in generated_code
+    assert "var inputValues: InlineArray[RWStructuredBuffer[Int32], 2]" in (
+        generated_code
+    )
+    assert "var outputValues: InlineArray[RWStructuredBuffer[Int32], 2]" in (
+        generated_code
+    )
+    assert "var rawBuffers: InlineArray[RWByteAddressBuffer, 2]" in generated_code
+    assert "struct ResourceBundle:" in generated_code
+    assert "var resources: ResourceSet" in generated_code
+    assert "var bundle = ResourceBundle(ResourceSet(" in generated_code
+    assert "var bundles = InlineArray[ResourceBundle, 2]" in generated_code
+    assert (
+        "buffer_load(bundles[int(outer)].resources.inputValues[int(slot)], index)"
+        in generated_code
+    )
+    assert (
+        "buffer_store(bundle.resources.outputValues[int(slot)], index, value)"
+        in generated_code
+    )
+    assert (
+        "buffer_store4(bundle.resources.rawBuffers[int(slot)], offset, data)"
+        in generated_code
+    )
+    assert (
+        "fn buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "fn buffer_store(buffer: RWStructuredBuffer[Int32], "
+        "index: UInt32, value: Int32):" in generated_code
+    )
+    assert (
+        "fn buffer_store4(buffer: RWByteAddressBuffer, "
+        "index: UInt32, value: SIMD[DType.uint32, 4]):" in generated_code
+    )
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+    assert ".Store4(" not in generated_code
+    assert "RWStructuredBuffer<" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            struct Resources {
+                writeonly RWStructuredBuffer<int> values[2];
+            };
+            struct Bundle {
+                Resources resources;
+            };
+            int invalidRead(Bundle bundle, int slot, uint index) {
+                return bundle.resources.values[slot].Load(index);
+            }
+            """,
+            r"Load.*bundle\.resources\.values.*writeonly",
+        ),
+        (
+            """
+            struct Resources {
+                readonly RWStructuredBuffer<int> values[2];
+            };
+            struct Bundle {
+                Resources resources;
+            };
+            void invalidStore(Bundle bundle, int slot, uint index, int value) {
+                bundle.resources.values[slot].Store(index, value);
+            }
+            """,
+            r"Store.*bundle\.resources\.values.*readonly",
+        ),
+        (
+            """
+            struct Resources {
+                readonly RWByteAddressBuffer rawBuffers[2];
+            };
+            struct Bundle {
+                Resources resources;
+            };
+            void invalidRawStore(
+                Bundle bundles[2],
+                uint outer,
+                int slot,
+                uint offset,
+                uint4 value
+            ) {
+                bundles[outer].resources.rawBuffers[slot].Store4(offset, value);
+            }
+            """,
+            r"Store4.*bundles\.resources\.rawBuffers.*readonly",
+        ),
+        (
+            """
+            struct Resources {
+                writeonly RWByteAddressBuffer rawBuffers[2];
+            };
+            struct Bundle {
+                Resources resources;
+            };
+            uint invalidRawRead(Bundle bundle, int slot, uint offset) {
+                return buffer_load(bundle.resources.rawBuffers[slot], offset);
+            }
+            """,
+            r"buffer_load.*bundle\.resources\.rawBuffers.*writeonly",
+        ),
+    ],
+)
+def test_nested_struct_resource_array_access_qualifiers_apply_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_nested_struct_resource_array_containers_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct ResourceSet {
+        readonly RWStructuredBuffer<int> inputValues[2];
+        RWStructuredBuffer<int> outputValues[2];
+        RWByteAddressBuffer rawBuffers[2];
+    };
+
+    struct ResourceBundle {
+        ResourceSet resources;
+    };
+
+    ResourceBundle bundle;
+    ResourceBundle bundles[2];
+
+    int readNested(uint outer, int slot, uint index) {
+        return bundles[outer].resources.inputValues[slot].Load(index);
+    }
+
+    void writeNested(int slot, uint index, int value, uint offset, uint4 data) {
+        bundle.resources.outputValues[slot].Store(index, value);
+        bundle.resources.rawBuffers[slot].Store4(offset, data);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "nested_struct_resource_array_containers.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_glsl_buffer_block_metadata_comments_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
