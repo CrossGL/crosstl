@@ -1275,6 +1275,35 @@ class TestCudaCodeGen:
         assert "cudaGetTextureObjectTextureDesc(" not in result
         assert "cudaGetTextureObjectResourceViewDesc(" not in result
 
+    def test_cuda_surface_object_descriptor_query_conversion(self):
+        """Test CUDA surface-object descriptor queries emit metadata comments."""
+        code = """
+        void querySurfaceObject(cudaSurfaceObject_t surfaceObj) {
+            cudaResourceDesc resourceDesc;
+            cudaGetSurfaceObjectResourceDesc(&resourceDesc, surfaceObj);
+            cudaError_t err = cudaGetSurfaceObjectResourceDesc(
+                &resourceDesc,
+                surfaceObj
+            );
+            err = cudaGetSurfaceObjectResourceDesc(&resourceDesc, surfaceObj);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA surface object resource descriptor query: "
+            "surfaceObj, output: resourceDesc"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        assert "cudaGetSurfaceObjectResourceDesc(" not in result
+
     def test_cuda_runtime_event_api_conversion(self):
         """Test CUDA stream and event API calls emit metadata comments"""
         code = """

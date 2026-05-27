@@ -708,6 +708,13 @@ class CudaToCrossGLConverter:
                     f"// CUDA texture object {descriptor_kind} descriptor query: "
                     f"{args[1]}, output: {output}"
                 ]
+        elif name == "cudaGetSurfaceObjectResourceDesc":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA surface object resource descriptor query: "
+                    f"{args[1]}, output: {output}"
+                ]
 
         return None
 

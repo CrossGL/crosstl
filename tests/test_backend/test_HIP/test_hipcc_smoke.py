@@ -777,6 +777,87 @@ def test_native_hip_texture_object_descriptor_queries_parse_and_compile_if_avail
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 
 
+def test_native_hip_resource_view_descriptor_edges_parse_and_compile_if_available(
+    tmp_path,
+):
+    """Smoke HIP resource-view descriptor edge fields for texture objects."""
+    hip_code = """
+    #include <hip/hip_runtime.h>
+
+    void texture_resource_view_descriptor_edges(
+        hipMipmappedArray_t mipmapped_array
+    ) {
+        hipTextureObject_t tex = 0;
+        hipResourceDesc resource_desc = {0};
+        hipTextureDesc texture_desc = {0};
+        hipResourceViewDesc view_desc = {0};
+        hipResourceViewDesc queried_view_desc;
+
+        resource_desc.resType = hipResourceTypeMipmappedArray;
+        resource_desc.res.mipmap.mipmap = mipmapped_array;
+        texture_desc.addressMode[0] = hipAddressModeClamp;
+        texture_desc.addressMode[1] = hipAddressModeBorder;
+        texture_desc.filterMode = hipFilterModeLinear;
+        texture_desc.normalizedCoords = 1;
+        view_desc.format = hipResViewFormatFloat4;
+        view_desc.width = 128;
+        view_desc.height = 64;
+        view_desc.depth = 1;
+        view_desc.firstMipmapLevel = 1;
+        view_desc.lastMipmapLevel = 3;
+        view_desc.firstLayer = 2;
+        view_desc.lastLayer = 5;
+
+        hipCreateTextureObject(&tex, &resource_desc, &texture_desc, &view_desc);
+        hipGetTextureObjectResourceViewDesc(&queried_view_desc, tex);
+        hipDestroyTextureObject(tex);
+    }
+    """
+
+    crossgl = convert_native_hip_to_crossgl(hip_code)
+
+    expected_fragments = (
+        "// Function: texture_resource_view_descriptor_edges",
+        "void texture_resource_view_descriptor_edges(hipMipmappedArray_t mipmapped_array)",
+        "var tex: sampler = 0;",
+        "var resource_desc: hipResourceDesc = {0};",
+        "var texture_desc: hipTextureDesc = {0};",
+        "var view_desc: hipResourceViewDesc = {0};",
+        "var queried_view_desc: hipResourceViewDesc;",
+        "resource_desc.resType = hipResourceTypeMipmappedArray;",
+        "resource_desc.res.mipmap.mipmap = mipmapped_array;",
+        "texture_desc.addressMode[0] = hipAddressModeClamp;",
+        "texture_desc.addressMode[1] = hipAddressModeBorder;",
+        "texture_desc.filterMode = hipFilterModeLinear;",
+        "texture_desc.normalizedCoords = 1;",
+        "view_desc.format = hipResViewFormatFloat4;",
+        "view_desc.width = 128;",
+        "view_desc.height = 64;",
+        "view_desc.depth = 1;",
+        "view_desc.firstMipmapLevel = 1;",
+        "view_desc.lastMipmapLevel = 3;",
+        "view_desc.firstLayer = 2;",
+        "view_desc.lastLayer = 5;",
+        "// HIP texture object create: tex, resource: (&resource_desc), "
+        "texture desc: (&texture_desc), resource view: (&view_desc)",
+        "// HIP texture object get resource view desc: output: queried_view_desc, "
+        "texture: tex",
+        "// HIP texture object destroy: tex",
+    )
+    for expected in expected_fragments:
+        assert expected in crossgl
+
+    raw_calls = (
+        "hipCreateTextureObject",
+        "hipGetTextureObjectResourceViewDesc",
+        "hipDestroyTextureObject",
+    )
+    for raw_call in raw_calls:
+        assert f"{raw_call}(" not in crossgl
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+
 def test_native_hip_memory_lifecycle_parses_and_compiles_if_available(tmp_path):
     """Smoke native HIP allocation, memset, copy, and free APIs."""
     hip_code = """
