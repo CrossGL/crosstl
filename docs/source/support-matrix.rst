@@ -26,7 +26,7 @@ implicitly supported.
    "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "732", "146", "GLSL 4.60 specification; OpenGL registry"
    "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "502", "367", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "397", "12", "SPIR-V unified specification; Khronos SPIR-V registry"
-   "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "289", "52", "CUDA C++ programming guide"
+   "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "291", "54", "CUDA C++ programming guide"
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "303", "11", "ROCm HIP documentation"
    "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "309", "33", "Mojo manual"
    "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "498", "35", "Rust reference"
@@ -39,7 +39,7 @@ implicitly supported.
    "OpenGL / GLSL", "38", "4", "0", "0", "1", "0"
    "Metal", "35", "5", "0", "0", "3", "0"
    "Vulkan SPIR-V", "17", "17", "1", "0", "0", "8"
-   "CUDA", "11", "11", "0", "0", "3", "18"
+   "CUDA", "11", "12", "0", "0", "3", "17"
    "HIP", "10", "12", "0", "0", "3", "18"
    "Mojo", "10", "27", "0", "1", "5", "0"
    "Rust", "11", "6", "0", "0", "0", "26"
@@ -96,7 +96,7 @@ Each category below uses the status codes from the legend.
 
    "Native source to CrossGL", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Native lexer coverage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Native preprocessor handling", "Y", "Y", "Y", "D", "?", "?", "U", "?", "P"
+   "Native preprocessor handling", "Y", "Y", "Y", "D", "P", "?", "U", "?", "P"
 
 .. csv-table:: stages
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
@@ -175,7 +175,7 @@ need an audit before implementation work can be scoped accurately.
    :header: "Backend", "Category", "Feature", "Status", "Notes"
 
    "Vulkan SPIR-V", "source", "Native preprocessor handling", "diagnostic", "Mesh/task IR operation nodes emit deterministic unsupported diagnostics with type-correct fallback values. Real SPIR-V mesh/task stage entry-point and payload lowering is not implemented yet."
-   "CUDA", "source", "Native preprocessor handling", "unknown", ""
+   "CUDA", "source", "Native preprocessor handling", "partial", "Plain 2D textureGather lowers to CUDA tex2Dgather with component selection and explicit-sampler overloads; native tex2Dgather imports back to CrossGL textureGather. Array, cube, offset, shadow, multisample, and sparse-residency gather forms emit deterministic diagnostics."
    "HIP", "source", "Native preprocessor handling", "unknown", ""
    "Mojo", "source", "Native preprocessor handling", "unsupported", "Mojo source has no C-style preprocessor expansion in this frontend; # lines are treated as comments and native import/from-import declarations are parsed separately."
    "Rust", "source", "Native preprocessor handling", "unknown", ""

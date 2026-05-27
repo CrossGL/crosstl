@@ -97,7 +97,14 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
           ]
         },
-        "cuda": {"status": "unknown"},
+        "cuda": {
+          "status": "partial",
+          "notes": "Plain 2D textureGather lowers to CUDA tex2Dgather with component selection and explicit-sampler overloads; native tex2Dgather imports back to CrossGL textureGather. Array, cube, offset, shadow, multisample, and sparse-residency gather forms emit deterministic diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_texture_gather_calls_emit_cuda_diagnostics",
+            "tests/test_backend/test_CUDA/test_codegen.py::def test_cuda_texture_gather_helpers_convert"
+          ]
+        },
         "hip": {"status": "unknown"},
         "mojo": {
           "status": "unsupported",

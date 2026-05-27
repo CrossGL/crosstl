@@ -89,6 +89,7 @@ class CudaToCrossGLConverter:
         "tex2D": "sampler2D",
         "tex2DLod": "sampler2D",
         "tex2DGrad": "sampler2D",
+        "tex2Dgather": "sampler2D",
         "tex3D": "sampler3D",
         "tex3DLod": "sampler3D",
         "tex3DGrad": "sampler3D",
@@ -1524,6 +1525,8 @@ class CudaToCrossGLConverter:
             return self.format_cuda_texture_call(base_name, args, "vec1", 1)
         if base_name in {"tex2D", "tex2DLod", "tex2DGrad"}:
             return self.format_cuda_texture_call(base_name, args, "vec2", 2)
+        if base_name == "tex2Dgather":
+            return self.format_cuda_texture_gather_call(args)
         if base_name in {"tex3D", "tex3DLod", "tex3DGrad"}:
             return self.format_cuda_texture_call(base_name, args, "vec3", 3)
         if base_name in {"texCubemap", "texCubemapLod", "texCubemapGrad"}:
@@ -1622,6 +1625,25 @@ class CudaToCrossGLConverter:
             return f"textureLod({texture_name}, {coordinate}, {remaining[0]})"
         return f"texture({texture_name}, {coordinate})"
 
+    def format_cuda_texture_gather_call(self, args):
+        if len(args) == 2:
+            texture_name, coordinate = args
+            component = None
+        elif len(args) in {3, 4}:
+            texture_name = args[0]
+            coordinate = self.format_vector_constructor("vec2", args[1:3])
+            component = args[3] if len(args) == 4 else None
+        else:
+            return self.format_unsupported_cuda_resource_expression(
+                "texture",
+                "tex2Dgather sparse residency",
+                "vec4<f32>(0.0, 0.0, 0.0, 0.0)",
+            )
+
+        if component is not None:
+            return f"textureGather({texture_name}, {coordinate}, {component})"
+        return f"textureGather({texture_name}, {coordinate})"
+
     def format_cuda_surface_read(self, args, dimensions, value_type):
         if len(args) < dimensions + 1:
             return None
@@ -1655,6 +1677,11 @@ class CudaToCrossGLConverter:
             return text.split(marker, 1)[0].strip()
 
         return expression
+
+    def format_unsupported_cuda_resource_expression(self, kind, member, fallback):
+        return (
+            f"(/* cuda {kind}.{member} not directly supported in CrossGL */ {fallback})"
+        )
 
     def format_vector_constructor(self, vector_name, args, element_type="f32"):
         if vector_name == "vec1":

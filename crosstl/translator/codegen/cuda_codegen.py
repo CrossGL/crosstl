@@ -3084,6 +3084,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     func_name, texture_type, args
                 )
 
+        if func_name == "textureGather" and len(args) >= 2:
+            texture_gather = self.generate_texture_gather_call(raw_args, args)
+            if texture_gather is not None:
+                return texture_gather
+
         if (
             func_name
             in {
@@ -3390,6 +3395,40 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return f"surf2Dwrite({value}, {image_name}, {x}, {y})"
 
         return None
+
+    def generate_texture_gather_call(self, raw_args, args):
+        texture_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+        if texture_type != "sampler2D":
+            return None
+
+        coordinate_index = 1
+        component = None
+        if len(args) == 2:
+            pass
+        elif len(args) == 3:
+            if self.is_sampler_state_argument(raw_args[1]):
+                coordinate_index = 2
+            else:
+                component = args[2]
+        elif len(args) == 4 and self.is_sampler_state_argument(raw_args[1]):
+            coordinate_index = 2
+            component = args[3]
+        else:
+            return None
+
+        texture_name = args[0]
+        coord = args[coordinate_index]
+        gather_args = (
+            f"{texture_name}, "
+            f"{self.coord_component(coord, 'x')}, "
+            f"{self.coord_component(coord, 'y')}"
+        )
+        if component is not None:
+            return f"tex2Dgather<float4>({gather_args}, {component})"
+        return f"tex2Dgather<float4>({gather_args})"
+
+    def is_sampler_state_argument(self, raw_arg):
+        return self.resource_base_type(self.get_expression_type(raw_arg)) == "sampler"
 
     def visit_cbuffer(self, cbuffer):
         """Visit constant buffer (convert to CUDA constant memory)"""

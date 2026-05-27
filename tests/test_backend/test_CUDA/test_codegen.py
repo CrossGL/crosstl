@@ -2261,6 +2261,65 @@ class TestCudaCodeGen:
         assert "surf2Dread" not in result
         assert "surf2Dwrite" not in result
 
+    def test_cuda_texture_gather_helpers_convert(self):
+        """Test CUDA tex2Dgather helpers convert to CrossGL textureGather."""
+        code = """
+        void gatherOps(
+            texture<float4, cudaTextureType2D> tex,
+            cudaTextureObject_t objectTex,
+            bool* resident,
+            float2 uv
+        ) {
+            float4 gathered = tex2Dgather<float4>(tex, uv.x, uv.y);
+            float4 gatheredComponent = tex2Dgather<float4>(
+                tex,
+                uv.x,
+                uv.y,
+                2
+            );
+            float4 gatheredObject = tex2Dgather<float4>(
+                objectTex,
+                uv.x,
+                uv.y,
+                1
+            );
+            float4 sparseGather = tex2Dgather<float4>(
+                objectTex,
+                uv.x,
+                uv.y,
+                resident,
+                3
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "sampler2D tex" in result
+        assert "sampler2D objectTex" in result
+        assert (
+            "var gathered: vec4<f32> = textureGather("
+            "tex, vec2<f32>(uv.x, uv.y));" in result
+        )
+        assert (
+            "var gatheredComponent: vec4<f32> = textureGather("
+            "tex, vec2<f32>(uv.x, uv.y), 2);" in result
+        )
+        assert (
+            "var gatheredObject: vec4<f32> = textureGather("
+            "objectTex, vec2<f32>(uv.x, uv.y), 1);" in result
+        )
+        assert (
+            "var sparseGather: vec4<f32> = "
+            "(/* cuda texture.tex2Dgather sparse residency not directly "
+            "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));" in result
+        )
+        assert "tex2Dgather<float4>(" not in result
+
     def test_qualified_resource_object_pointer_array_conversion(self):
         """Test qualified CUDA resource object arrays retain inferred shapes."""
         code = """

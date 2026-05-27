@@ -4661,19 +4661,15 @@ class TestCudaCodeGen:
         cuda_code = codegen.generate(ast)
 
         assert (
-            "float4 gathered = /* unsupported CUDA sampled resource call: "
-            "textureGather on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 gathered = tex2Dgather<float4>(colorMap, uv.x, uv.y);" in cuda_code
         )
         assert (
-            "float4 gatheredComponent = /* unsupported CUDA sampled resource call: "
-            "textureGather on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 gatheredComponent = "
+            "tex2Dgather<float4>(colorMap, uv.x, uv.y, 1);" in cuda_code
         )
         assert (
-            "float4 gatheredParam = /* unsupported CUDA sampled resource call: "
-            "textureGather on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 gatheredParam = "
+            "tex2Dgather<float4>(paramTex, uv.x, uv.y, 2);" in cuda_code
         )
         assert (
             "float4 gatheredLayer = /* unsupported CUDA sampled resource call: "
@@ -4858,9 +4854,8 @@ class TestCudaCodeGen:
             "cudaTextureObject_t paramLayers, textureCube<float4> paramCube"
         ) in cuda_code
         assert (
-            "float4 gathered = /* unsupported CUDA sampled resource call: "
-            "textureGather on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 gathered = tex2Dgather<float4>(paramTex, uv.x, uv.y, 1);"
+            in cuda_code
         )
         assert (
             "float4 gatheredLayer = /* unsupported CUDA sampled resource call: "
@@ -5363,9 +5358,8 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "float4 gathered = /* unsupported CUDA sampled resource call: "
-            "textureGather on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 gathered = tex2Dgather<float4>"
+            "(textureGrid[layer][slot], uv.x, uv.y, 1);" in cuda_code
         )
         assert (
             "float4 fetched = tex2D(textureGrid[layer][slot], pixel.x, pixel.y);"

@@ -772,6 +772,63 @@ class TestCudaParser:
         assert body[4].value.name == "surf2Dread<float4>"
         assert body[4].value.args[0] == "legacySurface"
 
+    def test_cuda_texture_gather_helper_parsing(self):
+        """Test CUDA tex2Dgather helper overloads parse."""
+        code = """
+        void gatherOps(
+            texture<float4, cudaTextureType2D> tex,
+            cudaTextureObject_t objectTex,
+            bool* resident,
+            float2 uv
+        ) {
+            float4 gathered = tex2Dgather<float4>(tex, uv.x, uv.y);
+            float4 gatheredComponent = tex2Dgather<float4>(
+                objectTex,
+                uv.x,
+                uv.y,
+                2
+            );
+            float4 sparseGather = tex2Dgather<float4>(
+                objectTex,
+                uv.x,
+                uv.y,
+                resident,
+                3
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        params = ast.functions[0].params
+        assert params[0].vtype == "texture<float4, cudaTextureType2D>"
+        assert params[1].vtype == "cudaTextureObject_t"
+        assert params[2].vtype == "bool *"
+
+        body = ast.functions[0].body
+        assert body[0].value.name == "tex2Dgather<float4>"
+        assert body[0].value.args[0] == "tex"
+        assert body[0].value.args[1].object == "uv"
+        assert body[0].value.args[1].member == "x"
+        assert body[0].value.args[2].object == "uv"
+        assert body[0].value.args[2].member == "y"
+        assert body[1].value.name == "tex2Dgather<float4>"
+        assert body[1].value.args[0] == "objectTex"
+        assert body[1].value.args[1].object == "uv"
+        assert body[1].value.args[1].member == "x"
+        assert body[1].value.args[2].object == "uv"
+        assert body[1].value.args[2].member == "y"
+        assert body[1].value.args[3] == "2"
+        assert body[2].value.name == "tex2Dgather<float4>"
+        assert body[2].value.args[0] == "objectTex"
+        assert body[2].value.args[1].object == "uv"
+        assert body[2].value.args[1].member == "x"
+        assert body[2].value.args[2].object == "uv"
+        assert body[2].value.args[2].member == "y"
+        assert body[2].value.args[3:] == ["resident", "3"]
+
     def test_qualified_resource_object_pointer_array_parsing(self):
         """Test global CUDA resource object pointer arrays with qualifiers parse."""
         code = """

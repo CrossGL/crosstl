@@ -461,7 +461,7 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 52,
+        "unsupported_marker_count": 54,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -551,7 +551,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 289
+        "test_count": 291
       },
       "translator_codegen": {
         "exists": true,
@@ -995,8 +995,8 @@
       "category": "source",
       "feature": "Native preprocessor handling",
       "feature_id": "source.preprocessing",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Plain 2D textureGather lowers to CUDA tex2Dgather with component selection and explicit-sampler overloads; native tex2Dgather imports back to CrossGL textureGather. Array, cube, offset, shadow, multisample, and sparse-residency gather forms emit deterministic diagnostics.",
+      "status": "partial"
     },
     {
       "backend": "HIP",
@@ -3038,9 +3038,12 @@
       "name": "Native preprocessor handling",
       "support": {
         "cuda": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_texture_gather_calls_emit_cuda_diagnostics",
+            "tests/test_backend/test_CUDA/test_codegen.py::def test_cuda_texture_gather_helpers_convert"
+          ],
+          "notes": "Plain 2D textureGather lowers to CUDA tex2Dgather with component selection and explicit-sampler overloads; native tex2Dgather imports back to CrossGL textureGather. Array, cube, offset, shadow, multisample, and sparse-residency gather forms emit deterministic diagnostics.",
+          "status": "partial"
         },
         "directx": {
           "evidence": [
@@ -5934,9 +5937,9 @@
     "status_counts": {
       "cuda": {
         "diagnostic": 0,
-        "partial": 11,
+        "partial": 12,
         "supported": 11,
-        "unknown": 18,
+        "unknown": 17,
         "unsupported": 3,
         "validated_rejection": 0
       },
