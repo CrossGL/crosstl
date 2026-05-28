@@ -8205,6 +8205,52 @@ def test_glsl_wave_intrinsic_invalid_or_unsupported_forms_emit_diagnostics():
     assert "WaveOpNode" not in generated
 
 
+def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
+    code = """
+    shader GLSLWaveTypeDiagnostics {
+        compute {
+            void main() {
+                bool flag;
+                float value;
+                vec2 values;
+                float badSum = WaveActiveSum(flag);
+                uint badBits = WaveActiveBitAnd(value);
+                bool badVote = WaveActiveAnyTrue(values);
+                uint badLane = WaveReadLaneAt(1u, value);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    for expected in [
+        (
+            "WaveActiveSum requires a numeric scalar or vector value argument: "
+            "flag has type bool"
+        ),
+        (
+            "WaveActiveBitAnd requires an integer or boolean scalar or vector "
+            "value argument: value has type float"
+        ),
+        (
+            "WaveActiveAnyTrue requires a boolean scalar value argument: "
+            "values has type vec2"
+        ),
+        (
+            "WaveReadLaneAt requires a scalar integer lane argument: "
+            "value has type float"
+        ),
+    ]:
+        assert expected in generated
+
+    assert "subgroupAdd(flag)" not in generated
+    assert "subgroupAnd(value)" not in generated
+    assert "subgroupAny(values)" not in generated
+    assert "subgroupBroadcast(1u, value)" not in generated
+
+
 def test_else_if_statement():
     code = """
     shader main {

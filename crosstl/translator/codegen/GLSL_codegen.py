@@ -597,6 +597,28 @@ class GLSLCodeGen:
         "WaveMultiPrefixBitOr",
         "WaveMultiPrefixBitXor",
     }
+    GLSL_WAVE_NUMERIC_OPERATIONS = {
+        "WaveActiveSum",
+        "WaveActiveProduct",
+        "WaveActiveMin",
+        "WaveActiveMax",
+        "WavePrefixSum",
+        "WavePrefixProduct",
+    }
+    GLSL_WAVE_INTEGER_OR_BOOLEAN_OPERATIONS = {
+        "WaveActiveBitAnd",
+        "WaveActiveBitOr",
+        "WaveActiveBitXor",
+    }
+    GLSL_WAVE_BOOLEAN_OPERATIONS = {
+        "WaveActiveAllTrue",
+        "WaveActiveAnyTrue",
+        "WaveActiveBallot",
+    }
+    GLSL_WAVE_LANE_INDEX_ARGUMENTS = {
+        "WaveReadLaneAt": 1,
+        "QuadReadLaneAt": 1,
+    }
     GLSL_TESSELLATION_FACTOR_BUILTINS = {
         "gl_TessLevelOuter",
         "gl_TessLevelInner",
@@ -5548,6 +5570,11 @@ class GLSLCodeGen:
         if isinstance(expr, (int, float)):
             return "float" if isinstance(expr, float) else "int"
         if isinstance(expr, BinaryOpNode):
+            operator = self.map_operator(
+                getattr(expr, "op", getattr(expr, "operator", None))
+            )
+            if operator in {"<", ">", "<=", ">=", "==", "!=", "&&", "||"}:
+                return "bool"
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
             if self.is_vector_value_type(left_type):
@@ -6696,6 +6723,10 @@ class GLSLCodeGen:
                 operation, "has no GL_KHR_shader_subgroup equivalent"
             )
 
+        type_diagnostic = self.glsl_wave_type_diagnostic(operation, node.arguments)
+        if type_diagnostic is not None:
+            return type_diagnostic
+
         if operation == "WaveGetLaneCount":
             return "gl_SubgroupSize"
         if operation == "WaveGetLaneIndex":
@@ -6711,6 +6742,84 @@ class GLSLCodeGen:
 
         args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
         return f"{mapped}({args})"
+
+    def glsl_wave_type_diagnostic(self, operation, args):
+        if operation in self.GLSL_WAVE_NUMERIC_OPERATIONS:
+            return self.glsl_wave_validate_argument_kind(
+                operation,
+                args[0],
+                "a numeric scalar or vector",
+                "value",
+                {"float", "double", "int", "uint"},
+            )
+        if operation in self.GLSL_WAVE_INTEGER_OR_BOOLEAN_OPERATIONS:
+            return self.glsl_wave_validate_argument_kind(
+                operation,
+                args[0],
+                "an integer or boolean scalar or vector",
+                "value",
+                {"int", "uint", "bool"},
+            )
+        if operation in self.GLSL_WAVE_BOOLEAN_OPERATIONS:
+            return self.glsl_wave_validate_argument_type(
+                operation,
+                args[0],
+                "a boolean scalar",
+                "value",
+                {"bool"},
+                allow_vectors=False,
+            )
+        index_argument = self.GLSL_WAVE_LANE_INDEX_ARGUMENTS.get(operation)
+        if index_argument is not None:
+            return self.glsl_wave_validate_argument_type(
+                operation,
+                args[index_argument],
+                "a scalar integer",
+                "lane",
+                {"int", "uint"},
+                allow_vectors=False,
+            )
+        return None
+
+    def glsl_wave_validate_argument_kind(
+        self, operation, arg, requirement, argument_label, allowed_kinds
+    ):
+        return self.glsl_wave_validate_argument_type(
+            operation,
+            arg,
+            requirement,
+            argument_label,
+            allowed_kinds,
+            allow_vectors=True,
+        )
+
+    def glsl_wave_validate_argument_type(
+        self,
+        operation,
+        arg,
+        requirement,
+        argument_label,
+        allowed_kinds,
+        allow_vectors,
+    ):
+        result_type = self.expression_result_type(arg)
+        if result_type is None:
+            return None
+        mapped_type = self.map_type(result_type)
+        component_kind = self.vector_component_type(mapped_type)
+        if component_kind is not None:
+            if allow_vectors and component_kind in allowed_kinds:
+                return None
+        elif mapped_type in allowed_kinds:
+            return None
+
+        return self.glsl_wave_diagnostic_expression(
+            operation,
+            (
+                f"requires {requirement} {argument_label} argument: "
+                f"{expression_debug_name(arg)} has type {mapped_type}"
+            ),
+        )
 
     def glsl_wave_diagnostic_expression(self, operation, reason):
         return (
