@@ -1,0 +1,42 @@
+name: PR Issue Links
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+      - ready_for_review
+      - converted_to_draft
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: pr-issue-links-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Assign closing-keyword issues
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout trusted base
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sync PR issue links
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          python tools/sync_pr_issue_links.py
+          --repo "$GITHUB_REPOSITORY"
+          --event-path "$GITHUB_EVENT_PATH"
