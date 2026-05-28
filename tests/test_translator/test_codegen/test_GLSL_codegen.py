@@ -8251,6 +8251,53 @@ def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
     assert "subgroupBroadcast(1u, value)" not in generated
 
 
+def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose():
+    code = """
+    shader GLSLAdditionalWaveIntrinsics {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                mat2 transform;
+                vec2 values;
+                bool equalLane = WaveActiveAllEqual(lane);
+                uint activeCount = WaveActiveCountBits(lane > 0u);
+                uint prefixCount = WavePrefixCountBits(lane > 1u);
+                bool badEqual = WaveActiveAllEqual(transform);
+                uint badCount = WaveActiveCountBits(values);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_vote : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_ballot : require" in generated
+    assert "bool equalLane = subgroupAllEqual(lane);" in generated
+    assert (
+        "uint activeCount = "
+        "subgroupBallotBitCount(subgroupBallot((lane > 0u)));" in generated
+    )
+    assert (
+        "uint prefixCount = "
+        "subgroupBallotExclusiveBitCount(subgroupBallot((lane > 1u)));" in generated
+    )
+    assert (
+        "WaveActiveAllEqual requires a scalar or vector value argument: "
+        "transform has type mat2"
+    ) in generated
+    assert (
+        "WaveActiveCountBits requires a boolean scalar value argument: "
+        "values has type vec2"
+    ) in generated
+    assert "WaveOpNode" not in generated
+    assert "WaveActiveAllEqual(" not in generated
+    assert "WaveActiveCountBits(" not in generated
+    assert "WavePrefixCountBits(" not in generated
+
+
 def test_else_if_statement():
     code = """
     shader main {

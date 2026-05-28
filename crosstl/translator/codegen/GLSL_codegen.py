@@ -530,11 +530,14 @@ class GLSLCodeGen:
         "WaveActiveMax": 1,
         "WaveActiveAllTrue": 1,
         "WaveActiveAnyTrue": 1,
+        "WaveActiveAllEqual": 1,
+        "WaveActiveCountBits": 1,
         "WaveActiveBallot": 1,
         "WaveReadLaneAt": 2,
         "WaveReadLaneFirst": 1,
         "WavePrefixSum": 1,
         "WavePrefixProduct": 1,
+        "WavePrefixCountBits": 1,
         "QuadReadAcrossX": 1,
         "QuadReadAcrossY": 1,
         "QuadReadAcrossDiagonal": 1,
@@ -556,6 +559,7 @@ class GLSLCodeGen:
         "WaveActiveMax": "subgroupMax",
         "WaveActiveAllTrue": "subgroupAll",
         "WaveActiveAnyTrue": "subgroupAny",
+        "WaveActiveAllEqual": "subgroupAllEqual",
         "WaveActiveBallot": "subgroupBallot",
         "WaveReadLaneAt": "subgroupBroadcast",
         "WaveReadLaneFirst": "subgroupBroadcastFirst",
@@ -572,6 +576,7 @@ class GLSLCodeGen:
         "WaveIsFirstLane": "#extension GL_KHR_shader_subgroup_basic : require",
         "WaveActiveAllTrue": "#extension GL_KHR_shader_subgroup_vote : require",
         "WaveActiveAnyTrue": "#extension GL_KHR_shader_subgroup_vote : require",
+        "WaveActiveAllEqual": "#extension GL_KHR_shader_subgroup_vote : require",
         "WaveActiveSum": "#extension GL_KHR_shader_subgroup_arithmetic : require",
         "WaveActiveProduct": "#extension GL_KHR_shader_subgroup_arithmetic : require",
         "WaveActiveBitAnd": "#extension GL_KHR_shader_subgroup_arithmetic : require",
@@ -582,6 +587,8 @@ class GLSLCodeGen:
         "WavePrefixSum": "#extension GL_KHR_shader_subgroup_arithmetic : require",
         "WavePrefixProduct": "#extension GL_KHR_shader_subgroup_arithmetic : require",
         "WaveActiveBallot": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WaveActiveCountBits": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WavePrefixCountBits": "#extension GL_KHR_shader_subgroup_ballot : require",
         "WaveReadLaneAt": "#extension GL_KHR_shader_subgroup_shuffle : require",
         "WaveReadLaneFirst": "#extension GL_KHR_shader_subgroup_ballot : require",
         "QuadReadAcrossX": "#extension GL_KHR_shader_subgroup_quad : require",
@@ -614,6 +621,11 @@ class GLSLCodeGen:
         "WaveActiveAllTrue",
         "WaveActiveAnyTrue",
         "WaveActiveBallot",
+        "WaveActiveCountBits",
+        "WavePrefixCountBits",
+    }
+    GLSL_WAVE_SCALAR_OR_VECTOR_OPERATIONS = {
+        "WaveActiveAllEqual",
     }
     GLSL_WAVE_LANE_INDEX_ARGUMENTS = {
         "WaveReadLaneAt": 1,
@@ -1190,6 +1202,10 @@ class GLSLCodeGen:
             for node in self.walk_ast(root):
                 if isinstance(node, WaveOpNode):
                     operations.add(node.operation)
+                elif isinstance(node, FunctionCallNode):
+                    operation = self.function_call_name(node)
+                    if operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
+                        operations.add(operation)
         return operations
 
     def glsl_wave_extension_lines(self, ast, target_stage=None):
@@ -5645,8 +5661,11 @@ class GLSLCodeGen:
                 "WaveIsFirstLane",
                 "WaveActiveAllTrue",
                 "WaveActiveAnyTrue",
+                "WaveActiveAllEqual",
             }:
                 return "bool"
+            if expr.operation in {"WaveActiveCountBits", "WavePrefixCountBits"}:
+                return "uint"
             if expr.operation in {"WaveActiveBallot", "WaveMatch"}:
                 return "uvec4"
             if expr.arguments:
@@ -5655,6 +5674,8 @@ class GLSLCodeGen:
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if func_name in self.GLSL_WAVE_INTRINSIC_ARITIES:
+                return self.glsl_wave_result_type(func_name, args)
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
                 return numeric_result_type
@@ -6613,6 +6634,9 @@ class GLSLCodeGen:
             if synchronization_call is not None:
                 return synchronization_call
 
+            if original_func_name in self.GLSL_WAVE_INTRINSIC_ARITIES:
+                return self.generate_glsl_wave_operation(original_func_name, expr.args)
+
             func_name = self.function_map.get(func_name, func_name)
             self.validate_fragment_only_helper_call(original_func_name)
 
@@ -6705,14 +6729,16 @@ class GLSLCodeGen:
         return None
 
     def generate_glsl_wave_op_expression(self, node):
-        operation = node.operation
+        return self.generate_glsl_wave_operation(node.operation, node.arguments)
+
+    def generate_glsl_wave_operation(self, operation, arguments):
         expected_arity = self.GLSL_WAVE_INTRINSIC_ARITIES.get(operation)
         if expected_arity is None:
             return self.glsl_wave_diagnostic_expression(
                 operation, "is not recognized by the OpenGL backend"
             )
 
-        actual_arity = len(node.arguments)
+        actual_arity = len(arguments)
         if actual_arity != expected_arity:
             return self.glsl_wave_diagnostic_expression(
                 operation, f"expects {expected_arity} arguments, got {actual_arity}"
@@ -6723,7 +6749,7 @@ class GLSLCodeGen:
                 operation, "has no GL_KHR_shader_subgroup equivalent"
             )
 
-        type_diagnostic = self.glsl_wave_type_diagnostic(operation, node.arguments)
+        type_diagnostic = self.glsl_wave_type_diagnostic(operation, arguments)
         if type_diagnostic is not None:
             return type_diagnostic
 
@@ -6734,14 +6760,39 @@ class GLSLCodeGen:
         if operation == "WaveIsFirstLane":
             return "subgroupElect()"
 
+        if operation == "WaveActiveCountBits":
+            predicate = self.generate_expression(arguments[0])
+            return f"subgroupBallotBitCount(subgroupBallot({predicate}))"
+        if operation == "WavePrefixCountBits":
+            predicate = self.generate_expression(arguments[0])
+            return f"subgroupBallotExclusiveBitCount(subgroupBallot({predicate}))"
+
         mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
         if mapped is None:
             return self.glsl_wave_diagnostic_expression(
                 operation, "is not recognized by the OpenGL backend"
             )
 
-        args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
+        args = ", ".join(self.generate_expression(arg) for arg in arguments)
         return f"{mapped}({args})"
+
+    def glsl_wave_result_type(self, operation, arguments):
+        if operation in {"WaveGetLaneCount", "WaveGetLaneIndex"}:
+            return "uint"
+        if operation in {
+            "WaveIsFirstLane",
+            "WaveActiveAllTrue",
+            "WaveActiveAnyTrue",
+            "WaveActiveAllEqual",
+        }:
+            return "bool"
+        if operation in {"WaveActiveCountBits", "WavePrefixCountBits"}:
+            return "uint"
+        if operation in {"WaveActiveBallot", "WaveMatch"}:
+            return "uvec4"
+        if arguments:
+            return self.expression_result_type(arguments[0])
+        return None
 
     def glsl_wave_type_diagnostic(self, operation, args):
         if operation in self.GLSL_WAVE_NUMERIC_OPERATIONS:
@@ -6768,6 +6819,15 @@ class GLSLCodeGen:
                 "value",
                 {"bool"},
                 allow_vectors=False,
+            )
+        if operation in self.GLSL_WAVE_SCALAR_OR_VECTOR_OPERATIONS:
+            return self.glsl_wave_validate_argument_type(
+                operation,
+                args[0],
+                "a scalar or vector",
+                "value",
+                {"float", "double", "int", "uint", "bool"},
+                allow_vectors=True,
             )
         index_argument = self.GLSL_WAVE_LANE_INDEX_ARGUMENTS.get(operation)
         if index_argument is not None:
