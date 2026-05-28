@@ -6,6 +6,7 @@ from crosstl.translator.codegen.stage_utils import (
     collect_stage_entry_records,
     collect_stage_entry_reserved_function_names,
     collect_stage_local_cbuffers,
+    collect_stage_local_structs,
     collect_stage_local_variables,
     compute_local_size,
     deduplicate_named_declarations,
@@ -84,12 +85,14 @@ class DummyStageNode:
         entry_point=None,
         local_functions=None,
         local_variables=None,
+        local_structs=None,
         local_cbuffers=None,
         layout_qualifiers=None,
     ):
         self.entry_point = entry_point
         self.local_functions = local_functions or []
         self.local_variables = local_variables or []
+        self.local_structs = local_structs or []
         self.local_cbuffers = local_cbuffers or []
         self.layout_qualifiers = layout_qualifiers or []
 
@@ -274,6 +277,29 @@ def test_collect_stage_local_variables_filters_by_stage_and_predicate():
     )
 
     assert variables == [fragment_tex]
+
+
+def test_collect_stage_local_structs_filters_by_canonical_stage_aliases():
+    hull_payload = DummyVariable("HullPatch", "struct")
+    domain_payload = DummyVariable("DomainPatch", "struct")
+    fragment_payload = DummyVariable("FragmentPayload", "struct")
+    ast = DummyAst(
+        stages={
+            "hull": DummyStageNode(local_structs=[hull_payload]),
+            "ShaderStage.TESSELLATION_EVALUATION": DummyStageNode(
+                local_structs=[domain_payload]
+            ),
+            "fragment": DummyStageNode(local_structs=[fragment_payload]),
+        }
+    )
+
+    assert collect_stage_local_structs(ast, "tessellation_control") == [hull_payload]
+    assert collect_stage_local_structs(ast, "domain") == [domain_payload]
+    assert collect_stage_local_structs(ast, None) == [
+        hull_payload,
+        domain_payload,
+        fragment_payload,
+    ]
 
 
 def test_collect_stage_local_cbuffers_filters_by_stage():

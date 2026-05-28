@@ -257,6 +257,180 @@ def test_parse_fragment_depth_only_output_roundtrip():
     assert "fragColor" not in glsl
 
 
+def test_parse_fragment_sample_mask_builtin_roundtrip():
+    code = """
+    #version 450 core
+    layout(location = 0) in int coverage;
+
+    void main() {
+        gl_SampleMask[0] = coverage;
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "void main(FragmentInput input)" in crossgl
+    assert "gl_SampleMask[0] = input.coverage;" in crossgl
+    assert "gl_FragColor" not in crossgl
+    assert "fragColor" not in crossgl
+    assert "@ gl_FragColor" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "layout(location = 0) in int coverage;" in glsl
+    assert "gl_SampleMask[0] = coverage;" in glsl
+    assert "gl_FragColor" not in glsl
+    assert "fragColor" not in glsl
+    assert "layout(location = 0) out" not in glsl
+
+
+def test_parse_fragment_sample_builtins_and_sample_qualifier_roundtrip():
+    code = """
+    #version 450 core
+    layout(location = 0) sample in vec2 sampleUv;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        color = vec4(
+            sampleUv + gl_SamplePosition,
+            float(gl_SampleID),
+            float(gl_SampleMaskIn[0])
+        );
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "sample vec2 sampleUv @location(0);" in crossgl
+    assert "gl_SamplePosition" in crossgl
+    assert "gl_SampleID" in crossgl
+    assert "gl_SampleMaskIn[0]" in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "layout(location = 0) sample in vec2 sampleUv;" in glsl
+    assert "gl_SamplePosition" in glsl
+    assert "gl_SampleID" in glsl
+    assert "gl_SampleMaskIn[0]" in glsl
+    assert "in FragmentInput input;" not in glsl
+
+
+def test_parse_fragment_sample_builtin_without_user_inputs_roundtrip():
+    code = """
+    #version 450 core
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        color = vec4(float(gl_SampleID));
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "vec4 main() @location(0) @ color" in crossgl
+    assert "FragmentInput input" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "gl_SampleID" in glsl
+    assert "in FragmentInput input;" not in glsl
+    assert "layout(location = 0) out vec4 fragColor;" in glsl
+
+
+def test_parse_fragment_interpolation_helpers_roundtrip():
+    code = """
+    #version 450 core
+    layout(location = 0) sample in vec4 sampleColor;
+    layout(location = 1) in vec2 offset;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        color = interpolateAtSample(sampleColor, gl_SampleID) + interpolateAtOffset(sampleColor, offset) + interpolateAtCentroid(sampleColor);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "sample vec4 sampleColor @location(0);" in crossgl
+    assert "interpolate_at_sample(input.sampleColor, gl_SampleID)" in crossgl
+    assert "interpolate_at_offset(input.sampleColor, input.offset)" in crossgl
+    assert "interpolate_at_centroid(input.sampleColor)" in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "layout(location = 0) sample in vec4 sampleColor;" in glsl
+    assert "interpolateAtSample(sampleColor, gl_SampleID)" in glsl
+    assert "interpolateAtOffset(sampleColor, offset)" in glsl
+    assert "interpolateAtCentroid(sampleColor)" in glsl
+    assert "interpolate_at_" not in glsl
+
+
+def test_parse_fragment_derivative_helpers_roundtrip():
+    code = """
+    #version 450 core
+    layout(location = 0) in vec2 uv;
+    layout(location = 0) out vec4 color;
+
+    void main() {
+        float dx = dFdx(uv.x);
+        float dyFine = dFdyFine(uv.y);
+        float widthCoarse = fwidthCoarse(uv.x);
+        color = vec4(dx + dyFine + widthCoarse);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "ddx(input.uv.x)" in crossgl
+    assert "ddy_fine(input.uv.y)" in crossgl
+    assert "fwidth_coarse(input.uv.x)" in crossgl
+    assert "dFdx(" not in crossgl
+    assert "dFdyFine(" not in crossgl
+    assert "fwidthCoarse(" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "dFdx(uv.x)" in glsl
+    assert "dFdyFine(uv.y)" in glsl
+    assert "fwidthCoarse(uv.x)" in glsl
+    assert "ddx(" not in glsl
+    assert "ddy_fine" not in glsl
+    assert "fwidth_coarse" not in glsl
+
+
+def test_parse_fragment_derivative_helpers_inside_gradients_roundtrip():
+    code = """
+    #version 450 core
+    layout(location = 0) in vec2 uv;
+    layout(location = 0) out vec4 color;
+    uniform sampler2D colorMap;
+
+    vec2 gradientX(vec2 value) {
+        return dFdx(value);
+    }
+
+    void main() {
+        color = textureGrad(colorMap, uv, gradientX(uv), dFdy(uv));
+    }
+    """
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "return ddx(value)" in crossgl
+    assert "textureGrad(colorMap, input.uv, gradientX(input.uv), ddy(input.uv))" in (
+        crossgl
+    )
+    assert "dFdx(" not in crossgl
+    assert "dFdy(" not in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "return dFdx(value);" in glsl
+    assert "textureGrad(colorMap, uv, gradientX(uv), dFdy(uv))" in glsl
+    assert "ddx(" not in glsl
+    assert "ddy(" not in glsl
+
+
 def test_parse_fragment_else_if_depth_output_roundtrip():
     code = """
     #version 450 core

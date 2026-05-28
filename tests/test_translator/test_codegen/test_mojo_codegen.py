@@ -8,10 +8,18 @@ from crosstl.translator.parser import Parser
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.ast import (
     AtomicOpNode,
+    ArrayLiteralNode,
+    BlockNode,
     BufferOpNode,
     BuiltinVariableNode,
     CastNode,
+    ExpressionStatementNode,
+    FunctionCallNode,
+    IdentifierNode,
+    LiteralPatternNode,
     LiteralNode,
+    MatchArmNode,
+    MatchNode,
     MeshOpNode,
     PrimitiveType,
     RayQueryOpNode,
@@ -23,6 +31,7 @@ from crosstl.translator.ast import (
     VariableNode,
     VectorType,
     WaveOpNode,
+    WildcardPatternNode,
 )
 from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
 
@@ -1187,6 +1196,81 @@ def test_direct_buffer_op_nodes_emit_mojo_helpers_without_ast_repr():
     )
 
 
+def test_direct_buffer_op_constructor_contexts_use_single_evaluation_helpers():
+    codegen = MojoCodeGen()
+    pairs = VariableNode("pairs", PrimitiveType("StructuredBuffer<float2>"))
+    consumed = VariableNode(
+        "consumed", PrimitiveType("ConsumeStructuredBuffer<float2>")
+    )
+    scalar_consumed = VariableNode(
+        "scalarConsumed", PrimitiveType("ConsumeStructuredBuffer<int>")
+    )
+    raw = VariableNode("raw", PrimitiveType("RWByteAddressBuffer"))
+    index = VariableNode("index", PrimitiveType("uint"))
+    uv = VariableNode("uv", PrimitiveType("float2"))
+
+    codegen.register_variable_type("pairs", "StructuredBuffer<float2>")
+    codegen.register_variable_type("consumed", "ConsumeStructuredBuffer<float2>")
+    codegen.register_variable_type("scalarConsumed", "ConsumeStructuredBuffer<int>")
+    codegen.register_variable_type("raw", "RWByteAddressBuffer")
+    codegen.register_variable_type("index", "uint")
+    codegen.register_variable_type("uv", "float2")
+
+    load = BufferOpNode("Load", pairs, [index])
+    consume = BufferOpNode("Consume", consumed, [])
+    scalar_consume = BufferOpNode("Consume", scalar_consumed, [])
+    reinterpret = FunctionCallNode("asfloat", [BufferOpNode("Load2", raw, [index])])
+
+    load_vector = codegen.generate_expression(FunctionCallNode("float4", [load, uv]))
+    consume_vector = codegen.generate_expression(
+        FunctionCallNode("float4", [consume, uv])
+    )
+    reinterpret_vector = codegen.generate_expression(
+        FunctionCallNode("float4", [reinterpret, uv])
+    )
+    load_matrix = codegen.generate_expression(FunctionCallNode("float2x2", [load, uv]))
+    consume_diagonal = codegen.generate_expression(
+        FunctionCallNode("float2x2", [scalar_consume])
+    )
+
+    vector_helper = "_crossgl_construct_f32_4_vf322_01_vf322_01"
+    matrix_helper = "_crossgl_construct_matrix_f32_c2_r2_2_vf322_01_vf322_01"
+    diagonal_helper = "_crossgl_matrix_diagonal_f32_c2_r2"
+
+    assert load_vector == f"{vector_helper}(buffer_load(pairs, index), uv)"
+    assert consume_vector == f"{vector_helper}(buffer_consume(consumed), uv)"
+    assert (
+        reinterpret_vector == f"{vector_helper}(asfloat(buffer_load2(raw, index)), uv)"
+    )
+    assert load_matrix == f"{matrix_helper}(buffer_load(pairs, index), uv)"
+    assert consume_diagonal.startswith(f"{diagonal_helper}(")
+    assert consume_diagonal.count("buffer_consume(scalarConsumed)") == 1
+
+    combined = "\n".join([load_vector, consume_vector, reinterpret_vector, load_matrix])
+    assert "buffer_load(pairs, index)[0]" not in combined
+    assert "buffer_consume(consumed)[0]" not in combined
+    assert "asfloat(buffer_load2(raw, index))[0]" not in combined
+    assert ("StructuredBuffer", "float2") in codegen.required_buffer_load_helpers
+    assert (
+        "ConsumeStructuredBuffer",
+        "float2",
+    ) in codegen.required_buffer_consume_helpers
+    assert (
+        "RWByteAddressBuffer",
+        2,
+    ) in codegen.required_byte_address_vector_load_helpers
+    assert any(
+        key[0] == "asfloat" and key[2] == "SIMD[DType.float32, 2]"
+        for key in codegen.required_reinterpret_helpers
+    )
+    assert any(
+        helper["key"][0] == "DType.float32"
+        for helper in codegen.required_constructor_helpers.values()
+    )
+    assert codegen.required_matrix_constructor_helpers
+    assert ("DType.float32", 2, 2) in codegen.required_matrix_diagonal_helpers
+
+
 def test_direct_buffer_op_nodes_reject_unsupported_operations_and_targets():
     codegen = MojoCodeGen()
     values = VariableNode("values", PrimitiveType("StructuredBuffer<int>"))
@@ -2185,6 +2269,380 @@ def test_hlsl_typed_writable_image_array_members_and_parameters_compile_with_moj
     assert result.returncode == 0, result.stderr
 
 
+def _typed_image_array_branch_context_source():
+    return """
+    struct ResourceGroup {
+        RWTexture2D<float2> rgImages[2];
+        RasterizerOrderedTexture2DArray<uint> counters[2];
+    };
+
+    float2 readConditional(
+        ResourceGroup group,
+        bool useFirst,
+        int slot,
+        int2 pixel
+    ) {
+        return useFirst
+            ? group.rgImages[0].Load(pixel)
+            : group.rgImages[slot].Load(pixel);
+    }
+
+    float2 readMatch(
+        ResourceGroup group,
+        int mode,
+        int slot,
+        int2 pixel
+    ) {
+        return match mode {
+            0 => group.rgImages[0].Load(pixel),
+            _ => group.rgImages[slot].Load(pixel)
+        };
+    }
+
+    void storeConditional(
+        ResourceGroup group,
+        bool useFirst,
+        int slot,
+        int2 pixel,
+        float2 value
+    ) {
+        if (useFirst) {
+            group.rgImages[0].Store(pixel, value);
+        } else {
+            group.rgImages[slot].Store(pixel, value);
+        }
+    }
+
+    uint updateConditional(
+        ResourceGroup group,
+        bool useFirst,
+        int slot,
+        int4 pixelLayer,
+        uint value
+    ) {
+        return useFirst
+            ? group.counters[0].InterlockedAdd(pixelLayer, value)
+            : group.counters[slot].InterlockedMax(pixelLayer, value);
+    }
+
+    uint updateMatch(
+        ResourceGroup group,
+        int mode,
+        int slot,
+        int4 pixelLayer,
+        uint value
+    ) {
+        return match mode {
+            0 => group.counters[0].InterlockedAdd(pixelLayer, value),
+            _ => group.counters[slot].InterlockedExchange(pixelLayer, value)
+        };
+    }
+    """
+
+
+def test_typed_image_array_branch_contexts_preserve_mojo_placeholders():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_typed_image_array_branch_context_source()))
+    )
+
+    atomic_add = "_crossgl_image_atomic_add_UImage2DArray_SIMD_DType_int32_4_UInt32"
+    atomic_max = "_crossgl_image_atomic_max_UImage2DArray_SIMD_DType_int32_4_UInt32"
+    atomic_exchange = (
+        "_crossgl_image_atomic_exchange_UImage2DArray_SIMD_DType_int32_4_UInt32"
+    )
+
+    assert "struct ResourceGroup:" in generated_code
+    assert "var rgImages: InlineArray[Image2DFloat2, 2]" in generated_code
+    assert "var counters: InlineArray[UImage2DArray, 2]" in generated_code
+    assert (
+        "fn image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.float32, 2]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: Image2DFloat2, coord: SIMD[DType.int32, 2], "
+        "value: SIMD[DType.float32, 2]):" in generated_code
+    )
+    assert f"fn {atomic_add}" in generated_code
+    assert f"fn {atomic_max}" in generated_code
+    assert f"fn {atomic_exchange}" in generated_code
+    assert (
+        "return (image_load(group.rgImages[0], pixel) if useFirst else "
+        "image_load(group.rgImages[int(slot)], pixel))" in generated_code
+    )
+    assert (
+        "var __cgl_match_value_0: SIMD[DType.float32, 2] = "
+        "SIMD[DType.float32, 2](0.0, 0.0)" in generated_code
+    )
+    assert "__cgl_match_value_0 = image_load(group.rgImages[0], pixel)" in (
+        generated_code
+    )
+    assert (
+        "__cgl_match_value_0 = image_load(group.rgImages[int(slot)], pixel)"
+        in generated_code
+    )
+    assert "image_store(group.rgImages[0], pixel, value)" in generated_code
+    assert "image_store(group.rgImages[int(slot)], pixel, value)" in generated_code
+    assert (
+        f"return ({atomic_add}(group.counters[0], pixelLayer, value) if useFirst "
+        f"else {atomic_max}(group.counters[int(slot)], pixelLayer, value))"
+        in generated_code
+    )
+    assert "var __cgl_match_value_1: UInt32 = 0" in generated_code
+    assert (
+        f"__cgl_match_value_1 = {atomic_add}(group.counters[0], pixelLayer, value)"
+        in generated_code
+    )
+    assert (
+        f"__cgl_match_value_1 = {atomic_exchange}("
+        "group.counters[int(slot)], pixelLayer, value)" in generated_code
+    )
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+    assert ".Interlocked" not in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_typed_image_array_branch_contexts_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_typed_image_array_branch_context_source()))
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "typed_image_array_branch_contexts.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            struct ResourceGroup {
+                RWTexture2D<float2> rgImages[2];
+            };
+
+            float2 invalidLoad(
+                ResourceGroup group,
+                bool useFirst,
+                int slot,
+                float2 pixel
+            ) {
+                return useFirst
+                    ? group.rgImages[0].Load(pixel)
+                    : group.rgImages[slot].Load(pixel);
+            }
+            """,
+            r"image_load.*coordinate.*Image2DFloat2",
+        ),
+        (
+            """
+            struct ResourceGroup {
+                RWTexture2D<float2> rgImages[2];
+            };
+
+            void invalidStore(
+                ResourceGroup group,
+                int mode,
+                int slot,
+                int2 pixel,
+                float4 value
+            ) {
+                match mode {
+                    0 => {
+                        group.rgImages[0].Store(pixel, value);
+                    }
+                    _ => {
+                        group.rgImages[slot].Store(pixel, value);
+                    }
+                }
+            }
+            """,
+            r"image_store.*value.*Image2DFloat2",
+        ),
+        (
+            """
+            struct ResourceGroup {
+                RWTexture2D<uint4> counters[2];
+            };
+
+            uint4 invalidAtomic(
+                ResourceGroup group,
+                int mode,
+                int slot,
+                int2 pixel,
+                uint4 value
+            ) {
+                return match mode {
+                    0 => group.counters[0].InterlockedAdd(pixel, value),
+                    _ => group.counters[slot].InterlockedAdd(pixel, value)
+                };
+            }
+            """,
+            r"image atomic.*scalar integer image required.*UImage2DUInt4",
+        ),
+    ],
+)
+def test_typed_image_array_branch_context_diagnostics_for_mojo_codegen(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            RWTexture2D<float2> image;
+
+            float4 invalidReturn(int2 pixel) {
+                return image.Load(pixel);
+            }
+            """,
+            r"image_load target.*return value.*expects vec2.*Image2DFloat2.*got float4",
+        ),
+        (
+            """
+            RWTexture2D<float2> image;
+
+            float4 invalidDeclaration(int2 pixel) {
+                float4 color = image.Load(pixel);
+                return color;
+            }
+            """,
+            r"image_load target.*declaration color.*expects vec2.*got float4",
+        ),
+        (
+            """
+            RWTexture2D<float2> image;
+
+            void invalidAssignment(int2 pixel) {
+                float4 color;
+                color = image.Load(pixel);
+            }
+            """,
+            r"image_load target.*assignment target.*expects vec2.*got float4",
+        ),
+        (
+            """
+            RWTexture2D<float2> image;
+
+            float4 invalidTernary(bool useFirst, int2 pixel) {
+                return useFirst ? image.Load(pixel) : image.Load(pixel);
+            }
+            """,
+            r"image_load target.*return value true branch.*expects vec2.*got float4",
+        ),
+        (
+            """
+            RWTexture2D<float2> image;
+
+            float4 invalidMatch(int mode, int2 pixel) {
+                return match mode {
+                    0 => image.Load(pixel),
+                    _ => image.Load(pixel)
+                };
+            }
+            """,
+            r"image_load target.*return value match arm 1.*expects vec2.*got float4",
+        ),
+        (
+            """
+            RWTexture2D<float2> image;
+
+            void acceptColor(float4 color) {
+            }
+
+            void invalidArgument(int2 pixel) {
+                acceptColor(image.Load(pixel));
+            }
+            """,
+            r"image_load target.*argument 1 for acceptColor.*expects vec2.*got float4",
+        ),
+        (
+            """
+            struct Pixel {
+                float4 color;
+            };
+
+            RWTexture2D<float2> image;
+
+            Pixel invalidStructField(int2 pixel) {
+                return Pixel { color: image.Load(pixel) };
+            }
+            """,
+            (
+                r"image_load target.*return value field Pixel\.color"
+                r".*expects vec2.*got float4"
+            ),
+        ),
+        (
+            """
+            RWTexture2D<float2> image;
+
+            float4 invalidVectorConstructor(int2 pixel) {
+                return float4(image.Load(pixel));
+            }
+            """,
+            (
+                r"image_load target.*vector constructor float4 argument 1"
+                r".*expects vec2.*got float4"
+            ),
+        ),
+        (
+            """
+            RWTexture2D<uint> image;
+
+            float invalidAtomicReturn(int2 pixel, uint value) {
+                return image.InterlockedAdd(pixel, value);
+            }
+            """,
+            r"image_atomic_add target.*return value.*expects uint.*UImage2D.*got float",
+        ),
+        (
+            """
+            RWTexture2D<uint> image;
+
+            float invalidAtomicDeclaration(int2 pixel, uint value) {
+                float old = image.InterlockedAdd(pixel, value);
+                return old;
+            }
+            """,
+            r"image_atomic_add target.*declaration old.*expects uint.*got float",
+        ),
+    ],
+)
+def test_image_result_target_context_diagnostics_for_mojo_codegen(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_image_atomic_explicit_scalar_cast_remains_allowed_for_mojo_codegen():
+    code = """
+    RWTexture2D<uint> image;
+
+    float castAtomic(int2 pixel, uint value) {
+        return float(image.InterlockedAdd(pixel, value));
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "return Float32(_crossgl_image_atomic_add_UImage2D_SIMD_DType_int32_2_UInt32"
+        in generated_code
+    )
+
+
 @pytest.mark.parametrize(
     ("resource_type", "value_type"),
     [
@@ -2376,7 +2834,8 @@ def test_hlsl_rasterizer_ordered_buffer_aliases_emit_mojo_buffer_helpers():
     assert "buffer_store(rawBytes, offset, value)" in generated_code
     assert "return buffer_load3(rawBytes, offset)" in generated_code
     assert "buffer_store4(rawBytes, offset, value)" in generated_code
-    assert "buffer_dimensions(bins, count)" in generated_code
+    assert "var __cgl_dimensions_0 = buffer_dimensions(bins)" in generated_code
+    assert "count = UInt32(__cgl_dimensions_0[0])" in generated_code
     assert "var previous: UInt32 = buffer_load(rawArray[int(slot)], offset)" in (
         generated_code
     )
@@ -2612,6 +3071,1155 @@ def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     assert "imageStore" not in generated_code
 
 
+def _resource_size_target_shape_source():
+    return """
+    sampler1D strip;
+    sampler2D colorMap;
+    sampler2DArray layers;
+    image2D colorImage;
+
+    void accept2(ivec2 dims) {
+    }
+
+    void accept3(int3 dims) {
+    }
+
+    int scalarSize(sampler1D tex) {
+        int width = textureSize(tex, 0);
+        return width;
+    }
+
+    ivec2 assignSize(sampler2D tex, image2D image) {
+        ivec2 dims = textureSize(tex, 0);
+        dims = imageSize(image);
+        accept2(textureSize(tex, 0));
+        return dims;
+    }
+
+    int3 arraySize(sampler2DArray tex) {
+        int3 dims = textureSize(tex, 0);
+        accept3(textureSize(tex, 0));
+        return dims;
+    }
+    """
+
+
+def _nested_resource_size_target_shape_source():
+    return """
+    struct SizeInfo {
+        ivec2 dims;
+        int3 layers;
+    };
+
+    sampler2D colorMap;
+    sampler2DArray layerMap;
+    image2D colorImage;
+
+    void acceptDims(ivec2 dims) {
+    }
+
+    void acceptInfo(SizeInfo info) {
+    }
+
+    ivec2 chooseDims(bool useTexture, sampler2D tex, image2D image) {
+        return useTexture ? textureSize(tex, 0) : imageSize(image);
+    }
+
+    ivec2[2] collectDims(sampler2D tex, image2D image) {
+        return {textureSize(tex, 0), imageSize(image)};
+    }
+
+    SizeInfo makeInfo(sampler2D tex, image2D image, sampler2DArray layers) {
+        SizeInfo info = SizeInfo{
+            dims: imageSize(image),
+            layers: textureSize(layers, 0),
+        };
+        acceptDims(textureSize(tex, 0));
+        acceptDims(true ? textureSize(tex, 0) : imageSize(image));
+        acceptInfo(SizeInfo{
+            dims: textureSize(tex, 0),
+            layers: textureSize(layers, 0),
+        });
+        return info;
+    }
+
+    SizeInfo makePositionalInfo(image2D image, sampler2DArray layers) {
+        return SizeInfo{imageSize(image), textureSize(layers, 0)};
+    }
+    """
+
+
+def _nested_array_resource_size_target_shape_source():
+    return """
+    sampler2D colorMap;
+    image2D colorImage;
+
+    ivec2[2] rowDims(sampler2D tex, image2D image) {
+        return {textureSize(tex, 0), imageSize(image)};
+    }
+
+    ivec2[2][2] nestedDims(sampler2D tex, image2D image) {
+        ivec2[2][2] dims = {
+            rowDims(tex, image),
+            {imageSize(image), textureSize(tex, 0)}
+        };
+        return dims;
+    }
+
+    ivec2[2][2] directNestedDims(sampler2D tex, image2D image) {
+        return {
+            {textureSize(tex, 0), imageSize(image)},
+            rowDims(tex, image)
+        };
+    }
+    """
+
+
+def _value_expression_resource_size_target_shape_source():
+    return """
+    sampler2D colorMap;
+    image2D colorImage;
+
+    void acceptGrid(ivec2[2][2] grid) {
+    }
+
+    ivec2 chooseByMatch(int mode, sampler2D tex, image2D image) {
+        return match mode {
+            0 => textureSize(tex, 0),
+            _ => imageSize(image)
+        };
+    }
+
+    void passNestedArrayArgument(sampler2D tex, image2D image) {
+        acceptGrid({
+            {textureSize(tex, 0)},
+            {imageSize(image), textureSize(tex, 0)}
+        });
+    }
+    """
+
+
+def _nested_match_resource_size_target_shape_source():
+    return """
+    struct SizeInfo {
+        ivec2 dims;
+        ivec2 alt;
+    };
+
+    sampler2D colorMap;
+    image2D colorImage;
+
+    ivec2[2] collectMatchDims(int mode, sampler2D tex, image2D image) {
+        return {
+            match mode {
+                0 => textureSize(tex, 0),
+                _ => imageSize(image)
+            },
+            match mode {
+                1 => imageSize(image),
+                _ => textureSize(tex, 0)
+            }
+        };
+    }
+
+    ivec2[2] updateMatchDims(int mode, sampler2D tex, image2D image) {
+        ivec2[2] dims = {
+            match mode {
+                0 => textureSize(tex, 0),
+                _ => imageSize(image)
+            },
+            imageSize(image)
+        };
+        dims = {
+            textureSize(tex, 0),
+            match mode {
+                1 => imageSize(image),
+                _ => textureSize(tex, 0)
+            }
+        };
+        return dims;
+    }
+
+    SizeInfo makeMatchInfo(int mode, sampler2D tex, image2D image) {
+        return SizeInfo{
+            dims: match mode {
+                0 => textureSize(tex, 0),
+                _ => imageSize(image)
+            },
+            alt: match mode {
+                1 => imageSize(image),
+                _ => textureSize(tex, 0)
+            }
+        };
+    }
+    """
+
+
+def _constructor_match_resource_size_target_shape_source():
+    return """
+    sampler1D widthMap;
+    sampler2D colorMap;
+    sampler2DMS msColorMap;
+    image2D colorImage;
+    uimage1D rowImage;
+
+    ivec2 vectorMatchConstructor(int mode, sampler2D tex, image2D image) {
+        return ivec2(match mode {
+            0 => textureSize(tex, 0),
+            _ => imageSize(image)
+        });
+    }
+
+    vec2 scalarMatchConstructor(int mode) {
+        return vec2(match mode {
+            0 => 1,
+            _ => 2
+        });
+    }
+
+    float scalarCastConstructor(int mode) {
+        return float(match mode {
+            0 => 1,
+            _ => 2
+        });
+    }
+
+    float scalarResourceMatchConstructor(int mode, sampler1D tex) {
+        return float(match mode {
+            0 => textureSize(tex, 0),
+            _ => 7
+        });
+    }
+
+    float scalarResourceTernaryConstructor(bool highMip, sampler1D tex) {
+        return float(highMip ? textureSize(tex, 1) : 7);
+    }
+
+    float scalarImageTernaryConstructor(bool useWidth, uimage1D image) {
+        return float(useWidth ? imageSize(image) : 3);
+    }
+
+    float scalarQueryLevelsMatchConstructor(int mode, sampler2D tex) {
+        return float(match mode {
+            0 => textureQueryLevels(tex),
+            _ => 1
+        });
+    }
+
+    float scalarSamplesTernaryConstructor(bool useSamples, sampler2DMS tex) {
+        return float(useSamples ? textureSamples(tex) : 1);
+    }
+
+    float scalarMemberQueryConstructors(
+        Texture1D<float4> strip,
+        Texture2D<float4> queryTex,
+        Texture2DMS<float4> msTex
+    ) {
+        return float(strip.GetDimensions()) +
+            float(queryTex.textureQueryLevels()) +
+            float(msTex.textureSamples());
+    }
+
+    mat2 matrixMatchConstructor(int mode) {
+        return mat2(match mode {
+            0 => 1.0,
+            _ => 2.0
+        });
+    }
+    """
+
+
+def test_resource_size_target_shape_contexts_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_resource_size_target_shape_source()))
+    )
+
+    assert "fn texture_size(tex: Texture1D, lod: Int32) -> Int32:" in generated_code
+    assert (
+        "fn texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
+        in generated_code
+    )
+    assert (
+        "fn texture_size(tex: Texture2DArray, lod: Int32) -> " "SIMD[DType.int32, 4]:"
+    ) in generated_code
+    assert "fn image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert "var width: Int32 = texture_size(tex, 0)" in generated_code
+    assert "var dims: SIMD[DType.int32, 2] = texture_size(tex, 0)" in generated_code
+    assert "dims = image_size(image)" in generated_code
+    assert "accept2(texture_size(tex, 0))" in generated_code
+    assert "var dims: SIMD[DType.int32, 4] = texture_size(tex, 0)" in generated_code
+    assert "accept3(texture_size(tex, 0))" in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+
+
+def test_nested_resource_size_target_shape_contexts_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_nested_resource_size_target_shape_source()))
+    )
+
+    assert "fn chooseDims" in generated_code
+    assert (
+        "return (texture_size(tex, 0) if useTexture else image_size(image))"
+        in generated_code
+    )
+    assert (
+        "return InlineArray[SIMD[DType.int32, 2], 2]("
+        "texture_size(tex, 0), image_size(image))"
+    ) in generated_code
+    assert "var info: SizeInfo = SizeInfo(" in generated_code
+    assert "dims=image_size(image)" in generated_code
+    assert "layers=texture_size(layers, 0)" in generated_code
+    assert (
+        "return SizeInfo(image_size(image), texture_size(layers, 0))" in generated_code
+    )
+    assert (
+        "acceptDims((texture_size(tex, 0) if True else image_size(image)))"
+        in generated_code
+    )
+    assert "acceptInfo(SizeInfo(" in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+
+
+def test_nested_array_resource_size_target_shape_contexts_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_nested_array_resource_size_target_shape_source()))
+    )
+
+    row_type = "InlineArray[SIMD[DType.int32, 2], 2]"
+    nested_type = f"InlineArray[{row_type}, 2]"
+    assert (
+        f"fn rowDims(tex: Texture2D, image: Image2D) -> {row_type}:" in generated_code
+    )
+    assert (
+        f"fn nestedDims(tex: Texture2D, image: Image2D) -> {nested_type}:"
+        in generated_code
+    )
+    assert f"var dims: {nested_type} = {nested_type}(" in generated_code
+    assert (
+        f"fn directNestedDims(tex: Texture2D, image: Image2D) -> {nested_type}:"
+        in generated_code
+    )
+    assert (
+        f"return {nested_type}({row_type}(texture_size(tex, 0), image_size(image)), "
+        "rowDims(tex, image))"
+    ) in generated_code
+    assert "List[SIMD[DType.int32, 2]]" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+
+
+def test_value_expression_resource_size_target_shape_contexts_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_value_expression_resource_size_target_shape_source()))
+    )
+
+    row_type = "InlineArray[SIMD[DType.int32, 2], 2]"
+    nested_type = f"InlineArray[{row_type}, 2]"
+    assert "var __cgl_match_value_0: SIMD[DType.int32, 2]" in generated_code
+    assert "__cgl_match_value_0 = texture_size(tex, 0)" in generated_code
+    assert "__cgl_match_value_0 = image_size(image)" in generated_code
+    assert "return __cgl_match_value_0" in generated_code
+    assert (
+        f"acceptGrid({nested_type}("
+        f"{row_type}(texture_size(tex, 0), SIMD[DType.int32, 2](0, 0)), "
+        f"{row_type}(image_size(image), texture_size(tex, 0))))"
+    ) in generated_code
+    assert "MatchNode" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+
+
+def test_nested_match_resource_size_target_shape_contexts_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_nested_match_resource_size_target_shape_source()))
+    )
+
+    row_type = "InlineArray[SIMD[DType.int32, 2], 2]"
+    assert (
+        "fn collectMatchDims(mode: Int32, tex: Texture2D, image: Image2D) "
+        f"-> {row_type}:"
+    ) in generated_code
+    assert "var __cgl_match_value_0: SIMD[DType.int32, 2]" in generated_code
+    assert "__cgl_match_value_0 = texture_size(tex, 0)" in generated_code
+    assert "__cgl_match_value_0 = image_size(image)" in generated_code
+    assert "var __cgl_match_value_1: SIMD[DType.int32, 2]" in generated_code
+    assert (
+        f"return {row_type}(__cgl_match_value_0, __cgl_match_value_1)" in generated_code
+    )
+    assert (
+        f"var dims: {row_type} = {row_type}(__cgl_match_value_2, " "image_size(image))"
+    ) in generated_code
+    assert (
+        f"dims = {row_type}(texture_size(tex, 0), __cgl_match_value_3)"
+        in generated_code
+    )
+    assert (
+        "return SizeInfo(dims=__cgl_match_value_4, alt=__cgl_match_value_5)"
+        in generated_code
+    )
+    assert "MatchNode" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+
+
+def test_constructor_match_resource_size_target_shape_contexts_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(_constructor_match_resource_size_target_shape_source())
+        )
+    )
+
+    assert "fn vectorMatchConstructor" in generated_code
+    assert "var __cgl_match_value_0: SIMD[DType.int32, 2]" in generated_code
+    assert "__cgl_match_value_0 = texture_size(tex, 0)" in generated_code
+    assert "__cgl_match_value_0 = image_size(image)" in generated_code
+    assert (
+        "return SIMD[DType.int32, 2](" "__cgl_match_value_0[0], __cgl_match_value_0[1])"
+    ) in generated_code
+    assert "var __cgl_match_value_1: Int32" in generated_code
+    assert (
+        "return SIMD[DType.float32, 2](" "(__cgl_match_value_1).cast[DType.float32]())"
+    ) in generated_code
+    assert "var __cgl_match_value_2: Int32" in generated_code
+    assert "return Float32(__cgl_match_value_2)" in generated_code
+    assert "var __cgl_match_value_3: Int32" in generated_code
+    assert "__cgl_match_value_3 = texture_size(tex, 0)" in generated_code
+    assert "__cgl_match_value_3 = 7" in generated_code
+    assert "return Float32(__cgl_match_value_3)" in generated_code
+    assert "return Float32((texture_size(tex, 1) if highMip else 7))" in generated_code
+    assert "return Float32((image_size(image) if useWidth else 3))" in generated_code
+    assert "var __cgl_match_value_4: Int32" in generated_code
+    assert "__cgl_match_value_4 = texture_query_levels(tex)" in generated_code
+    assert "__cgl_match_value_4 = 1" in generated_code
+    assert "return Float32(__cgl_match_value_4)" in generated_code
+    assert (
+        "return Float32((texture_samples(tex) if useSamples else 1))" in generated_code
+    )
+    assert (
+        "return ((Float32(texture_size(strip)) + "
+        "Float32(texture_query_levels(queryTex))) + "
+        "Float32(texture_samples(msTex)))"
+    ) in generated_code
+    assert "var __cgl_match_value_5: Float32" in generated_code
+    assert "return CrossGLMatrixF32C2R2(" in generated_code
+    assert generated_code.count("var __cgl_match_value_") == 6
+    assert "MatchNode" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "textureQueryLevels(" not in generated_code
+    assert "textureSamples(" not in generated_code
+
+
+def test_match_expression_requires_final_wildcard_for_mojo_codegen():
+    code = """
+    shader main {
+        compute {
+            int main(int mode) {
+                return match mode {
+                    0 => 1
+                    1 => 2
+                };
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(
+        ValueError, match="match expressions must include a final wildcard arm"
+    ):
+        generate_code(ast)
+
+
+def test_match_expression_statement_arm_requires_tail_value_for_mojo_codegen():
+    code = """
+    shader main {
+        compute {
+            int main(int mode) {
+                return match mode {
+                    0 => {
+                        int selected = 1;
+                        selected = selected + 1;
+                    }
+                    _ => 2
+                };
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(ValueError, match="every arm must end with a value expression"):
+        generate_code(ast)
+
+
+@pytest.mark.parametrize(
+    ("arms_source", "message"),
+    [
+        (
+            """
+            _ => 0
+            1 => 1
+            """,
+            "wildcard arm must be final",
+        ),
+        (
+            """
+            _ => 0
+            _ => 1
+            """,
+            "multiple wildcard arms cannot be lowered",
+        ),
+        (
+            """
+            other => other
+            _ => 0
+            """,
+            "identifier binding patterns cannot be lowered",
+        ),
+        (
+            """
+            Some(value) => 1
+            _ => 0
+            """,
+            "constructor patterns cannot be lowered",
+        ),
+        (
+            """
+            Point { x } => 1
+            _ => 0
+            """,
+            "struct destructuring patterns cannot be lowered",
+        ),
+        (
+            """
+            .. => 1
+            _ => 0
+            """,
+            "range-style patterns cannot be lowered",
+        ),
+    ],
+)
+def test_match_expression_unsupported_patterns_are_rejected_for_mojo_codegen(
+    arms_source, message
+):
+    code = f"""
+    shader main {{
+        compute {{
+            int main(int mode) {{
+                return match mode {{
+                    {arms_source}
+                }};
+            }}
+        }}
+    }}
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(ValueError, match=message):
+        generate_code(ast)
+
+
+def test_match_argument_nested_array_resource_size_target_shape_direct_ir_for_mojo_codegen():
+    source = """
+    sampler2D colorMap;
+    image2D colorImage;
+
+    void acceptGrid(ivec2[2][2] grid) {
+    }
+
+    void passMatchNestedArrayArgument(int mode, sampler2D tex, image2D image) {
+    }
+    """
+    ast = parse_code(tokenize_code(source))
+
+    def int_literal(value):
+        return LiteralNode(value, PrimitiveType("int"))
+
+    def call(name, *args):
+        return FunctionCallNode(IdentifierNode(name), list(args))
+
+    def texture_size():
+        return call("textureSize", IdentifierNode("tex"), int_literal(0))
+
+    def image_size():
+        return call("imageSize", IdentifierNode("image"))
+
+    match_expr = MatchNode(
+        IdentifierNode("mode"),
+        [
+            MatchArmNode(
+                LiteralPatternNode(int_literal(0)),
+                None,
+                ArrayLiteralNode(
+                    [
+                        ArrayLiteralNode([texture_size(), image_size()]),
+                        ArrayLiteralNode([image_size(), texture_size()]),
+                    ]
+                ),
+            ),
+            MatchArmNode(
+                WildcardPatternNode(),
+                None,
+                ArrayLiteralNode(
+                    [
+                        ArrayLiteralNode([image_size()]),
+                        ArrayLiteralNode([texture_size()]),
+                    ]
+                ),
+            ),
+        ],
+    )
+    ast.functions[-1].body = BlockNode(
+        [
+            ExpressionStatementNode(
+                call("acceptGrid", match_expr),
+                is_tail_expression=False,
+            )
+        ]
+    )
+
+    generated_code = generate_code(ast)
+
+    row_type = "InlineArray[SIMD[DType.int32, 2], 2]"
+    nested_type = f"InlineArray[{row_type}, 2]"
+    assert f"var __cgl_match_value_0: {nested_type} = {nested_type}(" in generated_code
+    assert f"__cgl_match_value_0 = {nested_type}(" in generated_code
+    assert (
+        f"{row_type}(image_size(image), SIMD[DType.int32, 2](0, 0))" in generated_code
+    )
+    assert "acceptGrid(__cgl_match_value_0)" in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            sampler2D colorMap;
+
+            int invalidDeclaration(sampler2D tex) {
+                int dims = textureSize(tex, 0);
+                return dims;
+            }
+            """,
+            r"texture_size target.*declaration dims.*expects ivec2.*got int",
+        ),
+        (
+            """
+            sampler2D colorMap;
+
+            void invalidAssignment(sampler2D tex) {
+                int dims;
+                dims = textureSize(tex, 0);
+            }
+            """,
+            r"texture_size target.*assignment target.*expects ivec2.*got int",
+        ),
+        (
+            """
+            sampler2DMSArray multisampled;
+
+            ivec2 invalidReturn(sampler2DMSArray tex) {
+                return textureSize(tex);
+            }
+            """,
+            r"texture_size target.*return value.*expects ivec3.*got ivec2",
+        ),
+        (
+            """
+            sampler2D colorMap;
+
+            void takeScalar(int dims) {
+            }
+
+            void invalidArgument(sampler2D tex) {
+                takeScalar(textureSize(tex, 0));
+            }
+            """,
+            r"texture_size target.*argument 1 for takeScalar.*expects ivec2.*got int",
+        ),
+        (
+            """
+            samplerCubeArray skyLayers;
+
+            ivec4 invalidWideReturn(samplerCubeArray tex) {
+                return textureSize(tex, 0);
+            }
+            """,
+            r"texture_size target.*return value.*expects ivec3.*got ivec4",
+        ),
+        (
+            """
+            image2D colorImage;
+
+            uvec2 invalidUnsignedReturn(image2D image) {
+                return imageSize(image);
+            }
+            """,
+            r"image_size target.*return value.*expects ivec2.*got uvec2",
+        ),
+        (
+            """
+            sampler2D colorMap;
+            sampler2DArray layerMap;
+
+            ivec2 invalidTernary(bool choose, sampler2D tex, sampler2DArray layers) {
+                return choose ? textureSize(layers, 0) : textureSize(tex, 0);
+            }
+            """,
+            r"texture_size target.*return value true branch.*expects ivec3.*got ivec2",
+        ),
+        (
+            """
+            sampler2D colorMap;
+            sampler2DArray layerMap;
+
+            ivec2[2] invalidArray(sampler2D tex, sampler2DArray layers) {
+                return {textureSize(tex, 0), textureSize(layers, 0)};
+            }
+            """,
+            r"texture_size target.*array literal element 2.*expects ivec3.*got ivec2",
+        ),
+        (
+            """
+            struct SizeInfo {
+                ivec2 dims;
+            };
+
+            sampler2DArray layerMap;
+
+            SizeInfo invalidStruct(sampler2DArray layers) {
+                return SizeInfo{dims: textureSize(layers, 0)};
+            }
+            """,
+            r"texture_size target.*field SizeInfo\.dims.*expects ivec3.*got ivec2",
+        ),
+        (
+            """
+            struct SizeInfo {
+                ivec2 dims;
+            };
+
+            sampler2DArray layerMap;
+
+            SizeInfo invalidPositionalStruct(sampler2DArray layers) {
+                return SizeInfo{textureSize(layers, 0)};
+            }
+            """,
+            r"texture_size target.*field SizeInfo\.dims.*expects ivec3.*got ivec2",
+        ),
+        (
+            """
+            struct SizeInfo {
+                ivec2 dims;
+            };
+
+            sampler2D colorMap;
+            sampler2DArray layerMap;
+
+            void acceptInfo(SizeInfo info) {
+            }
+
+            void invalidStructArgument(sampler2D tex, sampler2DArray layers) {
+                acceptInfo(SizeInfo{dims: true ? textureSize(tex, 0) : textureSize(layers, 0)});
+            }
+            """,
+            r"texture_size target.*argument 1 for acceptInfo field SizeInfo\.dims false branch.*expects ivec3.*got ivec2",
+        ),
+        (
+            """
+            sampler2D colorMap;
+            sampler2DArray layerMap;
+
+            ivec2[2][2] invalidNestedArray(sampler2D tex, sampler2DArray layers) {
+                return {
+                    {textureSize(tex, 0), textureSize(tex, 0)},
+                    {textureSize(tex, 0), textureSize(layers, 0)}
+                };
+            }
+            """,
+            r"texture_size target.*array literal element 2 array literal element 2.*expects ivec3.*got ivec2",
+        ),
+        (
+            """
+            sampler2D colorMap;
+            sampler2DArray layerMap;
+
+            ivec2 invalidMatch(int mode, sampler2D tex, sampler2DArray layers) {
+                return match mode {
+                    0 => textureSize(layers, 0),
+                    _ => textureSize(tex, 0)
+                };
+            }
+            """,
+            r"texture_size target.*return value match arm 1.*expects ivec3.*got ivec2",
+        ),
+        (
+            """
+            sampler2D colorMap;
+            sampler2DArray layerMap;
+
+            vec4 invalidDirectVectorConstructor(
+                bool useLayer,
+                sampler2D tex,
+                sampler2DArray layers
+            ) {
+                return vec4(
+                    useLayer ? textureSize(layers, 0) : textureSize(tex, 0),
+                    1.0,
+                    2.0,
+                    3.0
+                );
+            }
+            """,
+            r"texture_size target.*vector constructor vec4 argument 1 true branch.*expects ivec3.*got float",
+        ),
+        (
+            """
+            sampler2D colorMap;
+            sampler2DArray layerMap;
+
+            mat2 invalidDirectMatrixConstructor(
+                bool useLayer,
+                sampler2D tex,
+                sampler2DArray layers
+            ) {
+                return mat2(
+                    1.0,
+                    useLayer ? textureSize(layers, 0) : textureSize(tex, 0),
+                    2.0,
+                    3.0
+                );
+            }
+            """,
+            r"texture_size target.*matrix constructor mat2 argument 2 true branch.*expects ivec3.*got float",
+        ),
+        (
+            """
+            sampler2D colorMap;
+            sampler2DArray layerMap;
+
+            float invalidScalarConstructorTernary(
+                bool useLayer,
+                sampler2DArray layers
+            ) {
+                return float(useLayer ? textureSize(layers, 0) : 0);
+            }
+            """,
+            r"texture_size target.*scalar constructor float argument 1 true branch.*expects ivec3.*got float",
+        ),
+        (
+            """
+            sampler2D colorMap;
+            sampler2DArray layerMap;
+
+            float invalidScalarConstructorMatch(
+                int mode,
+                sampler2DArray layers
+            ) {
+                return float(match mode {
+                    0 => textureSize(layers, 0),
+                    _ => 0
+                });
+            }
+            """,
+            r"texture_size target.*scalar constructor float argument 1 match arm 1.*expects ivec3.*got float",
+        ),
+        (
+            """
+            sampler2D colorMap;
+            sampler2DArray layerMap;
+
+            float invalidScalarImageConstructor(
+                bool useWide,
+                image2D image
+            ) {
+                return float(useWide ? imageSize(image) : 0);
+            }
+            """,
+            r"image_size target.*scalar constructor float argument 1 true branch.*expects ivec2.*got float",
+        ),
+        (
+            """
+            sampler2D colorMap;
+            sampler2DArray layerMap;
+
+            void acceptGrid(ivec2[2][2] grid) {
+            }
+
+            void invalidNestedArgument(sampler2D tex, sampler2DArray layers) {
+                acceptGrid({
+                    {textureSize(tex, 0), textureSize(layers, 0)},
+                    {textureSize(tex, 0), textureSize(tex, 0)}
+                });
+            }
+            """,
+            r"texture_size target.*argument 1 for acceptGrid array literal element 1 array literal element 2.*expects ivec3.*got ivec2",
+        ),
+        (
+            """
+            sampler2D colorMap;
+            sampler2DArray layerMap;
+
+            ivec2[2] invalidArrayMatch(
+                int mode,
+                sampler2D tex,
+                sampler2DArray layers
+            ) {
+                return {
+                    match mode {
+                        0 => textureSize(layers, 0),
+                        _ => textureSize(tex, 0)
+                    },
+                    textureSize(tex, 0)
+                };
+            }
+            """,
+            r"texture_size target.*return value array literal element 1 match arm 1.*expects ivec3.*got ivec2",
+        ),
+        (
+            """
+            struct SizeInfo {
+                ivec2 dims;
+            };
+
+            sampler2D colorMap;
+            sampler2DArray layerMap;
+
+            SizeInfo invalidStructMatch(
+                int mode,
+                sampler2D tex,
+                sampler2DArray layers
+            ) {
+                return SizeInfo{
+                    dims: match mode {
+                        0 => textureSize(layers, 0),
+                        _ => textureSize(tex, 0)
+                    }
+                };
+            }
+            """,
+            r"texture_size target.*return value field SizeInfo\.dims match arm 1.*expects ivec3.*got ivec2",
+        ),
+    ],
+)
+def test_resource_size_target_shape_diagnostics_for_mojo_codegen(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            sampler2D colorMap;
+            image2D colorImage;
+
+            ivec2[2] invalidArrayMatch(int mode, sampler2D tex, image2D image) {
+                return {
+                    match mode {
+                        0 => textureSize(tex, 0)
+                    },
+                    imageSize(image)
+                };
+            }
+            """,
+            "match expressions must include a final wildcard arm",
+        ),
+        (
+            """
+            struct SizeInfo {
+                ivec2 dims;
+            };
+
+            sampler2D colorMap;
+
+            SizeInfo invalidStructMatch(int mode, sampler2D tex) {
+                return SizeInfo{
+                    dims: match mode {
+                        0 => textureSize(tex, 0)
+                    }
+                };
+            }
+            """,
+            "match expressions must include a final wildcard arm",
+        ),
+    ],
+)
+def test_nested_match_expression_exhaustiveness_diagnostics_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        """
+        vec2 invalidVectorConstructorMatch(int mode) {
+            return vec2(match mode {
+                0 => 1
+            });
+        }
+        """,
+        """
+        float invalidScalarConstructorMatch(int mode) {
+            return float(match mode {
+                0 => 1
+            });
+        }
+        """,
+        """
+        mat2 invalidMatrixConstructorMatch(int mode) {
+            return mat2(match mode {
+                0 => 1.0
+            });
+        }
+        """,
+    ],
+)
+def test_constructor_match_expression_exhaustiveness_diagnostics_for_mojo_codegen(
+    source,
+):
+    with pytest.raises(
+        ValueError, match="match expressions must include a final wildcard arm"
+    ):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_resource_size_target_shape_contexts_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(
+        parse_code(tokenize_code(_resource_size_target_shape_source()))
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "resource_size_target_shapes.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_nested_resource_size_target_shape_contexts_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(
+        parse_code(tokenize_code(_nested_resource_size_target_shape_source()))
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "nested_resource_size_target_shapes.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_nested_array_resource_size_target_shape_contexts_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(
+        parse_code(tokenize_code(_nested_array_resource_size_target_shape_source()))
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "nested_array_resource_size_target_shapes.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_value_expression_resource_size_target_shape_contexts_compile_with_mojo(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(
+        parse_code(tokenize_code(_value_expression_resource_size_target_shape_source()))
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "value_expression_resource_size_target_shapes.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_nested_match_resource_size_target_shape_contexts_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(
+        parse_code(tokenize_code(_nested_match_resource_size_target_shape_source()))
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "nested_match_resource_size_target_shapes.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_constructor_match_resource_size_target_shape_contexts_compile_with_mojo(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(_constructor_match_resource_size_target_shape_source())
+        )
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "constructor_match_resource_size_target_shapes.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_resource_query_and_image_placeholders_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -2731,6 +4339,109 @@ def test_resource_sample_count_and_query_level_diagnostics_for_mojo_codegen():
         ValueError, match="texture_query_levels.*texture resource required"
     ):
         generate_code(parse_code(tokenize_code(image_query_levels)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            float invalidGetDimensions(int count) {
+                return float(count.GetDimensions());
+            }
+            """,
+            r"GetDimensions.*texture, image, or buffer resource receiver required: Int32",
+        ),
+        (
+            """
+            vec2 invalidTextureSize(bool useQuery, int count) {
+                return vec2(useQuery ? count.textureSize() : 1);
+            }
+            """,
+            r"texture_size.*texture resource receiver required: Int32",
+        ),
+        (
+            """
+            vec2 invalidQueryLevels(bool useQuery, int count) {
+                return vec2(useQuery ? count.textureQueryLevels() : 1);
+            }
+            """,
+            r"texture_query_levels.*texture resource receiver required: Int32",
+        ),
+        (
+            """
+            float invalidTextureSamples(int mode, int count) {
+                return float(match mode {
+                    0 => count.textureSamples(),
+                    _ => 1
+                });
+            }
+            """,
+            r"texture_samples.*texture resource receiver required: Int32",
+        ),
+        (
+            """
+            vec2 invalidImageSamples(bool useQuery, int count) {
+                return vec2(useQuery ? count.imageSamples() : 1);
+            }
+            """,
+            r"image_samples.*image resource receiver required: Int32",
+        ),
+        (
+            """
+            sampler2DMS msTex;
+
+            vec2 invalidImageSamplesOnTexture(bool useQuery, sampler2DMS tex) {
+                return vec2(useQuery ? tex.imageSamples() : 1);
+            }
+            """,
+            r"image_samples.*image resource required: Texture2DMS",
+        ),
+        (
+            """
+            image2DMS msImage;
+
+            float invalidTextureSamplesOnImage(image2DMS image) {
+                return float(image.textureSamples());
+            }
+            """,
+            r"texture_samples.*texture resource required: Image2DMS",
+        ),
+        (
+            """
+            sampler2D colorMap;
+
+            float invalidNonMsTextureSamples(sampler2D tex) {
+                return float(tex.textureSamples());
+            }
+            """,
+            r"texture_samples.*multisample texture required: Texture2D",
+        ),
+        (
+            """
+            image2D colorImage;
+
+            vec2 invalidNonMsImageSamples(bool useQuery, image2D image) {
+                return vec2(useQuery ? image.imageSamples() : 1);
+            }
+            """,
+            r"image_samples.*multisample image required: Image2D",
+        ),
+        (
+            """
+            image2D colorImage;
+
+            float invalidQueryLevelsOnImage(image2D image) {
+                return float(image.textureQueryLevels());
+            }
+            """,
+            r"texture_query_levels.*texture resource required: Image2D",
+        ),
+    ],
+)
+def test_member_resource_query_receiver_diagnostics_for_mojo_codegen(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
 
 
 def test_multisample_resource_placeholders_compile_with_mojo(tmp_path):
@@ -3358,6 +5069,1215 @@ def test_nested_struct_resource_array_containers_compile_with_mojo(tmp_path):
     generated_code += "\nfn main():\n    pass\n"
 
     source_path = tmp_path / "nested_struct_resource_array_containers.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_nested_sampled_image_resource_array_containers_preserve_mojo_placeholders():
+    code = """
+    struct SampleSet {
+        sampler2D textures[2];
+        sampler states[2];
+        readonly image2D inputs[2];
+        writeonly image2D outputs[2];
+    };
+
+    struct SampleBundle {
+        SampleSet resources;
+    };
+
+    SampleBundle bundle;
+    SampleBundle bundles[2];
+
+    vec4 sampleNested(uint outer, int slot, vec2 uv) {
+        return texture(
+            bundles[outer].resources.textures[slot],
+            bundles[outer].resources.states[slot],
+            uv
+        );
+    }
+
+    vec4 readNested(int slot, ivec2 pixel) {
+        return imageLoad(bundle.resources.inputs[slot], pixel);
+    }
+
+    void writeNested(int slot, ivec2 pixel, vec4 value) {
+        imageStore(bundle.resources.outputs[slot], pixel, value);
+    }
+
+    vec4 sampleSetParam(SampleSet resources, int slot, vec2 uv) {
+        return texture(resources.textures[slot], resources.states[slot], uv);
+    }
+
+    void writeSetParam(SampleSet resources, int slot, ivec2 pixel, vec4 value) {
+        imageStore(resources.outputs[slot], pixel, value);
+    }
+
+    vec4 sampleBundleParam(
+        SampleBundle bundles[2],
+        uint outer,
+        int slot,
+        vec2 uv
+    ) {
+        return texture(bundles[outer].resources.textures[slot], uv);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct SampleSet:" in generated_code
+    assert "var textures: InlineArray[Texture2D, 2]" in generated_code
+    assert "var states: InlineArray[Sampler, 2]" in generated_code
+    assert "var inputs: InlineArray[Image2D, 2]" in generated_code
+    assert "var outputs: InlineArray[Image2D, 2]" in generated_code
+    assert "struct SampleBundle:" in generated_code
+    assert "var resources: SampleSet" in generated_code
+    assert "var bundle = SampleBundle(SampleSet(" in generated_code
+    assert "var bundles = InlineArray[SampleBundle, 2]" in generated_code
+    assert (
+        "fn sampleSetParam(resources: SampleSet, slot: Int32, "
+        "uv: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn sampleBundleParam(bundles: InlineArray[SampleBundle, 2], "
+        "outer: UInt32, slot: Int32, uv: SIMD[DType.float32, 2]) -> "
+        "SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "return sample(bundles[int(outer)].resources.textures[int(slot)], uv)"
+        in generated_code
+    )
+    assert "return image_load(bundle.resources.inputs[int(slot)], pixel)" in (
+        generated_code
+    )
+    assert "image_store(bundle.resources.outputs[int(slot)], pixel, value)" in (
+        generated_code
+    )
+    assert "return sample(resources.textures[int(slot)], uv)" in generated_code
+    assert "image_store(resources.outputs[int(slot)], pixel, value)" in generated_code
+    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
+        generated_code
+    )
+    assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
+        generated_code
+    )
+    assert (
+        "fn image_store(image: Image2D, coord: SIMD[DType.int32, 2], "
+        "value: SIMD[DType.float32, 4]):" in generated_code
+    )
+    assert "sampler2D" not in generated_code
+    assert "image2D" not in generated_code
+    assert "texture(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            struct SampleSet {
+                sampler2D textures[2];
+            };
+            struct SampleBundle {
+                SampleSet resources;
+            };
+            vec4 invalidSample(SampleBundle bundle, int slot, vec4 uv) {
+                return texture(bundle.resources.textures[slot], uv);
+            }
+            """,
+            r"sample.*coordinate.*Texture2D",
+        ),
+        (
+            """
+            struct SampleSet {
+                readonly image2D inputs[2];
+            };
+            struct SampleBundle {
+                SampleSet resources;
+            };
+            vec4 invalidRead(SampleBundle bundle, int slot, int pixel) {
+                return imageLoad(bundle.resources.inputs[slot], pixel);
+            }
+            """,
+            r"image_load.*coordinate.*Image2D",
+        ),
+        (
+            """
+            struct SampleSet {
+                writeonly image2D images[2];
+            };
+            struct SampleBundle {
+                SampleSet resources;
+            };
+            vec4 invalidRead(SampleBundle bundles[2], uint outer, int slot, ivec2 pixel) {
+                return imageLoad(bundles[outer].resources.images[slot], pixel);
+            }
+            """,
+            r"imageLoad.*bundles\.resources\.images.*writeonly",
+        ),
+        (
+            """
+            struct SampleSet {
+                readonly image2D images[2];
+            };
+            struct SampleBundle {
+                SampleSet resources;
+            };
+            void invalidWrite(
+                SampleBundle bundle,
+                int slot,
+                ivec2 pixel,
+                vec4 value
+            ) {
+                imageStore(bundle.resources.images[slot], pixel, value);
+            }
+            """,
+            r"imageStore.*bundle\.resources\.images.*readonly",
+        ),
+    ],
+)
+def test_nested_sampled_image_resource_array_diagnostics_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_nested_sampled_image_resource_array_containers_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct SampleSet {
+        sampler2D textures[2];
+        sampler states[2];
+        readonly image2D inputs[2];
+        writeonly image2D outputs[2];
+    };
+
+    struct SampleBundle {
+        SampleSet resources;
+    };
+
+    SampleBundle bundle;
+    SampleBundle bundles[2];
+
+    vec4 sampleNested(uint outer, int slot, vec2 uv) {
+        return texture(
+            bundles[outer].resources.textures[slot],
+            bundles[outer].resources.states[slot],
+            uv
+        );
+    }
+
+    vec4 readNested(int slot, ivec2 pixel) {
+        return imageLoad(bundle.resources.inputs[slot], pixel);
+    }
+
+    void writeNested(int slot, ivec2 pixel, vec4 value) {
+        imageStore(bundle.resources.outputs[slot], pixel, value);
+    }
+
+    vec4 sampleSetParam(SampleSet resources, int slot, vec2 uv) {
+        return texture(resources.textures[slot], resources.states[slot], uv);
+    }
+
+    void writeSetParam(SampleSet resources, int slot, ivec2 pixel, vec4 value) {
+        imageStore(resources.outputs[slot], pixel, value);
+    }
+
+    vec4 sampleBundleParam(
+        SampleBundle bundles[2],
+        uint outer,
+        int slot,
+        vec2 uv
+    ) {
+        return texture(bundles[outer].resources.textures[slot], uv);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "nested_sampled_image_resource_array_containers.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_nested_sampled_image_query_resource_array_containers_for_mojo_codegen():
+    code = """
+    struct QuerySet {
+        sampler2D textures[2];
+        sampler2DMS multisampled[2];
+        readonly image2D images[2];
+        readonly image2DMS msImages[2];
+        writeonly image2DMS msOutputs[2];
+    };
+
+    struct QueryBundle {
+        QuerySet resources;
+    };
+
+    QueryBundle bundle;
+    QueryBundle bundles[2];
+
+    ivec2 nestedTexSize(uint outer, int slot) {
+        return textureSize(bundles[outer].resources.textures[slot], 0);
+    }
+
+    int nestedLevels(int slot) {
+        return textureQueryLevels(bundle.resources.textures[slot]);
+    }
+
+    int nestedTexSamples(int slot) {
+        return textureSamples(bundle.resources.multisampled[slot]);
+    }
+
+    ivec2 nestedImageSize(uint outer, int slot) {
+        return imageSize(bundles[outer].resources.images[slot]);
+    }
+
+    int nestedImageSamples(int slot) {
+        return imageSamples(bundle.resources.msImages[slot]);
+    }
+
+    vec4 fetchNested(int slot, ivec2 pixel, int sampleIndex) {
+        return texelFetch(
+            bundle.resources.multisampled[slot],
+            pixel,
+            sampleIndex
+        );
+    }
+
+    vec4 loadNested(int slot, ivec2 pixel, int sampleIndex) {
+        return imageLoad(bundle.resources.msImages[slot], pixel, sampleIndex);
+    }
+
+    void storeNested(int slot, ivec2 pixel, int sampleIndex, vec4 value) {
+        imageStore(bundle.resources.msOutputs[slot], pixel, sampleIndex, value);
+    }
+
+    ivec2 paramTexSize(QuerySet resources, int slot) {
+        return textureSize(resources.textures[slot], 0);
+    }
+
+    int paramImageSamples(QueryBundle bundles[2], uint outer, int slot) {
+        return imageSamples(bundles[outer].resources.msImages[slot]);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct QuerySet:" in generated_code
+    assert "var textures: InlineArray[Texture2D, 2]" in generated_code
+    assert "var multisampled: InlineArray[Texture2DMS, 2]" in generated_code
+    assert "var images: InlineArray[Image2D, 2]" in generated_code
+    assert "var msImages: InlineArray[Image2DMS, 2]" in generated_code
+    assert "var msOutputs: InlineArray[Image2DMS, 2]" in generated_code
+    assert "var bundles = InlineArray[QueryBundle, 2]" in generated_code
+    assert (
+        "fn paramImageSamples(bundles: InlineArray[QueryBundle, 2], "
+        "outer: UInt32, slot: Int32) -> Int32:" in generated_code
+    )
+    assert (
+        "fn texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
+        in generated_code
+    )
+    assert "fn image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
+    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
+    assert (
+        "fn texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
+        "lod: Int32)" in generated_code
+    )
+    assert (
+        "fn image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], "
+        "sample: Int32) -> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: Image2DMS, coord: SIMD[DType.int32, 2], "
+        "sample: Int32, value: SIMD[DType.float32, 4]):" in generated_code
+    )
+    assert "fn image_size(image: Texture2D)" not in generated_code
+    assert "fn image_size(image: Texture2DMS)" not in generated_code
+    assert "fn texture_size(tex: Image2D)" not in generated_code
+    assert "fn texture_size(tex: Image2DMS)" not in generated_code
+    assert (
+        "return texture_size(bundles[int(outer)].resources.textures[int(slot)], 0)"
+        in generated_code
+    )
+    assert (
+        "return texture_query_levels(bundle.resources.textures[int(slot)])"
+        in generated_code
+    )
+    assert (
+        "return texture_samples(bundle.resources.multisampled[int(slot)])"
+        in generated_code
+    )
+    assert (
+        "return image_size(bundles[int(outer)].resources.images[int(slot)])"
+        in generated_code
+    )
+    assert (
+        "return image_samples(bundle.resources.msImages[int(slot)])" in generated_code
+    )
+    assert (
+        "return texel_fetch("
+        "bundle.resources.multisampled[int(slot)], pixel, sampleIndex)"
+        in generated_code
+    )
+    assert (
+        "return image_load(bundle.resources.msImages[int(slot)], pixel, sampleIndex)"
+        in generated_code
+    )
+    assert (
+        "image_store("
+        "bundle.resources.msOutputs[int(slot)], pixel, sampleIndex, value)"
+        in generated_code
+    )
+    assert "return texture_size(resources.textures[int(slot)], 0)" in generated_code
+    assert (
+        "return image_samples("
+        "bundles[int(outer)].resources.msImages[int(slot)])" in generated_code
+    )
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "textureQueryLevels(" not in generated_code
+    assert "textureSamples(" not in generated_code
+    assert "imageSamples(" not in generated_code
+    assert "texelFetch(" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            ivec2 invalidSize() {
+                return textureSize();
+            }
+            """,
+            r"texture_size.*texture resource required",
+        ),
+        (
+            """
+            ivec2 invalidSize() {
+                return imageSize();
+            }
+            """,
+            r"image_size.*image resource required",
+        ),
+        (
+            """
+            struct QuerySet {
+                image2D images[2];
+            };
+            struct QueryBundle {
+                QuerySet resources;
+            };
+            ivec2 invalidSize(QueryBundle bundle, int slot) {
+                return textureSize(bundle.resources.images[slot], 0);
+            }
+            """,
+            r"texture_size.*texture resource required",
+        ),
+        (
+            """
+            struct QuerySet {
+                sampler2D textures[2];
+            };
+            struct QueryBundle {
+                QuerySet resources;
+            };
+            ivec2 invalidSize(QueryBundle bundle, int slot) {
+                return imageSize(bundle.resources.textures[slot]);
+            }
+            """,
+            r"image_size.*image resource required",
+        ),
+        (
+            """
+            struct QuerySet {
+                image2D images[2];
+            };
+            struct QueryBundle {
+                QuerySet resources;
+            };
+            ivec2 invalidSize(QueryBundle bundle, int slot) {
+                return imageSize(bundle.resources.images[slot], 0);
+            }
+            """,
+            r"image_size.*expected 0 argument.*got 1",
+        ),
+        (
+            """
+            struct QuerySet {
+                sampler2D textures[2];
+            };
+            struct QueryBundle {
+                QuerySet resources;
+            };
+            ivec2 invalidSize(QueryBundle bundle, int slot, float lod) {
+                return textureSize(bundle.resources.textures[slot], lod);
+            }
+            """,
+            r"texture_size.*lod.*Texture2D.*Int32",
+        ),
+        (
+            """
+            struct QuerySet {
+                sampler2DMS multisampled[2];
+            };
+            struct QueryBundle {
+                QuerySet resources;
+            };
+            int invalidSamples(QueryBundle bundle, int slot) {
+                return textureQueryLevels(bundle.resources.multisampled[slot]);
+            }
+            """,
+            r"texture_query_levels.*non-multisample texture required",
+        ),
+        (
+            """
+            struct QuerySet {
+                sampler2D textures[2];
+            };
+            struct QueryBundle {
+                QuerySet resources;
+            };
+            int invalidSamples(QueryBundle bundle, int slot) {
+                return textureSamples(bundle.resources.textures[slot]);
+            }
+            """,
+            r"texture_samples.*multisample texture required",
+        ),
+        (
+            """
+            struct QuerySet {
+                image2D images[2];
+            };
+            struct QueryBundle {
+                QuerySet resources;
+            };
+            int invalidSamples(QueryBundle bundle, int slot) {
+                return imageSamples(bundle.resources.images[slot]);
+            }
+            """,
+            r"image_samples.*multisample image required",
+        ),
+        (
+            """
+            struct QuerySet {
+                sampler2DMS multisampled[2];
+            };
+            struct QueryBundle {
+                QuerySet resources;
+            };
+            vec4 invalidFetch(
+                QueryBundle bundle,
+                int slot,
+                vec3 pixel,
+                int sampleIndex
+            ) {
+                return texelFetch(
+                    bundle.resources.multisampled[slot],
+                    pixel,
+                    sampleIndex
+                );
+            }
+            """,
+            r"texel_fetch.*coordinate.*Texture2DMS",
+        ),
+        (
+            """
+            struct QuerySet {
+                image2DMS images[2];
+            };
+            struct QueryBundle {
+                QuerySet resources;
+            };
+            vec4 invalidLoad(QueryBundle bundle, int slot, ivec2 pixel) {
+                return imageLoad(bundle.resources.images[slot], pixel);
+            }
+            """,
+            r"image_load.*expected 2 argument.*got 1",
+        ),
+        (
+            """
+            struct QuerySet {
+                writeonly image2DMS images[2];
+            };
+            struct QueryBundle {
+                QuerySet resources;
+            };
+            void invalidStore(
+                QueryBundle bundle,
+                int slot,
+                ivec2 pixel,
+                float sampleIndex,
+                vec4 value
+            ) {
+                imageStore(
+                    bundle.resources.images[slot],
+                    pixel,
+                    sampleIndex,
+                    value
+                );
+            }
+            """,
+            r"image_store.*sample.*Image2DMS.*Int32",
+        ),
+    ],
+)
+def test_nested_sampled_image_query_resource_array_diagnostics_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_nested_sampled_image_query_resource_array_containers_compile_with_mojo(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct QuerySet {
+        sampler2D textures[2];
+        sampler2DMS multisampled[2];
+        readonly image2D images[2];
+        readonly image2DMS msImages[2];
+        writeonly image2DMS msOutputs[2];
+    };
+
+    struct QueryBundle {
+        QuerySet resources;
+    };
+
+    QueryBundle bundle;
+    QueryBundle bundles[2];
+
+    ivec2 nestedTexSize(uint outer, int slot) {
+        return textureSize(bundles[outer].resources.textures[slot], 0);
+    }
+
+    int nestedLevels(int slot) {
+        return textureQueryLevels(bundle.resources.textures[slot]);
+    }
+
+    int nestedTexSamples(int slot) {
+        return textureSamples(bundle.resources.multisampled[slot]);
+    }
+
+    ivec2 nestedImageSize(uint outer, int slot) {
+        return imageSize(bundles[outer].resources.images[slot]);
+    }
+
+    int nestedImageSamples(int slot) {
+        return imageSamples(bundle.resources.msImages[slot]);
+    }
+
+    vec4 fetchNested(int slot, ivec2 pixel, int sampleIndex) {
+        return texelFetch(
+            bundle.resources.multisampled[slot],
+            pixel,
+            sampleIndex
+        );
+    }
+
+    vec4 loadNested(int slot, ivec2 pixel, int sampleIndex) {
+        return imageLoad(bundle.resources.msImages[slot], pixel, sampleIndex);
+    }
+
+    void storeNested(int slot, ivec2 pixel, int sampleIndex, vec4 value) {
+        imageStore(bundle.resources.msOutputs[slot], pixel, sampleIndex, value);
+    }
+
+    ivec2 paramTexSize(QuerySet resources, int slot) {
+        return textureSize(resources.textures[slot], 0);
+    }
+
+    int paramImageSamples(QueryBundle bundles[2], uint outer, int slot) {
+        return imageSamples(bundles[outer].resources.msImages[slot]);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "nested_sampled_image_query_resource_array_containers.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_nested_hlsl_member_resource_query_containers_for_mojo_codegen():
+    code = """
+    struct MemberSet {
+        Texture2D<float4> textures[2];
+        Texture2DMS<float4> multisampled[2];
+        RWTexture2D<float2> images[2];
+    };
+
+    struct MemberBundle {
+        MemberSet resources;
+    };
+
+    MemberBundle bundle;
+    MemberBundle bundles[2];
+
+    int2 nestedTextureDimensions(uint outer, int slot) {
+        return bundles[outer].resources.textures[slot].GetDimensions();
+    }
+
+    float4 nestedTextureLoad(int slot, int2 pixel, int sampleIndex) {
+        return bundle.resources.multisampled[slot].Load(pixel, sampleIndex);
+    }
+
+    int2 nestedImageDimensions(int slot) {
+        return bundle.resources.images[slot].GetDimensions();
+    }
+
+    float2 nestedImageLoad(int slot, int2 pixel) {
+        return bundle.resources.images[slot].Load(pixel);
+    }
+
+    void nestedImageStore(MemberBundle bundle, int slot, int2 pixel, float2 value) {
+        bundle.resources.images[slot].Store(pixel, value);
+    }
+
+    int2 paramTextureDimensions(MemberSet resources, int slot) {
+        return resources.textures[slot].GetDimensions();
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct MemberSet:" in generated_code
+    assert "var textures: InlineArray[Texture2D, 2]" in generated_code
+    assert "var multisampled: InlineArray[Texture2DMS, 2]" in generated_code
+    assert "var images: InlineArray[Image2DFloat2, 2]" in generated_code
+    assert "var bundles = InlineArray[MemberBundle, 2]" in generated_code
+    assert "fn texture_size(tex: Texture2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert (
+        "fn texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
+        "lod: Int32)" in generated_code
+    )
+    assert (
+        "fn image_size(image: Image2DFloat2) -> SIMD[DType.int32, 2]:" in generated_code
+    )
+    assert (
+        "fn image_load(image: Image2DFloat2, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.float32, 2]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: Image2DFloat2, coord: SIMD[DType.int32, 2], "
+        "value: SIMD[DType.float32, 2]):" in generated_code
+    )
+    assert (
+        "return texture_size(bundles[int(outer)].resources.textures[int(slot)])"
+        in generated_code
+    )
+    assert (
+        "return texel_fetch("
+        "bundle.resources.multisampled[int(slot)], pixel, sampleIndex)"
+        in generated_code
+    )
+    assert "return image_size(bundle.resources.images[int(slot)])" in generated_code
+    assert (
+        "return image_load(bundle.resources.images[int(slot)], pixel)" in generated_code
+    )
+    assert (
+        "image_store(bundle.resources.images[int(slot)], pixel, value)"
+        in generated_code
+    )
+    assert "return texture_size(resources.textures[int(slot)])" in generated_code
+    assert "Texture2D<float4>" not in generated_code
+    assert "Texture2DMS<float4>" not in generated_code
+    assert "RWTexture2D<float2>" not in generated_code
+    assert ".GetDimensions(" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            struct MemberSet {
+                Texture2D<float4> textures[2];
+            };
+            struct MemberBundle {
+                MemberSet resources;
+            };
+            void invalidStore(
+                MemberBundle bundle,
+                int slot,
+                int2 pixel,
+                float4 value
+            ) {
+                bundle.resources.textures[slot].Store(pixel, value);
+            }
+            """,
+            r"image_store.*image resource required.*Texture2D",
+        ),
+        (
+            """
+            struct MemberSet {
+                RWTexture2D<float2> images[2];
+            };
+            struct MemberBundle {
+                MemberSet resources;
+            };
+            float2 invalidLoad(
+                MemberBundle bundle,
+                int slot,
+                int2 pixel,
+                int sampleIndex
+            ) {
+                return bundle.resources.images[slot].Load(pixel, sampleIndex);
+            }
+            """,
+            r"image_load.*expected 1 argument.*got 2",
+        ),
+        (
+            """
+            struct MemberSet {
+                Texture2D<float4> textures[2];
+            };
+            struct MemberBundle {
+                MemberSet resources;
+            };
+            int2 invalidDimensions(MemberBundle bundle, int slot, float lod) {
+                return bundle.resources.textures[slot].GetDimensions(lod);
+            }
+            """,
+            r"texture_size.*lod.*Texture2D.*Int32",
+        ),
+        (
+            """
+            struct MemberSet {
+                RWTexture2D<float2> images[2];
+            };
+            struct MemberBundle {
+                MemberSet resources;
+            };
+            int2 invalidDimensions(MemberBundle bundle, int slot) {
+                return bundle.resources.images[slot].GetDimensions(0);
+            }
+            """,
+            r"image_size.*expected 0 argument.*got 1",
+        ),
+        (
+            """
+            struct MemberSet {
+                Texture2DMS<float4> multisampled[2];
+            };
+            struct MemberBundle {
+                MemberSet resources;
+            };
+            float4 invalidLoad(
+                MemberBundle bundle,
+                int slot,
+                float2 pixel,
+                int sampleIndex
+            ) {
+                return bundle.resources.multisampled[slot].Load(pixel, sampleIndex);
+            }
+            """,
+            r"texel_fetch.*coordinate.*Texture2DMS.*SIMD\[DType\.int32, 2\]",
+        ),
+    ],
+)
+def test_nested_hlsl_member_resource_query_diagnostics_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_nested_hlsl_member_resource_query_containers_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct MemberSet {
+        Texture2D<float4> textures[2];
+        Texture2DMS<float4> multisampled[2];
+        RWTexture2D<float2> images[2];
+    };
+
+    struct MemberBundle {
+        MemberSet resources;
+    };
+
+    MemberBundle bundle;
+    MemberBundle bundles[2];
+
+    int2 nestedTextureDimensions(uint outer, int slot) {
+        return bundles[outer].resources.textures[slot].GetDimensions();
+    }
+
+    float4 nestedTextureLoad(int slot, int2 pixel, int sampleIndex) {
+        return bundle.resources.multisampled[slot].Load(pixel, sampleIndex);
+    }
+
+    int2 nestedImageDimensions(int slot) {
+        return bundle.resources.images[slot].GetDimensions();
+    }
+
+    float2 nestedImageLoad(int slot, int2 pixel) {
+        return bundle.resources.images[slot].Load(pixel);
+    }
+
+    void nestedImageStore(MemberBundle bundle, int slot, int2 pixel, float2 value) {
+        bundle.resources.images[slot].Store(pixel, value);
+    }
+
+    int2 paramTextureDimensions(MemberSet resources, int slot) {
+        return resources.textures[slot].GetDimensions();
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "nested_hlsl_member_resource_query_containers.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_hlsl_get_dimensions_out_parameter_statements_for_mojo_codegen():
+    code = """
+    struct DimensionSet {
+        Texture2DArray<float4> textures[2];
+        RWTexture3D<float4> volumes[2];
+        StructuredBuffer<float4> buffers[2];
+    };
+
+    Texture2D<float4> colorMap;
+    Texture2DMS<float4> multisampled;
+    RWTexture2D<uint> counters;
+    DimensionSet resources;
+
+    void queryDimensions(uint lod, int slot) {
+        uint width;
+        uint height;
+        uint depth;
+        uint elements;
+        uint levels;
+        uint samples;
+        uint stride;
+
+        colorMap.GetDimensions(width, height, levels);
+        resources.textures[slot].GetDimensions(
+            lod,
+            width,
+            height,
+            elements,
+            levels
+        );
+        multisampled.GetDimensions(width, height, samples);
+        counters.GetDimensions(width, height);
+        resources.volumes[slot].GetDimensions(width, height, depth);
+        resources.buffers[slot].GetDimensions(elements, stride);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn texture_size(tex: Texture2D) -> SIMD[DType.int32, 2]:" in (
+        generated_code
+    )
+    assert (
+        "fn texture_size(tex: Texture2DArray, lod: Int32) -> " "SIMD[DType.int32, 4]:"
+    ) in generated_code
+    assert (
+        "fn texture_size(tex: Texture2DMS) -> SIMD[DType.int32, 2]:" in generated_code
+    )
+    assert "fn image_size(image: UImage2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert (
+        "fn image_size(image: Image3DFloat4) -> SIMD[DType.int32, 4]:" in generated_code
+    )
+    assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
+    assert "fn texture_query_levels(tex: Texture2DArray) -> Int32:" in generated_code
+    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert (
+        "fn buffer_dimensions("
+        "buffer: StructuredBuffer[SIMD[DType.float32, 4]], "
+        "dimensions: UInt32, stride: UInt32):"
+    ) in generated_code
+    assert "var __cgl_dimensions_0 = texture_size(colorMap)" in generated_code
+    assert "width = UInt32(__cgl_dimensions_0[0])" in generated_code
+    assert "height = UInt32(__cgl_dimensions_0[1])" in generated_code
+    assert "levels = UInt32(texture_query_levels(colorMap))" in generated_code
+    assert (
+        "var __cgl_dimensions_1 = "
+        "texture_size(resources.textures[int(slot)], Int32(lod))"
+    ) in generated_code
+    assert "elements = UInt32(__cgl_dimensions_1[2])" in generated_code
+    assert (
+        "levels = UInt32(texture_query_levels(resources.textures[int(slot)]))"
+        in generated_code
+    )
+    assert "samples = UInt32(texture_samples(multisampled))" in generated_code
+    assert "var __cgl_dimensions_3 = image_size(counters)" in generated_code
+    assert "var __cgl_dimensions_4 = image_size(resources.volumes[int(slot)])" in (
+        generated_code
+    )
+    assert "depth = UInt32(__cgl_dimensions_4[2])" in generated_code
+    assert (
+        "var __cgl_dimensions_5 = buffer_dimensions(resources.buffers[int(slot)])"
+        in generated_code
+    )
+    assert "elements = UInt32(__cgl_dimensions_5[0])" in generated_code
+    assert "stride = UInt32(__cgl_dimensions_5[1])" in generated_code
+    assert ".GetDimensions(" not in generated_code
+
+
+def _hlsl_get_dimensions_edge_variant_source():
+    return """
+    Texture1D<float4> strip;
+    Texture1DArray<float4> stripArray;
+    TextureCube<float4> sky;
+    TextureCubeArray<float4> skyArray;
+    Texture2DMSArray<float4> msaaArray;
+    RWTexture1D<uint> row;
+    RWTexture1DArray<uint> rowArray;
+    RWTexture2DArray<uint> atlas;
+
+    void queryEdges(
+        uint lod,
+        uint width,
+        uint height,
+        uint elements,
+        uint levels,
+        uint samples
+    ) {
+        strip.GetDimensions(lod, width, levels);
+        strip.GetDimensions(width, levels);
+        stripArray.GetDimensions(lod, width, elements, levels);
+        sky.GetDimensions(width, height, levels);
+        skyArray.GetDimensions(lod, width, height, elements, levels);
+        msaaArray.GetDimensions(width, height, elements, samples);
+        row.GetDimensions(width);
+        rowArray.GetDimensions(width, elements);
+        atlas.GetDimensions(width, height, elements);
+    }
+
+    void queryParameterTexture(
+        Texture1DArray<float4> tex,
+        uint lod,
+        uint width,
+        uint elements,
+        uint levels
+    ) {
+        tex.GetDimensions(lod, width, elements, levels);
+    }
+    """
+
+
+def test_hlsl_get_dimensions_out_parameter_edge_variants_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_hlsl_get_dimensions_edge_variant_source()))
+    )
+
+    assert "fn texture_size(tex: Texture1D) -> Int32:" in generated_code
+    assert (
+        "fn texture_size(tex: Texture1DArray, lod: Int32) -> " "SIMD[DType.int32, 2]:"
+    ) in generated_code
+    assert "fn texture_size(tex: TextureCube) -> SIMD[DType.int32, 2]:" in (
+        generated_code
+    )
+    assert (
+        "fn texture_size(tex: TextureCubeArray, lod: Int32) -> " "SIMD[DType.int32, 4]:"
+    ) in generated_code
+    assert (
+        "fn texture_size(tex: Texture2DMSArray) -> SIMD[DType.int32, 4]:"
+        in generated_code
+    )
+    assert "fn texture_samples(tex: Texture2DMSArray) -> Int32:" in generated_code
+    assert "fn image_size(image: UImage1D) -> Int32:" in generated_code
+    assert "fn image_size(image: UImage1DArray) -> SIMD[DType.int32, 2]:" in (
+        generated_code
+    )
+    assert "fn image_size(image: UImage2DArray) -> SIMD[DType.int32, 4]:" in (
+        generated_code
+    )
+
+    assert (
+        "fn queryEdges(lod: UInt32, owned width: UInt32, "
+        "owned height: UInt32, owned elements: UInt32, "
+        "owned levels: UInt32, owned samples: UInt32) -> None:"
+    ) in generated_code
+    assert "owned lod" not in generated_code
+    assert "var __cgl_dimensions_0 = texture_size(strip, Int32(lod))" in (
+        generated_code
+    )
+    assert "width = UInt32(__cgl_dimensions_0)" in generated_code
+    assert "var __cgl_dimensions_1 = texture_size(strip)" in generated_code
+    assert "var __cgl_dimensions_2 = texture_size(stripArray, Int32(lod))" in (
+        generated_code
+    )
+    assert "elements = UInt32(__cgl_dimensions_2[1])" in generated_code
+    assert "var __cgl_dimensions_3 = texture_size(sky)" in generated_code
+    assert "height = UInt32(__cgl_dimensions_3[1])" in generated_code
+    assert "var __cgl_dimensions_4 = texture_size(skyArray, Int32(lod))" in (
+        generated_code
+    )
+    assert "elements = UInt32(__cgl_dimensions_4[2])" in generated_code
+    assert "var __cgl_dimensions_5 = texture_size(msaaArray)" in generated_code
+    assert "samples = UInt32(texture_samples(msaaArray))" in generated_code
+    assert "width = UInt32(image_size(row))" in generated_code
+    assert "var __cgl_dimensions_6 = image_size(rowArray)" in generated_code
+    assert "var __cgl_dimensions_7 = image_size(atlas)" in generated_code
+    assert (
+        "fn queryParameterTexture(tex: Texture1DArray, lod: UInt32, "
+        "owned width: UInt32, owned elements: UInt32, "
+        "owned levels: UInt32) -> None:"
+    ) in generated_code
+    assert "var __cgl_dimensions_8 = texture_size(tex, Int32(lod))" in (generated_code)
+    assert ".GetDimensions(" not in generated_code
+
+
+def test_hlsl_get_dimensions_out_parameter_edge_variants_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(
+        parse_code(tokenize_code(_hlsl_get_dimensions_edge_variant_source()))
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "hlsl_get_dimensions_edge_variants.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            Texture2D<float4> colorMap;
+
+            void invalidOverload() {
+                uint width;
+                uint height;
+                uint levels;
+                uint extra;
+                uint overflow;
+                colorMap.GetDimensions(width, height, levels, extra, overflow);
+            }
+            """,
+            r"GetDimensions overload.*Texture2D.*expected 2, 3, or 4.*got 5",
+        ),
+        (
+            """
+            Texture2D<float4> colorMap;
+
+            void invalidLod(float lod) {
+                uint width;
+                uint height;
+                uint levels;
+                colorMap.GetDimensions(lod, width, height, levels);
+            }
+            """,
+            r"GetDimensions overload.*lod argument.*Texture2D.*integer scalar",
+        ),
+        (
+            """
+            RWTexture2D<float4> output;
+
+            void invalidImageOverload() {
+                uint width;
+                uint height;
+                uint levels;
+                output.GetDimensions(width, height, levels);
+            }
+            """,
+            r"GetDimensions overload.*Image2DFloat4.*expected 2.*got 3",
+        ),
+    ],
+)
+def test_hlsl_get_dimensions_out_parameter_diagnostics_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_hlsl_get_dimensions_out_parameter_statements_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct DimensionSet {
+        Texture2DArray<float4> textures[2];
+        RWTexture3D<float4> volumes[2];
+        StructuredBuffer<float4> buffers[2];
+    };
+
+    Texture2D<float4> colorMap;
+    Texture2DMS<float4> multisampled;
+    RWTexture2D<uint> counters;
+    DimensionSet resources;
+
+    void queryDimensions(uint lod, int slot) {
+        uint width;
+        uint height;
+        uint depth;
+        uint elements;
+        uint levels;
+        uint samples;
+        uint stride;
+
+        colorMap.GetDimensions(width, height, levels);
+        resources.textures[slot].GetDimensions(
+            lod,
+            width,
+            height,
+            elements,
+            levels
+        );
+        multisampled.GetDimensions(width, height, samples);
+        counters.GetDimensions(width, height);
+        resources.volumes[slot].GetDimensions(width, height, depth);
+        resources.buffers[slot].GetDimensions(elements, stride);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "hlsl_get_dimensions_out_parameters.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
         [mojo, "run", str(source_path)],
@@ -4374,6 +7294,97 @@ def test_image_load_store_argument_diagnostics_for_mojo_codegen():
         generate_code(parse_code(tokenize_code(texture_image_load)))
 
 
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        (
+            """
+            float invalidLoad(int count, ivec2 pixel) {
+                return float(count.Load(pixel));
+            }
+            """,
+            r"Load.*texture, image, or buffer resource receiver required: Int32",
+        ),
+        (
+            """
+            vec2 invalidAtomic(int count, ivec2 pixel, uint value) {
+                return vec2(count.Add(pixel, value), 1.0);
+            }
+            """,
+            r"image_atomic_add.*image resource receiver required: Int32",
+        ),
+        (
+            """
+            uint passValue(uint value) {
+                return value;
+            }
+
+            uint invalidInterlocked(int count, ivec2 pixel, uint value) {
+                return passValue(count.InterlockedAdd(pixel, value));
+            }
+            """,
+            (
+                r"image_atomic_add.*image or byte-address buffer resource "
+                r"receiver required: Int32"
+            ),
+        ),
+        (
+            """
+            uint passValue(uint value) {
+                return value;
+            }
+
+            uint invalidStore(int count, ivec2 pixel, uint value) {
+                return passValue(count.Store(pixel, value));
+            }
+            """,
+            r"Store.*image or buffer resource receiver required: Int32",
+        ),
+        (
+            """
+            float invalidImageLoad(uimage2D image, int pixel) {
+                return float(image.Load(pixel));
+            }
+            """,
+            r"image_load.*coordinate.*UImage2D",
+        ),
+        (
+            """
+            uint invalidAtomicCoord(uimage2D image, int pixel, uint value) {
+                return image.Add(pixel, value);
+            }
+            """,
+            r"image_atomic_add.*coordinate.*UImage2D",
+        ),
+        (
+            """
+            uint invalidAtomicValue(uimage2D image, ivec2 pixel, int value) {
+                return image.Add(pixel, value);
+            }
+            """,
+            r"image_atomic_add.*value.*UImage2D",
+        ),
+        (
+            """
+            uint passValue(uint value) {
+                return value;
+            }
+
+            uint invalidImageStore(uimage2D image, ivec2 pixel, float value) {
+                return passValue(image.Store(pixel, value));
+            }
+            """,
+            r"image_store.*value.*UImage2D",
+        ),
+    ],
+)
+def test_image_member_operation_diagnostics_in_nested_contexts_for_mojo_codegen(
+    source, message
+):
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -4471,6 +7482,173 @@ def test_integer_image_atomic_placeholders_compile_with_mojo(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_multisample_image_atomic_placeholders_preserve_sample_indices_for_mojo():
+    code = """
+    uimage2DMS counters;
+    iimage2DMSArray signedLayers;
+
+    uint updateCounter(
+        uimage2DMS image,
+        ivec2 pixel,
+        int sampleIndex,
+        uint value,
+        uint replacement
+    ) {
+        uint added = imageAtomicAdd(image, pixel, sampleIndex, value);
+        return image.InterlockedCompareExchange(
+            pixel,
+            sampleIndex,
+            added,
+            replacement
+        );
+    }
+
+    int updateLayer(
+        iimage2DMSArray image,
+        ivec4 pixelLayer,
+        int sampleIndex,
+        int value
+    ) {
+        return image.InterlockedAdd(pixelLayer, sampleIndex, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct UImage2DMS:" in generated_code
+    assert "struct IImage2DMSArray:" in generated_code
+    assert (
+        "fn _crossgl_image_atomic_add_UImage2DMS_SIMD_DType_int32_2_Int32_UInt32"
+        "(arg0: UImage2DMS, arg1: SIMD[DType.int32, 2], arg2: Int32, "
+        "arg3: UInt32) -> UInt32:" in generated_code
+    )
+    assert (
+        "fn _crossgl_image_atomic_comp_swap_UImage2DMS_SIMD_DType_int32_2_"
+        "Int32_UInt32_UInt32"
+        "(arg0: UImage2DMS, arg1: SIMD[DType.int32, 2], arg2: Int32, "
+        "arg3: UInt32, arg4: UInt32) -> UInt32:" in generated_code
+    )
+    assert (
+        "fn _crossgl_image_atomic_add_IImage2DMSArray_SIMD_DType_int32_4_"
+        "Int32_Int32"
+        "(arg0: IImage2DMSArray, arg1: SIMD[DType.int32, 4], arg2: Int32, "
+        "arg3: Int32) -> Int32:" in generated_code
+    )
+    assert (
+        "_crossgl_image_atomic_add_UImage2DMS_SIMD_DType_int32_2_Int32_UInt32"
+        "(image, pixel, sampleIndex, value)" in generated_code
+    )
+    assert (
+        "_crossgl_image_atomic_comp_swap_UImage2DMS_SIMD_DType_int32_2_"
+        "Int32_UInt32_UInt32(image, pixel, sampleIndex, added, replacement)"
+        in generated_code
+    )
+    assert (
+        "_crossgl_image_atomic_add_IImage2DMSArray_SIMD_DType_int32_4_Int32_Int32"
+        "(image, pixelLayer, sampleIndex, value)" in generated_code
+    )
+    assert "imageAtomic" not in generated_code
+    assert ".Interlocked" not in generated_code
+
+
+def test_multisample_image_atomic_placeholders_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    uimage2DMS counters;
+    iimage2DMSArray signedLayers;
+
+    uint updateCounter(
+        uimage2DMS image,
+        ivec2 pixel,
+        int sampleIndex,
+        uint value,
+        uint replacement
+    ) {
+        uint added = imageAtomicAdd(image, pixel, sampleIndex, value);
+        return image.InterlockedCompareExchange(
+            pixel,
+            sampleIndex,
+            added,
+            replacement
+        );
+    }
+
+    int updateLayer(
+        iimage2DMSArray image,
+        ivec4 pixelLayer,
+        int sampleIndex,
+        int value
+    ) {
+        return image.InterlockedAdd(pixelLayer, sampleIndex, value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "multisample_image_atomic_placeholders.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        (
+            """
+            uimage2DMS counters;
+
+            uint invalidMissingSample(uimage2DMS image, ivec2 pixel, uint value) {
+                return imageAtomicAdd(image, pixel, value);
+            }
+            """,
+            r"image_atomic_add.*expected 3 argument.*got 2",
+        ),
+        (
+            """
+            uimage2DMS counters;
+
+            uint invalidMemberMissingSample(
+                uimage2DMS image,
+                ivec2 pixel,
+                uint compare,
+                uint value
+            ) {
+                return image.CompareExchange(pixel, compare, value);
+            }
+            """,
+            r"image_atomic_comp_swap.*expected 4 argument.*got 3",
+        ),
+        (
+            """
+            uimage2DMS counters;
+
+            uint invalidSampleType(
+                uimage2DMS image,
+                ivec2 pixel,
+                float sampleIndex,
+                uint value
+            ) {
+                return image.InterlockedAdd(pixel, sampleIndex, value);
+            }
+            """,
+            r"image_atomic_add.*sample.*UImage2DMS.*Int32",
+        ),
+    ],
+)
+def test_multisample_image_atomic_argument_diagnostics_for_mojo_codegen(
+    source, message
+):
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(source)))
 
 
 def test_float_image_atomics_are_rejected_for_mojo_codegen():
@@ -5010,6 +8188,168 @@ def test_direct_cast_nodes_emit_mojo_casts_without_ast_repr():
     assert codegen.generate_expression(scalar_expr) == "Float32(index)"
     assert codegen.expression_result_type(scalar_expr) == "float"
 
+    resource_codegen = MojoCodeGen()
+    resource_codegen.register_variable_type("mode", "int")
+    resource_codegen.register_variable_type("strip", "sampler1D")
+    resource_codegen.register_variable_type("queryTex", "sampler2D")
+    resource_codegen.register_variable_type("msTex", "sampler2DMS")
+    resource_codegen.register_variable_type("msImage", "uimage2DMS")
+    resource_codegen.register_variable_type("rowImage", "uimage1D")
+    resource_codegen.register_variable_type("layers", "sampler2DArray")
+    resource_codegen.register_variable_type("wideImage", "uimage2D")
+
+    valid_resource_match = MatchNode(
+        IdentifierNode("mode"),
+        [
+            MatchArmNode(
+                LiteralPatternNode(LiteralNode(0, PrimitiveType("int"))),
+                None,
+                FunctionCallNode(
+                    IdentifierNode("textureSize"),
+                    [
+                        IdentifierNode("strip"),
+                        LiteralNode(0, PrimitiveType("int")),
+                    ],
+                ),
+            ),
+            MatchArmNode(
+                WildcardPatternNode(),
+                None,
+                LiteralNode(7, PrimitiveType("int")),
+            ),
+        ],
+    )
+    prelude, expression = resource_codegen.generate_expression_with_prelude(
+        CastNode(valid_resource_match, PrimitiveType("float")),
+        1,
+        "float",
+        "return value",
+    )
+
+    assert "var __cgl_match_value_0: Int32" in prelude
+    assert "__cgl_match_value_0 = texture_size(strip, 0)" in prelude
+    assert "__cgl_match_value_0 = 7" in prelude
+    assert expression == "Float32(__cgl_match_value_0)"
+    assert (
+        resource_codegen.generate_expression(
+            CastNode(
+                TextureOpNode(
+                    "textureQueryLevels",
+                    VariableNode("queryTex", PrimitiveType("sampler2D")),
+                    [],
+                ),
+                PrimitiveType("float"),
+            )
+        )
+        == "Float32(texture_query_levels(queryTex))"
+    )
+    assert (
+        resource_codegen.generate_expression(
+            CastNode(
+                TextureOpNode(
+                    "textureSamples",
+                    VariableNode("msTex", PrimitiveType("sampler2DMS")),
+                    [],
+                ),
+                PrimitiveType("float"),
+            )
+        )
+        == "Float32(texture_samples(msTex))"
+    )
+    assert (
+        resource_codegen.generate_expression(
+            CastNode(
+                TextureOpNode(
+                    "imageSamples",
+                    VariableNode("msImage", PrimitiveType("uimage2DMS")),
+                    [],
+                ),
+                PrimitiveType("float"),
+            )
+        )
+        == "Float32(image_samples(msImage))"
+    )
+    assert (
+        resource_codegen.generate_expression(
+            CastNode(
+                TextureOpNode(
+                    "GetDimensions",
+                    VariableNode("rowImage", PrimitiveType("uimage1D")),
+                    [],
+                ),
+                PrimitiveType("float"),
+            )
+        )
+        == "Float32(image_size(rowImage))"
+    )
+
+    invalid_resource_match = MatchNode(
+        IdentifierNode("mode"),
+        [
+            MatchArmNode(
+                LiteralPatternNode(LiteralNode(0, PrimitiveType("int"))),
+                None,
+                FunctionCallNode(
+                    IdentifierNode("textureSize"),
+                    [
+                        IdentifierNode("layers"),
+                        LiteralNode(0, PrimitiveType("int")),
+                    ],
+                ),
+            ),
+            MatchArmNode(
+                WildcardPatternNode(),
+                None,
+                LiteralNode(0, PrimitiveType("int")),
+            ),
+        ],
+    )
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"texture_size target.*cast to float match arm 1"
+            r".*expects ivec3.*got float"
+        ),
+    ):
+        resource_codegen.generate_expression_with_prelude(
+            CastNode(invalid_resource_match, PrimitiveType("float")),
+            1,
+            "float",
+            "return value",
+        )
+
+    invalid_image_match = MatchNode(
+        IdentifierNode("mode"),
+        [
+            MatchArmNode(
+                LiteralPatternNode(LiteralNode(0, PrimitiveType("int"))),
+                None,
+                FunctionCallNode(
+                    IdentifierNode("imageSize"),
+                    [IdentifierNode("wideImage")],
+                ),
+            ),
+            MatchArmNode(
+                WildcardPatternNode(),
+                None,
+                LiteralNode(0, PrimitiveType("int")),
+            ),
+        ],
+    )
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"image_size target.*cast to float match arm 1"
+            r".*expects ivec2.*got float"
+        ),
+    ):
+        resource_codegen.generate_expression_with_prelude(
+            CastNode(invalid_image_match, PrimitiveType("float")),
+            1,
+            "float",
+            "return value",
+        )
+
 
 def test_direct_vector_cast_nodes_emit_mojo_simd_casts():
     codegen = MojoCodeGen()
@@ -5022,6 +8362,71 @@ def test_direct_vector_cast_nodes_emit_mojo_simd_casts():
 
     assert codegen.generate_expression(vector_expr) == "mask.cast[DType.float32]()"
     assert codegen.expression_result_type(vector_expr) == "vec4"
+
+
+def _direct_scalar_match_for_mojo_codegen():
+    def int_literal(value):
+        return LiteralNode(value, PrimitiveType("int"))
+
+    return MatchNode(
+        IdentifierNode("mode"),
+        [
+            MatchArmNode(
+                LiteralPatternNode(int_literal(0)),
+                None,
+                IdentifierNode("left"),
+            ),
+            MatchArmNode(WildcardPatternNode(), None, IdentifierNode("right")),
+        ],
+    )
+
+
+def _register_direct_match_variables_for_mojo_codegen(codegen):
+    codegen.register_variable_type("mode", "int")
+    codegen.register_variable_type("left", "int")
+    codegen.register_variable_type("right", "int")
+
+
+def test_direct_vector_cast_match_emits_single_mojo_prelude_temp():
+    codegen = MojoCodeGen()
+    _register_direct_match_variables_for_mojo_codegen(codegen)
+    vector_cast = CastNode(
+        _direct_scalar_match_for_mojo_codegen(),
+        VectorType(PrimitiveType("float"), 2),
+    )
+
+    prelude, expression = codegen.generate_expression_with_prelude(
+        vector_cast,
+        1,
+        "vec2",
+        "return value",
+    )
+
+    assert prelude.count("var __cgl_match_value_") == 1
+    assert "var __cgl_match_value_0: Int32 = 0" in prelude
+    assert "__cgl_match_value_1" not in prelude
+    assert (
+        expression
+        == "SIMD[DType.float32, 2]((__cgl_match_value_0).cast[DType.float32]())"
+    )
+
+
+def test_direct_constructor_and_cast_match_require_mojo_expression_prelude():
+    codegen = MojoCodeGen()
+    _register_direct_match_variables_for_mojo_codegen(codegen)
+    vector_constructor = FunctionCallNode(
+        IdentifierNode("vec2"), [_direct_scalar_match_for_mojo_codegen()]
+    )
+
+    with pytest.raises(ValueError, match="expression prelude context is required"):
+        codegen.generate_expression(vector_constructor)
+
+    vector_cast = CastNode(
+        _direct_scalar_match_for_mojo_codegen(),
+        VectorType(PrimitiveType("float"), 2),
+    )
+    with pytest.raises(ValueError, match="expression prelude context is required"):
+        codegen.generate_expression(vector_cast)
 
 
 def test_direct_swizzle_nodes_emit_mojo_components_without_ast_repr():
@@ -8239,6 +11644,774 @@ fn main():
     assert "[1.0, 2.0, 3.0, 0.0]" in result.stdout
 
 
+def _duplicate_sensitive_image_constructor_source():
+    return """
+    RWTexture2D<float4> colors;
+    RWTexture2D<uint> counters;
+
+    float2 pixel() {
+        return float2(1.0, 2.0);
+    }
+
+    int2 coord() {
+        return int2(0, 1);
+    }
+
+    float4 packImageVec() {
+        return float4(colors.Load(coord()).xy, pixel());
+    }
+
+    float2x2 packImageMatrix() {
+        return float2x2(colors.Load(coord()).xy, pixel());
+    }
+
+    float3 splatAtomic() {
+        return float3(float(counters.InterlockedAdd(coord(), 1u)));
+    }
+
+    float2x2 diagonalAtomic() {
+        return float2x2(float(counters.InterlockedAdd(coord(), 2u)));
+    }
+    """
+
+
+def test_duplicate_sensitive_image_constructors_emit_single_evaluation_helpers():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_duplicate_sensitive_image_constructor_source()))
+    )
+
+    vector_helper = "_crossgl_construct_f32_4_vf324_01_vf322_01"
+    matrix_helper = "_crossgl_construct_matrix_f32_c2_r2_2_vf324_01_vf322_01"
+    diagonal_helper = "_crossgl_matrix_diagonal_f32_c2_r2"
+    atomic_helper = "_crossgl_image_atomic_add_UImage2D_SIMD_DType_int32_2_UInt32"
+    atomic_one = f"{atomic_helper}(counters, coord(), 1)"
+    atomic_two = f"{atomic_helper}(counters, coord(), 2)"
+
+    assert f"fn {vector_helper}" in generated_code
+    assert f"fn {matrix_helper}" in generated_code
+    assert f"fn {diagonal_helper}" in generated_code
+    assert (
+        f"return {vector_helper}(image_load(colors, coord()), pixel())"
+        in generated_code
+    )
+    assert (
+        f"return {matrix_helper}(image_load(colors, coord()), pixel())"
+        in generated_code
+    )
+    assert f"return _crossgl_vec3_splat_f32(Float32({atomic_one}))" in generated_code
+    assert f"return {diagonal_helper}(Float32({atomic_two}))" in generated_code
+    assert generated_code.count(atomic_one) == 1
+    assert generated_code.count(atomic_two) == 1
+    assert "image_load(colors, coord())[0]" not in generated_code
+
+
+def test_duplicate_sensitive_image_constructors_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_duplicate_sensitive_image_constructor_source()))
+    )
+    generated_code += """
+fn main():
+    print(packImageVec())
+    print(packImageMatrix().c0)
+    print(splatAtomic())
+    print(diagonalAtomic().c0)
+"""
+
+    source_path = tmp_path / "duplicate_sensitive_image_constructors.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "source, pattern",
+    [
+        (
+            """
+            RWTexture2D<uint> counters;
+            int2 coord() { return int2(0, 1); }
+            float4 invalidVector() {
+                return float4(
+                    counters.InterlockedAdd(coord(), 1u),
+                    0.0,
+                    0.0,
+                    0.0
+                );
+            }
+            """,
+            r"image_atomic_add target.*vector constructor float4 argument 1"
+            r".*expects uint.*got float",
+        ),
+        (
+            """
+            RWTexture2D<uint> counters;
+            int2 coord() { return int2(0, 1); }
+            float2 makeUv() { return float2(1.0, 2.0); }
+            float4 invalidHelperVector() {
+                return float4(
+                    makeUv(),
+                    counters.InterlockedAdd(coord(), 1u),
+                    0.0
+                );
+            }
+            """,
+            r"image_atomic_add target.*constructor helper argument 2"
+            r".*expects uint.*got float",
+        ),
+        (
+            """
+            RWTexture2D<uint> counters;
+            int2 coord() { return int2(0, 1); }
+            float2x2 invalidMatrix() {
+                return float2x2(counters.InterlockedAdd(coord(), 1u));
+            }
+            """,
+            r"image_atomic_add target.*matrix constructor float2x2 argument 1"
+            r".*expects uint.*got float",
+        ),
+    ],
+)
+def test_image_atomic_constructor_scalar_targets_require_explicit_casts(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def _duplicate_sensitive_buffer_constructor_source():
+    return """
+    StructuredBuffer<float2> pairs;
+    ConsumeStructuredBuffer<float2> consumed;
+    ConsumeStructuredBuffer<int> scalarConsumed;
+    RWByteAddressBuffer raw;
+
+    uint index() {
+        return 0u;
+    }
+
+    float2 uv() {
+        return float2(1.0, 2.0);
+    }
+
+    float4 packLoad() {
+        return float4(pairs.Load(index()), uv());
+    }
+
+    float4 packConsume() {
+        return float4(consumed.Consume(), uv());
+    }
+
+    float4 packReinterpret() {
+        return float4(asfloat(raw.Load2(index())), uv());
+    }
+
+    float2x2 packMatrix() {
+        return float2x2(pairs.Load(index()), uv());
+    }
+
+    float2x2 diagonalConsume() {
+        return float2x2(float(scalarConsumed.Consume()));
+    }
+    """
+
+
+def test_duplicate_sensitive_buffer_constructors_emit_single_evaluation_helpers():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_duplicate_sensitive_buffer_constructor_source()))
+    )
+
+    vector_helper = "_crossgl_construct_f32_4_vf322_01_vf322_01"
+    matrix_helper = "_crossgl_construct_matrix_f32_c2_r2_2_vf322_01_vf322_01"
+    diagonal_helper = "_crossgl_matrix_diagonal_f32_c2_r2"
+
+    assert (
+        f"return {vector_helper}(buffer_load(pairs, index()), uv())" in generated_code
+    )
+    assert f"return {vector_helper}(buffer_consume(consumed), uv())" in generated_code
+    assert (
+        f"return {vector_helper}(asfloat(buffer_load2(raw, index())), uv())"
+        in generated_code
+    )
+    assert (
+        f"return {matrix_helper}(buffer_load(pairs, index()), uv())" in generated_code
+    )
+    assert (
+        f"return {diagonal_helper}(Float32(buffer_consume(scalarConsumed)))"
+        in generated_code
+    )
+    assert "buffer_load(pairs, index())[0]" not in generated_code
+    assert "buffer_consume(consumed)[0]" not in generated_code
+    assert "asfloat(buffer_load2(raw, index()))[0]" not in generated_code
+    assert generated_code.count("buffer_consume(scalarConsumed)") == 1
+
+
+def test_duplicate_sensitive_buffer_constructors_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_duplicate_sensitive_buffer_constructor_source()))
+    )
+    generated_code += """
+fn main():
+    print(packLoad())
+    print(packConsume())
+    print(packReinterpret())
+    print(packMatrix().c0)
+    print(diagonalConsume().c0)
+"""
+
+    source_path = tmp_path / "duplicate_sensitive_buffer_constructors.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "source, pattern",
+    [
+        (
+            """
+            StructuredBuffer<float2> pairs;
+            uint index() { return 0u; }
+            float invalidLoad() {
+                return float(pairs.Load(index()));
+            }
+            """,
+            r"buffer_load target.*scalar constructor float argument 1"
+            r".*expects float2.*got float",
+        ),
+        (
+            """
+            ConsumeStructuredBuffer<float2> consumed;
+            float invalidConsume() {
+                return float(consumed.Consume());
+            }
+            """,
+            r"buffer_consume target.*scalar constructor float argument 1"
+            r".*expects float2.*got float",
+        ),
+        (
+            """
+            RWByteAddressBuffer raw;
+            uint index() { return 0u; }
+            float invalidReinterpret() {
+                return float(asfloat(raw.Load2(index())));
+            }
+            """,
+            r"asfloat target.*scalar constructor float argument 1"
+            r".*expects vec2.*got float",
+        ),
+    ],
+)
+def test_buffer_and_reinterpret_constructor_scalar_targets_reject_vectors(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def _aggregate_buffer_reinterpret_target_source():
+    return """
+    struct PairBox {
+        float2 value;
+        float2 alt;
+    };
+
+    StructuredBuffer<float2> pairs;
+    ConsumeStructuredBuffer<float2> consumed;
+    RWByteAddressBuffer raw;
+
+    uint index() {
+        return 0u;
+    }
+
+    void acceptPairs(float2[2] values) {
+    }
+
+    void acceptBox(PairBox pairBox) {
+    }
+
+    float2 chooseBuffer(bool useRaw) {
+        return useRaw ? asfloat(raw.Load2(index())) : pairs.Load(index());
+    }
+
+    float2[2] collectBufferValues(int mode, bool useRaw) {
+        return {
+            useRaw ? asfloat(raw.Load2(index())) : pairs.Load(index()),
+            match mode {
+                0 => consumed.Consume(),
+                _ => asfloat(raw.Load2(index()))
+            }
+        };
+    }
+
+    PairBox makeBufferBox(int mode, bool useRaw) {
+        return PairBox{
+            value: useRaw ? asfloat(raw.Load2(index())) : pairs.Load(index()),
+            alt: match mode {
+                0 => consumed.Consume(),
+                _ => asfloat(raw.Load2(index()))
+            }
+        };
+    }
+
+    PairBox makePositionalBufferBox(int mode, bool useRaw) {
+        return PairBox(
+            useRaw ? asfloat(raw.Load2(index())) : pairs.Load(index()),
+            match mode {
+                0 => consumed.Consume(),
+                _ => asfloat(raw.Load2(index()))
+            }
+        );
+    }
+
+    void passBufferArray(int mode, bool useRaw) {
+        acceptPairs({
+            useRaw ? pairs.Load(index()) : asfloat(raw.Load2(index())),
+            match mode {
+                0 => asfloat(raw.Load2(index())),
+                _ => consumed.Consume()
+            }
+        });
+    }
+
+    void passBufferBox(int mode, bool useRaw) {
+        acceptBox(PairBox{
+            value: useRaw ? pairs.Load(index()) : asfloat(raw.Load2(index())),
+            alt: match mode {
+                0 => asfloat(raw.Load2(index())),
+                _ => consumed.Consume()
+            }
+        });
+    }
+    """
+
+
+def test_aggregate_buffer_reinterpret_targets_preserve_contexts_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_aggregate_buffer_reinterpret_target_source()))
+    )
+
+    array_type = "InlineArray[SIMD[DType.float32, 2], 2]"
+    assert "fn chooseBuffer(useRaw: Bool) -> SIMD[DType.float32, 2]:" in (
+        generated_code
+    )
+    assert (
+        "return (asfloat(buffer_load2(raw, index())) if useRaw else "
+        "buffer_load(pairs, index()))"
+    ) in generated_code
+    assert f"fn collectBufferValues(mode: Int32, useRaw: Bool) -> {array_type}:" in (
+        generated_code
+    )
+    assert "var __cgl_match_value_0: SIMD[DType.float32, 2]" in generated_code
+    assert "__cgl_match_value_0 = buffer_consume(consumed)" in generated_code
+    assert "__cgl_match_value_0 = asfloat(buffer_load2(raw, index()))" in (
+        generated_code
+    )
+    assert (
+        f"return {array_type}((asfloat(buffer_load2(raw, index())) if useRaw "
+        "else buffer_load(pairs, index())), __cgl_match_value_0)"
+    ) in generated_code
+    assert (
+        "return PairBox(value=(asfloat(buffer_load2(raw, index())) if useRaw else"
+        in generated_code
+    )
+    assert "return PairBox((asfloat(buffer_load2(raw, index())) if useRaw else" in (
+        generated_code
+    )
+    assert f"acceptPairs({array_type}(" in generated_code
+    assert "acceptBox(PairBox(value=(buffer_load(pairs, index()) if useRaw else" in (
+        generated_code
+    )
+    assert "pairs.Load(" not in generated_code
+    assert "raw.Load2(" not in generated_code
+    assert "consumed.Consume(" not in generated_code
+
+
+def test_aggregate_buffer_reinterpret_targets_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_aggregate_buffer_reinterpret_target_source()))
+    )
+    generated_code += """
+fn main():
+    print(chooseBuffer(True))
+    print(collectBufferValues(0, False)[0])
+    print(makeBufferBox(0, True).value)
+    print(makePositionalBufferBox(1, False).alt)
+    passBufferArray(0, True)
+    passBufferBox(1, False)
+"""
+
+    source_path = tmp_path / "aggregate_buffer_reinterpret_targets.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "source, pattern",
+    [
+        (
+            """
+            StructuredBuffer<float2> pairs;
+            uint index() { return 0u; }
+            float[2] invalidArray(bool choose) {
+                return {choose ? pairs.Load(index()) : 1.0, 2.0};
+            }
+            """,
+            r"buffer_load target.*return value array literal element 1 true branch"
+            r".*expects float2.*got float",
+        ),
+        (
+            """
+            RWByteAddressBuffer raw;
+            uint index() { return 0u; }
+            float[2] invalidArray(bool choose) {
+                return {choose ? asfloat(raw.Load2(index())) : 1.0, 2.0};
+            }
+            """,
+            r"asfloat target.*return value array literal element 1 true branch"
+            r".*expects vec2.*got float",
+        ),
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            StructuredBuffer<float2> pairs;
+            uint index() { return 0u; }
+            ScalarBox invalidBox(bool choose) {
+                return ScalarBox{
+                    value: choose ? pairs.Load(index()) : float2(1.0, 2.0)
+                };
+            }
+            """,
+            r"buffer_load target.*return value field ScalarBox\.value true branch"
+            r".*expects float2.*got float",
+        ),
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            RWByteAddressBuffer raw;
+            uint index() { return 0u; }
+            ScalarBox invalidBox(bool choose) {
+                return ScalarBox(
+                    choose ? asfloat(raw.Load2(index())) : float2(1.0, 2.0)
+                );
+            }
+            """,
+            r"asfloat target.*return value field ScalarBox\.value true branch"
+            r".*expects vec2.*got float",
+        ),
+        (
+            """
+            ConsumeStructuredBuffer<float2> consumed;
+            float invalidMatch(int mode) {
+                return match mode {
+                    0 => consumed.Consume(),
+                    _ => float2(1.0, 2.0)
+                };
+            }
+            """,
+            r"buffer_consume target.*return value match arm 1"
+            r".*expects float2.*got float",
+        ),
+    ],
+)
+def test_aggregate_buffer_reinterpret_target_shape_diagnostics(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def _constructor_helper_match_and_ternary_source():
+    return """
+    vec2 makeUv() {
+        return vec2(0.25, 0.75);
+    }
+
+    vec2 makeAltUv() {
+        return vec2(1.25, 1.75);
+    }
+
+    ivec2 makeIndexPair() {
+        return ivec2(2, 3);
+    }
+
+    vec4 packTernaryVec(bool useAlt) {
+        return vec4(useAlt ? makeAltUv() : makeUv(), makeIndexPair());
+    }
+
+    mat2 packTernaryMatrix(bool useAlt) {
+        return mat2(useAlt ? makeAltUv() : makeUv(), makeIndexPair());
+    }
+
+    vec4 packMatchVec(int mode) {
+        return vec4(match mode {
+            0 => makeUv(),
+            _ => makeAltUv()
+        }, makeIndexPair());
+    }
+
+    mat2 packMatchMatrix(int mode) {
+        return mat2(match mode {
+            0 => makeUv(),
+            _ => makeAltUv()
+        }, makeIndexPair());
+    }
+    """
+
+
+def test_constructor_helper_match_and_ternary_operands_emit_single_preludes():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_constructor_helper_match_and_ternary_source()))
+    )
+
+    vector_helper = "_crossgl_construct_f32_4_vf322_01_vi322_01"
+    matrix_helper = "_crossgl_construct_matrix_f32_c2_r2_2_vf322_01_vi322_01"
+    assert f"fn {vector_helper}" in generated_code
+    assert f"fn {matrix_helper}" in generated_code
+    assert (
+        f"return {vector_helper}((makeAltUv() if useAlt else makeUv()), "
+        "makeIndexPair())"
+    ) in generated_code
+    assert (
+        f"return {matrix_helper}((makeAltUv() if useAlt else makeUv()), "
+        "makeIndexPair())"
+    ) in generated_code
+    assert "var __cgl_match_value_0: SIMD[DType.float32, 2]" in generated_code
+    assert "__cgl_match_value_0 = makeUv()" in generated_code
+    assert "__cgl_match_value_0 = makeAltUv()" in generated_code
+    assert f"return {vector_helper}(__cgl_match_value_0, makeIndexPair())" in (
+        generated_code
+    )
+    assert "var __cgl_match_value_1: SIMD[DType.float32, 2]" in generated_code
+    assert f"return {matrix_helper}(__cgl_match_value_1, makeIndexPair())" in (
+        generated_code
+    )
+    assert generated_code.count("var __cgl_match_value_") == 2
+    assert "MatchNode" not in generated_code
+    assert "makeIndexPair()[0]" not in generated_code
+    assert "makeIndexPair()[1]" not in generated_code
+    assert "SIMD[DType.float32, 4]((makeAltUv() if useAlt else makeUv())" not in (
+        generated_code
+    )
+    assert "CrossGLMatrixF32C2R2((makeAltUv() if useAlt else makeUv())" not in (
+        generated_code
+    )
+
+
+def test_constructor_helper_match_and_ternary_operands_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_constructor_helper_match_and_ternary_source()))
+    )
+    generated_code += """
+fn main():
+    print(packTernaryVec(False))
+    print(packTernaryVec(True))
+    print(packTernaryMatrix(False).c0)
+    print(packTernaryMatrix(False).c1)
+    print(packTernaryMatrix(True).c0)
+    print(packMatchVec(0))
+    print(packMatchVec(1))
+    print(packMatchMatrix(0).c0)
+    print(packMatchMatrix(0).c1)
+    print(packMatchMatrix(1).c0)
+"""
+
+    source_path = tmp_path / "constructor_helper_match_and_ternary.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[0.25, 0.75, 2.0, 3.0]" in result.stdout
+    assert "[1.25, 1.75, 2.0, 3.0]" in result.stdout
+    assert "[2.0, 3.0]" in result.stdout
+    assert "[0.25, 0.75]" in result.stdout
+    assert "[1.25, 1.75]" in result.stdout
+
+
+def _constructor_helper_resource_query_branch_source():
+    return """
+    sampler1D widthMap;
+    sampler2D colorMap;
+    image2D colorImage;
+
+    ivec2 makeIndexPair() {
+        return ivec2(2, 3);
+    }
+
+    float nextFloat() {
+        return 9.0;
+    }
+
+    vec4 packScalarTernaryResource(bool highMip, sampler1D tex) {
+        return vec4(
+            makeIndexPair(),
+            highMip ? textureSize(tex, 1) : textureSize(tex, 0),
+            nextFloat()
+        );
+    }
+
+    vec4 packScalarMatchResource(int mode, sampler1D tex) {
+        return vec4(makeIndexPair(), match mode {
+            0 => textureSize(tex, 0),
+            _ => textureSize(tex, 1)
+        }, nextFloat());
+    }
+
+    vec4 packVectorTernaryResource(bool useTex, sampler2D tex, image2D image) {
+        return vec4(
+            useTex ? textureSize(tex, 0) : imageSize(image),
+            makeIndexPair()
+        );
+    }
+
+    mat2 packMatrixVectorTernaryResource(
+        bool useTex,
+        sampler2D tex,
+        image2D image
+    ) {
+        return mat2(
+            useTex ? textureSize(tex, 0) : imageSize(image),
+            makeIndexPair()
+        );
+    }
+    """
+
+
+def test_constructor_helper_resource_query_branches_preserve_target_shapes():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_constructor_helper_resource_query_branch_source()))
+    )
+
+    scalar_helper = "_crossgl_construct_f32_4_vi322_01_si32_s"
+    vector_helper = "_crossgl_construct_f32_4_vi322_01_vi322_01"
+    matrix_helper = "_crossgl_construct_matrix_f32_c2_r2_2_vi322_01_vi322_01"
+    assert f"fn {scalar_helper}" in generated_code
+    assert f"fn {vector_helper}" in generated_code
+    assert f"fn {matrix_helper}" in generated_code
+    assert (
+        f"return {scalar_helper}(makeIndexPair(), "
+        "(texture_size(tex, 1) if highMip else texture_size(tex, 0)), "
+        "nextFloat())"
+    ) in generated_code
+    assert "var __cgl_match_value_0: Int32" in generated_code
+    assert "__cgl_match_value_0 = texture_size(tex, 0)" in generated_code
+    assert "__cgl_match_value_0 = texture_size(tex, 1)" in generated_code
+    assert (
+        f"return {scalar_helper}(makeIndexPair(), __cgl_match_value_0, nextFloat())"
+        in generated_code
+    )
+    assert (
+        f"return {vector_helper}((texture_size(tex, 0) if useTex else "
+        "image_size(image)), makeIndexPair())"
+    ) in generated_code
+    assert (
+        f"return {matrix_helper}((texture_size(tex, 0) if useTex else "
+        "image_size(image)), makeIndexPair())"
+    ) in generated_code
+    assert generated_code.count("var __cgl_match_value_") == 1
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_constructor_helper_resource_query_ternary_shape_diagnostics():
+    code = """
+    sampler2D colorMap;
+    sampler2DArray layerMap;
+
+    ivec2 makeIndexPair() {
+        return ivec2(2, 3);
+    }
+
+    float nextFloat() {
+        return 9.0;
+    }
+
+    vec4 invalidScalarHelperTernary(
+        bool useLayer,
+        sampler2D tex,
+        sampler2DArray layers
+    ) {
+        return vec4(
+            makeIndexPair(),
+            useLayer ? textureSize(layers, 0) : textureSize(tex, 0),
+            nextFloat()
+        );
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"texture_size target.*constructor helper argument 2 true branch"
+            r".*expects ivec3.*got float"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_constructor_helper_resource_query_branches_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_constructor_helper_resource_query_branch_source()))
+    )
+    generated_code += """
+fn main():
+    print(packScalarTernaryResource(False, Texture1D()))
+    print(packScalarTernaryResource(True, Texture1D()))
+    print(packScalarMatchResource(0, Texture1D()))
+    print(packVectorTernaryResource(False, Texture2D(), Image2D()))
+    print(packMatrixVectorTernaryResource(True, Texture2D(), Image2D()).c0)
+"""
+
+    source_path = tmp_path / "constructor_helper_resource_query_branches.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[2.0, 3.0, 0.0, 9.0]" in result.stdout
+    assert "[0.0, 0.0, 2.0, 3.0]" in result.stdout
+
+
 def test_duplicate_sensitive_bool_vector_helpers_use_bool_dtype():
     code = """
     bool flag() {
@@ -10308,6 +14481,33 @@ def test_match_statement_lowers_to_mojo_condition_chain():
     assert "value = 2" in generated_code
     assert "MatchNode" not in generated_code
     assert "MatchArmNode" not in generated_code
+
+
+def test_match_statement_nonfinal_wildcard_is_rejected_for_mojo_codegen():
+    code = """
+    shader main {
+        compute {
+            int main(int mode) {
+                int value = 0;
+                match mode {
+                    _ => {
+                        value = 1;
+                    }
+                    1 => {
+                        value = 2;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(ValueError, match="wildcard arm must be final"):
+        generate_code(ast)
 
 
 def test_match_guarded_arm_is_rejected_for_mojo_codegen():

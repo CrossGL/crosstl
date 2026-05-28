@@ -21,6 +21,7 @@ from ..ast import (
     ExpressionStatementNode,
     IdentifierNode,
     MemberAccessNode,
+    UnaryOpNode,
     BlockNode,
     WildcardPatternNode,
 )
@@ -972,12 +973,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 fallback,
             )
 
-        target_expr = args[0]
+        target_expr = self.visit(target["target_expr"])
         value_args = ", ".join(args[1:])
         return f"{intrinsic}(&{target_expr}, {value_args})"
 
     def structured_buffer_atomic_target(self, target_expr):
         """Return RWStructuredBuffer target metadata for an atomic lvalue."""
+        target_expr = self.strip_address_of_expression(target_expr)
         element_access = self.structured_buffer_element_access(target_expr)
         if element_access is None:
             return None
@@ -993,8 +995,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         target_type = self.expression_result_type(target_expr) or parts[1]
         return {
             "buffer_type": buffer_type,
+            "target_expr": target_expr,
             "target_type": target_type,
         }
+
+    def strip_address_of_expression(self, expr):
+        """Return the lvalue inside an address-of expression."""
+        if isinstance(expr, UnaryOpNode):
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            if operator == "&":
+                return getattr(expr, "operand", expr)
+        return expr
 
     def structured_buffer_element_access(self, target_expr):
         """Return the structured-buffer element access inside an atomic lvalue."""

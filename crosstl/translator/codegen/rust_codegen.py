@@ -382,9 +382,15 @@ class RustCodeGen:
         self.swizzle_temp_counter = 0
         self.vector_arg_temp_counter = 0
         self.matrix_arg_temp_counter = 0
+        self.lambda_capture_temp_counter = 0
         self.assignment_lhs_depth = 0
         self.member_object_depth = 0
         self.array_object_depth = 0
+        self.return_move_blocked_roots = set()
+        self.lambda_capture_alias_stack = []
+        self.lambda_capture_place_alias_stack = []
+        self.force_move_lambda_depth = 0
+        self.nested_lambda_capture_preclone_depth = 0
 
     def generate(self, ast):
         """Generate complete Rust-like shader source for a CrossGL AST."""
@@ -424,9 +430,15 @@ class RustCodeGen:
         self.swizzle_temp_counter = 0
         self.vector_arg_temp_counter = 0
         self.matrix_arg_temp_counter = 0
+        self.lambda_capture_temp_counter = 0
         self.assignment_lhs_depth = 0
         self.member_object_depth = 0
         self.array_object_depth = 0
+        self.return_move_blocked_roots = set()
+        self.lambda_capture_alias_stack = []
+        self.lambda_capture_place_alias_stack = []
+        self.force_move_lambda_depth = 0
+        self.nested_lambda_capture_preclone_depth = 0
         code = "// Generated Rust GPU Shader Code\n"
         code += "use gpu::*;\n"
         code += "use math::*;\n\n"
@@ -1959,13 +1971,21 @@ class RustCodeGen:
             getattr(func, "body", None)
         )
 
+        inferred_constraints = self.combined_function_generic_constraints(func)
+        self.current_function_generic_constraints = inferred_constraints
+
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         params = []
         for p in param_list:
             param_type = self.function_parameter_type(p)
             self.register_variable_type(p.name, param_type, scope="local")
             param_name = p.name
-            if param_name in self.current_mutated_names:
+            if param_name in self.current_mutated_names or (
+                self.function_parameter_requires_mut_binding(
+                    p,
+                    inferred_constraints,
+                )
+            ):
                 param_name = f"mut {param_name}"
             params.append(f"{param_name}: {self.map_type(param_type)}")
 
@@ -1984,8 +2004,6 @@ class RustCodeGen:
         elif shader_type == "compute":
             code += f"#[compute_shader]\n"
 
-        inferred_constraints = self.combined_function_generic_constraints(func)
-        self.current_function_generic_constraints = inferred_constraints
         generic_params = self.format_generic_params(
             func,
             extra_constraints=inferred_constraints,
@@ -2585,6 +2603,24 @@ class RustCodeGen:
                 return self.convert_type_node_to_string(vtype)
             return vtype
         return "float"
+
+    def function_parameter_requires_mut_binding(self, param, generic_constraints):
+        qualifiers = {str(q) for q in getattr(param, "qualifiers", []) or []}
+        if "mut" in qualifiers or getattr(param, "is_mutable", False):
+            return True
+
+        param_type = self.function_parameter_type(param)
+        if self.callable_type_uses_trait(param_type, "FnMut"):
+            return True
+
+        param_name = self.type_name_string(param_type)
+        if not param_name:
+            return False
+
+        return any(
+            self.callable_type_uses_trait(bound, "FnMut")
+            for bound in generic_constraints.get(param_name, [])
+        )
 
     def generate_param_attributes(self, param):
         """Generate Rust GPU parameter attributes based on semantic"""
@@ -3448,6 +3484,8 @@ class RustCodeGen:
                 )
             return pattern.name
         if isinstance(pattern, ConstructorPatternNode):
+            if not pattern.arguments:
+                return pattern.type_name
             args = ", ".join(
                 self.generate_match_pattern(arg, unused_bindings, mutable_bindings)
                 for arg in pattern.arguments
@@ -3781,7 +3819,7 @@ class RustCodeGen:
 
     def generate_expression_with_type(self, expr, target_type, static_context=False):
         if isinstance(expr, LambdaNode):
-            return self.generate_lambda_node_expression(expr)
+            return self.generate_lambda_node_expression(expr, target_type=target_type)
         if isinstance(expr, BlockNode):
             return self.generate_block_expression(expr, target_type=target_type)
         if isinstance(expr, MatchNode):
@@ -3818,7 +3856,7 @@ class RustCodeGen:
                 return_context=True,
             )
         if isinstance(expr, LambdaNode):
-            return self.generate_lambda_node_expression(expr)
+            return self.generate_lambda_node_expression(expr, target_type=target_type)
         if isinstance(expr, BlockNode):
             return self.generate_block_expression(
                 expr,
@@ -3852,7 +3890,7 @@ class RustCodeGen:
                 return_context=True,
             )
         if isinstance(expr, LambdaNode):
-            return self.generate_lambda_node_expression(expr)
+            return self.generate_lambda_node_expression(expr, target_type=target_type)
         if isinstance(expr, BlockNode):
             return self.generate_block_expression(
                 expr,
@@ -3906,7 +3944,12 @@ class RustCodeGen:
         )
         return f"(if {condition} {{ {true_value} }} else {{ {false_value} }})"
 
-    def generate_return_function_call_expression(self, expr, target_type=None):
+    def generate_return_function_call_expression(
+        self,
+        expr,
+        target_type=None,
+        move_counts=None,
+    ):
         func_expr = getattr(expr, "function", getattr(expr, "name", "unknown"))
         func_name = self.function_call_name(func_expr)
         if not isinstance(func_name, str):
@@ -3920,6 +3963,7 @@ class RustCodeGen:
             args,
             target_type=target_type,
             return_context=True,
+            move_counts=move_counts,
         )
         if enum_variant is not None:
             return enum_variant
@@ -3929,19 +3973,27 @@ class RustCodeGen:
             generated_args = self.generate_return_call_args_with_types(
                 args,
                 param_types,
+                func_name=func_name,
+                move_counts=move_counts,
             )
             return f"{callee}({', '.join(generated_args)})"
 
         struct_constructor = self.generate_return_struct_new_call_with_typed_args(
             func_name,
             args,
+            move_counts=move_counts,
         )
         if struct_constructor is not None:
             return struct_constructor
 
         return None
 
-    def generate_return_constructor_expression(self, expr, target_type=None):
+    def generate_return_constructor_expression(
+        self,
+        expr,
+        target_type=None,
+        move_counts=None,
+    ):
         type_name = self.normalize_turbofish_type_name(
             self.convert_type_node_to_string(expr.constructor_type)
         )
@@ -3956,38 +4008,36 @@ class RustCodeGen:
             if variant_info is not None:
                 enum_type, variant_name, field_types = variant_info
                 constructor_path = self.enum_variant_call_path(enum_type, variant_name)
-                argument_values = list(named_arguments.values())
-                move_counts = self.return_move_place_counts(argument_values)
-                fields = []
-                for name, value in named_arguments.items():
-                    field_value = self.generate_return_argument_with_type(
-                        value,
-                        field_types.get(name),
-                        move_counts,
-                    )
-                    fields.append(f"{name}: {field_value}")
+                fields = self.generate_return_named_constructor_fields(
+                    named_arguments,
+                    lambda name: field_types.get(name),
+                    move_counts=move_counts,
+                )
                 return f"{constructor_path} {{ {', '.join(fields)} }}"
 
             constructor_path = self.rust_constructor_path(rust_type)
-            argument_values = list(named_arguments.values())
-            move_counts = self.return_move_place_counts(argument_values)
-            fields = []
-            for name, value in named_arguments.items():
-                member_type = self.resolve_struct_member_type(type_name, name)
-                field_value = self.generate_return_argument_with_type(
-                    value,
-                    member_type,
-                    move_counts,
-                )
-                fields.append(f"{name}: {field_value}")
+            fields = self.generate_return_named_constructor_fields(
+                named_arguments,
+                lambda name: self.resolve_struct_member_type(type_name, name),
+                move_counts=move_counts,
+            )
             return f"{constructor_path} {{ {', '.join(fields)} }}"
 
         arguments = getattr(expr, "arguments", []) or []
         member_types = self.resolve_struct_positional_member_types(type_name)
-        args = self.generate_return_call_args_with_types(arguments, member_types)
+        args = self.generate_return_call_args_with_types(
+            arguments,
+            member_types,
+            move_counts=move_counts,
+        )
         return f"{self.rust_constructor_path(rust_type)}::new({', '.join(args)})"
 
-    def generate_return_struct_new_call_with_typed_args(self, func_name, args):
+    def generate_return_struct_new_call_with_typed_args(
+        self,
+        func_name,
+        args,
+        move_counts=None,
+    ):
         type_name = self.struct_new_call_type_name(func_name)
         if type_name is None:
             return None
@@ -3996,8 +4046,46 @@ class RustCodeGen:
         if not member_types:
             return None
 
-        generated_args = self.generate_return_call_args_with_types(args, member_types)
+        generated_args = self.generate_return_call_args_with_types(
+            args,
+            member_types,
+            move_counts=move_counts,
+        )
         return f"{self.struct_new_call_path(type_name)}({', '.join(generated_args)})"
+
+    def generate_return_named_constructor_fields(
+        self,
+        named_arguments,
+        field_type_for_name,
+        move_counts=None,
+    ):
+        argument_values = list(named_arguments.values())
+        local_move_counts = (
+            move_counts
+            if move_counts is not None
+            else self.return_move_place_counts(argument_values)
+        )
+        later_roots = self.return_call_arg_later_roots(argument_values)
+        lambda_conflict_roots = self.return_call_arg_lambda_conflict_roots(
+            argument_values
+        )
+        fields = []
+        for index, (name, value) in enumerate(named_arguments.items()):
+            field_type = field_type_for_name(name)
+            field_value = self.generate_with_lambda_capture_move_blocks(
+                value,
+                later_roots[index],
+                lambda value=value, field_type=field_type: (
+                    self.generate_return_argument_with_type(
+                        value,
+                        field_type,
+                        local_move_counts,
+                    )
+                ),
+                lambda_conflict_roots[index],
+            )
+            fields.append(f"{name}: {field_value}")
+        return fields
 
     def generate_enum_variant_call_with_typed_args(
         self,
@@ -4005,6 +4093,7 @@ class RustCodeGen:
         args,
         target_type=None,
         return_context=False,
+        move_counts=None,
     ):
         variant_info = self.enum_variant_call_info(func_name, target_type)
         if variant_info is None:
@@ -4020,36 +4109,49 @@ class RustCodeGen:
             generated_args = self.generate_return_call_args_with_types(
                 args,
                 payload_types,
+                move_counts=move_counts,
             )
         else:
-            generated_args = []
-            for index, arg in enumerate(args):
-                payload_type = (
-                    payload_types[index] if index < len(payload_types) else None
-                )
-                arg_expr = self.generate_expression_with_type(arg, payload_type)
-                arg_expr = self.normalize_typed_expression_value(
-                    arg,
-                    arg_expr,
-                    payload_type,
-                )
-                generated_args.append(arg_expr)
+            generated_args = self.generate_constructor_call_args_with_types(
+                args,
+                payload_types,
+            )
 
         return (
             f"{self.enum_variant_call_path(enum_type, variant_name)}"
             f"({', '.join(generated_args)})"
         )
 
-    def generate_return_call_args_with_types(self, args, target_types):
-        move_counts = self.return_move_place_counts(args)
+    def generate_return_call_args_with_types(
+        self,
+        args,
+        target_types,
+        func_name=None,
+        move_counts=None,
+    ):
+        if move_counts is None:
+            move_counts = self.return_move_place_counts(args)
+        later_roots = self.return_call_arg_later_roots(args)
+        lambda_conflict_roots = self.return_call_arg_lambda_conflict_roots(args)
         generated_args = []
         for index, arg in enumerate(args):
             target_type = target_types[index] if index < len(target_types) else None
-            generated_args.append(
-                self.generate_return_argument_with_type(
+            if func_name is not None:
+                target_type = self.user_function_argument_target_type(
+                    func_name,
                     arg,
                     target_type,
-                    move_counts,
+                )
+            generated_args.append(
+                self.generate_with_lambda_capture_move_blocks(
+                    arg,
+                    later_roots[index],
+                    lambda: self.generate_return_argument_with_type(
+                        arg,
+                        target_type,
+                        move_counts,
+                    ),
+                    lambda_conflict_roots[index],
                 )
             )
         return generated_args
@@ -4070,6 +4172,31 @@ class RustCodeGen:
                         target_type,
                     )
 
+        if isinstance(arg, FunctionCallNode):
+            function_call = self.generate_return_function_call_expression(
+                arg,
+                target_type,
+                move_counts=move_counts,
+            )
+            if function_call is not None:
+                return self.normalize_typed_expression_value(
+                    arg,
+                    function_call,
+                    target_type,
+                )
+
+        if isinstance(arg, ConstructorNode):
+            constructor = self.generate_return_constructor_expression(
+                arg,
+                target_type,
+                move_counts=move_counts,
+            )
+            return self.normalize_typed_expression_value(
+                arg,
+                constructor,
+                target_type,
+            )
+
         if isinstance(arg, BlockNode):
             arg_expr = self.generate_return_branch_expression_with_type(
                 arg,
@@ -4082,24 +4209,7 @@ class RustCodeGen:
     def return_move_place_counts(self, args):
         records = []
         for index, arg in enumerate(args):
-            move_key = self.return_move_place_key(arg)
-            if move_key is None:
-                continue
-
-            kind = move_key[0]
-            root_name = (
-                move_key[1]
-                if kind == "identifier"
-                else self.return_place_root_name(arg)
-            )
-            records.append(
-                {
-                    "index": index,
-                    "key": move_key,
-                    "kind": kind,
-                    "root": root_name,
-                }
-            )
+            records.extend(self.return_move_place_records(arg, (index,)))
 
         if not records:
             return {}
@@ -4108,6 +4218,21 @@ class RustCodeGen:
         roots = {record["root"] for record in records}
         for root in roots:
             root_records = [record for record in records if record["root"] == root]
+            blocking_records = [
+                record
+                for record in root_records
+                if record["kind"] in {"indexed", "lambda_capture"}
+            ]
+            movable_records = [
+                record
+                for record in root_records
+                if record["kind"] in {"identifier", "member"}
+            ]
+            if blocking_records and movable_records:
+                continue
+            root_records = movable_records
+            if not root_records:
+                continue
             direct_records = [
                 record for record in root_records if record["kind"] == "identifier"
             ]
@@ -4141,6 +4266,328 @@ class RustCodeGen:
             counts[move_key] = counts.get(move_key, 0) + 1
         return counts
 
+    def return_call_arg_later_roots(self, args):
+        records_by_index = []
+        for index, arg in enumerate(args):
+            records_by_index.append(self.return_move_place_records(arg, (index,)))
+
+        later_roots_by_index = []
+        later_roots = set()
+        for records in reversed(records_by_index):
+            later_roots_by_index.append(set(later_roots))
+            later_roots.update(
+                record["root"] for record in records if record["root"] is not None
+            )
+
+        return list(reversed(later_roots_by_index))
+
+    def return_call_arg_lambda_conflict_roots(self, args):
+        capture_roots_by_index = []
+        capture_root_counts = {}
+        for index, arg in enumerate(args):
+            capture_roots = {
+                record["root"]
+                for record in self.return_move_place_records(arg, (index,))
+                if record["kind"] == "lambda_capture" and record["root"] is not None
+            }
+            capture_roots_by_index.append(capture_roots)
+            for root in capture_roots:
+                capture_root_counts[root] = capture_root_counts.get(root, 0) + 1
+
+        return [
+            {root for root in capture_roots if capture_root_counts[root] > 1}
+            for capture_roots in capture_roots_by_index
+        ]
+
+    def generate_with_lambda_capture_move_blocks(
+        self,
+        arg,
+        later_roots,
+        generate_arg,
+        lambda_conflict_roots=None,
+    ):
+        capture_roots = self.return_argument_lambda_capture_root_names(arg)
+        candidate_roots = capture_roots & (lambda_conflict_roots or set())
+        if self.loop_depth > 0 and isinstance(arg, LambdaNode):
+            candidate_roots |= capture_roots
+        if self.nested_lambda_capture_preclone_depth > 0:
+            candidate_roots |= capture_roots & self.return_move_blocked_roots
+        preclone_places = self.lambda_preclone_capture_roots(
+            arg,
+            candidate_roots,
+        )
+        if preclone_places:
+            return self.generate_with_precloned_lambda_captures(
+                arg,
+                preclone_places,
+                generate_arg,
+            )
+
+        blocked_roots = capture_roots & later_roots
+        if lambda_conflict_roots is not None:
+            blocked_roots |= capture_roots & lambda_conflict_roots
+        if not blocked_roots:
+            return generate_arg()
+
+        saved_blocked_roots = self.return_move_blocked_roots
+        self.return_move_blocked_roots = saved_blocked_roots | blocked_roots
+        enable_nested_preclone = not isinstance(arg, LambdaNode)
+        if enable_nested_preclone:
+            self.nested_lambda_capture_preclone_depth += 1
+        try:
+            return generate_arg()
+        finally:
+            if enable_nested_preclone:
+                self.nested_lambda_capture_preclone_depth -= 1
+            self.return_move_blocked_roots = saved_blocked_roots
+
+    def lambda_preclone_capture_roots(self, arg, candidate_roots):
+        if not isinstance(arg, LambdaNode) or not candidate_roots:
+            return set()
+
+        saved_blocked_roots = self.return_move_blocked_roots
+        self.return_move_blocked_roots = saved_blocked_roots - set(candidate_roots)
+        try:
+            body_records = self.return_move_place_records(
+                getattr(arg, "body", None),
+                (),
+            )
+        finally:
+            self.return_move_blocked_roots = saved_blocked_roots
+
+        preclone_places = []
+        for root in sorted(candidate_roots):
+            if self.is_static_reference(root):
+                continue
+            root_type = self.variable_types.get(root)
+            if root_type is None or self.type_is_copy_derivable(
+                root_type,
+                self.current_generic_param_names,
+            ):
+                continue
+
+            root_records = [
+                record
+                for record in body_records
+                if record["root"] == root and record["kind"] in {"identifier", "member"}
+            ]
+            if len(root_records) == 1:
+                record = root_records[0]
+                key = record["key"]
+                if record["kind"] == "member":
+                    key = key[1]
+                place_type = self.return_place_key_type(key)
+                if place_type is None or self.type_is_copy_derivable(
+                    place_type,
+                    self.current_generic_param_names,
+                ):
+                    continue
+                preclone_places.append(
+                    {
+                        "key": key,
+                        "root": root,
+                        "type": place_type,
+                    }
+                )
+        return preclone_places
+
+    def generate_with_precloned_lambda_captures(
+        self,
+        arg,
+        preclone_places,
+        generate_arg,
+    ):
+        saved_variable_types = self.variable_types.copy()
+        saved_local_variable_names = self.local_variable_names.copy()
+        aliases = {}
+        place_aliases = {}
+        bindings = []
+        for place in preclone_places:
+            key = place["key"]
+            place_type = place["type"]
+            place_value = self.return_place_key_expression(key)
+            if place_type is None or place_value is None:
+                continue
+            alias = self.next_lambda_capture_temp_name(
+                self.lambda_capture_place_label(key)
+            )
+            if key[0] == "identifier":
+                aliases[place["root"]] = alias
+            else:
+                place_aliases[key] = alias
+            self.register_variable_type(alias, place_type, scope="local")
+            bindings.append(f"let {alias} = {self.clone_value_expression(place_value)}")
+
+        if not aliases and not place_aliases:
+            self.variable_types = saved_variable_types
+            self.local_variable_names = saved_local_variable_names
+            return generate_arg()
+
+        self.lambda_capture_alias_stack.append(aliases)
+        self.lambda_capture_place_alias_stack.append(place_aliases)
+        self.force_move_lambda_depth += 1
+        try:
+            closure = generate_arg()
+        finally:
+            self.force_move_lambda_depth -= 1
+            self.lambda_capture_place_alias_stack.pop()
+            self.lambda_capture_alias_stack.pop()
+            self.variable_types = saved_variable_types
+            self.local_variable_names = saved_local_variable_names
+
+        return f"{{ {'; '.join(bindings)}; {closure} }}"
+
+    def lambda_capture_place_label(self, key):
+        if key[0] == "identifier":
+            return key[1]
+        if key[0] == "member":
+            return f"{self.lambda_capture_place_label(key[1])}_{key[2]}"
+        return "capture"
+
+    def lambda_capture_place_alias_name(self, key):
+        if key is None:
+            return None
+        for aliases in reversed(self.lambda_capture_place_alias_stack):
+            alias = aliases.get(key)
+            if alias is not None:
+                return alias
+        return None
+
+    def return_place_key_type(self, key):
+        if key is None:
+            return None
+        if key[0] == "identifier":
+            return self.variable_types.get(key[1])
+        if key[0] == "member":
+            object_type = self.return_place_key_type(key[1])
+            if object_type is None:
+                return None
+            return self.resolve_struct_member_type(object_type, key[2])
+        return None
+
+    def return_place_key_expression(self, key):
+        if key is None:
+            return None
+        if key[0] == "identifier":
+            return self.lazy_static_identifier_expression(key[1])
+        if key[0] == "member":
+            object_expr = self.return_place_key_expression(key[1])
+            if object_expr is None:
+                return None
+            return f"{object_expr}.{key[2]}"
+        return None
+
+    def lambda_capture_alias_name(self, name):
+        for aliases in reversed(self.lambda_capture_alias_stack):
+            alias = aliases.get(name)
+            if alias is not None:
+                return alias
+        return None
+
+    def return_argument_lambda_capture_root_names(self, expr):
+        return {
+            record["root"]
+            for record in self.return_move_place_records(expr, ())
+            if record["kind"] == "lambda_capture" and record["root"] is not None
+        }
+
+    def lambda_capture_root_names(self, expr):
+        if not isinstance(expr, LambdaNode):
+            return set()
+
+        roots = set()
+        for capture in getattr(expr, "captures", []) or []:
+            if isinstance(capture, str):
+                name = capture if capture.isidentifier() else None
+            else:
+                name = self.return_place_root_name(capture)
+            if name is not None:
+                roots.add(name)
+        return roots
+
+    def return_move_place_records(self, expr, index_path):
+        if isinstance(expr, LambdaNode):
+            return [
+                {
+                    "index": index_path + (capture_index,),
+                    "key": ("lambda_capture", name),
+                    "kind": "lambda_capture",
+                    "root": name,
+                }
+                for capture_index, name in enumerate(
+                    sorted(self.lambda_capture_root_names(expr))
+                )
+            ]
+
+        if isinstance(expr, ArrayAccessNode):
+            root_name = self.return_place_root_name(expr)
+            if root_name is not None and root_name in self.variable_types:
+                return [
+                    {
+                        "index": index_path,
+                        "key": ("indexed", root_name),
+                        "kind": "indexed",
+                        "root": root_name,
+                    }
+                ]
+
+        move_key = self.return_move_place_key(expr)
+        if move_key is not None:
+            kind = move_key[0]
+            root_name = (
+                move_key[1]
+                if kind == "identifier"
+                else self.return_place_root_name(expr)
+            )
+            return [
+                {
+                    "index": index_path,
+                    "key": move_key,
+                    "kind": kind,
+                    "root": root_name,
+                }
+            ]
+
+        child_args = self.return_consumed_child_arguments(expr)
+        records = []
+        for child_index, child in enumerate(child_args):
+            records.extend(
+                self.return_move_place_records(
+                    child,
+                    index_path + (child_index,),
+                )
+            )
+        return records
+
+    def return_consumed_child_arguments(self, expr):
+        if isinstance(expr, ConstructorNode):
+            named_arguments = getattr(expr, "named_arguments", {}) or {}
+            if named_arguments:
+                return list(named_arguments.values())
+            return list(getattr(expr, "arguments", []) or [])
+
+        if not isinstance(expr, FunctionCallNode):
+            return []
+
+        func_expr = getattr(expr, "function", getattr(expr, "name", "unknown"))
+        func_name = self.function_call_name(func_expr)
+        if not isinstance(func_name, str):
+            return []
+
+        args = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
+        if self.is_user_defined_function(func_name):
+            return args
+        if self.enum_variant_call_info(func_name) is not None:
+            return args
+
+        type_name = self.struct_new_call_type_name(func_name)
+        if type_name is not None and self.resolve_struct_positional_member_types(
+            type_name
+        ):
+            return args
+
+        return []
+
     def return_move_place_key(self, expr):
         name = self.simple_identifier_expression_name(expr)
         if name is not None and self.should_move_direct_return_identifier(name):
@@ -4170,11 +4617,23 @@ class RustCodeGen:
         return None
 
     def generate_constructor_call_args_with_types(self, args, target_types):
+        later_roots = self.return_call_arg_later_roots(args)
+        lambda_conflict_roots = self.return_call_arg_lambda_conflict_roots(args)
         generated_args = []
         for index, arg in enumerate(args):
             target_type = target_types[index] if index < len(target_types) else None
             generated_args.append(
-                self.generate_constructor_argument_with_type(arg, target_type)
+                self.generate_with_lambda_capture_move_blocks(
+                    arg,
+                    later_roots[index],
+                    lambda arg=arg, target_type=target_type: (
+                        self.generate_constructor_argument_with_type(
+                            arg,
+                            target_type,
+                        )
+                    ),
+                    lambda_conflict_roots[index],
+                )
             )
         return generated_args
 
@@ -4183,6 +4642,12 @@ class RustCodeGen:
         return self.normalize_typed_expression_value(arg, arg_expr, target_type)
 
     def generate_return_member_access_expression(self, expr):
+        place_alias = self.lambda_capture_place_alias_name(
+            self.return_place_expression_key(expr)
+        )
+        if place_alias is not None:
+            return self.lazy_static_identifier_expression(place_alias)
+
         if not self.should_move_member_return_place(expr):
             return None
 
@@ -4218,6 +4683,8 @@ class RustCodeGen:
         root_name = self.return_place_root_name(object_expr)
         if root_name is None or self.is_static_reference(root_name):
             return False
+        if root_name in self.return_move_blocked_roots:
+            return False
 
         return root_name in self.variable_types
 
@@ -4246,11 +4713,16 @@ class RustCodeGen:
 
     def generate_direct_return_move_expression(self, expr):
         name = self.simple_identifier_expression_name(expr)
-        if name is None or not self.should_move_direct_return_identifier(name):
+        if name is None:
             return None
-        return self.lazy_static_identifier_expression(name)
+        move_name = self.lambda_capture_alias_name(name) or name
+        if not self.should_move_direct_return_identifier(move_name):
+            return None
+        return self.lazy_static_identifier_expression(move_name)
 
     def should_move_direct_return_identifier(self, name):
+        if name in self.return_move_blocked_roots:
+            return False
         if self.is_static_reference(name):
             return False
         value_type = self.variable_types.get(name)
@@ -4698,30 +5170,46 @@ class RustCodeGen:
             if variant_info is not None:
                 enum_type, variant_name, field_types = variant_info
                 constructor_path = self.enum_variant_call_path(enum_type, variant_name)
-                fields = []
-                for name, value in named_arguments.items():
-                    field_value = self.generate_constructor_argument_with_type(
-                        value,
-                        field_types.get(name),
-                    )
-                    fields.append(f"{name}: {field_value}")
+                fields = self.generate_constructor_named_fields(
+                    named_arguments,
+                    lambda name: field_types.get(name),
+                )
                 return f"{constructor_path} {{ {', '.join(fields)} }}"
 
             constructor_path = self.rust_constructor_path(rust_type)
-            fields = []
-            for name, value in named_arguments.items():
-                member_type = self.resolve_struct_member_type(type_name, name)
-                field_value = self.generate_constructor_argument_with_type(
-                    value,
-                    member_type,
-                )
-                fields.append(f"{name}: {field_value}")
+            fields = self.generate_constructor_named_fields(
+                named_arguments,
+                lambda name: self.resolve_struct_member_type(type_name, name),
+            )
             return f"{constructor_path} {{ {', '.join(fields)} }}"
 
         arguments = getattr(expr, "arguments", []) or []
         member_types = self.resolve_struct_positional_member_types(type_name)
         args = self.generate_constructor_call_args_with_types(arguments, member_types)
         return f"{self.rust_constructor_path(rust_type)}::new({', '.join(args)})"
+
+    def generate_constructor_named_fields(self, named_arguments, field_type_for_name):
+        argument_values = list(named_arguments.values())
+        later_roots = self.return_call_arg_later_roots(argument_values)
+        lambda_conflict_roots = self.return_call_arg_lambda_conflict_roots(
+            argument_values
+        )
+        fields = []
+        for index, (name, value) in enumerate(named_arguments.items()):
+            field_type = field_type_for_name(name)
+            field_value = self.generate_with_lambda_capture_move_blocks(
+                value,
+                later_roots[index],
+                lambda value=value, field_type=field_type: (
+                    self.generate_constructor_argument_with_type(
+                        value,
+                        field_type,
+                    )
+                ),
+                lambda_conflict_roots[index],
+            )
+            fields.append(f"{name}: {field_value}")
+        return fields
 
     def rust_array_padding_expression(self, base_type, static_context=False):
         if static_context:
@@ -5413,19 +5901,28 @@ class RustCodeGen:
         body = self.generate_lambda_body(args[-1])
         return f"|{params}| {body}"
 
-    def generate_lambda_node_expression(self, node):
+    def generate_lambda_node_expression(self, node, target_type=None):
         """Render a first-class LambdaNode as a native Rust closure."""
         saved_variable_types = self.variable_types.copy()
         saved_local_variable_names = self.local_variable_names.copy()
         try:
             params = []
-            for param in getattr(node, "parameters", []) or []:
+            parameter_target_types = self.callable_parameter_target_types(target_type)
+            for index, param in enumerate(getattr(node, "parameters", []) or []):
                 param_type = self.function_parameter_type(param)
+                if self.is_inferred_declaration_type(param_type):
+                    if index < len(parameter_target_types):
+                        param_type = parameter_target_types[index]
                 self.register_variable_type(param.name, param_type, scope="local")
                 params.append(self.generate_lambda_node_parameter(param, param_type))
 
-            body = self.generate_lambda_node_body(getattr(node, "body", None))
-            return f"|{', '.join(params)}| {body}"
+            return_type = self.lambda_node_return_target_type(node, target_type)
+            body = self.generate_lambda_node_body(
+                getattr(node, "body", None),
+                return_type=return_type,
+            )
+            move_prefix = "move " if self.force_move_lambda_depth > 0 else ""
+            return f"{move_prefix}|{', '.join(params)}| {body}"
         finally:
             self.variable_types = saved_variable_types
             self.local_variable_names = saved_local_variable_names
@@ -5435,11 +5932,244 @@ class RustCodeGen:
             return param.name
         return f"{param.name}: {self.map_type(param_type)}"
 
-    def generate_lambda_node_body(self, body):
-        if isinstance(body, BlockNode):
-            return self.generate_block_expression(body, return_context=True)
+    def lambda_node_return_target_type(self, node, target_type):
+        explicit_type = getattr(node, "return_type", None)
+        if explicit_type is None and hasattr(node, "get_annotation"):
+            explicit_type = node.get_annotation("return_type")
+        if explicit_type is not None:
+            return self.type_name_string(explicit_type)
 
-        return self.generate_return_branch_expression_with_type(body, None)
+        return self.callable_return_target_type(target_type)
+
+    def callable_return_target_type(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if type_name is None:
+            return None
+
+        return_type = self.split_callable_return_type(type_name)
+        if return_type is None:
+            return None
+        return self.source_type_from_rust_type(return_type)
+
+    def callable_parameter_target_types(self, type_name):
+        signature = self.callable_signature_parts(type_name)
+        if signature is None:
+            return []
+
+        _callable_trait, params_text, _return_type = signature
+        if not params_text:
+            return []
+
+        return [
+            self.source_type_from_rust_type(param_type.strip())
+            for param_type in self.split_top_level_list(params_text)
+            if param_type.strip()
+        ]
+
+    def callable_type_uses_trait(self, type_name, trait_name):
+        signature = self.callable_signature_parts(type_name)
+        if signature is None:
+            return False
+
+        callable_trait, _params_text, _return_type = signature
+        return callable_trait == trait_name
+
+    def callable_signature_parts(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if type_name is None:
+            return None
+
+        type_name = type_name.strip()
+        match = re.match(r"^(?:dyn\s+|impl\s+)?(FnOnce|FnMut|Fn)\s*\(", type_name)
+        if match is None:
+            return None
+
+        open_index = type_name.find("(", match.start())
+        close_index = self.find_matching_delimiter(type_name, open_index, "(", ")")
+        if close_index is None:
+            return None
+
+        params_text = type_name[open_index + 1 : close_index].strip()
+        suffix = type_name[close_index + 1 :].strip()
+        return_type = "()"
+        if suffix.startswith("->"):
+            return_type = suffix[2:].strip()
+
+        return match.group(1), params_text, return_type
+
+    def split_callable_return_type(self, type_name):
+        paren_depth = 0
+        bracket_depth = 0
+        angle_depth = 0
+        index = 0
+        while index < len(type_name) - 1:
+            char = type_name[index]
+            next_char = type_name[index + 1]
+            if (
+                char == "-"
+                and next_char == ">"
+                and paren_depth == 0
+                and bracket_depth == 0
+                and angle_depth == 0
+            ):
+                return type_name[index + 2 :].strip()
+
+            if char == "(":
+                paren_depth += 1
+            elif char == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif char == "[":
+                bracket_depth += 1
+            elif char == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif char == "<":
+                angle_depth += 1
+            elif char == ">":
+                angle_depth = max(0, angle_depth - 1)
+            index += 1
+        return None
+
+    def type_name_string(self, type_name):
+        if type_name is None:
+            return None
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            return self.convert_type_node_to_string(type_name)
+        return str(type_name)
+
+    def source_type_from_rust_type(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if type_name is None:
+            return None
+        type_name = type_name.strip()
+
+        array_parts = self.rust_array_type_parts(type_name)
+        if array_parts is not None:
+            base_type, sizes = array_parts
+            return self.format_c_array_type(base_type, sizes)
+
+        rust_scalar_aliases = {
+            "i16": "short",
+            "u16": "ushort",
+            "i32": "int",
+            "u32": "uint",
+            "i64": "long",
+            "u64": "ulong",
+            "f16": "half",
+            "f32": "float",
+            "f64": "double",
+        }
+        return rust_scalar_aliases.get(type_name, type_name)
+
+    def rust_array_type_parts(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if type_name is None:
+            return None
+        type_name = type_name.strip()
+        if not (type_name.startswith("[") and type_name.endswith("]")):
+            return None
+
+        body = type_name[1:-1].strip()
+        separator = self.find_top_level_separator(body, ";")
+        if separator is None:
+            return None
+
+        element_type = body[:separator].strip()
+        size_text = body[separator + 1 :].strip()
+        try:
+            size = int(size_text)
+        except ValueError:
+            size = None
+
+        nested_parts = self.rust_array_type_parts(element_type)
+        if nested_parts is not None:
+            base_type, nested_sizes = nested_parts
+            return base_type, [size, *nested_sizes]
+        return self.source_type_from_rust_type(element_type), [size]
+
+    def find_top_level_separator(self, text, separator):
+        paren_depth = 0
+        bracket_depth = 0
+        angle_depth = 0
+        for index, char in enumerate(text):
+            if char == separator and all(
+                depth == 0 for depth in (paren_depth, bracket_depth, angle_depth)
+            ):
+                return index
+            if char == "(":
+                paren_depth += 1
+            elif char == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif char == "[":
+                bracket_depth += 1
+            elif char == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif char == "<":
+                angle_depth += 1
+            elif char == ">":
+                angle_depth = max(0, angle_depth - 1)
+        return None
+
+    def find_matching_delimiter(self, text, open_index, open_char, close_char):
+        if open_index < 0 or open_index >= len(text) or text[open_index] != open_char:
+            return None
+
+        depth = 0
+        for index in range(open_index, len(text)):
+            char = text[index]
+            if char == open_char:
+                depth += 1
+            elif char == close_char:
+                depth -= 1
+                if depth == 0:
+                    return index
+        return None
+
+    def split_top_level_list(self, text, separator=","):
+        parts = []
+        current = []
+        paren_depth = 0
+        bracket_depth = 0
+        angle_depth = 0
+        for char in text:
+            if char == separator and all(
+                depth == 0 for depth in (paren_depth, bracket_depth, angle_depth)
+            ):
+                parts.append("".join(current))
+                current = []
+                continue
+            current.append(char)
+
+            if char == "(":
+                paren_depth += 1
+            elif char == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif char == "[":
+                bracket_depth += 1
+            elif char == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif char == "<":
+                angle_depth += 1
+            elif char == ">":
+                angle_depth = max(0, angle_depth - 1)
+
+        if current:
+            parts.append("".join(current))
+        return parts
+
+    def generate_lambda_node_body(self, body, return_type=None):
+        saved_return_type = self.current_return_type
+        self.current_return_type = return_type
+        try:
+            if isinstance(body, BlockNode):
+                return self.generate_block_expression(
+                    body,
+                    target_type=return_type,
+                    return_context=True,
+                )
+
+            return self.generate_return_branch_expression_with_type(body, return_type)
+        finally:
+            self.current_return_type = saved_return_type
 
     def generate_lambda_parameter(self, arg):
         raw = self.lambda_raw_argument_text(arg).strip()
@@ -5560,19 +6290,10 @@ class RustCodeGen:
         if not member_types:
             return None
 
-        generated_args = []
-        for arg, member_type in zip(args, member_types):
-            arg_expr = self.generate_expression_with_type(arg, member_type)
-            arg_expr = self.normalize_typed_expression_value(
-                arg,
-                arg_expr,
-                member_type,
-            )
-            generated_args.append(arg_expr)
-
-        for arg in args[len(generated_args) :]:
-            generated_args.append(self.generate_expression(arg))
-
+        generated_args = self.generate_constructor_call_args_with_types(
+            args,
+            member_types,
+        )
         return f"{self.struct_new_call_path(type_name)}({', '.join(generated_args)})"
 
     def vector_constructor_target_type(self, target_type, source_vector_info):
@@ -5736,17 +6457,65 @@ class RustCodeGen:
 
     def generate_user_function_call_args(self, func_name, args):
         param_types = self.user_function_param_types.get(func_name, [])
+        later_roots = self.return_call_arg_later_roots(args)
+        lambda_conflict_roots = self.return_call_arg_lambda_conflict_roots(args)
         generated_args = []
         for index, arg in enumerate(args):
             param_type = param_types[index] if index < len(param_types) else None
-            if param_type is None:
-                generated_args.append(self.generate_expression(arg))
+            target_type = self.user_function_argument_target_type(
+                func_name,
+                arg,
+                param_type,
+            )
+            if target_type is None:
+                generated_args.append(
+                    self.generate_with_lambda_capture_move_blocks(
+                        arg,
+                        later_roots[index],
+                        lambda: self.generate_expression(arg),
+                        lambda_conflict_roots[index],
+                    )
+                )
                 continue
 
-            arg_expr = self.generate_expression_with_type(arg, param_type)
-            arg_expr = self.normalize_user_function_call_arg(arg, arg_expr, param_type)
+            arg_expr = self.generate_with_lambda_capture_move_blocks(
+                arg,
+                later_roots[index],
+                lambda: self.generate_expression_with_type(arg, target_type),
+                lambda_conflict_roots[index],
+            )
+            arg_expr = self.normalize_user_function_call_arg(
+                arg,
+                arg_expr,
+                target_type,
+            )
             generated_args.append(arg_expr)
         return generated_args
+
+    def user_function_argument_target_type(self, func_name, arg, param_type):
+        if not isinstance(arg, LambdaNode):
+            return param_type
+
+        callable_type = self.callable_parameter_target_type(func_name, param_type)
+        return callable_type or param_type
+
+    def callable_parameter_target_type(self, func_name, param_type):
+        if self.callable_return_target_type(param_type) is not None:
+            return param_type
+
+        param_name = self.type_name_string(param_type)
+        if not param_name:
+            return None
+
+        callee = self.user_function_nodes.get(func_name)
+        if callee is None:
+            return None
+
+        constraints = self.combined_function_generic_constraints(callee)
+        for bound in constraints.get(param_name, []):
+            if self.callable_return_target_type(bound) is not None:
+                return bound
+        return None
 
     def normalize_user_function_call_arg(self, arg, generated_arg, param_type):
         return self.normalize_typed_expression_value(arg, generated_arg, param_type)
@@ -6019,7 +6788,11 @@ class RustCodeGen:
         return f"{self.rust_constructor_path(rust_type)}::new({args})"
 
     def should_clone_member_access_value(self, expr):
-        if self.assignment_lhs_depth > 0 or self.member_object_depth > 0:
+        if (
+            self.assignment_lhs_depth > 0
+            or self.member_object_depth > 0
+            or self.array_object_depth > 0
+        ):
             return False
 
         member_type = self.expression_result_type(expr)
@@ -6049,6 +6822,7 @@ class RustCodeGen:
         )
 
     def generate_identifier_value_expression(self, name):
+        name = self.lambda_capture_alias_name(name) or name
         value = self.lazy_static_identifier_expression(name)
         if self.should_clone_identifier_value(name):
             return self.clone_value_expression(value)
@@ -6096,6 +6870,14 @@ class RustCodeGen:
     def next_matrix_arg_temp_name(self):
         name = f"__cgl_mat_arg_{self.matrix_arg_temp_counter}"
         self.matrix_arg_temp_counter += 1
+        return name
+
+    def next_lambda_capture_temp_name(self, root):
+        safe_root = re.sub(r"[^0-9A-Za-z_]+", "_", str(root)).strip("_")
+        if not safe_root:
+            safe_root = "capture"
+        name = f"__cgl_capture_{safe_root}_{self.lambda_capture_temp_counter}"
+        self.lambda_capture_temp_counter += 1
         return name
 
     def is_repeat_safe_expression(self, expr):
@@ -7682,6 +8464,9 @@ class RustCodeGen:
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
+
+        if self.split_callable_return_type(vtype_str) is not None:
+            return vtype_str
 
         if "[" in vtype_str and "]" in vtype_str:
             base_type, sizes = self.c_array_type_parts(vtype_str)

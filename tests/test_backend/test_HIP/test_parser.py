@@ -1411,6 +1411,31 @@ class TestHipParser:
         assert isinstance(body[0].body[0], FunctionCallNode)
         assert isinstance(body[1], SyncNode)
 
+    def test_masked_syncwarp_parsing(self):
+        """Test parsing masked and unmasked HIP warp synchronization."""
+        code = """
+        __global__ void kernel(unsigned int mask) {
+            __syncwarp(mask);
+            __syncwarp();
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        kernel = ast.statements[0]
+        masked_sync = kernel.body[0]
+        unmasked_sync = kernel.body[1]
+
+        assert isinstance(kernel, KernelNode)
+        assert isinstance(masked_sync, SyncNode)
+        assert masked_sync.sync_type == "__syncwarp"
+        assert masked_sync.args == ["mask"]
+        assert isinstance(unmasked_sync, SyncNode)
+        assert unmasked_sync.sync_type == "__syncwarp"
+        assert unmasked_sync.args == []
+
     def test_c_style_for_structured_assignment_updates_parsing(self):
         """Test array and member assignment targets in for updates"""
         code = """

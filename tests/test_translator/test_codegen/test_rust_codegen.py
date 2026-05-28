@@ -4005,6 +4005,120 @@ def test_non_copy_return_call_and_constructor_args_move_when_unique_and_compile(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_non_copy_nested_return_call_args_move_last_occurrence_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    pair_type = NamedType("Pair")
+    ast = ShaderNode(
+        "NonCopyNestedReturnArguments",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "Pair",
+                [
+                    StructMemberNode("first", payload_type),
+                    StructMemberNode("second", payload_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "identity",
+                payload_type,
+                [ParameterNode("value", payload_type)],
+                [ReturnNode(IdentifierNode("value"))],
+            ),
+            FunctionNode(
+                "make_pair",
+                pair_type,
+                [
+                    ParameterNode("first", payload_type),
+                    ParameterNode("second", payload_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            pair_type,
+                            [IdentifierNode("first"), IdentifierNode("second")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_nested_single_call",
+                payload_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("identity"),
+                            [
+                                FunctionCallNode(
+                                    IdentifierNode("identity"),
+                                    [IdentifierNode("payload")],
+                                )
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_nested_then_direct",
+                pair_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_pair"),
+                            [
+                                FunctionCallNode(
+                                    IdentifierNode("identity"),
+                                    [IdentifierNode("payload")],
+                                ),
+                                IdentifierNode("payload"),
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_direct_then_nested",
+                pair_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_pair"),
+                            [
+                                IdentifierNode("payload"),
+                                FunctionCallNode(
+                                    IdentifierNode("identity"),
+                                    [IdentifierNode("payload")],
+                                ),
+                            ],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "return identity(identity(payload));" in generated_code
+    assert "return make_pair(identity(payload.clone()), payload);" in generated_code
+    assert "return make_pair(payload.clone(), identity(payload));" in generated_code
+    assert "identity(identity(payload.clone()))" not in generated_code
+    assert "identity(payload.clone()), payload.clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_non_copy_return_call_and_constructor_member_args_move_when_safe_compile(
     tmp_path,
 ):
@@ -5311,7 +5425,7 @@ def test_generic_struct_like_enum_variant_assignment_and_call_targets_compile(
     ) in generated_code
     assert (
         "return identity_choice(Choice::<Payload>::Named { "
-        "primary: payload.clone(), backup: payload.clone() });"
+        "primary: payload.clone(), backup: payload });"
     ) in generated_code
     assert "selected = Choice::Named" not in generated_code
     assert "identity_choice(Choice::Named" not in generated_code
@@ -6804,6 +6918,5802 @@ def test_array_lambda_block_bodies_return_places_compile(tmp_path):
     ) in generated_code
     assert "return rows[0];" not in generated_code
     assert "LambdaNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_explicit_return_uses_closure_target_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_row_type = ArrayType(payload_type, 2)
+    closure_type = GenericType("F")
+    closure_bound = NamedType("FnOnce(i32) -> [Payload; 2]")
+
+    payload_constructor = ConstructorNode(
+        payload_type,
+        [
+            ArrayLiteralNode([]),
+            IdentifierNode("value"),
+        ],
+    )
+    closure_body = BlockNode([ReturnNode(ArrayLiteralNode([payload_constructor]))])
+
+    ast = ShaderNode(
+        "ArrayLambdaExplicitReturnTarget",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "apply_payload_row",
+                payload_row_type,
+                [
+                    ParameterNode("seed", PrimitiveType("int")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "closure_returns_row_from_int_function",
+                PrimitiveType("int"),
+                [ParameterNode("seed", PrimitiveType("int"))],
+                [
+                    VariableNode(
+                        "row",
+                        payload_row_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_payload_row"),
+                            [
+                                IdentifierNode("seed"),
+                                LambdaNode(
+                                    [ParameterNode("value", PrimitiveType("int"))],
+                                    closure_body,
+                                ),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(
+                        MemberAccessNode(
+                            ArrayAccessNode(
+                                IdentifierNode("row"),
+                                LiteralNode(0, PrimitiveType("int")),
+                            ),
+                            "count",
+                        )
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "pub fn apply_payload_row<F: FnOnce(i32) -> [Payload; 2]>" in generated_code
+    assert (
+        "let row: [Payload; 2] = apply_payload_row(seed, |value: i32| {\n"
+        "        return [Payload::new(vec![], value), Default::default()];\n"
+        "    });"
+    ) in generated_code
+    assert "return [Payload::new(vec![], value)];" not in generated_code
+    assert "Vec<FnOnce" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_infers_fn_and_fnmut_parameter_targets_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_row_type = ArrayType(payload_type, 2)
+    read_closure_type = GenericType("F")
+    write_closure_type = GenericType("G")
+    read_closure_bound = NamedType("Fn(i32) -> [Payload; 2]")
+    write_closure_bound = NamedType("FnMut(i32) -> [Payload; 2]")
+
+    def payload_constructor(value_name):
+        return ConstructorNode(
+            payload_type,
+            [
+                ArrayLiteralNode([]),
+                IdentifierNode(value_name),
+            ],
+        )
+
+    def row_literal(value_name):
+        return ArrayLiteralNode([payload_constructor(value_name)])
+
+    ast = ShaderNode(
+        "ArrayLambdaCallableParameterTargets",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "apply_read_payload_row",
+                payload_row_type,
+                [
+                    ParameterNode("seed", PrimitiveType("int")),
+                    ParameterNode("transform", read_closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[read_closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "apply_mut_payload_row",
+                payload_row_type,
+                [
+                    ParameterNode("seed", PrimitiveType("int")),
+                    ParameterNode("transform", write_closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("G", constraints=[write_closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "closure_infers_callable_parameters",
+                PrimitiveType("int"),
+                [ParameterNode("seed", PrimitiveType("int"))],
+                [
+                    VariableNode(
+                        "row_a",
+                        payload_row_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_read_payload_row"),
+                            [
+                                IdentifierNode("seed"),
+                                LambdaNode(
+                                    [
+                                        ParameterNode("value", None),
+                                    ],
+                                    BlockNode([ReturnNode(row_literal("value"))]),
+                                ),
+                            ],
+                        ),
+                    ),
+                    VariableNode(
+                        "row_b",
+                        payload_row_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_mut_payload_row"),
+                            [
+                                MemberAccessNode(
+                                    ArrayAccessNode(
+                                        IdentifierNode("row_a"),
+                                        LiteralNode(0, PrimitiveType("int")),
+                                    ),
+                                    "count",
+                                ),
+                                LambdaNode(
+                                    [
+                                        ParameterNode("next", None),
+                                    ],
+                                    row_literal("next"),
+                                ),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(
+                        MemberAccessNode(
+                            ArrayAccessNode(
+                                IdentifierNode("row_b"),
+                                LiteralNode(0, PrimitiveType("int")),
+                            ),
+                            "count",
+                        )
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "pub fn apply_read_payload_row<F: Fn(i32) -> [Payload; 2]>" in generated_code
+    assert (
+        "pub fn apply_mut_payload_row<G: FnMut(i32) -> [Payload; 2]>"
+        "(seed: i32, mut transform: G)"
+    ) in generated_code
+    assert (
+        "let row_a: [Payload; 2] = apply_read_payload_row(seed, |value: i32| {\n"
+        "        return [Payload::new(vec![], value), Default::default()];\n"
+        "    });"
+    ) in generated_code
+    assert (
+        "let row_b: [Payload; 2] = apply_mut_payload_row(row_a[0].count, "
+        "|next: i32| [Payload::new(vec![], next), Default::default()]);"
+    ) in generated_code
+    assert "|value|" not in generated_code
+    assert "|next|" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_infers_multi_arg_nested_callable_targets_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_row_type = ArrayType(payload_type, 2)
+    payload_matrix_type = ArrayType(payload_row_type, 2)
+    row_closure_type = GenericType("G")
+    matrix_closure_type = GenericType("F")
+    row_closure_bound = NamedType("Fn([Payload; 2], i32) -> [Payload; 2]")
+    matrix_closure_bound = NamedType(
+        "Fn([Payload; 2], i32) -> [[Payload; 2]; 2]",
+    )
+
+    def payload_constructor(value_name):
+        return ConstructorNode(
+            payload_type,
+            [
+                ArrayLiteralNode([]),
+                IdentifierNode(value_name),
+            ],
+        )
+
+    def row_literal(value_name):
+        return ArrayLiteralNode([payload_constructor(value_name)])
+
+    nested_row_call = FunctionCallNode(
+        IdentifierNode("apply_payload_row_with_seed"),
+        [
+            IdentifierNode("captured_row"),
+            IdentifierNode("offset"),
+            LambdaNode(
+                [
+                    ParameterNode("inner_row", None),
+                    ParameterNode("inner_seed", None),
+                ],
+                row_literal("inner_seed"),
+            ),
+        ],
+    )
+
+    ast = ShaderNode(
+        "ArrayLambdaMultiArgNestedTargets",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "apply_payload_row_with_seed",
+                payload_row_type,
+                [
+                    ParameterNode("row", payload_row_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                    ParameterNode("transform", row_closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("row"), IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("G", constraints=[row_closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "apply_payload_matrix_from_row",
+                payload_matrix_type,
+                [
+                    ParameterNode("row", payload_row_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                    ParameterNode("transform", matrix_closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("row"), IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[matrix_closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "closure_infers_multi_arg_nested_callable_parameters",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("row", payload_row_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "matrix",
+                        payload_matrix_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_payload_matrix_from_row"),
+                            [
+                                IdentifierNode("row"),
+                                IdentifierNode("seed"),
+                                LambdaNode(
+                                    [
+                                        ParameterNode("captured_row", None),
+                                        ParameterNode("offset", None),
+                                    ],
+                                    BlockNode(
+                                        [
+                                            ReturnNode(
+                                                ArrayLiteralNode([nested_row_call])
+                                            )
+                                        ]
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(
+                        MemberAccessNode(
+                            ArrayAccessNode(
+                                ArrayAccessNode(
+                                    IdentifierNode("matrix"),
+                                    LiteralNode(0, PrimitiveType("int")),
+                                ),
+                                LiteralNode(0, PrimitiveType("int")),
+                            ),
+                            "count",
+                        )
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn apply_payload_row_with_seed<G: Fn([Payload; 2], i32) -> "
+        "[Payload; 2]>"
+    ) in generated_code
+    assert (
+        "pub fn apply_payload_matrix_from_row<F: Fn([Payload; 2], i32) -> "
+        "[[Payload; 2]; 2]>"
+    ) in generated_code
+    assert "|captured_row: [Payload; 2], offset: i32|" in generated_code
+    assert "|inner_row: [Payload; 2], inner_seed: i32|" in generated_code
+    assert "|captured_row, offset|" not in generated_code
+    assert "|inner_row, inner_seed|" not in generated_code
+    assert "return [apply_payload_row_with_seed(captured_row.clone(), offset," in (
+        generated_code
+    )
+    assert "[Payload::new(vec![], inner_seed), Default::default()]" in generated_code
+    assert "), Default::default()];" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_infers_multi_arg_fnmut_and_fnonce_targets_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_row_type = ArrayType(payload_type, 2)
+    payload_matrix_type = ArrayType(payload_row_type, 2)
+    mut_closure_type = GenericType("M")
+    once_closure_type = GenericType("O")
+    mut_closure_bound = NamedType("FnMut([Payload; 2], i32) -> [Payload; 2]")
+    once_closure_bound = NamedType(
+        "FnOnce([Payload; 2], i32) -> [[Payload; 2]; 2]",
+    )
+
+    def payload_constructor(value_name):
+        return ConstructorNode(
+            payload_type,
+            [
+                ArrayLiteralNode([]),
+                IdentifierNode(value_name),
+            ],
+        )
+
+    def row_literal(value_name):
+        return ArrayLiteralNode([payload_constructor(value_name)])
+
+    nested_mut_row_call = FunctionCallNode(
+        IdentifierNode("apply_mut_payload_row_with_seed"),
+        [
+            IdentifierNode("once_row"),
+            IdentifierNode("once_seed"),
+            LambdaNode(
+                [
+                    ParameterNode("nested_row", None),
+                    ParameterNode("nested_seed", None),
+                ],
+                row_literal("nested_seed"),
+            ),
+        ],
+    )
+
+    ast = ShaderNode(
+        "ArrayLambdaMultiArgFnMutFnOnceTargets",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "apply_mut_payload_row_with_seed",
+                payload_row_type,
+                [
+                    ParameterNode("row", payload_row_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                    ParameterNode("transform", mut_closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("row"), IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("M", constraints=[mut_closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "apply_once_payload_matrix_with_seed",
+                payload_matrix_type,
+                [
+                    ParameterNode("row", payload_row_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                    ParameterNode("transform", once_closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("row"), IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("O", constraints=[once_closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "closure_infers_multi_arg_fnmut_and_fnonce_parameters",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("row", payload_row_type),
+                    ParameterNode("fallback", payload_row_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "mutated_row",
+                        payload_row_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_mut_payload_row_with_seed"),
+                            [
+                                IdentifierNode("row"),
+                                IdentifierNode("seed"),
+                                LambdaNode(
+                                    [
+                                        ParameterNode("mut_row", None),
+                                        ParameterNode("mut_seed", None),
+                                    ],
+                                    row_literal("mut_seed"),
+                                ),
+                            ],
+                        ),
+                    ),
+                    VariableNode(
+                        "matrix",
+                        payload_matrix_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_once_payload_matrix_with_seed"),
+                            [
+                                IdentifierNode("fallback"),
+                                IdentifierNode("seed"),
+                                LambdaNode(
+                                    [
+                                        ParameterNode("once_row", None),
+                                        ParameterNode("once_seed", None),
+                                    ],
+                                    BlockNode(
+                                        [
+                                            ReturnNode(
+                                                ArrayLiteralNode(
+                                                    [
+                                                        nested_mut_row_call,
+                                                        IdentifierNode("mutated_row"),
+                                                    ]
+                                                )
+                                            )
+                                        ]
+                                    ),
+                                    captures=["mutated_row"],
+                                ),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(
+                        MemberAccessNode(
+                            ArrayAccessNode(
+                                ArrayAccessNode(
+                                    IdentifierNode("matrix"),
+                                    LiteralNode(0, PrimitiveType("int")),
+                                ),
+                                LiteralNode(0, PrimitiveType("int")),
+                            ),
+                            "count",
+                        )
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn apply_mut_payload_row_with_seed<M: FnMut([Payload; 2], i32) -> "
+        "[Payload; 2]>(row: [Payload; 2], seed: i32, mut transform: M)"
+    ) in generated_code
+    assert (
+        "pub fn apply_once_payload_matrix_with_seed<O: FnOnce([Payload; 2], i32) -> "
+        "[[Payload; 2]; 2]>"
+    ) in generated_code
+    assert "|mut_row: [Payload; 2], mut_seed: i32|" in generated_code
+    assert "|once_row: [Payload; 2], once_seed: i32|" in generated_code
+    assert "|nested_row: [Payload; 2], nested_seed: i32|" in generated_code
+    assert "|mut_row, mut_seed|" not in generated_code
+    assert "|once_row, once_seed|" not in generated_code
+    assert "|nested_row, nested_seed|" not in generated_code
+    assert (
+        "let matrix: [[Payload; 2]; 2] = apply_once_payload_matrix_with_seed"
+        "(fallback.clone(), seed, |once_row: [Payload; 2], once_seed: i32| {"
+    ) in generated_code
+    assert "return [apply_mut_payload_row_with_seed(once_row.clone(), once_seed," in (
+        generated_code
+    )
+    assert "[Payload::new(vec![], nested_seed), Default::default()]" in generated_code
+    assert "mutated_row" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_fnonce_capture_return_args_move_or_clone_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    payload_cube_type = ArrayType(payload_matrix_type, 2)
+    matrix_pair_type = NamedType("MatrixPair")
+    matrix_wrapper_type = NamedType("MatrixWrapper")
+    closure_type = GenericType("F")
+    closure_bound = NamedType("FnOnce(i32) -> MatrixPair")
+
+    def apply_pair_call(seed, transform):
+        return FunctionCallNode(
+            IdentifierNode("apply_matrix_pair"),
+            [IdentifierNode(seed), transform],
+        )
+
+    def count_first_pair_payload(pair_name):
+        return MemberAccessNode(
+            ArrayAccessNode(
+                ArrayAccessNode(
+                    MemberAccessNode(IdentifierNode(pair_name), "primary"),
+                    LiteralNode(0, PrimitiveType("int")),
+                ),
+                LiteralNode(0, PrimitiveType("int")),
+            ),
+            "count",
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaFnOnceCaptureReturnArgs",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixPair",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            StructNode(
+                "MatrixWrapper",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "make_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("primary", payload_matrix_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("seed", PrimitiveType("int")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "closure_moves_captured_matrices_to_call",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("left", payload_matrix_type),
+                    ParameterNode("right", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        apply_pair_call(
+                            "seed",
+                            LambdaNode(
+                                [ParameterNode("value", None)],
+                                FunctionCallNode(
+                                    IdentifierNode("make_matrix_pair"),
+                                    [IdentifierNode("left"), IdentifierNode("right")],
+                                ),
+                                captures=["left", "right"],
+                            ),
+                        ),
+                    ),
+                    ReturnNode(count_first_pair_payload("pair")),
+                ],
+            ),
+            FunctionNode(
+                "closure_clones_duplicate_capture_before_move",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        apply_pair_call(
+                            "seed",
+                            LambdaNode(
+                                [ParameterNode("value", None)],
+                                FunctionCallNode(
+                                    IdentifierNode("make_matrix_pair"),
+                                    [
+                                        IdentifierNode("matrix"),
+                                        IdentifierNode("matrix"),
+                                    ],
+                                ),
+                                captures=["matrix"],
+                            ),
+                        ),
+                    ),
+                    ReturnNode(count_first_pair_payload("pair")),
+                ],
+            ),
+            FunctionNode(
+                "closure_moves_captured_members_to_constructor",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        apply_pair_call(
+                            "seed",
+                            LambdaNode(
+                                [ParameterNode("value", None)],
+                                ConstructorNode(
+                                    matrix_pair_type,
+                                    [
+                                        MemberAccessNode(
+                                            IdentifierNode("wrapper"),
+                                            "primary",
+                                        ),
+                                        MemberAccessNode(
+                                            IdentifierNode("wrapper"),
+                                            "backup",
+                                        ),
+                                    ],
+                                ),
+                                captures=["wrapper"],
+                            ),
+                        ),
+                    ),
+                    ReturnNode(count_first_pair_payload("pair")),
+                ],
+            ),
+            FunctionNode(
+                "closure_clones_captured_indexed_rows",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("rows", payload_cube_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        apply_pair_call(
+                            "seed",
+                            LambdaNode(
+                                [ParameterNode("value", None)],
+                                ConstructorNode(
+                                    matrix_pair_type,
+                                    [
+                                        ArrayAccessNode(
+                                            IdentifierNode("rows"),
+                                            LiteralNode(0, PrimitiveType("int")),
+                                        ),
+                                        ArrayAccessNode(
+                                            IdentifierNode("rows"),
+                                            LiteralNode(1, PrimitiveType("int")),
+                                        ),
+                                    ],
+                                ),
+                                captures=["rows"],
+                            ),
+                        ),
+                    ),
+                    ReturnNode(count_first_pair_payload("pair")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "pub fn apply_matrix_pair<F: FnOnce(i32) -> MatrixPair>" in generated_code
+    assert "|value: i32|" in generated_code
+    assert "make_matrix_pair(left, right)" in generated_code
+    assert "make_matrix_pair(left.clone(), right.clone())" not in generated_code
+    assert "make_matrix_pair(matrix.clone(), matrix)" in generated_code
+    assert "make_matrix_pair(matrix.clone(), matrix.clone())" not in generated_code
+    assert "MatrixPair::new(wrapper.primary, wrapper.backup)" in generated_code
+    assert "wrapper.primary.clone()" not in generated_code
+    assert "wrapper.backup.clone()" not in generated_code
+    assert "MatrixPair::new(rows[0].clone(), rows[1].clone())" in generated_code
+    assert "MatrixPair::new(rows[0], rows[1])" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_capture_sibling_return_args_clone_before_move_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    matrix_pair_type = NamedType("MatrixPair")
+    closure_type = GenericType("F")
+    closure_bound = NamedType("FnOnce([[Payload; 2]; 2], i32) -> MatrixPair")
+
+    def count_first_pair_payload(pair_name):
+        return MemberAccessNode(
+            ArrayAccessNode(
+                ArrayAccessNode(
+                    MemberAccessNode(IdentifierNode(pair_name), "primary"),
+                    LiteralNode(0, PrimitiveType("int")),
+                ),
+                LiteralNode(0, PrimitiveType("int")),
+            ),
+            "count",
+        )
+
+    def captured_pair_lambda():
+        return LambdaNode(
+            [
+                ParameterNode("source", None),
+                ParameterNode("value", None),
+            ],
+            FunctionCallNode(
+                IdentifierNode("make_matrix_pair"),
+                [IdentifierNode("matrix"), IdentifierNode("source")],
+            ),
+            captures=["matrix"],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaCaptureSiblingReturnArgs",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixPair",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "make_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("primary", payload_matrix_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_matrix_source",
+                matrix_pair_type,
+                [
+                    ParameterNode("source", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("source"), IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "apply_matrix_source_after",
+                matrix_pair_type,
+                [
+                    ParameterNode("transform", closure_type),
+                    ParameterNode("source", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("source"), IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "return_sibling_arg_then_capture",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_matrix_source"),
+                            [
+                                IdentifierNode("matrix"),
+                                IdentifierNode("seed"),
+                                captured_pair_lambda(),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(count_first_pair_payload("pair")),
+                ],
+            ),
+            FunctionNode(
+                "return_capture_then_sibling_arg",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_matrix_source_after"),
+                            [
+                                captured_pair_lambda(),
+                                IdentifierNode("matrix"),
+                                IdentifierNode("seed"),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(count_first_pair_payload("pair")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "apply_matrix_source(matrix.clone(), seed, "
+        "|source: [[Payload; 2]; 2], value: i32| make_matrix_pair(matrix, source))"
+        in generated_code
+    )
+    assert (
+        "apply_matrix_source_after(|source: [[Payload; 2]; 2], value: i32| "
+        "make_matrix_pair(matrix.clone(), source), matrix.clone(), seed)"
+        in generated_code
+    )
+    assert "apply_matrix_source(matrix, seed, |source" not in generated_code
+    assert (
+        "apply_matrix_source(matrix.clone(), seed, |source: [[Payload; 2]; 2], "
+        "value: i32| make_matrix_pair(matrix.clone(), source))" not in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_capture_sibling_member_and_index_paths_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    payload_cube_type = ArrayType(payload_matrix_type, 2)
+    matrix_pair_type = NamedType("MatrixPair")
+    matrix_wrapper_type = NamedType("MatrixWrapper")
+    cube_pair_type = NamedType("CubePair")
+    closure_type = GenericType("F")
+    matrix_closure_bound = NamedType("FnOnce([[Payload; 2]; 2], i32) -> MatrixPair")
+    cube_closure_bound = NamedType("FnOnce([[Payload; 2]; 2], i32) -> CubePair")
+
+    def payload_count_from_matrix_pair(pair_name):
+        return MemberAccessNode(
+            ArrayAccessNode(
+                ArrayAccessNode(
+                    MemberAccessNode(IdentifierNode(pair_name), "primary"),
+                    LiteralNode(0, PrimitiveType("int")),
+                ),
+                LiteralNode(0, PrimitiveType("int")),
+            ),
+            "count",
+        )
+
+    def payload_count_from_cube_pair(pair_name):
+        return MemberAccessNode(
+            ArrayAccessNode(
+                ArrayAccessNode(
+                    ArrayAccessNode(
+                        MemberAccessNode(IdentifierNode(pair_name), "primary"),
+                        LiteralNode(0, PrimitiveType("int")),
+                    ),
+                    LiteralNode(0, PrimitiveType("int")),
+                ),
+                LiteralNode(0, PrimitiveType("int")),
+            ),
+            "count",
+        )
+
+    def apply_matrix_source_after_call(transform, source, seed="seed"):
+        return FunctionCallNode(
+            IdentifierNode("apply_matrix_source_after"),
+            [transform, source, IdentifierNode(seed)],
+        )
+
+    def apply_cube_source_after_call(transform, source, seed="seed"):
+        return FunctionCallNode(
+            IdentifierNode("apply_cube_source_after"),
+            [transform, source, IdentifierNode(seed)],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaCaptureSiblingMemberIndexPaths",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixPair",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            StructNode(
+                "MatrixWrapper",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            StructNode(
+                "CubePair",
+                [
+                    StructMemberNode("primary", payload_cube_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "make_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("primary", payload_matrix_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "make_cube_pair",
+                cube_pair_type,
+                [
+                    ParameterNode("primary", payload_cube_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            cube_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_matrix_source_after",
+                matrix_pair_type,
+                [
+                    ParameterNode("transform", closure_type),
+                    ParameterNode("source", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("source"), IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[matrix_closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "apply_cube_source_after",
+                cube_pair_type,
+                [
+                    ParameterNode("transform", closure_type),
+                    ParameterNode("source", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("source"), IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[cube_closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "return_capture_member_then_same_member_sibling",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        apply_matrix_source_after_call(
+                            LambdaNode(
+                                [
+                                    ParameterNode("source", None),
+                                    ParameterNode("value", None),
+                                ],
+                                FunctionCallNode(
+                                    IdentifierNode("make_matrix_pair"),
+                                    [
+                                        MemberAccessNode(
+                                            IdentifierNode("wrapper"),
+                                            "primary",
+                                        ),
+                                        IdentifierNode("source"),
+                                    ],
+                                ),
+                                captures=["wrapper"],
+                            ),
+                            MemberAccessNode(IdentifierNode("wrapper"), "primary"),
+                        ),
+                    ),
+                    ReturnNode(payload_count_from_matrix_pair("pair")),
+                ],
+            ),
+            FunctionNode(
+                "return_capture_root_then_index_sibling",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("rows", payload_cube_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        cube_pair_type,
+                        apply_cube_source_after_call(
+                            LambdaNode(
+                                [
+                                    ParameterNode("source", None),
+                                    ParameterNode("value", None),
+                                ],
+                                FunctionCallNode(
+                                    IdentifierNode("make_cube_pair"),
+                                    [IdentifierNode("rows"), IdentifierNode("source")],
+                                ),
+                                captures=["rows"],
+                            ),
+                            ArrayAccessNode(
+                                IdentifierNode("rows"),
+                                LiteralNode(0, PrimitiveType("int")),
+                            ),
+                        ),
+                    ),
+                    ReturnNode(payload_count_from_cube_pair("pair")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "apply_matrix_source_after(|source: [[Payload; 2]; 2], value: i32| "
+        "make_matrix_pair(wrapper.primary.clone(), source), "
+        "wrapper.primary.clone(), seed)" in generated_code
+    )
+    assert "make_matrix_pair(wrapper.primary, source)" not in generated_code
+    assert (
+        "apply_cube_source_after(|source: [[Payload; 2]; 2], value: i32| "
+        "make_cube_pair(rows.clone(), source), rows[0].clone(), seed)" in generated_code
+    )
+    assert "make_cube_pair(rows, source)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_multiple_captures_clone_shared_roots_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    matrix_pair_type = NamedType("MatrixPair")
+    first_closure_type = GenericType("F")
+    second_closure_type = GenericType("G")
+    closure_bound = NamedType("FnOnce(i32) -> MatrixPair")
+
+    def count_first_pair_payload(pair_name):
+        return MemberAccessNode(
+            ArrayAccessNode(
+                ArrayAccessNode(
+                    MemberAccessNode(IdentifierNode(pair_name), "primary"),
+                    LiteralNode(0, PrimitiveType("int")),
+                ),
+                LiteralNode(0, PrimitiveType("int")),
+            ),
+            "count",
+        )
+
+    def captured_pair_lambda():
+        return LambdaNode(
+            [ParameterNode("value", None)],
+            FunctionCallNode(
+                IdentifierNode("make_matrix_pair"),
+                [IdentifierNode("matrix"), IdentifierNode("matrix")],
+            ),
+            captures=["matrix"],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaMultipleCaptureSharedRoots",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixPair",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "make_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("primary", payload_matrix_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_two_matrix_builders",
+                matrix_pair_type,
+                [
+                    ParameterNode("first", first_closure_type),
+                    ParameterNode("second", second_closure_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "left",
+                        matrix_pair_type,
+                        FunctionCallNode(
+                            IdentifierNode("first"),
+                            [IdentifierNode("seed")],
+                        ),
+                    ),
+                    VariableNode(
+                        "right",
+                        matrix_pair_type,
+                        FunctionCallNode(
+                            IdentifierNode("second"),
+                            [IdentifierNode("seed")],
+                        ),
+                    ),
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_matrix_pair"),
+                            [
+                                MemberAccessNode(IdentifierNode("left"), "primary"),
+                                MemberAccessNode(IdentifierNode("right"), "primary"),
+                            ],
+                        )
+                    ),
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                    GenericParameterNode("G", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "return_two_captured_builders",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_two_matrix_builders"),
+                            [
+                                captured_pair_lambda(),
+                                captured_pair_lambda(),
+                                IdentifierNode("seed"),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(count_first_pair_payload("pair")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "apply_two_matrix_builders(|value: i32| "
+        "make_matrix_pair(matrix.clone(), matrix.clone()), |value: i32| "
+        "make_matrix_pair(matrix.clone(), matrix.clone()), seed)" in generated_code
+    )
+    assert "make_matrix_pair(matrix.clone(), matrix), seed)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_preclones_shared_single_use_captures_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    matrix_pair_type = NamedType("MatrixPair")
+    first_closure_type = GenericType("F")
+    second_closure_type = GenericType("G")
+    closure_bound = NamedType("FnOnce(i32) -> [[Payload; 2]; 2]")
+
+    def count_first_pair_payload(pair_name):
+        return MemberAccessNode(
+            ArrayAccessNode(
+                ArrayAccessNode(
+                    MemberAccessNode(IdentifierNode(pair_name), "primary"),
+                    LiteralNode(0, PrimitiveType("int")),
+                ),
+                LiteralNode(0, PrimitiveType("int")),
+            ),
+            "count",
+        )
+
+    def captured_matrix_lambda():
+        return LambdaNode(
+            [ParameterNode("value", None)],
+            IdentifierNode("matrix"),
+            captures=["matrix"],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaPreclonesSharedSingleUseCaptures",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixPair",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "make_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("primary", payload_matrix_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_two_matrix_values",
+                matrix_pair_type,
+                [
+                    ParameterNode("first", first_closure_type),
+                    ParameterNode("second", second_closure_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "left",
+                        payload_matrix_type,
+                        FunctionCallNode(
+                            IdentifierNode("first"),
+                            [IdentifierNode("seed")],
+                        ),
+                    ),
+                    VariableNode(
+                        "right",
+                        payload_matrix_type,
+                        FunctionCallNode(
+                            IdentifierNode("second"),
+                            [IdentifierNode("seed")],
+                        ),
+                    ),
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_matrix_pair"),
+                            [IdentifierNode("left"), IdentifierNode("right")],
+                        )
+                    ),
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                    GenericParameterNode("G", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "return_two_precloned_builders",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_two_matrix_values"),
+                            [
+                                captured_matrix_lambda(),
+                                captured_matrix_lambda(),
+                                IdentifierNode("seed"),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(count_first_pair_payload("pair")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "apply_two_matrix_values({ let __cgl_capture_matrix_0 = matrix.clone(); "
+        "move |value: i32| __cgl_capture_matrix_0 }, "
+        "{ let __cgl_capture_matrix_1 = matrix.clone(); "
+        "move |value: i32| __cgl_capture_matrix_1 }, seed)" in generated_code
+    )
+    assert "|value: i32| matrix.clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_nested_preclones_shared_single_use_captures_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    matrix_pair_type = NamedType("MatrixPair")
+    first_closure_type = GenericType("F")
+    second_closure_type = GenericType("G")
+    closure_bound = NamedType("FnOnce(i32) -> [[Payload; 2]; 2]")
+
+    def count_first_pair_payload(pair_name):
+        return MemberAccessNode(
+            ArrayAccessNode(
+                ArrayAccessNode(
+                    MemberAccessNode(IdentifierNode(pair_name), "primary"),
+                    LiteralNode(0, PrimitiveType("int")),
+                ),
+                LiteralNode(0, PrimitiveType("int")),
+            ),
+            "count",
+        )
+
+    def captured_matrix_lambda():
+        return LambdaNode(
+            [ParameterNode("value", None)],
+            IdentifierNode("matrix"),
+            captures=["matrix"],
+        )
+
+    def wrap_builder(lambda_node):
+        return FunctionCallNode(
+            IdentifierNode("wrap_matrix_value_builder"),
+            [lambda_node],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaNestedPreclonesSharedSingleUseCaptures",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixPair",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "make_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("primary", payload_matrix_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "wrap_matrix_value_builder",
+                first_closure_type,
+                [ParameterNode("builder", first_closure_type)],
+                [ReturnNode(IdentifierNode("builder"))],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "apply_two_wrapped_matrix_values",
+                matrix_pair_type,
+                [
+                    ParameterNode("first", first_closure_type),
+                    ParameterNode("second", second_closure_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "left",
+                        payload_matrix_type,
+                        FunctionCallNode(
+                            IdentifierNode("first"),
+                            [IdentifierNode("seed")],
+                        ),
+                    ),
+                    VariableNode(
+                        "right",
+                        payload_matrix_type,
+                        FunctionCallNode(
+                            IdentifierNode("second"),
+                            [IdentifierNode("seed")],
+                        ),
+                    ),
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_matrix_pair"),
+                            [IdentifierNode("left"), IdentifierNode("right")],
+                        )
+                    ),
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                    GenericParameterNode("G", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "return_two_nested_precloned_builders",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_two_wrapped_matrix_values"),
+                            [
+                                wrap_builder(captured_matrix_lambda()),
+                                wrap_builder(captured_matrix_lambda()),
+                                IdentifierNode("seed"),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(count_first_pair_payload("pair")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "apply_two_wrapped_matrix_values("
+        "wrap_matrix_value_builder({ let __cgl_capture_matrix_0 = matrix.clone(); "
+        "move |value: i32| __cgl_capture_matrix_0 }), "
+        "wrap_matrix_value_builder({ let __cgl_capture_matrix_1 = matrix.clone(); "
+        "move |value: i32| __cgl_capture_matrix_1 }), seed)" in generated_code
+    )
+    assert "|value: i32| matrix.clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_preclones_shared_single_use_member_captures_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    matrix_pair_type = NamedType("MatrixPair")
+    matrix_wrapper_type = NamedType("MatrixWrapper")
+    first_closure_type = GenericType("F")
+    second_closure_type = GenericType("G")
+    closure_bound = NamedType("FnOnce(i32) -> [[Payload; 2]; 2]")
+
+    def count_first_pair_payload(pair_name):
+        return MemberAccessNode(
+            ArrayAccessNode(
+                ArrayAccessNode(
+                    MemberAccessNode(IdentifierNode(pair_name), "primary"),
+                    LiteralNode(0, PrimitiveType("int")),
+                ),
+                LiteralNode(0, PrimitiveType("int")),
+            ),
+            "count",
+        )
+
+    def captured_primary_lambda():
+        return LambdaNode(
+            [ParameterNode("value", None)],
+            MemberAccessNode(IdentifierNode("wrapper"), "primary"),
+            captures=["wrapper"],
+        )
+
+    def wrap_builder(lambda_node):
+        return FunctionCallNode(
+            IdentifierNode("wrap_matrix_value_builder"),
+            [lambda_node],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaPreclonesSharedSingleUseMemberCaptures",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixPair",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            StructNode(
+                "MatrixWrapper",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "make_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("primary", payload_matrix_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "wrap_matrix_value_builder",
+                first_closure_type,
+                [ParameterNode("builder", first_closure_type)],
+                [ReturnNode(IdentifierNode("builder"))],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "apply_two_matrix_values",
+                matrix_pair_type,
+                [
+                    ParameterNode("first", first_closure_type),
+                    ParameterNode("second", second_closure_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "left",
+                        payload_matrix_type,
+                        FunctionCallNode(
+                            IdentifierNode("first"),
+                            [IdentifierNode("seed")],
+                        ),
+                    ),
+                    VariableNode(
+                        "right",
+                        payload_matrix_type,
+                        FunctionCallNode(
+                            IdentifierNode("second"),
+                            [IdentifierNode("seed")],
+                        ),
+                    ),
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_matrix_pair"),
+                            [IdentifierNode("left"), IdentifierNode("right")],
+                        )
+                    ),
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                    GenericParameterNode("G", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "return_two_precloned_member_builders",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_two_matrix_values"),
+                            [
+                                captured_primary_lambda(),
+                                captured_primary_lambda(),
+                                IdentifierNode("seed"),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(count_first_pair_payload("pair")),
+                ],
+            ),
+            FunctionNode(
+                "return_two_nested_precloned_member_builders",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_two_matrix_values"),
+                            [
+                                wrap_builder(captured_primary_lambda()),
+                                wrap_builder(captured_primary_lambda()),
+                                IdentifierNode("seed"),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(count_first_pair_payload("pair")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "apply_two_matrix_values("
+        "{ let __cgl_capture_wrapper_primary_0 = wrapper.primary.clone(); "
+        "move |value: i32| __cgl_capture_wrapper_primary_0 }, "
+        "{ let __cgl_capture_wrapper_primary_1 = wrapper.primary.clone(); "
+        "move |value: i32| __cgl_capture_wrapper_primary_1 }, seed)" in generated_code
+    )
+    assert (
+        "apply_two_matrix_values("
+        "wrap_matrix_value_builder({ let __cgl_capture_wrapper_primary_2 = "
+        "wrapper.primary.clone(); move |value: i32| "
+        "__cgl_capture_wrapper_primary_2 }), "
+        "wrap_matrix_value_builder({ let __cgl_capture_wrapper_primary_3 = "
+        "wrapper.primary.clone(); move |value: i32| "
+        "__cgl_capture_wrapper_primary_3 }), seed)" in generated_code
+    )
+    assert " = wrapper.clone()" not in generated_code
+    assert "|value: i32| wrapper.primary.clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_preclones_nested_member_captures_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    matrix_pair_type = NamedType("MatrixPair")
+    matrix_wrapper_type = NamedType("MatrixWrapper")
+    outer_wrapper_type = NamedType("OuterWrapper")
+    first_closure_type = GenericType("F")
+    second_closure_type = GenericType("G")
+    closure_bound = NamedType("FnOnce(i32) -> [[Payload; 2]; 2]")
+
+    def count_first_pair_payload(pair_name):
+        return MemberAccessNode(
+            ArrayAccessNode(
+                ArrayAccessNode(
+                    MemberAccessNode(IdentifierNode(pair_name), "primary"),
+                    LiteralNode(0, PrimitiveType("int")),
+                ),
+                LiteralNode(0, PrimitiveType("int")),
+            ),
+            "count",
+        )
+
+    def captured_nested_primary_lambda():
+        return LambdaNode(
+            [ParameterNode("value", None)],
+            MemberAccessNode(
+                MemberAccessNode(IdentifierNode("outer"), "inner"),
+                "primary",
+            ),
+            captures=["outer"],
+        )
+
+    def wrap_builder(lambda_node):
+        return FunctionCallNode(
+            IdentifierNode("wrap_matrix_value_builder"),
+            [lambda_node],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaPreclonesNestedMemberCaptures",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixPair",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            StructNode(
+                "MatrixWrapper",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            StructNode(
+                "OuterWrapper",
+                [
+                    StructMemberNode("inner", matrix_wrapper_type),
+                    StructMemberNode("fallback", matrix_wrapper_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "make_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("primary", payload_matrix_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "wrap_matrix_value_builder",
+                first_closure_type,
+                [ParameterNode("builder", first_closure_type)],
+                [ReturnNode(IdentifierNode("builder"))],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "apply_two_matrix_values",
+                matrix_pair_type,
+                [
+                    ParameterNode("first", first_closure_type),
+                    ParameterNode("second", second_closure_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "left",
+                        payload_matrix_type,
+                        FunctionCallNode(
+                            IdentifierNode("first"),
+                            [IdentifierNode("seed")],
+                        ),
+                    ),
+                    VariableNode(
+                        "right",
+                        payload_matrix_type,
+                        FunctionCallNode(
+                            IdentifierNode("second"),
+                            [IdentifierNode("seed")],
+                        ),
+                    ),
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_matrix_pair"),
+                            [IdentifierNode("left"), IdentifierNode("right")],
+                        )
+                    ),
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                    GenericParameterNode("G", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "return_two_precloned_nested_member_builders",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("outer", outer_wrapper_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_two_matrix_values"),
+                            [
+                                captured_nested_primary_lambda(),
+                                captured_nested_primary_lambda(),
+                                IdentifierNode("seed"),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(count_first_pair_payload("pair")),
+                ],
+            ),
+            FunctionNode(
+                "return_two_wrapped_precloned_nested_member_builders",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("outer", outer_wrapper_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        FunctionCallNode(
+                            IdentifierNode("apply_two_matrix_values"),
+                            [
+                                wrap_builder(captured_nested_primary_lambda()),
+                                wrap_builder(captured_nested_primary_lambda()),
+                                IdentifierNode("seed"),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(count_first_pair_payload("pair")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "apply_two_matrix_values("
+        "{ let __cgl_capture_outer_inner_primary_0 = outer.inner.primary.clone(); "
+        "move |value: i32| __cgl_capture_outer_inner_primary_0 }, "
+        "{ let __cgl_capture_outer_inner_primary_1 = outer.inner.primary.clone(); "
+        "move |value: i32| __cgl_capture_outer_inner_primary_1 }, seed)"
+        in generated_code
+    )
+    assert (
+        "apply_two_matrix_values("
+        "wrap_matrix_value_builder({ let __cgl_capture_outer_inner_primary_2 = "
+        "outer.inner.primary.clone(); move |value: i32| "
+        "__cgl_capture_outer_inner_primary_2 }), "
+        "wrap_matrix_value_builder({ let __cgl_capture_outer_inner_primary_3 = "
+        "outer.inner.primary.clone(); move |value: i32| "
+        "__cgl_capture_outer_inner_primary_3 }), seed)" in generated_code
+    )
+    assert " = outer.clone()" not in generated_code
+    assert " = outer.inner.clone()" not in generated_code
+    assert "|value: i32| outer.inner.primary.clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_return_constructors_deep_member_preclones_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    matrix_pair_type = NamedType("MatrixPair")
+    matrix_wrapper_type = NamedType("MatrixWrapper")
+    outer_wrapper_type = NamedType("OuterWrapper")
+    wrapped_pair_type = NamedType("WrappedPair")
+    final_bundle_type = NamedType("FinalBundle")
+    bundle_choice_type = NamedType("BundleChoice")
+    bundle_choice_ready_type = NamedType("BundleChoice::Ready")
+    first_closure_type = GenericType("F")
+    second_closure_type = GenericType("G")
+    closure_bound = NamedType("FnOnce(i32) -> [[Payload; 2]; 2]")
+    bundle_choice_enum = EnumNode(
+        "BundleChoice",
+        [
+            EnumVariantNode(
+                "Ready",
+                fields=[("wrapped", wrapped_pair_type)],
+            ),
+        ],
+    )
+
+    def captured_nested_primary_lambda():
+        return LambdaNode(
+            [ParameterNode("value", None)],
+            MemberAccessNode(
+                MemberAccessNode(IdentifierNode("outer"), "inner"),
+                "primary",
+            ),
+            captures=["outer"],
+        )
+
+    def nested_wrapped_pair_call():
+        return FunctionCallNode(
+            IdentifierNode("make_wrapped_pair"),
+            [
+                FunctionCallNode(
+                    IdentifierNode("wrap_matrix_pair"),
+                    [
+                        FunctionCallNode(
+                            IdentifierNode("apply_two_matrix_values"),
+                            [
+                                captured_nested_primary_lambda(),
+                                captured_nested_primary_lambda(),
+                                IdentifierNode("seed"),
+                            ],
+                        )
+                    ],
+                ),
+                IdentifierNode("source"),
+            ],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaReturnConstructorsDeepMemberPreclones",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixPair",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            StructNode(
+                "MatrixWrapper",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            StructNode(
+                "OuterWrapper",
+                [
+                    StructMemberNode("inner", matrix_wrapper_type),
+                    StructMemberNode("fallback", matrix_wrapper_type),
+                ],
+            ),
+            StructNode(
+                "WrappedPair",
+                [
+                    StructMemberNode("pair", matrix_pair_type),
+                    StructMemberNode("source", matrix_wrapper_type),
+                ],
+            ),
+            StructNode(
+                "FinalBundle",
+                [
+                    StructMemberNode("wrapped", wrapped_pair_type),
+                ],
+            ),
+            bundle_choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "make_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("primary", payload_matrix_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "wrap_matrix_pair",
+                matrix_pair_type,
+                [ParameterNode("pair", matrix_pair_type)],
+                [ReturnNode(IdentifierNode("pair"))],
+            ),
+            FunctionNode(
+                "make_wrapped_pair",
+                wrapped_pair_type,
+                [
+                    ParameterNode("pair", matrix_pair_type),
+                    ParameterNode("source", matrix_wrapper_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            wrapped_pair_type,
+                            [],
+                            named_arguments={
+                                "pair": IdentifierNode("pair"),
+                                "source": IdentifierNode("source"),
+                            },
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_two_matrix_values",
+                matrix_pair_type,
+                [
+                    ParameterNode("first", first_closure_type),
+                    ParameterNode("second", second_closure_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "left",
+                        payload_matrix_type,
+                        FunctionCallNode(
+                            IdentifierNode("first"),
+                            [IdentifierNode("seed")],
+                        ),
+                    ),
+                    VariableNode(
+                        "right",
+                        payload_matrix_type,
+                        FunctionCallNode(
+                            IdentifierNode("second"),
+                            [IdentifierNode("seed")],
+                        ),
+                    ),
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_matrix_pair"),
+                            [IdentifierNode("left"), IdentifierNode("right")],
+                        )
+                    ),
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                    GenericParameterNode("G", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "return_deep_struct_constructor",
+                final_bundle_type,
+                [
+                    ParameterNode("outer", outer_wrapper_type),
+                    ParameterNode("source", matrix_wrapper_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            final_bundle_type,
+                            [],
+                            named_arguments={
+                                "wrapped": nested_wrapped_pair_call(),
+                            },
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_deep_enum_constructor",
+                bundle_choice_type,
+                [
+                    ParameterNode("outer", outer_wrapper_type),
+                    ParameterNode("source", matrix_wrapper_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            bundle_choice_ready_type,
+                            [],
+                            named_arguments={
+                                "wrapped": nested_wrapped_pair_call(),
+                            },
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "return FinalBundle { wrapped: make_wrapped_pair(wrap_matrix_pair("
+        "apply_two_matrix_values({ let __cgl_capture_outer_inner_primary_0 = "
+        "outer.inner.primary.clone(); move |value: i32| "
+        "__cgl_capture_outer_inner_primary_0 }, "
+        "{ let __cgl_capture_outer_inner_primary_1 = "
+        "outer.inner.primary.clone(); move |value: i32| "
+        "__cgl_capture_outer_inner_primary_1 }, seed)), source) };" in generated_code
+    )
+    assert (
+        "return BundleChoice::Ready { wrapped: make_wrapped_pair("
+        "wrap_matrix_pair(apply_two_matrix_values("
+        "{ let __cgl_capture_outer_inner_primary_2 = "
+        "outer.inner.primary.clone(); move |value: i32| "
+        "__cgl_capture_outer_inner_primary_2 }, "
+        "{ let __cgl_capture_outer_inner_primary_3 = "
+        "outer.inner.primary.clone(); move |value: i32| "
+        "__cgl_capture_outer_inner_primary_3 }, seed)), source) };" in generated_code
+    )
+    assert " = outer.clone()" not in generated_code
+    assert " = outer.inner.clone()" not in generated_code
+    assert "|value: i32| outer.inner.primary.clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_nested_capture_sibling_roots_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    matrix_pair_type = NamedType("MatrixPair")
+    closure_type = GenericType("F")
+    closure_bound = NamedType("FnOnce(i32) -> MatrixPair")
+
+    def count_first_pair_payload(pair_name):
+        return MemberAccessNode(
+            ArrayAccessNode(
+                ArrayAccessNode(
+                    MemberAccessNode(IdentifierNode(pair_name), "primary"),
+                    LiteralNode(0, PrimitiveType("int")),
+                ),
+                LiteralNode(0, PrimitiveType("int")),
+            ),
+            "count",
+        )
+
+    def captured_pair_lambda():
+        return LambdaNode(
+            [ParameterNode("value", None)],
+            FunctionCallNode(
+                IdentifierNode("make_matrix_pair"),
+                [IdentifierNode("matrix"), IdentifierNode("matrix")],
+            ),
+            captures=["matrix"],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaNestedCaptureSiblingRoots",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixPair",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "make_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("primary", payload_matrix_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("seed", PrimitiveType("int")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "combine_nested_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("candidate", matrix_pair_type),
+                    ParameterNode("source", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_matrix_pair"),
+                            [
+                                MemberAccessNode(
+                                    IdentifierNode("candidate"),
+                                    "primary",
+                                ),
+                                IdentifierNode("source"),
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_nested_capture_then_sibling",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "pair",
+                        matrix_pair_type,
+                        FunctionCallNode(
+                            IdentifierNode("combine_nested_pair"),
+                            [
+                                FunctionCallNode(
+                                    IdentifierNode("apply_matrix_pair"),
+                                    [
+                                        IdentifierNode("seed"),
+                                        captured_pair_lambda(),
+                                    ],
+                                ),
+                                IdentifierNode("matrix"),
+                            ],
+                        ),
+                    ),
+                    ReturnNode(count_first_pair_payload("pair")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "combine_nested_pair(apply_matrix_pair(seed, |value: i32| "
+        "make_matrix_pair(matrix.clone(), matrix.clone())), matrix.clone())"
+        in generated_code
+    )
+    assert "make_matrix_pair(matrix.clone(), matrix)), matrix.clone())" not in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_named_constructor_nested_capture_sibling_roots_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    matrix_pair_type = NamedType("MatrixPair")
+    matrix_bundle_type = NamedType("MatrixBundle")
+    matrix_choice_type = NamedType("MatrixChoice")
+    matrix_choice_candidate_type = NamedType("MatrixChoice::Candidate")
+    closure_type = GenericType("F")
+    closure_bound = NamedType("FnOnce(i32) -> MatrixPair")
+    matrix_choice_enum = EnumNode(
+        "MatrixChoice",
+        [
+            EnumVariantNode(
+                "Candidate",
+                fields=[
+                    ("candidate", matrix_pair_type),
+                    ("source", payload_matrix_type),
+                ],
+            ),
+        ],
+    )
+
+    def captured_pair_lambda():
+        return LambdaNode(
+            [ParameterNode("value", None)],
+            FunctionCallNode(
+                IdentifierNode("make_matrix_pair"),
+                [IdentifierNode("matrix"), IdentifierNode("matrix")],
+            ),
+            captures=["matrix"],
+        )
+
+    def nested_pair_call():
+        return FunctionCallNode(
+            IdentifierNode("apply_matrix_pair"),
+            [
+                IdentifierNode("seed"),
+                captured_pair_lambda(),
+            ],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaNamedConstructorNestedCaptureSiblingRoots",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixPair",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            StructNode(
+                "MatrixBundle",
+                [
+                    StructMemberNode("candidate", matrix_pair_type),
+                    StructMemberNode("source", payload_matrix_type),
+                ],
+            ),
+            matrix_choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "make_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("primary", payload_matrix_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("seed", PrimitiveType("int")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "return_named_struct_capture_then_sibling",
+                matrix_bundle_type,
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_bundle_type,
+                            [],
+                            named_arguments={
+                                "candidate": nested_pair_call(),
+                                "source": IdentifierNode("matrix"),
+                            },
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_named_enum_capture_then_sibling",
+                matrix_choice_type,
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_choice_candidate_type,
+                            [],
+                            named_arguments={
+                                "candidate": nested_pair_call(),
+                                "source": IdentifierNode("matrix"),
+                            },
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "return MatrixBundle { candidate: apply_matrix_pair(seed, |value: i32| "
+        "make_matrix_pair(matrix.clone(), matrix.clone())), "
+        "source: matrix.clone() };"
+    ) in generated_code
+    assert (
+        "return MatrixChoice::Candidate { candidate: apply_matrix_pair(seed, "
+        "|value: i32| make_matrix_pair(matrix.clone(), matrix.clone())), "
+        "source: matrix.clone() };"
+    ) in generated_code
+    assert "make_matrix_pair(matrix.clone(), matrix)), source: matrix.clone()" not in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_non_return_named_constructor_capture_siblings_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    matrix_pair_type = NamedType("MatrixPair")
+    matrix_bundle_type = NamedType("MatrixBundle")
+    matrix_choice_type = NamedType("MatrixChoice")
+    matrix_choice_candidate_type = NamedType("MatrixChoice::Candidate")
+    matrix_tuple_choice_type = NamedType("MatrixTupleChoice")
+    closure_type = GenericType("F")
+    closure_bound = NamedType("FnOnce(i32) -> MatrixPair")
+    matrix_choice_enum = EnumNode(
+        "MatrixChoice",
+        [
+            EnumVariantNode(
+                "Candidate",
+                fields=[
+                    ("candidate", matrix_pair_type),
+                    ("source", payload_matrix_type),
+                ],
+            ),
+        ],
+    )
+    matrix_tuple_choice_enum = EnumNode(
+        "MatrixTupleChoice",
+        [
+            EnumVariantNode(
+                "Pair",
+                fields=[matrix_pair_type, payload_matrix_type],
+            ),
+        ],
+    )
+
+    def first_bundle_payload_count(bundle_name):
+        return MemberAccessNode(
+            ArrayAccessNode(
+                ArrayAccessNode(
+                    MemberAccessNode(
+                        MemberAccessNode(IdentifierNode(bundle_name), "candidate"),
+                        "primary",
+                    ),
+                    LiteralNode(0, PrimitiveType("int")),
+                ),
+                LiteralNode(0, PrimitiveType("int")),
+            ),
+            "count",
+        )
+
+    def captured_pair_lambda():
+        return LambdaNode(
+            [ParameterNode("value", None)],
+            FunctionCallNode(
+                IdentifierNode("make_matrix_pair"),
+                [IdentifierNode("matrix"), IdentifierNode("matrix")],
+            ),
+            captures=["matrix"],
+        )
+
+    def nested_pair_call():
+        return FunctionCallNode(
+            IdentifierNode("apply_matrix_pair"),
+            [
+                IdentifierNode("seed"),
+                captured_pair_lambda(),
+            ],
+        )
+
+    def named_bundle_constructor():
+        return ConstructorNode(
+            matrix_bundle_type,
+            [],
+            named_arguments={
+                "candidate": nested_pair_call(),
+                "source": IdentifierNode("matrix"),
+            },
+        )
+
+    def named_choice_constructor():
+        return ConstructorNode(
+            matrix_choice_candidate_type,
+            [],
+            named_arguments={
+                "candidate": nested_pair_call(),
+                "source": IdentifierNode("matrix"),
+            },
+        )
+
+    def positional_bundle_constructor():
+        return ConstructorNode(
+            matrix_bundle_type,
+            [nested_pair_call(), IdentifierNode("matrix")],
+        )
+
+    def struct_new_bundle_call():
+        return FunctionCallNode(
+            IdentifierNode("MatrixBundle::new"),
+            [nested_pair_call(), IdentifierNode("matrix")],
+        )
+
+    def tuple_choice_call():
+        return FunctionCallNode(
+            IdentifierNode("MatrixTupleChoice::Pair"),
+            [nested_pair_call(), IdentifierNode("matrix")],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaNonReturnNamedConstructorCaptureSiblings",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixPair",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            StructNode(
+                "MatrixBundle",
+                [
+                    StructMemberNode("candidate", matrix_pair_type),
+                    StructMemberNode("source", payload_matrix_type),
+                ],
+            ),
+            matrix_choice_enum,
+            matrix_tuple_choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "make_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("primary", payload_matrix_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("seed", PrimitiveType("int")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("seed")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "local_named_struct_capture_then_sibling",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "bundle",
+                        matrix_bundle_type,
+                        named_bundle_constructor(),
+                    ),
+                    ReturnNode(first_bundle_payload_count("bundle")),
+                ],
+            ),
+            FunctionNode(
+                "assign_named_struct_capture_then_sibling",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode("bundle", matrix_bundle_type),
+                    AssignmentNode(
+                        IdentifierNode("bundle"),
+                        named_bundle_constructor(),
+                    ),
+                    ReturnNode(first_bundle_payload_count("bundle")),
+                ],
+            ),
+            FunctionNode(
+                "local_named_enum_capture_then_sibling",
+                matrix_choice_type,
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "choice",
+                        matrix_choice_type,
+                        named_choice_constructor(),
+                    ),
+                    ReturnNode(IdentifierNode("choice")),
+                ],
+            ),
+            FunctionNode(
+                "local_positional_struct_capture_then_sibling",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "bundle",
+                        matrix_bundle_type,
+                        positional_bundle_constructor(),
+                    ),
+                    ReturnNode(first_bundle_payload_count("bundle")),
+                ],
+            ),
+            FunctionNode(
+                "local_struct_new_capture_then_sibling",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "bundle",
+                        matrix_bundle_type,
+                        struct_new_bundle_call(),
+                    ),
+                    ReturnNode(first_bundle_payload_count("bundle")),
+                ],
+            ),
+            FunctionNode(
+                "local_tuple_enum_capture_then_sibling",
+                matrix_tuple_choice_type,
+                [
+                    ParameterNode("matrix", payload_matrix_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    VariableNode(
+                        "choice",
+                        matrix_tuple_choice_type,
+                        tuple_choice_call(),
+                    ),
+                    ReturnNode(IdentifierNode("choice")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        generated_code.count(
+            "let bundle: MatrixBundle = MatrixBundle::new("
+            "apply_matrix_pair(seed, |value: i32| "
+            "make_matrix_pair(matrix.clone(), matrix.clone())), matrix.clone());"
+        )
+        == 2
+    )
+    assert (
+        "let bundle: MatrixBundle = MatrixBundle { candidate: "
+        "apply_matrix_pair(seed, |value: i32| "
+        "make_matrix_pair(matrix.clone(), matrix.clone())), "
+        "source: matrix.clone() };"
+    ) in generated_code
+    assert (
+        "bundle = MatrixBundle { candidate: apply_matrix_pair(seed, "
+        "|value: i32| make_matrix_pair(matrix.clone(), matrix.clone())), "
+        "source: matrix.clone() };"
+    ) in generated_code
+    assert (
+        "let choice: MatrixChoice = MatrixChoice::Candidate { candidate: "
+        "apply_matrix_pair(seed, |value: i32| "
+        "make_matrix_pair(matrix.clone(), matrix.clone())), "
+        "source: matrix.clone() };"
+    ) in generated_code
+    assert (
+        "let choice: MatrixTupleChoice = MatrixTupleChoice::Pair("
+        "apply_matrix_pair(seed, |value: i32| "
+        "make_matrix_pair(matrix.clone(), matrix.clone())), matrix.clone());"
+    ) in generated_code
+    assert "make_matrix_pair(matrix.clone(), matrix)), source: matrix.clone()" not in (
+        generated_code
+    )
+    assert "make_matrix_pair(matrix.clone(), matrix)), matrix.clone())" not in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_fnonce_branch_values_return_captured_arrays_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    payload_cube_type = ArrayType(payload_matrix_type, 2)
+    matrix_wrapper_type = NamedType("MatrixWrapper")
+    closure_type = GenericType("F")
+    closure_bound = NamedType("FnOnce(bool) -> [[Payload; 2]; 2]")
+
+    def apply_matrix_once(flag_name, transform):
+        return FunctionCallNode(
+            IdentifierNode("apply_payload_matrix_once"),
+            [IdentifierNode(flag_name), transform],
+        )
+
+    def first_payload_count(matrix_name):
+        return MemberAccessNode(
+            ArrayAccessNode(
+                ArrayAccessNode(
+                    IdentifierNode(matrix_name),
+                    LiteralNode(0, PrimitiveType("int")),
+                ),
+                LiteralNode(0, PrimitiveType("int")),
+            ),
+            "count",
+        )
+
+    def bool_match(true_tail, false_tail):
+        return MatchNode(
+            IdentifierNode("use_left"),
+            [
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(True, PrimitiveType("bool"))),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            true_tail,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(False, PrimitiveType("bool"))),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            false_tail,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+            ],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaFnOnceBranchReturns",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixWrapper",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "apply_payload_matrix_once",
+                payload_matrix_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("flag")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "closure_ternary_moves_captured_matrices",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("left", payload_matrix_type),
+                    ParameterNode("right", payload_matrix_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        payload_matrix_type,
+                        apply_matrix_once(
+                            "flag",
+                            LambdaNode(
+                                [ParameterNode("use_left", None)],
+                                TernaryOpNode(
+                                    IdentifierNode("use_left"),
+                                    IdentifierNode("left"),
+                                    IdentifierNode("right"),
+                                ),
+                                captures=["left", "right"],
+                            ),
+                        ),
+                    ),
+                    ReturnNode(first_payload_count("selected")),
+                ],
+            ),
+            FunctionNode(
+                "closure_match_moves_member_or_clones_indexed_matrix",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                    ParameterNode("rows", payload_cube_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        payload_matrix_type,
+                        apply_matrix_once(
+                            "flag",
+                            LambdaNode(
+                                [ParameterNode("use_left", None)],
+                                bool_match(
+                                    MemberAccessNode(
+                                        IdentifierNode("wrapper"),
+                                        "primary",
+                                    ),
+                                    ArrayAccessNode(
+                                        IdentifierNode("rows"),
+                                        LiteralNode(1, PrimitiveType("int")),
+                                    ),
+                                ),
+                                captures=["wrapper", "rows"],
+                            ),
+                        ),
+                    ),
+                    ReturnNode(first_payload_count("selected")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn apply_payload_matrix_once<F: FnOnce(bool) -> [[Payload; 2]; 2]>"
+        in generated_code
+    )
+    assert "|use_left: bool|" in generated_code
+    assert "(if use_left { left } else { right })" in generated_code
+    assert "left.clone() } else { right.clone()" not in generated_code
+    assert "match use_left" in generated_code
+    assert "wrapper.primary" in generated_code
+    assert "wrapper.primary.clone()" not in generated_code
+    assert "rows[1].clone()" in generated_code
+    assert "rows[1]\n" not in generated_code
+    assert "LambdaNode" not in generated_code
+    assert "MatchNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_constructor_branch_fields_capture_members_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    matrix_wrapper_type = NamedType("MatrixWrapper")
+    matrix_bundle_type = NamedType("MatrixBundle")
+    matrix_choice_type = NamedType("MatrixChoice")
+    matrix_choice_selected_type = NamedType("MatrixChoice::Selected")
+    closure_type = GenericType("F")
+    closure_bound = NamedType("FnOnce(bool) -> [[Payload; 2]; 2]")
+    matrix_choice_enum = EnumNode(
+        "MatrixChoice",
+        [
+            EnumVariantNode(
+                "Selected",
+                fields=[
+                    ("selected", payload_matrix_type),
+                    ("fallback", payload_matrix_type),
+                ],
+            ),
+        ],
+    )
+
+    def apply_matrix_once(transform):
+        return FunctionCallNode(
+            IdentifierNode("apply_payload_matrix_once"),
+            [IdentifierNode("flag"), transform],
+        )
+
+    def captured_member_lambda(member):
+        return LambdaNode(
+            [ParameterNode("use_primary", None)],
+            MemberAccessNode(IdentifierNode("wrapper"), member),
+            captures=["wrapper"],
+        )
+
+    def branch_value():
+        return TernaryOpNode(
+            IdentifierNode("choose_primary"),
+            apply_matrix_once(captured_member_lambda("primary")),
+            apply_matrix_once(captured_member_lambda("backup")),
+        )
+
+    def match_value():
+        return MatchNode(
+            IdentifierNode("choose_primary"),
+            [
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(True, PrimitiveType("bool"))),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            apply_matrix_once(captured_member_lambda("primary")),
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(False, PrimitiveType("bool"))),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            apply_matrix_once(captured_member_lambda("backup")),
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+            ],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaConstructorBranchFieldsCaptureMembers",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixWrapper",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            StructNode(
+                "MatrixBundle",
+                [
+                    StructMemberNode("selected", payload_matrix_type),
+                    StructMemberNode("fallback", payload_matrix_type),
+                ],
+            ),
+            matrix_choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "apply_payload_matrix_once",
+                payload_matrix_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("flag")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "return_branch_struct_constructor",
+                matrix_bundle_type,
+                [
+                    ParameterNode("choose_primary", PrimitiveType("bool")),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                    ParameterNode("fallback", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_bundle_type,
+                            [],
+                            named_arguments={
+                                "selected": branch_value(),
+                                "fallback": IdentifierNode("fallback"),
+                            },
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_match_enum_constructor",
+                matrix_choice_type,
+                [
+                    ParameterNode("choose_primary", PrimitiveType("bool")),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                    ParameterNode("fallback", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_choice_selected_type,
+                            [],
+                            named_arguments={
+                                "selected": match_value(),
+                                "fallback": IdentifierNode("fallback"),
+                            },
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "return MatrixBundle { selected: (if choose_primary" in generated_code
+    assert "return MatrixChoice::Selected { selected: match choose_primary" in (
+        generated_code
+    )
+    assert (
+        generated_code.count(
+            "apply_payload_matrix_once(flag, |use_primary: bool| wrapper.primary)"
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            "apply_payload_matrix_once(flag, |use_primary: bool| wrapper.backup)"
+        )
+        == 2
+    )
+    assert "fallback: fallback" in generated_code
+    assert " = wrapper.clone()" not in generated_code
+    assert "wrapper.primary.clone()" not in generated_code
+    assert "wrapper.backup.clone()" not in generated_code
+    assert "LambdaNode" not in generated_code
+    assert "MatchNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_array_literal_constructor_fields_and_generic_payloads_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    generic_type = GenericType("T")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    generic_matrix_type = ArrayType(ArrayType(generic_type, 2), 2)
+    generic_batch_type = ArrayType(generic_matrix_type, 2)
+    matrix_wrapper_type = NamedType("MatrixWrapper")
+    matrix_pack_payload_type = NamedType("MatrixPack", [payload_type])
+    matrix_choice_payload_type = NamedType("MatrixChoice", [payload_type])
+    matrix_choice_packed_type = NamedType("MatrixChoice::Packed")
+    closure_type = GenericType("F")
+    closure_bound = NamedType("FnOnce(bool) -> [[Payload; 2]; 2]")
+    matrix_choice_enum = EnumNode(
+        "MatrixChoice",
+        [
+            EnumVariantNode(
+                "Packed",
+                fields=[
+                    ("batches", generic_batch_type),
+                    ("fallback", generic_matrix_type),
+                ],
+            ),
+            EnumVariantNode("Tuple", fields=[generic_batch_type]),
+        ],
+    )
+    matrix_choice_enum.generic_params = [GenericParameterNode("T")]
+
+    def apply_matrix_once(member):
+        return FunctionCallNode(
+            IdentifierNode("apply_payload_matrix_once"),
+            [
+                IdentifierNode("flag"),
+                LambdaNode(
+                    [ParameterNode("use_primary", None)],
+                    MemberAccessNode(IdentifierNode("wrapper"), member),
+                    captures=["wrapper"],
+                ),
+            ],
+        )
+
+    def captured_batch_literal():
+        return ArrayLiteralNode(
+            [
+                apply_matrix_once("primary"),
+                apply_matrix_once("backup"),
+            ]
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaConstructorArrayFieldsGenericPayloads",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixWrapper",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            StructNode(
+                "MatrixPack",
+                [
+                    StructMemberNode("batches", generic_batch_type),
+                    StructMemberNode("fallback", generic_matrix_type),
+                ],
+                generic_params=[GenericParameterNode("T")],
+            ),
+            matrix_choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "apply_payload_matrix_once",
+                payload_matrix_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("flag")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "return_struct_array_field",
+                matrix_pack_payload_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                    ParameterNode("fallback", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pack_payload_type,
+                            [],
+                            named_arguments={
+                                "batches": captured_batch_literal(),
+                                "fallback": IdentifierNode("fallback"),
+                            },
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_struct_like_enum_array_field",
+                matrix_choice_payload_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                    ParameterNode("fallback", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_choice_packed_type,
+                            [],
+                            named_arguments={
+                                "batches": captured_batch_literal(),
+                                "fallback": IdentifierNode("fallback"),
+                            },
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_tuple_enum_array_payload",
+                matrix_choice_payload_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("MatrixChoice::Tuple"),
+                            [captured_batch_literal()],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "pub struct MatrixPack<T>" in generated_code
+    assert "pub enum MatrixChoice<T>" in generated_code
+    assert "MatrixPack::<Payload> { batches: [" in generated_code
+    assert "MatrixChoice::<Payload>::Packed { batches: [" in generated_code
+    assert "MatrixChoice::<Payload>::Tuple([" in generated_code
+    assert (
+        generated_code.count(
+            "apply_payload_matrix_once(flag, |use_primary: bool| wrapper.primary)"
+        )
+        == 3
+    )
+    assert (
+        generated_code.count(
+            "apply_payload_matrix_once(flag, |use_primary: bool| wrapper.backup)"
+        )
+        == 3
+    )
+    assert "fallback: fallback" in generated_code
+    assert " = wrapper.clone()" not in generated_code
+    assert "wrapper.primary.clone()" not in generated_code
+    assert "wrapper.backup.clone()" not in generated_code
+    assert "LambdaNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_match_returned_block_array_enum_payloads_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    generic_type = GenericType("T")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    generic_matrix_type = ArrayType(ArrayType(generic_type, 2), 2)
+    generic_batch_type = ArrayType(generic_matrix_type, 2)
+    matrix_wrapper_type = NamedType("MatrixWrapper")
+    matrix_choice_payload_type = NamedType("MatrixChoice", [payload_type])
+    matrix_choice_packed_type = NamedType("MatrixChoice::Packed")
+    closure_type = GenericType("F")
+    closure_bound = NamedType("FnOnce(bool) -> [[Payload; 2]; 2]")
+    matrix_choice_enum = EnumNode(
+        "MatrixChoice",
+        [
+            EnumVariantNode("Tuple", fields=[generic_batch_type]),
+            EnumVariantNode(
+                "Packed",
+                fields=[
+                    ("batches", generic_batch_type),
+                    ("fallback", generic_matrix_type),
+                ],
+            ),
+        ],
+    )
+    matrix_choice_enum.generic_params = [GenericParameterNode("T")]
+
+    def apply_matrix_once(member):
+        return FunctionCallNode(
+            IdentifierNode("apply_payload_matrix_once"),
+            [
+                IdentifierNode("flag"),
+                LambdaNode(
+                    [ParameterNode("use_primary", None)],
+                    MemberAccessNode(IdentifierNode("wrapper"), member),
+                    captures=["wrapper"],
+                ),
+            ],
+        )
+
+    def block_matrix(marker, member):
+        return BlockNode(
+            [
+                VariableNode(
+                    "marker",
+                    PrimitiveType("int"),
+                    LiteralNode(marker, PrimitiveType("int")),
+                ),
+                ExpressionStatementNode(
+                    apply_matrix_once(member),
+                    is_tail_expression=True,
+                ),
+            ]
+        )
+
+    def block_batch(first_marker, first_member, second_marker, second_member):
+        return ArrayLiteralNode(
+            [
+                block_matrix(first_marker, first_member),
+                block_matrix(second_marker, second_member),
+            ]
+        )
+
+    def tuple_choice(batch):
+        return FunctionCallNode(
+            IdentifierNode("MatrixChoice::Tuple"),
+            [batch],
+        )
+
+    def packed_choice(batch):
+        return ConstructorNode(
+            matrix_choice_packed_type,
+            [],
+            named_arguments={
+                "batches": batch,
+                "fallback": IdentifierNode("fallback"),
+            },
+        )
+
+    def bool_match(selector, true_tail, false_tail):
+        return MatchNode(
+            IdentifierNode(selector),
+            [
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(True, PrimitiveType("bool"))),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            true_tail,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(False, PrimitiveType("bool"))),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            false_tail,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+            ],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaMatchReturnedBlockArrayEnumPayloads",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixWrapper",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            matrix_choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "apply_payload_matrix_once",
+                payload_matrix_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("flag")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "return_match_tuple_block_array_payload",
+                matrix_choice_payload_type,
+                [
+                    ParameterNode("choose_tuple", PrimitiveType("bool")),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                ],
+                [
+                    ReturnNode(
+                        bool_match(
+                            "choose_tuple",
+                            tuple_choice(block_batch(1, "primary", 2, "backup")),
+                            tuple_choice(block_batch(3, "backup", 4, "primary")),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_match_struct_block_array_field",
+                matrix_choice_payload_type,
+                [
+                    ParameterNode("choose_packed", PrimitiveType("bool")),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                    ParameterNode("fallback", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        bool_match(
+                            "choose_packed",
+                            packed_choice(block_batch(5, "primary", 6, "backup")),
+                            packed_choice(block_batch(7, "backup", 8, "primary")),
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "pub enum MatrixChoice<T>" in generated_code
+    assert "return match choose_tuple {" in generated_code
+    assert "return match choose_packed {" in generated_code
+    assert generated_code.count("MatrixChoice::<Payload>::Tuple([") == 2
+    assert generated_code.count("MatrixChoice::<Payload>::Packed { batches: [") == 2
+    for marker in range(1, 9):
+        assert f"let marker: i32 = {marker};" in generated_code
+    assert (
+        generated_code.count(
+            "apply_payload_matrix_once(flag, |use_primary: bool| wrapper.primary)"
+        )
+        == 4
+    )
+    assert (
+        generated_code.count(
+            "apply_payload_matrix_once(flag, |use_primary: bool| wrapper.backup)"
+        )
+        == 4
+    )
+    assert "fallback: fallback" in generated_code
+    assert " = wrapper.clone()" not in generated_code
+    assert "wrapper.primary.clone()" not in generated_code
+    assert "wrapper.backup.clone()" not in generated_code
+    assert "LambdaNode" not in generated_code
+    assert "MatchNode" not in generated_code
+    assert "BlockNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_loop_updated_array_capture_member_preclones_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    payload_cube_type = ArrayType(payload_matrix_type, 2)
+    matrix_wrapper_type = NamedType("MatrixWrapper")
+    closure_type = GenericType("F")
+    closure_bound = NamedType("FnOnce(bool) -> [[Payload; 2]; 2]")
+
+    def apply_matrix_once(member):
+        return FunctionCallNode(
+            IdentifierNode("apply_payload_matrix_once"),
+            [
+                IdentifierNode("flag"),
+                LambdaNode(
+                    [ParameterNode("use_primary", None)],
+                    MemberAccessNode(IdentifierNode("wrapper"), member),
+                    captures=["wrapper"],
+                ),
+            ],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaLoopUpdatedArrayCaptureMemberPreclones",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixWrapper",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "apply_payload_matrix_once",
+                payload_matrix_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("flag")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "loop_update_batch_from_primary",
+                payload_matrix_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                ],
+                [
+                    VariableNode("batches", payload_cube_type),
+                    VariableNode(
+                        "i",
+                        PrimitiveType("int"),
+                        LiteralNode(0, PrimitiveType("int")),
+                    ),
+                    WhileNode(
+                        BinaryOpNode(
+                            IdentifierNode("i"),
+                            "<",
+                            LiteralNode(2, PrimitiveType("int")),
+                        ),
+                        [
+                            AssignmentNode(
+                                ArrayAccessNode(
+                                    IdentifierNode("batches"),
+                                    IdentifierNode("i"),
+                                ),
+                                apply_matrix_once("primary"),
+                            ),
+                            AssignmentNode(
+                                IdentifierNode("i"),
+                                BinaryOpNode(
+                                    IdentifierNode("i"),
+                                    "+",
+                                    LiteralNode(1, PrimitiveType("int")),
+                                ),
+                            ),
+                        ],
+                    ),
+                    ReturnNode(
+                        ArrayAccessNode(
+                            IdentifierNode("batches"),
+                            LiteralNode(0, PrimitiveType("int")),
+                        )
+                    ),
+                ],
+            ),
+            FunctionNode(
+                "loop_update_batch_from_backup",
+                payload_matrix_type,
+                [
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                ],
+                [
+                    VariableNode("batches", payload_cube_type),
+                    VariableNode(
+                        "i",
+                        PrimitiveType("int"),
+                        LiteralNode(0, PrimitiveType("int")),
+                    ),
+                    WhileNode(
+                        BinaryOpNode(
+                            IdentifierNode("i"),
+                            "<",
+                            LiteralNode(2, PrimitiveType("int")),
+                        ),
+                        [
+                            AssignmentNode(
+                                ArrayAccessNode(
+                                    IdentifierNode("batches"),
+                                    IdentifierNode("i"),
+                                ),
+                                apply_matrix_once("backup"),
+                            ),
+                            AssignmentNode(
+                                IdentifierNode("i"),
+                                BinaryOpNode(
+                                    IdentifierNode("i"),
+                                    "+",
+                                    LiteralNode(1, PrimitiveType("int")),
+                                ),
+                            ),
+                        ],
+                    ),
+                    ReturnNode(
+                        ArrayAccessNode(
+                            IdentifierNode("batches"),
+                            LiteralNode(0, PrimitiveType("int")),
+                        )
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "while (i < 2) {" in generated_code
+    assert generated_code.count("let __cgl_capture_wrapper_primary_") == 1
+    assert generated_code.count("let __cgl_capture_wrapper_backup_") == 1
+    assert (
+        "apply_payload_matrix_once(flag, { let __cgl_capture_wrapper_primary_"
+        in generated_code
+    )
+    assert (
+        "apply_payload_matrix_once(flag, { let __cgl_capture_wrapper_backup_"
+        in generated_code
+    )
+    assert "wrapper.primary.clone()" in generated_code
+    assert "wrapper.backup.clone()" in generated_code
+    assert "move |use_primary: bool| __cgl_capture_wrapper_primary_" in generated_code
+    assert "move |use_primary: bool| __cgl_capture_wrapper_backup_" in generated_code
+    assert " = wrapper.clone()" not in generated_code
+    assert "LambdaNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_match_nested_helper_sibling_member_preclones_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    matrix_wrapper_type = NamedType("MatrixWrapper")
+    matrix_pair_type = NamedType("MatrixPair")
+    matrix_choice_type = NamedType("MatrixChoice")
+    matrix_choice_ready_type = NamedType("MatrixChoice::Ready")
+    first_closure_type = GenericType("F")
+    second_closure_type = GenericType("G")
+    closure_bound = NamedType("FnOnce(i32) -> [[Payload; 2]; 2]")
+    matrix_choice_enum = EnumNode(
+        "MatrixChoice",
+        [
+            EnumVariantNode(
+                "Ready",
+                fields=[
+                    ("pair", matrix_pair_type),
+                    ("fallback", payload_matrix_type),
+                ],
+            ),
+        ],
+    )
+
+    def captured_member_lambda(member):
+        return LambdaNode(
+            [ParameterNode("value", None)],
+            MemberAccessNode(IdentifierNode("wrapper"), member),
+            captures=["wrapper"],
+        )
+
+    def apply_two_members(first_member, second_member):
+        return FunctionCallNode(
+            IdentifierNode("apply_two_matrix_values"),
+            [
+                captured_member_lambda(first_member),
+                captured_member_lambda(second_member),
+                IdentifierNode("seed"),
+            ],
+        )
+
+    def build_choice(first_member, second_member, fallback_member):
+        return FunctionCallNode(
+            IdentifierNode("build_choice"),
+            [
+                apply_two_members(first_member, second_member),
+                MemberAccessNode(IdentifierNode("wrapper"), fallback_member),
+            ],
+        )
+
+    def bool_match(true_tail, false_tail):
+        return MatchNode(
+            IdentifierNode("choose_primary"),
+            [
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(True, PrimitiveType("bool"))),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            true_tail,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(False, PrimitiveType("bool"))),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            false_tail,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+            ],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaMatchNestedHelperSiblingMemberPreclones",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixWrapper",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            StructNode(
+                "MatrixPair",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            matrix_choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "make_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("primary", payload_matrix_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_two_matrix_values",
+                matrix_pair_type,
+                [
+                    ParameterNode("first_builder", first_closure_type),
+                    ParameterNode("second_builder", second_closure_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_matrix_pair"),
+                            [
+                                FunctionCallNode(
+                                    IdentifierNode("first_builder"),
+                                    [IdentifierNode("seed")],
+                                ),
+                                FunctionCallNode(
+                                    IdentifierNode("second_builder"),
+                                    [IdentifierNode("seed")],
+                                ),
+                            ],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                    GenericParameterNode("G", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "build_choice",
+                matrix_choice_type,
+                [
+                    ParameterNode("pair", matrix_pair_type),
+                    ParameterNode("fallback", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_choice_ready_type,
+                            [],
+                            named_arguments={
+                                "pair": IdentifierNode("pair"),
+                                "fallback": IdentifierNode("fallback"),
+                            },
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_match_nested_helper_sibling_members",
+                matrix_choice_type,
+                [
+                    ParameterNode("choose_primary", PrimitiveType("bool")),
+                    ParameterNode("wrapper", matrix_wrapper_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    ReturnNode(
+                        bool_match(
+                            build_choice("primary", "backup", "primary"),
+                            build_choice("backup", "primary", "backup"),
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "return match choose_primary {" in generated_code
+    assert generated_code.count("let __cgl_capture_wrapper_primary_") == 2
+    assert generated_code.count("let __cgl_capture_wrapper_backup_") == 2
+    assert generated_code.count("wrapper.primary.clone()") == 3
+    assert generated_code.count("wrapper.backup.clone()") == 3
+    assert (
+        "build_choice(apply_two_matrix_values({ let "
+        "__cgl_capture_wrapper_primary_0 = wrapper.primary.clone(); "
+        "move |value: i32| __cgl_capture_wrapper_primary_0 }, "
+        "{ let __cgl_capture_wrapper_backup_1 = wrapper.backup.clone(); "
+        "move |value: i32| __cgl_capture_wrapper_backup_1 }, seed), "
+        "wrapper.primary.clone())" in generated_code
+    )
+    assert (
+        "build_choice(apply_two_matrix_values({ let "
+        "__cgl_capture_wrapper_backup_2 = wrapper.backup.clone(); "
+        "move |value: i32| __cgl_capture_wrapper_backup_2 }, "
+        "{ let __cgl_capture_wrapper_primary_3 = wrapper.primary.clone(); "
+        "move |value: i32| __cgl_capture_wrapper_primary_3 }, seed), "
+        "wrapper.backup.clone())" in generated_code
+    )
+    assert "move |value: i32| __cgl_capture_wrapper_primary_" in generated_code
+    assert "move |value: i32| __cgl_capture_wrapper_backup_" in generated_code
+    assert " = wrapper.clone()" not in generated_code
+    assert "build_choice(apply_two_matrix_values(|value: i32| wrapper." not in (
+        generated_code
+    )
+    assert "LambdaNode" not in generated_code
+    assert "MatchNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_match_constructor_indexed_capture_paths_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    payload_cube_type = ArrayType(payload_matrix_type, 2)
+    matrix_pair_type = NamedType("MatrixPair")
+    batch_wrapper_type = NamedType("BatchWrapper")
+    matrix_choice_type = NamedType("MatrixChoice")
+    matrix_choice_ready_type = NamedType("MatrixChoice::Ready")
+    first_closure_type = GenericType("F")
+    second_closure_type = GenericType("G")
+    closure_bound = NamedType("FnOnce(i32) -> [[Payload; 2]; 2]")
+    matrix_choice_enum = EnumNode(
+        "MatrixChoice",
+        [
+            EnumVariantNode(
+                "Ready",
+                fields=[
+                    ("direct", matrix_pair_type),
+                    ("nested", matrix_pair_type),
+                    ("fallback", payload_matrix_type),
+                ],
+            ),
+        ],
+    )
+
+    def row_index(index):
+        return ArrayAccessNode(
+            IdentifierNode("rows"),
+            LiteralNode(index, PrimitiveType("int")),
+        )
+
+    def wrapper_batch_index(index):
+        return ArrayAccessNode(
+            MemberAccessNode(IdentifierNode("wrapper"), "batches"),
+            LiteralNode(index, PrimitiveType("int")),
+        )
+
+    def captured_row_lambda(index):
+        return LambdaNode(
+            [ParameterNode("value", None)],
+            row_index(index),
+            captures=["rows"],
+        )
+
+    def captured_wrapper_batch_lambda(index):
+        return LambdaNode(
+            [ParameterNode("value", None)],
+            wrapper_batch_index(index),
+            captures=["wrapper"],
+        )
+
+    def apply_two(first_builder, second_builder):
+        return FunctionCallNode(
+            IdentifierNode("apply_two_matrix_values"),
+            [
+                first_builder,
+                second_builder,
+                IdentifierNode("seed"),
+            ],
+        )
+
+    def build_choice(direct_pair, nested_pair, fallback):
+        return FunctionCallNode(
+            IdentifierNode("build_index_choice"),
+            [
+                direct_pair,
+                nested_pair,
+                fallback,
+            ],
+        )
+
+    def bool_match(true_tail, false_tail):
+        return MatchNode(
+            IdentifierNode("choose_direct"),
+            [
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(True, PrimitiveType("bool"))),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            true_tail,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(False, PrimitiveType("bool"))),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            false_tail,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+            ],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaMatchConstructorIndexedCapturePaths",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "MatrixPair",
+                [
+                    StructMemberNode("primary", payload_matrix_type),
+                    StructMemberNode("backup", payload_matrix_type),
+                ],
+            ),
+            StructNode(
+                "BatchWrapper",
+                [
+                    StructMemberNode("batches", payload_cube_type),
+                    StructMemberNode("fallback", payload_matrix_type),
+                ],
+            ),
+            matrix_choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "make_matrix_pair",
+                matrix_pair_type,
+                [
+                    ParameterNode("primary", payload_matrix_type),
+                    ParameterNode("backup", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_pair_type,
+                            [IdentifierNode("primary"), IdentifierNode("backup")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_two_matrix_values",
+                matrix_pair_type,
+                [
+                    ParameterNode("first_builder", first_closure_type),
+                    ParameterNode("second_builder", second_closure_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("make_matrix_pair"),
+                            [
+                                FunctionCallNode(
+                                    IdentifierNode("first_builder"),
+                                    [IdentifierNode("seed")],
+                                ),
+                                FunctionCallNode(
+                                    IdentifierNode("second_builder"),
+                                    [IdentifierNode("seed")],
+                                ),
+                            ],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                    GenericParameterNode("G", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "build_index_choice",
+                matrix_choice_type,
+                [
+                    ParameterNode("direct", matrix_pair_type),
+                    ParameterNode("nested", matrix_pair_type),
+                    ParameterNode("fallback", payload_matrix_type),
+                ],
+                [
+                    ReturnNode(
+                        ConstructorNode(
+                            matrix_choice_ready_type,
+                            [],
+                            named_arguments={
+                                "direct": IdentifierNode("direct"),
+                                "nested": IdentifierNode("nested"),
+                                "fallback": IdentifierNode("fallback"),
+                            },
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_match_constructor_indexed_capture_paths",
+                matrix_choice_type,
+                [
+                    ParameterNode("choose_direct", PrimitiveType("bool")),
+                    ParameterNode("rows", payload_cube_type),
+                    ParameterNode("wrapper", batch_wrapper_type),
+                    ParameterNode("seed", PrimitiveType("int")),
+                ],
+                [
+                    ReturnNode(
+                        bool_match(
+                            build_choice(
+                                apply_two(
+                                    captured_row_lambda(0),
+                                    captured_row_lambda(1),
+                                ),
+                                apply_two(
+                                    captured_wrapper_batch_lambda(0),
+                                    captured_wrapper_batch_lambda(1),
+                                ),
+                                row_index(0),
+                            ),
+                            build_choice(
+                                apply_two(
+                                    captured_row_lambda(1),
+                                    captured_row_lambda(0),
+                                ),
+                                apply_two(
+                                    captured_wrapper_batch_lambda(1),
+                                    captured_wrapper_batch_lambda(0),
+                                ),
+                                MemberAccessNode(IdentifierNode("wrapper"), "fallback"),
+                            ),
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "return match choose_direct {" in generated_code
+    assert generated_code.count("rows[0].clone()") == 3
+    assert generated_code.count("rows[1].clone()") == 2
+    assert generated_code.count("wrapper.batches[0].clone()") == 2
+    assert generated_code.count("wrapper.batches[1].clone()") == 2
+    assert "wrapper.fallback.clone()" in generated_code
+    assert "rows.clone()" not in generated_code
+    assert "wrapper.clone()" not in generated_code
+    assert "__cgl_capture_rows_" not in generated_code
+    assert "__cgl_capture_wrapper_" not in generated_code
+    assert "|value: i32| rows[0]," not in generated_code
+    assert "|value: i32| wrapper.batches[0]," not in generated_code
+    assert "LambdaNode" not in generated_code
+    assert "MatchNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_array_lambda_generic_payload_dynamic_indexed_branch_captures_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    generic_type = GenericType("T")
+    payload_matrix_type = ArrayType(ArrayType(payload_type, 2), 2)
+    payload_cube_type = ArrayType(payload_matrix_type, 2)
+    generic_matrix_type = ArrayType(ArrayType(generic_type, 2), 2)
+    batch_wrapper_type = NamedType("BatchWrapper")
+    matrix_selection_payload_type = NamedType("MatrixSelection", [payload_type])
+    matrix_selection_ready_type = NamedType("MatrixSelection::Ready")
+    closure_type = GenericType("F")
+    closure_bound = NamedType("FnOnce(i32, bool) -> [[Payload; 2]; 2]")
+    matrix_selection_enum = EnumNode(
+        "MatrixSelection",
+        [
+            EnumVariantNode(
+                "Ready",
+                fields=[
+                    ("selected", generic_matrix_type),
+                    ("fallback", generic_matrix_type),
+                ],
+            ),
+        ],
+    )
+    matrix_selection_enum.generic_params = [GenericParameterNode("T")]
+
+    def rows_index(index_expr):
+        return ArrayAccessNode(IdentifierNode("rows"), index_expr)
+
+    def wrapper_batches_index(index_expr):
+        return ArrayAccessNode(
+            MemberAccessNode(IdentifierNode("wrapper"), "batches"),
+            index_expr,
+        )
+
+    def select_with_lambda(lambda_body):
+        return FunctionCallNode(
+            IdentifierNode("select_indexed_matrix"),
+            [
+                IdentifierNode("index"),
+                IdentifierNode("choose_wrapper"),
+                LambdaNode(
+                    [
+                        ParameterNode("slot", None),
+                        ParameterNode("use_wrapper", None),
+                    ],
+                    lambda_body,
+                    captures=["rows", "wrapper"],
+                ),
+            ],
+        )
+
+    def ready_selection(selected_expr, fallback_expr):
+        return ConstructorNode(
+            matrix_selection_ready_type,
+            [],
+            named_arguments={
+                "selected": selected_expr,
+                "fallback": fallback_expr,
+            },
+        )
+
+    def bool_match(true_tail, false_tail):
+        return MatchNode(
+            IdentifierNode("use_wrapper"),
+            [
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(True, PrimitiveType("bool"))),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            true_tail,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(False, PrimitiveType("bool"))),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            false_tail,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+            ],
+        )
+
+    ast = ShaderNode(
+        "ArrayLambdaGenericPayloadDynamicIndexedBranchCaptures",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            StructNode(
+                "BatchWrapper",
+                [
+                    StructMemberNode("batches", payload_cube_type),
+                    StructMemberNode("fallback", payload_matrix_type),
+                ],
+            ),
+            matrix_selection_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "select_indexed_matrix",
+                payload_matrix_type,
+                [
+                    ParameterNode("index", PrimitiveType("int")),
+                    ParameterNode("choose_wrapper", PrimitiveType("bool")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [
+                                IdentifierNode("index"),
+                                IdentifierNode("choose_wrapper"),
+                            ],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "return_ternary_indexed_selection",
+                matrix_selection_payload_type,
+                [
+                    ParameterNode("index", PrimitiveType("int")),
+                    ParameterNode("choose_wrapper", PrimitiveType("bool")),
+                    ParameterNode("rows", payload_cube_type),
+                    ParameterNode("wrapper", batch_wrapper_type),
+                ],
+                [
+                    ReturnNode(
+                        ready_selection(
+                            select_with_lambda(
+                                TernaryOpNode(
+                                    IdentifierNode("use_wrapper"),
+                                    wrapper_batches_index(IdentifierNode("slot")),
+                                    rows_index(IdentifierNode("slot")),
+                                )
+                            ),
+                            rows_index(LiteralNode(0, PrimitiveType("int"))),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "return_match_indexed_selection",
+                matrix_selection_payload_type,
+                [
+                    ParameterNode("index", PrimitiveType("int")),
+                    ParameterNode("choose_wrapper", PrimitiveType("bool")),
+                    ParameterNode("rows", payload_cube_type),
+                    ParameterNode("wrapper", batch_wrapper_type),
+                ],
+                [
+                    ReturnNode(
+                        ready_selection(
+                            select_with_lambda(
+                                BlockNode(
+                                    [
+                                        VariableNode(
+                                            "normalized",
+                                            PrimitiveType("int"),
+                                            IdentifierNode("slot"),
+                                        ),
+                                        ExpressionStatementNode(
+                                            bool_match(
+                                                wrapper_batches_index(
+                                                    IdentifierNode("normalized")
+                                                ),
+                                                rows_index(
+                                                    IdentifierNode("normalized")
+                                                ),
+                                            ),
+                                            is_tail_expression=True,
+                                        ),
+                                    ]
+                                )
+                            ),
+                            MemberAccessNode(IdentifierNode("wrapper"), "fallback"),
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "pub enum MatrixSelection<T>" in generated_code
+    assert (
+        "pub fn select_indexed_matrix<F: FnOnce(i32, bool) -> [[Payload; 2]; 2]>"
+        in generated_code
+    )
+    assert (
+        "return MatrixSelection::<Payload>::Ready { "
+        "selected: select_indexed_matrix(index, choose_wrapper, "
+        "|slot: i32, use_wrapper: bool| (if use_wrapper { "
+        "wrapper.batches[slot as usize].clone() } else { "
+        "rows[slot as usize].clone() })), fallback: rows[0].clone() };"
+        in generated_code
+    )
+    assert "let normalized: i32 = slot;" in generated_code
+    assert "match use_wrapper {" in generated_code
+    assert generated_code.count("wrapper.batches[slot as usize].clone()") == 1
+    assert generated_code.count("rows[slot as usize].clone()") == 1
+    assert generated_code.count("wrapper.batches[normalized as usize].clone()") == 1
+    assert generated_code.count("rows[normalized as usize].clone()") == 1
+    assert "wrapper.fallback.clone()" in generated_code
+    assert "rows.clone()" not in generated_code
+    assert "wrapper.clone()" not in generated_code
+    assert "wrapper.batches.clone()" not in generated_code
+    assert "__cgl_capture_rows_" not in generated_code
+    assert "__cgl_capture_wrapper_" not in generated_code
+    assert "wrapper.batches[slot as usize] }" not in generated_code
+    assert "rows[slot as usize] }" not in generated_code
+    assert "wrapper.batches[normalized as usize]\n" not in generated_code
+    assert "rows[normalized as usize]\n" not in generated_code
+    assert "LambdaNode" not in generated_code
+    assert "MatchNode" not in generated_code
+    assert "TernaryOpNode" not in generated_code
+    assert "BlockNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_lambda_fnonce_guarded_match_returns_nested_enum_struct_payloads_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    generic_type = GenericType("T")
+    choice_payload_type = NamedType("Choice", [payload_type])
+    envelope_type = NamedType("Envelope")
+    omitted_named_variant_type = NamedType("Choice::Named")
+    closure_type = GenericType("F")
+    closure_bound = NamedType("FnOnce(Choice<Payload>, bool) -> Envelope")
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode(
+                "Named",
+                fields=[
+                    ("primary", generic_type),
+                    ("backup", generic_type),
+                ],
+            ),
+        ],
+    )
+    choice_enum.generic_params = [GenericParameterNode("T")]
+
+    def apply_envelope_once(choice, flag, transform):
+        return FunctionCallNode(
+            IdentifierNode("apply_envelope_once"),
+            [IdentifierNode(choice), IdentifierNode(flag), transform],
+        )
+
+    def choice_named(primary, backup):
+        return ConstructorNode(
+            omitted_named_variant_type,
+            [],
+            named_arguments={
+                "primary": IdentifierNode(primary),
+                "backup": IdentifierNode(backup),
+            },
+        )
+
+    def envelope(choice_expr, fallback_name):
+        return ConstructorNode(
+            envelope_type,
+            [],
+            named_arguments={
+                "choice": choice_expr,
+                "fallback": IdentifierNode(fallback_name),
+            },
+        )
+
+    def named_pattern():
+        return StructPatternNode(
+            "Choice::Named",
+            {
+                "primary": IdentifierPatternNode("primary"),
+                "backup": IdentifierPatternNode("backup"),
+            },
+        )
+
+    guarded_match_tail = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                named_pattern(),
+                BinaryOpNode(
+                    IdentifierNode("use_primary"),
+                    "&&",
+                    BinaryOpNode(
+                        MemberAccessNode(IdentifierNode("primary"), "count"),
+                        ">",
+                        LiteralNode(0, PrimitiveType("int")),
+                    ),
+                ),
+                [
+                    VariableNode(
+                        "marker",
+                        PrimitiveType("int"),
+                        MemberAccessNode(IdentifierNode("primary"), "count"),
+                    ),
+                    ExpressionStatementNode(
+                        envelope(choice_named("primary", "backup"), "backup"),
+                        is_tail_expression=True,
+                    ),
+                ],
+            ),
+            MatchArmNode(
+                named_pattern(),
+                None,
+                [
+                    VariableNode(
+                        "marker",
+                        PrimitiveType("int"),
+                        MemberAccessNode(IdentifierNode("backup"), "count"),
+                    ),
+                    ExpressionStatementNode(
+                        envelope(choice_named("backup", "primary"), "primary"),
+                        is_tail_expression=True,
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    ast = ShaderNode(
+        "LambdaFnOnceGuardedMatchEnumStructPayloads",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            choice_enum,
+            StructNode(
+                "Envelope",
+                [
+                    StructMemberNode("choice", choice_payload_type),
+                    StructMemberNode("fallback", payload_type),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "apply_envelope_once",
+                envelope_type,
+                [
+                    ParameterNode("choice", choice_payload_type),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("transform"),
+                            [IdentifierNode("choice"), IdentifierNode("flag")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "closure_guarded_match_returns_nested_payload",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("choice", choice_payload_type),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                ],
+                [
+                    VariableNode(
+                        "result",
+                        envelope_type,
+                        apply_envelope_once(
+                            "choice",
+                            "flag",
+                            LambdaNode(
+                                [
+                                    ParameterNode("choice", None),
+                                    ParameterNode("use_primary", None),
+                                ],
+                                BlockNode(
+                                    [
+                                        VariableNode(
+                                            "prelude",
+                                            PrimitiveType("int"),
+                                            LiteralNode(0, PrimitiveType("int")),
+                                        ),
+                                        ExpressionStatementNode(
+                                            guarded_match_tail,
+                                            is_tail_expression=True,
+                                        ),
+                                    ]
+                                ),
+                            ),
+                        ),
+                    ),
+                    ReturnNode(
+                        MemberAccessNode(
+                            MemberAccessNode(IdentifierNode("result"), "fallback"),
+                            "count",
+                        )
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn apply_envelope_once<F: FnOnce(Choice<Payload>, bool) -> Envelope>"
+        in generated_code
+    )
+    assert "|choice: Choice<Payload>, use_primary: bool|" in generated_code
+    assert "let prelude: i32 = 0;" in generated_code
+    assert "return match choice" not in generated_code
+    assert "match choice {" in generated_code
+    assert (
+        "Choice::Named { primary, backup } if (use_primary && (primary.count > 0)) =>"
+        in generated_code
+    )
+    assert "let marker: i32 = primary.count;" in generated_code
+    assert "let marker: i32 = backup.count;" in generated_code
+    assert (
+        "choice: Choice::<Payload>::Named { "
+        "primary: primary, backup: backup.clone() }, fallback: backup" in generated_code
+    )
+    assert (
+        "choice: Choice::<Payload>::Named { "
+        "primary: backup, backup: primary.clone() }, fallback: primary"
+        in generated_code
+    )
+    assert "primary: primary, backup: backup }, fallback: backup" not in generated_code
+    assert "primary: backup, backup: primary }, fallback: primary" not in generated_code
+    assert "LambdaNode" not in generated_code
+    assert "MatchNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_lambda_fnonce_option_result_enum_payload_returns_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    generic_type = GenericType("T")
+    error_type = GenericType("E")
+    choice_payload_type = NamedType("Choice", [payload_type])
+    option_choice_type = NamedType("Option", [choice_payload_type])
+    result_choice_payload_type = NamedType(
+        "Result",
+        [choice_payload_type, payload_type],
+    )
+    closure_type = GenericType("F")
+    option_closure_bound = NamedType(
+        "FnOnce(Choice<Payload>, bool) -> Option<Choice<Payload>>"
+    )
+    result_closure_bound = NamedType(
+        "FnOnce(Choice<Payload>, Payload, bool) -> " "Result<Choice<Payload>, Payload>"
+    )
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode("One", fields=[generic_type]),
+            EnumVariantNode("Pair", fields=[generic_type, generic_type]),
+        ],
+    )
+    choice_enum.generic_params = [GenericParameterNode("T")]
+    option_enum = EnumNode(
+        "Option",
+        [
+            EnumVariantNode("Some", fields=[generic_type]),
+            EnumVariantNode("None"),
+        ],
+    )
+    option_enum.generic_params = [GenericParameterNode("T")]
+    result_enum = EnumNode(
+        "Result",
+        [
+            EnumVariantNode("Ok", fields=[generic_type]),
+            EnumVariantNode("Err", fields=[error_type]),
+        ],
+    )
+    result_enum.generic_params = [
+        GenericParameterNode("T"),
+        GenericParameterNode("E"),
+    ]
+
+    def enum_call(path, args=None):
+        return FunctionCallNode(IdentifierNode(path), args or [])
+
+    def choice_repack_match():
+        return MatchNode(
+            IdentifierNode("choice"),
+            [
+                MatchArmNode(
+                    ConstructorPatternNode(
+                        "Choice::One",
+                        [IdentifierPatternNode("payload")],
+                    ),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            enum_call(
+                                "Choice::One",
+                                [IdentifierNode("payload")],
+                            ),
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+                MatchArmNode(
+                    ConstructorPatternNode(
+                        "Choice::Pair",
+                        [
+                            IdentifierPatternNode("first"),
+                            IdentifierPatternNode("second"),
+                        ],
+                    ),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            enum_call(
+                                "Choice::Pair",
+                                [
+                                    IdentifierNode("first"),
+                                    IdentifierNode("second"),
+                                ],
+                            ),
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+            ],
+        )
+
+    option_lambda = LambdaNode(
+        [
+            ParameterNode("choice", None),
+            ParameterNode("take_some", None),
+        ],
+        BlockNode(
+            [
+                VariableNode(
+                    "prelude",
+                    PrimitiveType("int"),
+                    LiteralNode(1, PrimitiveType("int")),
+                ),
+                ExpressionStatementNode(
+                    TernaryOpNode(
+                        IdentifierNode("take_some"),
+                        enum_call("Option::Some", [choice_repack_match()]),
+                        enum_call("Option::None"),
+                    ),
+                    is_tail_expression=True,
+                ),
+            ]
+        ),
+    )
+    result_lambda = LambdaNode(
+        [
+            ParameterNode("choice", None),
+            ParameterNode("fallback", None),
+            ParameterNode("take_ok", None),
+        ],
+        BlockNode(
+            [
+                IfNode(
+                    IdentifierNode("take_ok"),
+                    BlockNode(
+                        [
+                            ReturnNode(
+                                enum_call(
+                                    "Result::Ok",
+                                    [choice_repack_match()],
+                                )
+                            )
+                        ]
+                    ),
+                ),
+                ExpressionStatementNode(
+                    enum_call("Result::Err", [IdentifierNode("fallback")]),
+                    is_tail_expression=True,
+                ),
+            ]
+        ),
+    )
+
+    ast = ShaderNode(
+        "LambdaFnOnceOptionResultEnumPayloads",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            choice_enum,
+            option_enum,
+            result_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "apply_option_choice_once",
+                option_choice_type,
+                [
+                    ParameterNode("choice", choice_payload_type),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        enum_call(
+                            "transform",
+                            [
+                                IdentifierNode("choice"),
+                                IdentifierNode("flag"),
+                            ],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[option_closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "apply_result_choice_once",
+                result_choice_payload_type,
+                [
+                    ParameterNode("choice", choice_payload_type),
+                    ParameterNode("fallback", payload_type),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        enum_call(
+                            "transform",
+                            [
+                                IdentifierNode("choice"),
+                                IdentifierNode("fallback"),
+                                IdentifierNode("flag"),
+                            ],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[result_closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "closure_option_tail_returns_nested_match",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("choice", choice_payload_type),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        option_choice_type,
+                        enum_call(
+                            "apply_option_choice_once",
+                            [
+                                IdentifierNode("choice"),
+                                IdentifierNode("flag"),
+                                option_lambda,
+                            ],
+                        ),
+                    ),
+                    ReturnNode(LiteralNode(0, PrimitiveType("int"))),
+                ],
+            ),
+            FunctionNode(
+                "closure_result_explicit_return_or_tail_err",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("choice", choice_payload_type),
+                    ParameterNode("fallback", payload_type),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                ],
+                [
+                    VariableNode(
+                        "status",
+                        result_choice_payload_type,
+                        enum_call(
+                            "apply_result_choice_once",
+                            [
+                                IdentifierNode("choice"),
+                                IdentifierNode("fallback"),
+                                IdentifierNode("flag"),
+                                result_lambda,
+                            ],
+                        ),
+                    ),
+                    ReturnNode(LiteralNode(0, PrimitiveType("int"))),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn apply_option_choice_once"
+        "<F: FnOnce(Choice<Payload>, bool) -> Option<Choice<Payload>>>"
+        in generated_code
+    )
+    assert (
+        "pub fn apply_result_choice_once"
+        "<F: FnOnce(Choice<Payload>, Payload, bool) -> "
+        "Result<Choice<Payload>, Payload>>" in generated_code
+    )
+    assert "|choice: Choice<Payload>, take_some: bool|" in generated_code
+    assert (
+        "|choice: Choice<Payload>, fallback: Payload, take_ok: bool|" in generated_code
+    )
+    assert "let prelude: i32 = 1;" in generated_code
+    assert "Option::<Choice<Payload>>::Some(match choice.clone() {" in generated_code
+    assert "Option::<Choice<Payload>>::None" in generated_code
+    assert (
+        "return Result::<Choice<Payload>, Payload>::Ok(match choice.clone() {"
+        in generated_code
+    )
+    assert "Result::<Choice<Payload>, Payload>::Err(fallback)" in generated_code
+    assert "Choice::<Payload>::One(payload.clone())" in generated_code
+    assert "Choice::<Payload>::Pair(first.clone(), second.clone())" in generated_code
+    assert "LambdaNode" not in generated_code
+    assert "MatchNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_lambda_fnonce_option_result_nested_call_arguments_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    generic_type = GenericType("T")
+    error_type = GenericType("E")
+    choice_payload_type = NamedType("Choice", [payload_type])
+    option_choice_type = NamedType("Option", [choice_payload_type])
+    result_option_payload_type = NamedType(
+        "Result",
+        [option_choice_type, payload_type],
+    )
+    result_choice_payload_type = NamedType(
+        "Result",
+        [choice_payload_type, payload_type],
+    )
+    closure_type = GenericType("F")
+    option_closure_bound = NamedType(
+        "FnOnce(Choice<Payload>, bool) -> Option<Choice<Payload>>"
+    )
+    result_closure_bound = NamedType(
+        "FnOnce(Choice<Payload>, Payload, bool) -> " "Result<Choice<Payload>, Payload>"
+    )
+    choice_enum = EnumNode(
+        "Choice",
+        [EnumVariantNode("One", fields=[generic_type])],
+    )
+    choice_enum.generic_params = [GenericParameterNode("T")]
+    option_enum = EnumNode(
+        "Option",
+        [
+            EnumVariantNode("Some", fields=[generic_type]),
+            EnumVariantNode("None"),
+        ],
+    )
+    option_enum.generic_params = [GenericParameterNode("T")]
+    result_enum = EnumNode(
+        "Result",
+        [
+            EnumVariantNode("Ok", fields=[generic_type]),
+            EnumVariantNode("Err", fields=[error_type]),
+        ],
+    )
+    result_enum.generic_params = [
+        GenericParameterNode("T"),
+        GenericParameterNode("E"),
+    ]
+
+    def enum_call(path, args=None):
+        return FunctionCallNode(IdentifierNode(path), args or [])
+
+    def option_lambda():
+        return LambdaNode(
+            [
+                ParameterNode("choice", None),
+                ParameterNode("take_some", None),
+            ],
+            TernaryOpNode(
+                IdentifierNode("take_some"),
+                enum_call("Option::Some", [IdentifierNode("choice")]),
+                enum_call("Option::None"),
+            ),
+        )
+
+    def result_lambda():
+        return LambdaNode(
+            [
+                ParameterNode("choice", None),
+                ParameterNode("fallback", None),
+                ParameterNode("take_ok", None),
+            ],
+            BlockNode(
+                [
+                    IfNode(
+                        IdentifierNode("take_ok"),
+                        BlockNode(
+                            [
+                                ReturnNode(
+                                    enum_call(
+                                        "Result::Ok",
+                                        [IdentifierNode("choice")],
+                                    )
+                                )
+                            ]
+                        ),
+                    ),
+                    ExpressionStatementNode(
+                        enum_call("Result::Err", [IdentifierNode("fallback")]),
+                        is_tail_expression=True,
+                    ),
+                ]
+            ),
+        )
+
+    def apply_option(choice, flag, transform):
+        return enum_call(
+            "apply_option_choice_once",
+            [IdentifierNode(choice), IdentifierNode(flag), transform],
+        )
+
+    def apply_result(choice, fallback, flag, transform):
+        return enum_call(
+            "apply_result_choice_once",
+            [
+                IdentifierNode(choice),
+                IdentifierNode(fallback),
+                IdentifierNode(flag),
+                transform,
+            ],
+        )
+
+    ast = ShaderNode(
+        "NestedCallableOptionResultArguments",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            choice_enum,
+            option_enum,
+            result_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "apply_option_choice_once",
+                option_choice_type,
+                [
+                    ParameterNode("choice", choice_payload_type),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        enum_call(
+                            "transform",
+                            [
+                                IdentifierNode("choice"),
+                                IdentifierNode("flag"),
+                            ],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[option_closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "apply_result_choice_once",
+                result_choice_payload_type,
+                [
+                    ParameterNode("choice", choice_payload_type),
+                    ParameterNode("fallback", payload_type),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        enum_call(
+                            "transform",
+                            [
+                                IdentifierNode("choice"),
+                                IdentifierNode("fallback"),
+                                IdentifierNode("flag"),
+                            ],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[result_closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "score_option",
+                PrimitiveType("int"),
+                [ParameterNode("value", option_choice_type)],
+                [ReturnNode(LiteralNode(1, PrimitiveType("int")))],
+            ),
+            FunctionNode(
+                "score_result_option",
+                PrimitiveType("int"),
+                [ParameterNode("value", result_option_payload_type)],
+                [ReturnNode(LiteralNode(2, PrimitiveType("int")))],
+            ),
+            FunctionNode(
+                "score_result_choice",
+                PrimitiveType("int"),
+                [ParameterNode("value", result_choice_payload_type)],
+                [ReturnNode(LiteralNode(3, PrimitiveType("int")))],
+            ),
+            FunctionNode(
+                "nested_option_call_argument",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("choice", choice_payload_type),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                ],
+                [
+                    ReturnNode(
+                        enum_call(
+                            "score_option",
+                            [
+                                apply_option(
+                                    "choice",
+                                    "flag",
+                                    option_lambda(),
+                                )
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "nested_result_enum_payload_argument",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("choice", choice_payload_type),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                ],
+                [
+                    ReturnNode(
+                        enum_call(
+                            "score_result_option",
+                            [
+                                enum_call(
+                                    "Result::Ok",
+                                    [
+                                        apply_option(
+                                            "choice",
+                                            "flag",
+                                            option_lambda(),
+                                        )
+                                    ],
+                                )
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "nested_result_call_argument",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("choice", choice_payload_type),
+                    ParameterNode("fallback", payload_type),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                ],
+                [
+                    ReturnNode(
+                        enum_call(
+                            "score_result_choice",
+                            [
+                                apply_result(
+                                    "choice",
+                                    "fallback",
+                                    "flag",
+                                    result_lambda(),
+                                )
+                            ],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "return score_option(apply_option_choice_once("
+        "choice, flag, |choice: Choice<Payload>, take_some: bool|" in generated_code
+    )
+    assert (
+        "Result::<Option<Choice<Payload>>, Payload>::Ok("
+        "apply_option_choice_once(choice, flag, "
+        "|choice: Choice<Payload>, take_some: bool|" in generated_code
+    )
+    assert (
+        "return score_result_choice(apply_result_choice_once("
+        "choice, fallback, flag, "
+        "|choice: Choice<Payload>, fallback: Payload, take_ok: bool|" in generated_code
+    )
+    assert "(if take_some { Option::<Choice<Payload>>::Some(choice) }" in (
+        generated_code
+    )
+    assert "else { Option::<Choice<Payload>>::None })" in generated_code
+    assert "return Result::<Choice<Payload>, Payload>::Ok(choice);" in generated_code
+    assert "Result::<Choice<Payload>, Payload>::Err(fallback)" in generated_code
+    assert "LambdaNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_option_result_match_consumers_from_fnonce_helpers_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    generic_type = GenericType("T")
+    error_type = GenericType("E")
+    choice_payload_type = NamedType("Choice", [payload_type])
+    option_choice_type = NamedType("Option", [choice_payload_type])
+    result_choice_payload_type = NamedType(
+        "Result",
+        [choice_payload_type, payload_type],
+    )
+    closure_type = GenericType("F")
+    option_closure_bound = NamedType(
+        "FnOnce(Choice<Payload>, bool) -> Option<Choice<Payload>>"
+    )
+    result_closure_bound = NamedType(
+        "FnOnce(Choice<Payload>, Payload, bool) -> " "Result<Choice<Payload>, Payload>"
+    )
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode("Keep", fields=[generic_type]),
+            EnumVariantNode(
+                "Pair",
+                fields=[
+                    ("left", generic_type),
+                    ("right", generic_type),
+                ],
+            ),
+        ],
+    )
+    choice_enum.generic_params = [GenericParameterNode("T")]
+    option_enum = EnumNode(
+        "Option",
+        [
+            EnumVariantNode("Some", fields=[generic_type]),
+            EnumVariantNode("None"),
+        ],
+    )
+    option_enum.generic_params = [GenericParameterNode("T")]
+    result_enum = EnumNode(
+        "Result",
+        [
+            EnumVariantNode("Ok", fields=[generic_type]),
+            EnumVariantNode("Err", fields=[error_type]),
+        ],
+    )
+    result_enum.generic_params = [
+        GenericParameterNode("T"),
+        GenericParameterNode("E"),
+    ]
+
+    def enum_call(path, args=None):
+        return FunctionCallNode(IdentifierNode(path), args or [])
+
+    def count_of(name):
+        return MemberAccessNode(IdentifierNode(name), "count")
+
+    def sum_counts(left, right):
+        return BinaryOpNode(count_of(left), "+", count_of(right))
+
+    def choice_count_match(choice_expr):
+        return MatchNode(
+            choice_expr,
+            [
+                MatchArmNode(
+                    ConstructorPatternNode(
+                        "Choice::Keep",
+                        [IdentifierPatternNode("payload")],
+                    ),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            count_of("payload"),
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+                MatchArmNode(
+                    StructPatternNode(
+                        "Choice::Pair",
+                        {
+                            "left": IdentifierPatternNode("left"),
+                            "right": IdentifierPatternNode("right"),
+                        },
+                    ),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            sum_counts("left", "right"),
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+            ],
+        )
+
+    def option_lambda():
+        return LambdaNode(
+            [
+                ParameterNode("choice", None),
+                ParameterNode("take_some", None),
+            ],
+            TernaryOpNode(
+                IdentifierNode("take_some"),
+                enum_call("Option::Some", [IdentifierNode("choice")]),
+                enum_call("Option::None"),
+            ),
+        )
+
+    def result_lambda():
+        return LambdaNode(
+            [
+                ParameterNode("choice", None),
+                ParameterNode("fallback", None),
+                ParameterNode("take_ok", None),
+            ],
+            TernaryOpNode(
+                IdentifierNode("take_ok"),
+                enum_call("Result::Ok", [IdentifierNode("choice")]),
+                enum_call("Result::Err", [IdentifierNode("fallback")]),
+            ),
+        )
+
+    def apply_option(choice, flag, transform):
+        return enum_call(
+            "apply_option_choice_once",
+            [IdentifierNode(choice), IdentifierNode(flag), transform],
+        )
+
+    def apply_result(choice, fallback, flag, transform):
+        return enum_call(
+            "apply_result_choice_once",
+            [
+                IdentifierNode(choice),
+                IdentifierNode(fallback),
+                IdentifierNode(flag),
+                transform,
+            ],
+        )
+
+    ast = ShaderNode(
+        "OptionResultMatchConsumers",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    ArrayNode("float", "weights"),
+                    StructMemberNode("count", PrimitiveType("int")),
+                ],
+            ),
+            choice_enum,
+            option_enum,
+            result_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "apply_option_choice_once",
+                option_choice_type,
+                [
+                    ParameterNode("choice", choice_payload_type),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        enum_call(
+                            "transform",
+                            [
+                                IdentifierNode("choice"),
+                                IdentifierNode("flag"),
+                            ],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[option_closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "apply_result_choice_once",
+                result_choice_payload_type,
+                [
+                    ParameterNode("choice", choice_payload_type),
+                    ParameterNode("fallback", payload_type),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                    ParameterNode("transform", closure_type),
+                ],
+                [
+                    ReturnNode(
+                        enum_call(
+                            "transform",
+                            [
+                                IdentifierNode("choice"),
+                                IdentifierNode("fallback"),
+                                IdentifierNode("flag"),
+                            ],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode("F", constraints=[result_closure_bound]),
+                ],
+            ),
+            FunctionNode(
+                "consume_option_choice",
+                PrimitiveType("int"),
+                [ParameterNode("value", option_choice_type)],
+                [
+                    ReturnNode(
+                        MatchNode(
+                            IdentifierNode("value"),
+                            [
+                                MatchArmNode(
+                                    ConstructorPatternNode(
+                                        "Option::Some",
+                                        [IdentifierPatternNode("choice")],
+                                    ),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            choice_count_match(
+                                                IdentifierNode("choice")
+                                            ),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                                MatchArmNode(
+                                    ConstructorPatternNode("Option::None", []),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            LiteralNode(0, PrimitiveType("int")),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "consume_result_choice",
+                PrimitiveType("int"),
+                [ParameterNode("value", result_choice_payload_type)],
+                [
+                    ReturnNode(
+                        MatchNode(
+                            IdentifierNode("value"),
+                            [
+                                MatchArmNode(
+                                    ConstructorPatternNode(
+                                        "Result::Ok",
+                                        [IdentifierPatternNode("choice")],
+                                    ),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            choice_count_match(
+                                                IdentifierNode("choice")
+                                            ),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                                MatchArmNode(
+                                    ConstructorPatternNode(
+                                        "Result::Err",
+                                        [IdentifierPatternNode("fallback")],
+                                    ),
+                                    None,
+                                    [
+                                        ExpressionStatementNode(
+                                            count_of("fallback"),
+                                            is_tail_expression=True,
+                                        )
+                                    ],
+                                ),
+                            ],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "score_nested_consumers",
+                PrimitiveType("int"),
+                [
+                    ParameterNode("choice", choice_payload_type),
+                    ParameterNode("fallback", payload_type),
+                    ParameterNode("flag", PrimitiveType("bool")),
+                ],
+                [
+                    VariableNode(
+                        "option_score",
+                        PrimitiveType("int"),
+                        enum_call(
+                            "consume_option_choice",
+                            [
+                                apply_option(
+                                    "choice",
+                                    "flag",
+                                    option_lambda(),
+                                )
+                            ],
+                        ),
+                    ),
+                    VariableNode(
+                        "result_score",
+                        PrimitiveType("int"),
+                        enum_call(
+                            "consume_result_choice",
+                            [
+                                apply_result(
+                                    "choice",
+                                    "fallback",
+                                    "flag",
+                                    result_lambda(),
+                                )
+                            ],
+                        ),
+                    ),
+                    ReturnNode(
+                        BinaryOpNode(
+                            IdentifierNode("option_score"),
+                            "+",
+                            IdentifierNode("result_score"),
+                        )
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn consume_option_choice(value: Option<Choice<Payload>>) -> i32"
+        in generated_code
+    )
+    assert "Option::Some(choice) =>" in generated_code
+    assert "Option::None() =>" not in generated_code
+    assert "Option::None =>" in generated_code
+    assert "Choice::Pair { left, right } =>" in generated_code
+    assert "Result::Ok(choice) =>" in generated_code
+    assert "Result::Err(fallback) =>" in generated_code
+    assert (
+        "let option_score: i32 = consume_option_choice(apply_option_choice_once("
+        "choice.clone(), flag, |choice: Choice<Payload>, take_some: bool|"
+        in generated_code
+    )
+    assert (
+        "let result_score: i32 = consume_result_choice(apply_result_choice_once("
+        "choice.clone(), fallback.clone(), flag, "
+        "|choice: Choice<Payload>, fallback: Payload, take_ok: bool|" in generated_code
+    )
+    assert "LambdaNode" not in generated_code
+    assert "MatchNode" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

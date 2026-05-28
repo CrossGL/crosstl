@@ -1926,7 +1926,7 @@ class TestVulkanSPIRVCodeGen:
         )
         assert " Fmod " not in spv_code
 
-    def test_atan2_intrinsics_use_argument_result_type(self):
+    def test_atan2_intrinsics_use_argument_result_type(self, tmp_path):
         source_code = """
         shader Atan2Intrinsics {
             compute {
@@ -1958,6 +1958,43 @@ class TestVulkanSPIRVCodeGen:
             r"Atan2 %\d+ %\d+",
             spv_code,
         )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_invalid_atan2_operand_shapes_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidAtan2BuiltinShapes {
+            compute {
+                void main() {
+                    ivec2 intAtan = atan2(ivec2(1, 2), ivec2(3, 4));
+                    bvec2 boolAtan = atan2(bvec2(true, false), bvec2(false, true));
+                    vec2 widthMismatch = atan2(
+                        vec2(1.0, 2.0),
+                        vec3(3.0, 4.0, 5.0)
+                    );
+                    float scalarVector = atan2(1.0, vec2(2.0, 3.0));
+                    dvec2 doubleAtan = atan2(
+                        dvec2(1.0, 2.0),
+                        dvec2(3.0, 4.0)
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count(
+                "; WARNING: atan2 requires matching 32-bit floating-point "
+                "scalar or vector operands"
+            )
+            == 5
+        )
+        assert " Atan2 " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_frac_and_scalar_saturate_builtins_lower_to_spirv_extinst(self):
         source_code = """
@@ -1998,6 +2035,453 @@ class TestVulkanSPIRVCodeGen:
         )
         assert " Frac " not in spv_code
         assert " Saturate " not in spv_code
+
+    def test_malformed_std450_math_builtins_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader MalformedStd450Builtins {
+            compute {
+                void main() {
+                    float missingUnary = sin();
+                    float missingBinary = distance(vec2(0.0, 1.0));
+                    vec3 missingTernary = refract(vec3(0.0), vec3(1.0));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "; WARNING: sin requires 1 operand" in spv_code
+        assert "; WARNING: distance requires 2 operands" in spv_code
+        assert "; WARNING: refract requires 3 operands" in spv_code
+        assert " Sin " not in spv_code
+        assert " Distance " not in spv_code
+        assert " Refract " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_malformed_min_max_clamp_mix_builtins_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader MalformedGenericBuiltins {
+            compute {
+                void main() {
+                    float missingMin = min(1.0);
+                    float extraMax = max(1.0, 2.0, 3.0);
+                    float missingClamp = clamp(1.0, 0.0);
+                    vec3 missingMix = mix(vec3(0.0), vec3(1.0));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "; WARNING: min requires 2 operands" in spv_code
+        assert "; WARNING: max requires 2 operands" in spv_code
+        assert "; WARNING: clamp requires 3 operands" in spv_code
+        assert "; WARNING: mix requires 3 operands" in spv_code
+        assert " Min " not in spv_code
+        assert " Max " not in spv_code
+        assert " Clamp " not in spv_code
+        assert " Mix " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_invalid_min_max_clamp_mix_operand_shapes_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidGenericBuiltinShapes {
+            compute {
+                void main() {
+                    bool boolMin = min(true, false);
+                    vec2 widthMax = max(vec2(1.0, 2.0), vec3(1.0, 2.0, 3.0));
+                    vec2 badClamp = clamp(
+                        vec2(1.0, 2.0),
+                        vec3(0.0, 0.0, 0.0),
+                        vec2(1.0, 1.0)
+                    );
+                    vec3 badMixSelector = mix(
+                        vec3(0.0),
+                        vec3(1.0),
+                        vec2(0.5, 0.5)
+                    );
+                    bvec3 mask = bvec3(true, false, true);
+                    vec3 badMixValue = mix(vec3(0.0), vec2(1.0), mask);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "; WARNING: min requires compatible scalar or vector numeric operands"
+            in spv_code
+        )
+        assert (
+            "; WARNING: max requires compatible scalar or vector numeric operands"
+            in spv_code
+        )
+        assert (
+            "; WARNING: clamp requires compatible scalar or vector numeric operands"
+            in spv_code
+        )
+        assert (
+            spv_code.count(
+                "; WARNING: mix requires compatible value operands and selector"
+            )
+            == 2
+        )
+        assert " Min " not in spv_code
+        assert " Max " not in spv_code
+        assert " Clamp " not in spv_code
+        assert " Mix " not in spv_code
+        assert " FMix " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_invalid_vector_math_operand_shapes_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidVectorMathBuiltinShapes {
+            compute {
+                void main() {
+                    float dotScalar = dot(1.0, 2.0);
+                    float dotWidth = dot(
+                        vec2(1.0, 2.0),
+                        vec3(1.0, 2.0, 3.0)
+                    );
+                    float dotInt = dot(ivec2(1, 2), ivec2(3, 4));
+
+                    vec3 crossScalar = cross(1.0, 2.0);
+                    vec3 crossWidth = cross(
+                        vec2(1.0, 2.0),
+                        vec2(3.0, 4.0)
+                    );
+                    vec3 crossInt = cross(
+                        ivec3(1, 2, 3),
+                        ivec3(3, 2, 1)
+                    );
+
+                    vec3 reflectWidth = reflect(
+                        vec3(1.0),
+                        vec2(0.0, 1.0)
+                    );
+                    ivec3 reflectInt = reflect(
+                        ivec3(1, 2, 3),
+                        ivec3(0, 1, 0)
+                    );
+
+                    vec3 refractWidth = refract(
+                        vec3(1.0),
+                        vec2(0.0, 1.0),
+                        0.5
+                    );
+                    vec3 refractEtaVector = refract(
+                        vec3(1.0),
+                        vec3(0.0, 1.0, 0.0),
+                        vec2(0.5, 0.5)
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count(
+                "; WARNING: dot requires matching floating-point vector operands"
+            )
+            == 3
+        )
+        assert (
+            spv_code.count(
+                "; WARNING: cross requires matching 3-component "
+                "floating-point vector operands"
+            )
+            == 3
+        )
+        assert (
+            spv_code.count(
+                "; WARNING: reflect requires matching floating-point scalar "
+                "or vector operands"
+            )
+            == 2
+        )
+        assert (
+            spv_code.count(
+                "; WARNING: refract requires matching floating-point incident "
+                "and normal operands plus scalar eta"
+            )
+            == 2
+        )
+        assert "OpDot" not in spv_code
+        assert " Cross " not in spv_code
+        assert " Reflect " not in spv_code
+        assert " Refract " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_vector_math_builtins_lower_valid_operand_shapes(self, tmp_path):
+        source_code = """
+        shader ValidVectorMathBuiltinShapes {
+            compute {
+                void main() {
+                    vec3 a = vec3(1.0, 0.0, 0.0);
+                    vec3 b = vec3(0.0, 1.0, 0.0);
+                    vec3 c = cross(a, b);
+                    vec3 r = reflect(a, b);
+                    vec3 t = refract(a, b, 0.5);
+
+                    dvec3 da = dvec3(1.0, 0.0, 0.0);
+                    dvec3 db = dvec3(0.0, 1.0, 0.0);
+                    dvec3 dc = cross(da, db);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        dvec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(double_type.group(1))} 3",
+            spv_code,
+        )
+
+        assert vec3_type is not None
+        assert dvec3_type is not None
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(vec3_type.group(1))} %\d+ "
+            r"Cross %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(vec3_type.group(1))} %\d+ "
+            r"Reflect %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(vec3_type.group(1))} %\d+ "
+            r"Refract %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(dvec3_type.group(1))} %\d+ "
+            r"Cross %\d+ %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_invalid_metric_math_operand_shapes_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidMetricMathBuiltinShapes {
+            compute {
+                void main() {
+                    float lengthInt = length(ivec2(1, 2));
+                    ivec3 normalizeInt = normalize(ivec3(1, 2, 3));
+                    float distanceWidth = distance(
+                        vec2(0.0, 1.0),
+                        vec3(0.0, 1.0, 2.0)
+                    );
+                    float distanceInt = distance(ivec2(1, 2), ivec2(3, 4));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "; WARNING: length requires floating-point scalar or vector operand"
+            in spv_code
+        )
+        assert (
+            "; WARNING: normalize requires floating-point scalar or vector operand"
+            in spv_code
+        )
+        assert (
+            spv_code.count(
+                "; WARNING: distance requires matching floating-point scalar "
+                "or vector operands"
+            )
+            == 2
+        )
+        assert " Length " not in spv_code
+        assert " Distance " not in spv_code
+        assert " Normalize " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_metric_math_builtins_lower_valid_operand_shapes(self, tmp_path):
+        source_code = """
+        shader ValidMetricMathBuiltinShapes {
+            compute {
+                void main() {
+                    vec3 a = vec3(1.0, 2.0, 3.0);
+                    vec3 b = vec3(3.0, 2.0, 1.0);
+                    float lf = length(a);
+                    float df = distance(a, b);
+                    vec3 nf = normalize(a);
+
+                    dvec3 da = dvec3(1.0, 2.0, 3.0);
+                    dvec3 db = dvec3(3.0, 2.0, 1.0);
+                    double ld = length(da);
+                    double dd = distance(da, db);
+                    dvec3 nd = normalize(da);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        dvec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(double_type.group(1))} 3",
+            spv_code,
+        )
+
+        assert vec3_type is not None
+        assert dvec3_type is not None
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ " r"Length %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ "
+            r"Distance %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(vec3_type.group(1))} %\d+ "
+            r"Normalize %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(double_type.group(1))} %\d+ " r"Length %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(double_type.group(1))} %\d+ "
+            r"Distance %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(dvec3_type.group(1))} %\d+ "
+            r"Normalize %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_invalid_unary_std450_operand_shapes_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidUnaryStd450BuiltinShapes {
+            compute {
+                void main() {
+                    ivec2 sinInt = sin(ivec2(1, 2));
+                    ivec3 sqrtInt = sqrt(ivec3(1, 4, 9));
+                    bvec2 fractBool = fract(bvec2(true, false));
+                    ivec2 floorInt = floor(ivec2(1, 2));
+                    dvec2 cosDouble = cos(dvec2(0.25, 0.5));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "; WARNING: sin requires 32-bit floating-point scalar or vector operand"
+            in spv_code
+        )
+        assert (
+            "; WARNING: sqrt requires 32-bit floating-point scalar or vector operand"
+            in spv_code
+        )
+        assert (
+            "; WARNING: fract requires 32-bit floating-point scalar or vector operand"
+            in spv_code
+        )
+        assert (
+            "; WARNING: floor requires 32-bit floating-point scalar or vector operand"
+            in spv_code
+        )
+        assert (
+            "; WARNING: cos requires 32-bit floating-point scalar or vector operand"
+            in spv_code
+        )
+        assert " Sin " not in spv_code
+        assert " Sqrt " not in spv_code
+        assert " Fract " not in spv_code
+        assert " Floor " not in spv_code
+        assert " Cos " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_unary_std450_builtins_lower_valid_operand_shapes(self, tmp_path):
+        source_code = """
+        shader ValidUnaryStd450BuiltinShapes {
+            compute {
+                void main() {
+                    vec2 a = vec2(0.25, 4.0);
+                    vec2 s = sin(a);
+                    vec2 q = sqrt(a);
+                    vec2 f = fract(a);
+                    vec2 l = floor(a);
+                    vec2 c = cos(a);
+                    vec2 e = exp(a);
+                    vec2 r = roundEven(a);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+
+        assert float_type is not None
+        vec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 2",
+            spv_code,
+        )
+
+        assert vec2_type is not None
+        for instruction in ("Sin", "Sqrt", "Fract", "Floor", "Cos", "Exp", "RoundEven"):
+            assert re.search(
+                rf"%\d+ = OpExtInst {re.escape(vec2_type.group(1))} %\d+ "
+                rf"{instruction} %\d+",
+                spv_code,
+            )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_vector_saturate_builtins_lower_to_vector_fclamp(self):
         source_code = """
@@ -2410,6 +2894,521 @@ class TestVulkanSPIRVCodeGen:
         )
         assert " USign " not in spv_code
 
+    def test_abs_builtins_use_typed_spirv_extinsts(self, tmp_path):
+        source_code = """
+        shader AbsBuiltins {
+            compute {
+                void main() {
+                    float f;
+                    float af = abs(f);
+                    vec2 vf = vec2(-1.0, 2.0);
+                    vec2 avf = abs(vf);
+                    double d;
+                    double ad = abs(d);
+                    dvec2 vd = dvec2(-1.0, 2.0);
+                    dvec2 avd = abs(vd);
+                    int i;
+                    int ai = abs(i);
+                    ivec3 vi = ivec3(-1, 0, 2);
+                    ivec3 avi = abs(vi);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        assert int_type is not None
+        vec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 2",
+            spv_code,
+        )
+        dvec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(double_type.group(1))} 2",
+            spv_code,
+        )
+        ivec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(int_type.group(1))} 3",
+            spv_code,
+        )
+
+        assert vec2_type is not None
+        assert dvec2_type is not None
+        assert ivec3_type is not None
+        for type_id in (
+            float_type.group(1),
+            vec2_type.group(1),
+            double_type.group(1),
+            dvec2_type.group(1),
+        ):
+            assert re.search(
+                rf"%\d+ = OpExtInst {re.escape(type_id)} %\d+ FAbs %\d+",
+                spv_code,
+            )
+        for type_id in (int_type.group(1), ivec3_type.group(1)):
+            assert re.search(
+                rf"%\d+ = OpExtInst {re.escape(type_id)} %\d+ SAbs %\d+",
+                spv_code,
+            )
+
+        assert not re.search(
+            rf"OpExtInst {re.escape(int_type.group(1))} %\d+ FAbs",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_invalid_abs_operand_shapes_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidAbsBuiltins {
+            compute {
+                void main() {
+                    uint u;
+                    uint au = abs(u);
+                    uvec2 vu = uvec2(1, 2);
+                    uvec2 avu = abs(vu);
+                    bool b;
+                    bool ab = abs(b);
+                    bvec2 vb = bvec2(true, false);
+                    bvec2 avb = abs(vb);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count(
+                "; WARNING: abs requires floating-point or signed integer "
+                "scalar or vector operand"
+            )
+            == 4
+        )
+        assert " FAbs " not in spv_code
+        assert " SAbs " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_pow_builtin_uses_typed_spirv_extinsts(self, tmp_path):
+        source_code = """
+        shader PowBuiltins {
+            compute {
+                void main() {
+                    float x;
+                    float y;
+                    float sf = pow(x, y);
+                    vec3 vx = vec3(1.0, 2.0, 3.0);
+                    vec3 vy = vec3(2.0, 3.0, 4.0);
+                    vec3 vv = pow(vx, vy);
+                    vec3 vs = pow(vx, 2.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+
+        assert float_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        assert vec3_type is not None
+
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ "
+            r"Pow %\d+ %\d+",
+            spv_code,
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ Pow",
+                    spv_code,
+                )
+            )
+            == 2
+        )
+
+        scalar_splat = re.search(
+            rf"(?P<splat>%\d+) = OpCompositeConstruct "
+            rf"{re.escape(vec3_type.group(1))} (%\d+) \2 \2",
+            spv_code,
+        )
+        assert scalar_splat is not None
+        assert re.search(
+            rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ Pow "
+            rf"%\d+ {re.escape(scalar_splat.group('splat'))}",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_invalid_pow_operand_shapes_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidPowBuiltins {
+            compute {
+                void main() {
+                    int i;
+                    int j;
+                    int intPow = pow(i, j);
+                    bool flag;
+                    bool boolPow = pow(flag, false);
+                    vec2 widthPow = pow(
+                        vec2(1.0, 2.0),
+                        vec3(2.0, 3.0, 4.0)
+                    );
+                    float scalarVectorPow = pow(2.0, vec2(1.0, 2.0));
+                    double dx;
+                    double dy;
+                    double doublePow = pow(dx, dy);
+                    dvec2 ux = dvec2(1.0, 2.0);
+                    dvec2 uy = dvec2(2.0, 3.0);
+                    dvec2 dvecPow = pow(ux, uy);
+                    mat2 a = mat2(1.0, 0.0, 0.0, 1.0);
+                    mat2 b = mat2(2.0, 0.0, 0.0, 2.0);
+                    mat2 matrixPow = pow(a, b);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count(
+                "; WARNING: pow requires compatible 32-bit floating-point "
+                "scalar or vector operands"
+            )
+            == 7
+        )
+        assert " Pow " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_malformed_pow_builtin_emits_diagnostics(self, tmp_path):
+        source_code = """
+        shader MalformedPowBuiltins {
+            compute {
+                void main() {
+                    float missingPow = pow(2.0);
+                    float extraPow = pow(2.0, 3.0, 4.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("; WARNING: pow requires 2 operands") == 2
+        assert " Pow " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_step_smoothstep_builtins_use_typed_spirv_extinsts(self, tmp_path):
+        source_code = """
+        shader StepSmoothstepBuiltins {
+            compute {
+                void main() {
+                    float sf = step(0.25, 0.5);
+                    vec3 v = vec3(0.0, 0.5, 1.0);
+                    vec3 edge = vec3(0.25, 0.5, 0.75);
+                    vec3 vs = step(0.25, v);
+                    vec3 vv = step(edge, v);
+                    vec3 sm = smoothstep(0.0, 1.0, v);
+                    vec3 smv = smoothstep(edge, vec3(1.0), v);
+
+                    double de;
+                    double dx;
+                    double ds = step(de, dx);
+                    dvec2 lo = dvec2(0.0, 0.25);
+                    dvec2 hi = dvec2(0.75, 1.0);
+                    dvec2 dv = dvec2(0.25, 0.5);
+                    dvec2 dsm = smoothstep(lo, hi, dv);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        dvec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(double_type.group(1))} 2",
+            spv_code,
+        )
+        assert vec3_type is not None
+        assert dvec2_type is not None
+
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ "
+            r"Step %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(double_type.group(1))} %\d+ "
+            r"Step %\d+ %\d+",
+            spv_code,
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ Step",
+                    spv_code,
+                )
+            )
+            == 2
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ SmoothStep",
+                    spv_code,
+                )
+            )
+            == 2
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(dvec2_type.group(1))} %\d+ "
+            r"SmoothStep %\d+ %\d+ %\d+",
+            spv_code,
+        )
+
+        scalar_edge_splat = re.search(
+            rf"(?P<splat>%\d+) = OpCompositeConstruct "
+            rf"{re.escape(vec3_type.group(1))} (%\d+) \2 \2",
+            spv_code,
+        )
+        assert scalar_edge_splat is not None
+        assert re.search(
+            rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ Step "
+            rf"{re.escape(scalar_edge_splat.group('splat'))} %\d+",
+            spv_code,
+        )
+
+        assert " Smoothstep " not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_invalid_step_smoothstep_operand_shapes_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidStepSmoothstepBuiltins {
+            compute {
+                void main() {
+                    ivec2 intStep = step(ivec2(1, 2), ivec2(3, 4));
+                    bool boolStep = step(false, true);
+                    float vectorScalarStep = step(vec2(0.0, 1.0), 0.5);
+                    vec2 widthStep = step(
+                        vec3(0.0, 0.5, 1.0),
+                        vec2(0.25, 0.75)
+                    );
+                    mat2 a = mat2(0.0, 0.25, 0.5, 0.75);
+                    mat2 b = mat2(1.0, 0.75, 0.5, 0.25);
+                    mat2 matrixStep = step(a, b);
+
+                    ivec2 intSmooth = smoothstep(
+                        ivec2(0, 1),
+                        ivec2(2, 3),
+                        ivec2(1, 2)
+                    );
+                    bool boolSmooth = smoothstep(false, true, false);
+                    float vectorScalarSmooth = smoothstep(
+                        vec2(0.0, 0.25),
+                        vec2(0.75, 1.0),
+                        0.5
+                    );
+                    vec2 widthSmooth = smoothstep(
+                        vec2(0.0, 0.25),
+                        vec3(0.25, 0.5, 0.75),
+                        vec2(0.5, 0.75)
+                    );
+                    mat2 matrixSmooth = smoothstep(a, b, a);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count(
+                "; WARNING: step requires compatible floating-point scalar "
+                "or vector operands"
+            )
+            == 5
+        )
+        assert (
+            spv_code.count(
+                "; WARNING: smoothstep requires compatible floating-point "
+                "scalar or vector operands"
+            )
+            == 5
+        )
+        assert " Step " not in spv_code
+        assert " SmoothStep " not in spv_code
+        assert " Smoothstep " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_malformed_step_smoothstep_builtins_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader MalformedStepSmoothstepBuiltins {
+            compute {
+                void main() {
+                    float missingStep = step(0.25);
+                    float extraStep = step(0.0, 0.5, 1.0);
+                    float missingSmooth = smoothstep(0.0, 1.0);
+                    float extraSmooth = smoothstep(0.0, 1.0, 0.5, 0.75);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("; WARNING: step requires 2 operands") == 2
+        assert spv_code.count("; WARNING: smoothstep requires 3 operands") == 2
+        assert " Step " not in spv_code
+        assert " SmoothStep " not in spv_code
+        assert " Smoothstep " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_degrees_radians_builtins_use_typed_spirv_extinsts(self, tmp_path):
+        source_code = """
+        shader DegreesRadiansBuiltins {
+            compute {
+                void main() {
+                    float d = degrees(1.0);
+                    float r = radians(180.0);
+                    vec3 angles = vec3(0.0, 90.0, 180.0);
+                    vec3 dv = degrees(angles);
+                    vec3 rv = radians(angles);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+
+        assert float_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        assert vec3_type is not None
+
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ " r"Degrees %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ " r"Radians %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(vec3_type.group(1))} %\d+ " r"Degrees %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(vec3_type.group(1))} %\d+ " r"Radians %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_invalid_degrees_radians_operand_shapes_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidDegreesRadiansBuiltins {
+            compute {
+                void main() {
+                    int intDegrees = degrees(1);
+                    bool boolRadians = radians(true);
+                    double d;
+                    double doubleDegrees = degrees(d);
+                    dvec2 dv = dvec2(90.0, 180.0);
+                    dvec2 doubleRadians = radians(dv);
+                    mat2 m = mat2(0.0, 1.0, 2.0, 3.0);
+                    mat2 matrixDegrees = degrees(m);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count(
+                "; WARNING: degrees requires 32-bit floating-point "
+                "scalar or vector operand"
+            )
+            == 3
+        )
+        assert (
+            spv_code.count(
+                "; WARNING: radians requires 32-bit floating-point "
+                "scalar or vector operand"
+            )
+            == 2
+        )
+        assert " Degrees " not in spv_code
+        assert " Radians " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_malformed_degrees_radians_builtins_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader MalformedDegreesRadiansBuiltins {
+            compute {
+                void main() {
+                    float missingDegrees = degrees();
+                    float extraDegrees = degrees(1.0, 2.0);
+                    float missingRadians = radians();
+                    float extraRadians = radians(90.0, 180.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("; WARNING: degrees requires 1 operand") == 2
+        assert spv_code.count("; WARNING: radians requires 1 operand") == 2
+        assert " Degrees " not in spv_code
+        assert " Radians " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_dot_uses_vector_component_result_type(self):
         source_code = """
         shader DotBuiltins {
@@ -2664,6 +3663,48 @@ class TestVulkanSPIRVCodeGen:
         assert "OpControlBarrier" not in spv_code
         assert spv_code.count("OpFunctionCall") == 2
         assert "WARNING" not in spv_code
+
+    def test_compute_synchronization_builtins_reject_operands(self, tmp_path):
+        source_code = """
+        shader ComputeSynchronization {
+            compute {
+                void main() {
+                    barrier(1);
+                    workgroupBarrier(2);
+                    groupMemoryBarrier(3);
+                    memoryBarrierShared(4);
+                    memoryBarrierBuffer(5);
+                    memoryBarrierImage(6);
+                    allMemoryBarrier(7);
+                    memoryBarrier(8);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        for function_name in [
+            "barrier",
+            "workgroupBarrier",
+            "groupMemoryBarrier",
+            "memoryBarrierShared",
+            "memoryBarrierBuffer",
+            "memoryBarrierImage",
+            "allMemoryBarrier",
+            "memoryBarrier",
+        ]:
+            assert (
+                f"; WARNING: synchronization builtin '{function_name}' "
+                "requires 0 operands"
+            ) in spv_code
+
+        assert "OpControlBarrier" not in spv_code
+        assert "OpMemoryBarrier" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert re.search(r"OpExtInst %\d+ %\d+ \\w*Barrier", spv_code) is None
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_compute_wave_lane_intrinsics_emit_subgroup_builtins(self):
         source_code = """
@@ -3067,6 +4108,1474 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "OpSetMeshOutputsEXT" not in spv_code
 
+    def test_mesh_stage_set_vertex_and_primitive_emit_output_stores(self, tmp_path):
+        source_code = """
+        shader MeshOutputSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+            };
+
+            mesh {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(triangles, max_vertices = 3, max_primitives = 1) out;
+
+                void main() {
+                    MeshVertex outVertex;
+                    outVertex.position = vec4(0.0, 0.0, 0.0, 1.0);
+                    vec3 position = vec3(0.0, 0.5, 1.0);
+                    SetMeshOutputCounts(3, 1);
+                    SetVertex(0, position);
+                    SetVertex(1, outVertex);
+                    SetPrimitive(0, uvec3(0u, 1u, 2u));
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint MeshEXT %(\d+) "main"([^\n]*)', spv_code)
+        assert entry_match is not None
+        vertex_output_match = re.search(
+            r'OpName %(\d+) "_CrossGLMeshVerticesEXT"', spv_code
+        )
+        primitive_output_match = re.search(
+            r'OpName %(\d+) "_CrossGLMeshPrimitiveTriangleIndicesEXT"', spv_code
+        )
+        assert vertex_output_match is not None
+        assert primitive_output_match is not None
+        entry_operands = entry_match.group(2).split()
+        assert f"%{vertex_output_match.group(1)}" in entry_operands
+        assert f"%{primitive_output_match.group(1)}" in entry_operands
+        assert re.search(r"OpMemberDecorate %\d+ 0 BuiltIn Position", spv_code)
+        assert re.search(
+            r"OpDecorate %\d+ BuiltIn PrimitiveTriangleIndicesEXT", spv_code
+        )
+        assert re.search(
+            rf"%{vertex_output_match.group(1)} = OpVariable %\d+ Output",
+            spv_code,
+        )
+        assert re.search(
+            rf"%{primitive_output_match.group(1)} = OpVariable %\d+ Output",
+            spv_code,
+        )
+        assert re.search(r"OpSetMeshOutputsEXT %\d+ %\d+", spv_code)
+        assert not re.search(r"OpExtInst [^\n]*\bSetVertex\b", spv_code)
+        assert not re.search(r"OpExtInst [^\n]*\bSetPrimitive\b", spv_code)
+        assert "SetVertex value must be" not in spv_code
+        assert "SetPrimitive value does not match" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    @pytest.mark.parametrize(
+        ("topology", "primitive_value", "builtin_name", "execution_mode"),
+        [
+            (
+                "lines",
+                "uvec2(0u, 1u)",
+                "PrimitiveLineIndicesEXT",
+                "OutputLinesEXT",
+            ),
+            ("points", "0u", "PrimitivePointIndicesEXT", "OutputPoints"),
+        ],
+    )
+    def test_mesh_stage_set_primitive_uses_topology_specific_builtins(
+        self, tmp_path, topology, primitive_value, builtin_name, execution_mode
+    ):
+        source_code = f"""
+        shader MeshPrimitiveTopologySPIRV {{
+            mesh {{
+                layout({topology}, max_vertices = 2, max_primitives = 1) out;
+
+                void main() {{
+                    SetMeshOutputCounts(2, 1);
+                    SetPrimitive(0, {primitive_value});
+                }}
+            }}
+        }}
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint MeshEXT %(\d+) "main"', spv_code)
+        assert entry_match is not None
+        entry_id = entry_match.group(1)
+        assert f"OpExecutionMode %{entry_id} {execution_mode}" in spv_code
+        assert re.search(rf"OpDecorate %\d+ BuiltIn {builtin_name}", spv_code)
+        assert f"_CrossGLMesh{builtin_name}" in spv_code
+        assert not re.search(r"OpExtInst [^\n]*\bSetPrimitive\b", spv_code)
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_output_parameter_assignments_emit_output_stores(self, tmp_path):
+        source_code = """
+        shader MeshOutputParameterSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                int primitiveId @ gl_PrimitiveID;
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    MeshVertex outVertex;
+                    outVertex.position = vec4(0.0, 0.0, 0.0, 1.0);
+                    outVertex.uv = vec2(0.5, 1.0);
+                    MeshPrimitive outPrimitive;
+                    outPrimitive.primitiveId = 7;
+                    outPrimitive.normal = vec3(0.0, 0.0, 1.0);
+                    SetMeshOutputCounts(3, 1);
+                    verts[0] = outVertex;
+                    verts[1].uv = vec2(0.25, 0.75);
+                    tris[0] = uvec3(0u, 1u, 2u);
+                    prims[0] = outPrimitive;
+                    prims[0].normal = vec3(1.0, 0.0, 0.0);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint MeshEXT %(\d+) "main"([^\n]*)', spv_code)
+        assert entry_match is not None
+        assert "OpFunctionParameter" not in spv_code
+        assert not re.search(r'OpName %\d+ "verts"', spv_code)
+        assert not re.search(r'OpName %\d+ "tris"', spv_code)
+        assert not re.search(r'OpName %\d+ "prims"', spv_code)
+
+        position_id = spirv_named_id(spv_code, "_CrossGLMeshVerticesEXT")
+        uv_id = spirv_named_id(spv_code, "_CrossGLMesh_vertices_uv")
+        indices_id = spirv_named_id(spv_code, "_CrossGLMeshPrimitiveTriangleIndicesEXT")
+        primitive_id = spirv_named_id(spv_code, "_CrossGLMesh_primitives_primitiveId")
+        normal_id = spirv_named_id(spv_code, "_CrossGLMesh_primitives_normal")
+
+        entry_operands = entry_match.group(2).split()
+        for variable_id in (position_id, uv_id, indices_id, primitive_id, normal_id):
+            assert variable_id in entry_operands
+
+        assert re.search(r"OpMemberDecorate %\d+ 0 BuiltIn Position", spv_code)
+        assert f"OpDecorate {uv_id} Location 5" in spv_code
+        assert (
+            f"OpDecorate {indices_id} BuiltIn PrimitiveTriangleIndicesEXT" in spv_code
+        )
+        assert f"OpDecorate {primitive_id} BuiltIn PrimitiveId" in spv_code
+        assert f"OpDecorate {primitive_id} PerPrimitiveEXT" in spv_code
+        assert f"OpDecorate {normal_id} Location 1" in spv_code
+        assert f"OpDecorate {normal_id} PerPrimitiveEXT" in spv_code
+        assert "Could not determine array element type" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_output_parameter_helper_forwards_interfaces(self, tmp_path):
+        source_code = """
+        shader MeshOutputHelperSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                int primitiveId @ gl_PrimitiveID;
+                vec3 normal @ NORMAL;
+            };
+
+            void writeOutputs(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) {
+                MeshVertex outVertex;
+                outVertex.position = vec4(0.0, 0.0, 0.0, 1.0);
+                outVertex.uv = vec2(0.5, 1.0);
+                MeshPrimitive outPrimitive;
+                outPrimitive.primitiveId = 9;
+                outPrimitive.normal = vec3(0.0, 1.0, 0.0);
+                verts[0] = outVertex;
+                tris[0] = uvec3(0u, 1u, 2u);
+                prims[0] = outPrimitive;
+            }
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(3, 1);
+                    writeOutputs(verts, tris, prims);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        helper_call = re.search(
+            r"%\d+ = OpFunctionCall %\d+ %\d+\s*$",
+            spv_code,
+            re.MULTILINE,
+        )
+        assert helper_call is not None
+        assert "OpFunctionParameter" not in spv_code
+        assert not re.search(r'OpName %\d+ "verts"', spv_code)
+        assert not re.search(r'OpName %\d+ "tris"', spv_code)
+        assert not re.search(r'OpName %\d+ "prims"', spv_code)
+        assert "Unknown variable verts" not in spv_code
+        assert "Unknown variable tris" not in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "OpDecorate" in spv_code
+        assert "BuiltIn Position" in spv_code
+        assert "BuiltIn PrimitiveTriangleIndicesEXT" in spv_code
+        assert "BuiltIn PrimitiveId" in spv_code
+        assert "PerPrimitiveEXT" in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_output_parameter_component_assignments(self, tmp_path):
+        source_code = """
+        shader MeshOutputComponentSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                int primitiveId @ gl_PrimitiveID;
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(3, 1);
+                    verts[0].position.z = 0.5;
+                    verts[0].uv.x = 0.25;
+                    verts[0].uv.y = 0.75;
+                    tris[0] = uvec3(0u, 1u, 2u);
+                    prims[0].normal.xy = vec2(1.0, 0.0);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        position_id = spirv_named_id(spv_code, "_CrossGLMeshVerticesEXT")
+        uv_id = spirv_named_id(spv_code, "_CrossGLMesh_vertices_uv")
+        normal_id = spirv_named_id(spv_code, "_CrossGLMesh_primitives_normal")
+
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(position_id)} %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"OpAccessChain %\d+ {re.escape(uv_id)} %\d+ %\d+", spv_code
+                )
+            )
+            >= 2
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"OpAccessChain %\d+ {re.escape(normal_id)} %\d+ %\d+",
+                    spv_code,
+                )
+            )
+            >= 2
+        )
+        assert f"OpDecorate {uv_id} Location 5" in spv_code
+        assert f"OpDecorate {normal_id} Location 1" in spv_code
+        assert f"OpDecorate {normal_id} PerPrimitiveEXT" in spv_code
+        assert "Unknown variable verts" not in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_helper_component_assignments_dynamic_indices(self, tmp_path):
+        source_code = """
+        shader MeshOutputHelperComponentSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                vec3 normal @ NORMAL;
+            };
+
+            void writeComponents(
+                uint vertexIndex,
+                uint primitiveIndex,
+                @vertices out MeshVertex verts[3],
+                @primitives out MeshPrimitive prims[2]
+            ) {
+                verts[vertexIndex].position.z = 0.25;
+                verts[vertexIndex].uv.xy = vec2(0.5, 0.75);
+                prims[primitiveIndex].normal.xy = vec2(1.0, 0.0);
+            }
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[2]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(2) {
+                    uint vertexIndex = 1u;
+                    uint primitiveIndex = 1u;
+                    SetMeshOutputCounts(3, 2);
+                    tris[0] = uvec3(0u, 1u, 2u);
+                    writeComponents(vertexIndex, primitiveIndex, verts, prims);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint MeshEXT %(\d+) "main"([^\n]*)', spv_code)
+        assert entry_match is not None
+        entry_operands = entry_match.group(2).split()
+        vertex_parameter = spirv_named_parameter(spv_code, "vertexIndex")
+        primitive_parameter = spirv_named_parameter(spv_code, "primitiveIndex")
+
+        assert re.search(
+            r"%\d+ = OpFunctionCall %\d+ %\d+ %\d+ %\d+\s*$",
+            spv_code,
+            re.MULTILINE,
+        )
+        assert spv_code.count("OpFunctionParameter") == 2
+        assert not re.search(r'OpName %\d+ "verts"', spv_code)
+        assert not re.search(r'OpName %\d+ "prims"', spv_code)
+
+        position_id = spirv_named_id(spv_code, "_CrossGLMeshVerticesEXT")
+        uv_id = spirv_named_id(spv_code, "_CrossGLMesh_vertices_uv")
+        normal_id = spirv_named_id(spv_code, "_CrossGLMesh_primitives_normal")
+        for variable_id in (position_id, uv_id, normal_id):
+            assert variable_id in entry_operands
+
+        assert "BuiltIn Position" in spv_code
+        assert f"OpDecorate {uv_id} Location 5" in spv_code
+        assert f"OpDecorate {normal_id} Location 1" in spv_code
+        assert f"OpDecorate {normal_id} PerPrimitiveEXT" in spv_code
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(position_id)} "
+            rf"{re.escape(vertex_parameter)} %\d+ %\d+",
+            spv_code,
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"OpAccessChain %\d+ {re.escape(uv_id)} "
+                    rf"{re.escape(vertex_parameter)} %\d+",
+                    spv_code,
+                )
+            )
+            >= 2
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"OpAccessChain %\d+ {re.escape(normal_id)} "
+                    rf"{re.escape(primitive_parameter)} %\d+",
+                    spv_code,
+                )
+            )
+            >= 2
+        )
+        assert "Unknown variable verts" not in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_helper_compound_component_assignments_dynamic_indices(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshOutputHelperCompoundSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                vec3 normal @ NORMAL;
+            };
+
+            void adjustComponents(
+                uint vertexIndex,
+                uint primitiveIndex,
+                @vertices out MeshVertex verts[3],
+                @primitives out MeshPrimitive prims[2]
+            ) {
+                verts[vertexIndex].position = vec4(0.0, 0.0, 0.0, 1.0);
+                verts[vertexIndex].position.z += 0.25;
+                verts[vertexIndex].uv = vec2(0.25, 0.5);
+                verts[vertexIndex].uv.xy += vec2(0.5, 0.25);
+                prims[primitiveIndex].normal = vec3(0.0, 0.0, 1.0);
+                prims[primitiveIndex].normal.xy += vec2(1.0, 0.0);
+            }
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[2]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(2) {
+                    uint vertexIndex = 1u;
+                    uint primitiveIndex = 1u;
+                    SetMeshOutputCounts(3, 2);
+                    tris[0] = uvec3(0u, 1u, 2u);
+                    adjustComponents(vertexIndex, primitiveIndex, verts, prims);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint MeshEXT %(\d+) "main"([^\n]*)', spv_code)
+        assert entry_match is not None
+        entry_operands = entry_match.group(2).split()
+        vertex_parameter = spirv_named_parameter(spv_code, "vertexIndex")
+        primitive_parameter = spirv_named_parameter(spv_code, "primitiveIndex")
+
+        assert re.search(
+            r"%\d+ = OpFunctionCall %\d+ %\d+ %\d+ %\d+\s*$",
+            spv_code,
+            re.MULTILINE,
+        )
+        assert spv_code.count("OpFunctionParameter") == 2
+        assert not re.search(r'OpName %\d+ "verts"', spv_code)
+        assert not re.search(r'OpName %\d+ "prims"', spv_code)
+
+        position_id = spirv_named_id(spv_code, "_CrossGLMeshVerticesEXT")
+        uv_id = spirv_named_id(spv_code, "_CrossGLMesh_vertices_uv")
+        normal_id = spirv_named_id(spv_code, "_CrossGLMesh_primitives_normal")
+        position_shadow_id = spirv_named_id(
+            spv_code, "_CrossGLMeshShadow_vertices_position"
+        )
+        uv_shadow_id = spirv_named_id(spv_code, "_CrossGLMeshShadow_vertices_uv")
+        normal_shadow_id = spirv_named_id(
+            spv_code, "_CrossGLMeshShadow_primitives_normal"
+        )
+        for variable_id in (
+            position_id,
+            uv_id,
+            normal_id,
+            position_shadow_id,
+            uv_shadow_id,
+            normal_shadow_id,
+        ):
+            assert variable_id in entry_operands
+
+        for shadow_id in (position_shadow_id, uv_shadow_id, normal_shadow_id):
+            assert re.search(
+                rf"{re.escape(shadow_id)} = OpVariable %\d+ Private\b", spv_code
+            )
+
+        output_accesses = []
+        shadow_accesses = []
+        for variable_id in (position_id, uv_id, normal_id):
+            output_accesses.extend(
+                re.findall(
+                    rf"(%\d+) = OpAccessChain %\d+ {re.escape(variable_id)}\b",
+                    spv_code,
+                )
+            )
+        for variable_id in (position_shadow_id, uv_shadow_id, normal_shadow_id):
+            shadow_accesses.extend(
+                re.findall(
+                    rf"(%\d+) = OpAccessChain %\d+ {re.escape(variable_id)}\b",
+                    spv_code,
+                )
+            )
+
+        assert all(
+            not re.search(rf"OpLoad %\d+ {re.escape(access_id)}\b", spv_code)
+            for access_id in output_accesses
+        )
+        assert any(
+            re.search(rf"OpLoad %\d+ {re.escape(access_id)}\b", spv_code)
+            for access_id in shadow_accesses
+        )
+        assert spv_code.count("OpFAdd") >= 3
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(position_id)} "
+            rf"{re.escape(vertex_parameter)} %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(position_shadow_id)} "
+            rf"{re.escape(vertex_parameter)} %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(normal_shadow_id)} "
+            rf"{re.escape(primitive_parameter)} %\d+",
+            spv_code,
+        )
+        assert "Unknown variable verts" not in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "Unsupported LHS type" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_helper_compound_member_assignments_dynamic_indices(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshOutputHelperMemberCompoundSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                vec3 normal @ NORMAL;
+            };
+
+            void adjustMembers(
+                uint vertexIndex,
+                uint primitiveIndex,
+                @vertices out MeshVertex verts[3],
+                @primitives out MeshPrimitive prims[2]
+            ) {
+                verts[vertexIndex].position = vec4(0.25, 0.25, 0.25, 1.0);
+                verts[vertexIndex].position += vec4(0.5, 0.25, 0.125, 0.0);
+                verts[vertexIndex].uv = vec2(0.25, 0.5);
+                verts[vertexIndex].uv += vec2(0.125, 0.25);
+                prims[primitiveIndex].normal = vec3(1.0, 2.0, 3.0);
+                prims[primitiveIndex].normal *= vec3(0.5, 0.25, 0.125);
+            }
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[2]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(2) {
+                    uint vertexIndex = 1u;
+                    uint primitiveIndex = 1u;
+                    SetMeshOutputCounts(3, 2);
+                    tris[0] = uvec3(0u, 1u, 2u);
+                    adjustMembers(vertexIndex, primitiveIndex, verts, prims);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint MeshEXT %(\d+) "main"([^\n]*)', spv_code)
+        assert entry_match is not None
+        entry_operands = entry_match.group(2).split()
+        vertex_parameter = spirv_named_parameter(spv_code, "vertexIndex")
+        primitive_parameter = spirv_named_parameter(spv_code, "primitiveIndex")
+
+        assert re.search(
+            r"%\d+ = OpFunctionCall %\d+ %\d+ %\d+ %\d+\s*$",
+            spv_code,
+            re.MULTILINE,
+        )
+        assert spv_code.count("OpFunctionParameter") == 2
+        assert not re.search(r'OpName %\d+ "verts"', spv_code)
+        assert not re.search(r'OpName %\d+ "prims"', spv_code)
+
+        position_id = spirv_named_id(spv_code, "_CrossGLMeshVerticesEXT")
+        uv_id = spirv_named_id(spv_code, "_CrossGLMesh_vertices_uv")
+        normal_id = spirv_named_id(spv_code, "_CrossGLMesh_primitives_normal")
+        position_shadow_id = spirv_named_id(
+            spv_code, "_CrossGLMeshShadow_vertices_position"
+        )
+        uv_shadow_id = spirv_named_id(spv_code, "_CrossGLMeshShadow_vertices_uv")
+        normal_shadow_id = spirv_named_id(
+            spv_code, "_CrossGLMeshShadow_primitives_normal"
+        )
+        for variable_id in (
+            position_id,
+            uv_id,
+            normal_id,
+            position_shadow_id,
+            uv_shadow_id,
+            normal_shadow_id,
+        ):
+            assert variable_id in entry_operands
+
+        for shadow_id in (position_shadow_id, uv_shadow_id, normal_shadow_id):
+            assert re.search(
+                rf"{re.escape(shadow_id)} = OpVariable %\d+ Private\b", spv_code
+            )
+
+        output_accesses = []
+        shadow_accesses = []
+        for variable_id in (position_id, uv_id, normal_id):
+            output_accesses.extend(
+                re.findall(
+                    rf"(%\d+) = OpAccessChain %\d+ {re.escape(variable_id)}\b",
+                    spv_code,
+                )
+            )
+        for variable_id in (position_shadow_id, uv_shadow_id, normal_shadow_id):
+            shadow_accesses.extend(
+                re.findall(
+                    rf"(%\d+) = OpAccessChain %\d+ {re.escape(variable_id)}\b",
+                    spv_code,
+                )
+            )
+
+        assert output_accesses
+        assert shadow_accesses
+        assert all(
+            not re.search(rf"OpLoad %\d+ {re.escape(access_id)}\b", spv_code)
+            for access_id in output_accesses
+        )
+        assert any(
+            re.search(rf"OpLoad %\d+ {re.escape(access_id)}\b", spv_code)
+            for access_id in shadow_accesses
+        )
+        assert spv_code.count("OpFAdd") >= 2
+        assert "OpFMul" in spv_code
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(position_id)} "
+            rf"{re.escape(vertex_parameter)} %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(uv_id)} "
+            rf"{re.escape(vertex_parameter)}\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(normal_id)} "
+            rf"{re.escape(primitive_parameter)}\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(position_shadow_id)} "
+            rf"{re.escape(vertex_parameter)}\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(normal_shadow_id)} "
+            rf"{re.escape(primitive_parameter)}\b",
+            spv_code,
+        )
+        assert "Unknown variable verts" not in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "Unsupported LHS type" not in spv_code
+        assert "literal index must be non-negative" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_whole_element_compound_assignments_reject_cleanly(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshOutputWholeElementCompoundSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(3, 1);
+                    verts[0] += MeshVertex(
+                        vec4(0.0, 0.0, 0.0, 1.0),
+                        vec2(0.0, 0.0)
+                    );
+                    prims[0] += MeshPrimitive(vec3(0.0, 1.0, 0.0));
+                    tris[0] += uvec3(0u, 1u, 2u);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            spv_code.count(
+                "WARNING: Compound assignment to whole SPIR-V mesh output "
+                "elements cannot be lowered"
+            )
+            == 2
+        )
+        assert (
+            spv_code.count(
+                "WARNING: Compound assignment to SPIR-V mesh indices output "
+                "cannot be lowered"
+            )
+            == 1
+        )
+        assert "Unsupported LHS type" not in spv_code
+        assert "Unknown variable verts" not in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "Unknown variable tris" not in spv_code
+        assert "_CrossGLMesh" not in spv_code
+        assert "OpFAdd" not in spv_code
+        assert "OpIAdd" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_whole_element_compound_assignments_reject_negative_indices(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshOutputWholeElementNegativeCompoundSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(3, 1);
+                    verts[-1] += MeshVertex(
+                        vec4(0.0, 0.0, 0.0, 1.0),
+                        vec2(0.0, 0.0)
+                    );
+                    prims[-1] += MeshPrimitive(vec3(0.0, 1.0, 0.0));
+                    tris[-1] += uvec3(0u, 1u, 2u);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            spv_code.count(
+                "WARNING: SPIR-V mesh verts output literal index must be non-negative"
+            )
+            == 1
+        )
+        assert (
+            spv_code.count(
+                "WARNING: SPIR-V mesh prims output literal index must be non-negative"
+            )
+            == 1
+        )
+        assert (
+            spv_code.count(
+                "WARNING: SPIR-V mesh tris output literal index must be non-negative"
+            )
+            == 1
+        )
+        assert (
+            "Compound assignment to whole SPIR-V mesh output elements" not in spv_code
+        )
+        assert "Compound assignment to SPIR-V mesh indices output" not in spv_code
+        assert "Unsupported LHS type" not in spv_code
+        assert "Unknown variable verts" not in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "Unknown variable tris" not in spv_code
+        assert "_CrossGLMesh" not in spv_code
+        assert "OpFAdd" not in spv_code
+        assert "OpIAdd" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_whole_element_assignments_reject_negative_indices(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshOutputWholeElementNegativeDirectSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(3, 1);
+                    verts[-1] = MeshVertex(
+                        vec4(0.0, 0.0, 0.0, 1.0),
+                        vec2(0.0, 0.0)
+                    );
+                    prims[-1] = MeshPrimitive(vec3(0.0, 1.0, 0.0));
+                    tris[-1] = uvec3(0u, 1u, 2u);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            spv_code.count(
+                "WARNING: SPIR-V mesh verts output literal index must be non-negative"
+            )
+            == 1
+        )
+        assert (
+            spv_code.count(
+                "WARNING: SPIR-V mesh prims output literal index must be non-negative"
+            )
+            == 1
+        )
+        assert (
+            spv_code.count(
+                "WARNING: SPIR-V mesh tris output literal index must be non-negative"
+            )
+            == 1
+        )
+        assert "SPIR-V mesh SetVertex literal index" not in spv_code
+        assert "SPIR-V mesh SetPrimitive literal index" not in spv_code
+        assert "Unsupported LHS type" not in spv_code
+        assert "Unknown variable verts" not in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "Unknown variable tris" not in spv_code
+        assert "_CrossGLMesh" not in spv_code
+        assert "OpCompositeConstruct" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_whole_element_assignments_reject_shape_mismatches(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshOutputWholeElementShapeMismatchSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(3, 1);
+                    verts[0] = vec4(0.0, 0.0, 0.0, 1.0);
+                    prims[0] = vec4(0.0, 1.0, 0.0, 1.0);
+                    tris[0] = uvec2(0u, 1u);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh verts output assignment value does not match "
+            "MeshVertex"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V mesh prims output assignment value does not match "
+            "MeshPrimitive"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V mesh indices output assignment value does not match "
+            "v3uint"
+        ) in spv_code
+        assert "Could not determine array element type" not in spv_code
+        assert "Unsupported LHS type" not in spv_code
+        assert "Unknown variable verts" not in spv_code
+        assert "Unknown variable tris" not in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "_CrossGLMesh" not in spv_code
+        assert "OpCompositeExtract" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_direct_member_assignments_reject_unknown_members(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshOutputUnknownDirectMembersSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                int primitiveId @ gl_PrimitiveID;
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(3, 1);
+                    verts[0].missingVertex = vec4(0.0, 1.0, 2.0, 3.0);
+                    verts[1].missingComponent.x = vec4(4.0, 5.0, 6.0, 7.0);
+                    prims[0].missingPrimitive = vec3(0.0, 1.0, 0.0);
+                    prims[0].missingPrimitiveComponent.y =
+                        vec4(1.0, 2.0, 3.0, 4.0);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh output verts has no member missingVertex" in spv_code
+        )
+        assert (
+            "WARNING: SPIR-V mesh output verts has no member missingComponent"
+            in spv_code
+        )
+        assert (
+            "WARNING: SPIR-V mesh output prims has no member missingPrimitive"
+            in spv_code
+        )
+        assert (
+            "WARNING: SPIR-V mesh output prims has no member "
+            "missingPrimitiveComponent"
+        ) in spv_code
+        assert "Unsupported LHS type" not in spv_code
+        assert "Unknown variable verts" not in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "_CrossGLMesh" not in spv_code
+        assert "OpCompositeConstruct" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_direct_component_assignments_reject_invalid_targets(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshOutputInvalidDirectComponentsSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+                float size @ TEXCOORD1;
+            };
+
+            struct MeshPrimitive {
+                int primitiveId @ gl_PrimitiveID;
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(3, 1);
+                    verts[0].uv.xx = vec2(0.1, 0.2);
+                    verts[0].uv.xq = vec2(0.3, 0.4);
+                    verts[0].size.x = vec4(0.5, 0.6, 0.7, 0.8);
+                    prims[0].primitiveId.x = vec4(1.0, 2.0, 3.0, 4.0);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "Cannot assign to vector swizzle xx with duplicate components" in spv_code
+        )
+        assert "Invalid vector swizzle xq for v2float" in spv_code
+        assert "SPIR-V mesh output size has no vector component x" in spv_code
+        assert "SPIR-V mesh output primitiveId has no vector component x" in spv_code
+        assert "Unsupported LHS type" not in spv_code
+        assert "Unknown variable verts" not in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "_CrossGLMesh" not in spv_code
+        assert "OpCompositeConstruct" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_compound_member_assignments_reject_negative_indices(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshOutputNegativeCompoundSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(3, 1);
+                    verts[-1].position += vec4(0.1, 0.2, 0.3, 0.0);
+                    verts[-1].uv += vec2(0.1, 0.2);
+                    prims[-1].normal += vec3(0.3, 0.4, 0.5);
+                    tris[0] = uvec3(0u, 1u, 2u);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            spv_code.count(
+                "WARNING: SPIR-V mesh verts output literal index must be non-negative"
+            )
+            == 2
+        )
+        assert (
+            spv_code.count(
+                "WARNING: SPIR-V mesh prims output literal index must be non-negative"
+            )
+            == 1
+        )
+        assert "Unsupported LHS type" not in spv_code
+        assert "Unknown variable verts" not in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "_CrossGLMeshShadow_" not in spv_code
+        assert "BuiltIn Position" not in spv_code
+        assert "OpFAdd" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_compound_component_assignments_reject_invalid_swizzles(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshOutputInvalidCompoundSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(3, 1);
+                    verts[0].uv.xx += vec2(0.1, 0.2);
+                    prims[0].normal.xyz += vec2(0.3, 0.4);
+                    verts[0].uv.xy += 0.5;
+                    prims[0].normal.xq += vec2(0.5, 0.6);
+                    tris[0] = uvec3(0u, 1u, 2u);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "Cannot assign to vector swizzle xx with duplicate components" in spv_code
+        )
+        assert "Cannot assign 2-component vector to 3-component swizzle xyz" in spv_code
+        assert "Cannot assign scalar value to vector swizzle xy" in spv_code
+        assert "Invalid vector swizzle xq for v3float" in spv_code
+        assert "Unsupported LHS type" not in spv_code
+        assert "Could not find member" not in spv_code
+        assert "OpFAdd" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_primitive_builtin_output_parameters(self, tmp_path):
+        source_code = """
+        shader MeshPrimitiveBuiltinSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+            };
+
+            struct MeshPrimitive {
+                int primitiveId @ gl_PrimitiveID;
+                int layer @ gl_Layer;
+                int viewport @ gl_ViewportIndex;
+                bool cull @ gl_CullPrimitiveEXT;
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(3, 1);
+                    verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                    tris[0] = uvec3(0u, 1u, 2u);
+                    prims[0].primitiveId = 3;
+                    prims[0].layer = 2;
+                    prims[0].viewport = 1;
+                    prims[0].cull = false;
+                    prims[0].normal = vec3(0.0, 1.0, 0.0);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint MeshEXT %(\d+) "main"([^\n]*)', spv_code)
+        assert entry_match is not None
+        entry_operands = entry_match.group(2).split()
+
+        builtin_outputs = {
+            "_CrossGLMesh_primitives_primitiveId": "PrimitiveId",
+            "_CrossGLMesh_primitives_layer": "Layer",
+            "_CrossGLMesh_primitives_viewport": "ViewportIndex",
+            "_CrossGLMesh_primitives_cull": "CullPrimitiveEXT",
+        }
+        for name, builtin in builtin_outputs.items():
+            variable_id = spirv_named_id(spv_code, name)
+            assert variable_id in entry_operands
+            assert f"OpDecorate {variable_id} BuiltIn {builtin}" in spv_code
+            assert f"OpDecorate {variable_id} PerPrimitiveEXT" in spv_code
+
+        normal_id = spirv_named_id(spv_code, "_CrossGLMesh_primitives_normal")
+        assert normal_id in entry_operands
+        assert f"OpDecorate {normal_id} Location 1" in spv_code
+        assert f"OpDecorate {normal_id} PerPrimitiveEXT" in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_primitive_builtin_helper_forwarding(self, tmp_path):
+        source_code = """
+        shader MeshPrimitiveBuiltinHelperSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+            };
+
+            struct MeshPrimitive {
+                int primitiveId @ gl_PrimitiveID;
+                int layer @ gl_Layer;
+                int viewport @ gl_ViewportIndex;
+                bool cull @ gl_CullPrimitiveEXT;
+                vec3 normal @ NORMAL;
+            };
+
+            void writePrimitive(@primitives out MeshPrimitive prims[1]) {
+                MeshPrimitive outPrimitive;
+                outPrimitive.primitiveId = 4;
+                outPrimitive.layer = 2;
+                outPrimitive.viewport = 1;
+                outPrimitive.cull = true;
+                outPrimitive.normal = vec3(0.0, 1.0, 0.0);
+                prims[0] = outPrimitive;
+            }
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(3, 1);
+                    verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                    tris[0] = uvec3(0u, 1u, 2u);
+                    writePrimitive(prims);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint MeshEXT %(\d+) "main"([^\n]*)', spv_code)
+        assert entry_match is not None
+        entry_operands = entry_match.group(2).split()
+        assert re.search(r"%\d+ = OpFunctionCall %\d+ %\d+\s*$", spv_code, re.MULTILINE)
+        assert "OpFunctionParameter" not in spv_code
+        assert not re.search(r'OpName %\d+ "prims"', spv_code)
+
+        builtin_outputs = {
+            "_CrossGLMesh_primitives_primitiveId": "PrimitiveId",
+            "_CrossGLMesh_primitives_layer": "Layer",
+            "_CrossGLMesh_primitives_viewport": "ViewportIndex",
+            "_CrossGLMesh_primitives_cull": "CullPrimitiveEXT",
+        }
+        for name, builtin in builtin_outputs.items():
+            variable_id = spirv_named_id(spv_code, name)
+            assert variable_id in entry_operands
+            assert f"OpDecorate {variable_id} BuiltIn {builtin}" in spv_code
+            assert f"OpDecorate {variable_id} PerPrimitiveEXT" in spv_code
+
+        normal_id = spirv_named_id(spv_code, "_CrossGLMesh_primitives_normal")
+        assert normal_id in entry_operands
+        assert f"OpDecorate {normal_id} Location 1" in spv_code
+        assert f"OpDecorate {normal_id} PerPrimitiveEXT" in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_primitive_builtin_helper_dynamic_member_stores(self, tmp_path):
+        source_code = """
+        shader MeshPrimitiveBuiltinDynamicHelperSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+            };
+
+            struct MeshPrimitive {
+                int primitiveId @ gl_PrimitiveID;
+                int layer @ gl_Layer;
+                int viewport @ gl_ViewportIndex;
+                bool cull @ gl_CullPrimitiveEXT;
+                vec3 normal @ NORMAL;
+            };
+
+            void writePrimitive(
+                uint primitiveIndex,
+                @primitives out MeshPrimitive prims[2]
+            ) {
+                prims[primitiveIndex].primitiveId = 5;
+                prims[primitiveIndex].layer = 3;
+                prims[primitiveIndex].viewport = 2;
+                prims[primitiveIndex].cull = true;
+                prims[primitiveIndex].normal = vec3(1.0, 0.0, 0.0);
+            }
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[2]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(2) {
+                    uint primitiveIndex = 1u;
+                    SetMeshOutputCounts(3, 2);
+                    verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                    tris[0] = uvec3(0u, 1u, 2u);
+                    writePrimitive(primitiveIndex, prims);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint MeshEXT %(\d+) "main"([^\n]*)', spv_code)
+        assert entry_match is not None
+        entry_operands = entry_match.group(2).split()
+        index_parameter = spirv_named_parameter(spv_code, "primitiveIndex")
+
+        assert re.search(
+            rf"%\d+ = OpFunctionCall %\d+ %\d+ %\d+\s*$",
+            spv_code,
+            re.MULTILINE,
+        )
+        assert spv_code.count("OpFunctionParameter") == 1
+        assert not re.search(r'OpName %\d+ "prims"', spv_code)
+
+        builtin_outputs = {
+            "_CrossGLMesh_primitives_primitiveId": "PrimitiveId",
+            "_CrossGLMesh_primitives_layer": "Layer",
+            "_CrossGLMesh_primitives_viewport": "ViewportIndex",
+            "_CrossGLMesh_primitives_cull": "CullPrimitiveEXT",
+        }
+        for name, builtin in builtin_outputs.items():
+            variable_id = spirv_named_id(spv_code, name)
+            assert variable_id in entry_operands
+            assert f"OpDecorate {variable_id} BuiltIn {builtin}" in spv_code
+            assert f"OpDecorate {variable_id} PerPrimitiveEXT" in spv_code
+            assert re.search(
+                rf"OpAccessChain %\d+ {re.escape(variable_id)} "
+                rf"{re.escape(index_parameter)}\b",
+                spv_code,
+            )
+
+        normal_id = spirv_named_id(spv_code, "_CrossGLMesh_primitives_normal")
+        assert normal_id in entry_operands
+        assert f"OpDecorate {normal_id} Location 1" in spv_code
+        assert f"OpDecorate {normal_id} PerPrimitiveEXT" in spv_code
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(normal_id)} "
+            rf"{re.escape(index_parameter)}\b",
+            spv_code,
+        )
+        assert "Unknown variable prims" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_output_helpers_wrong_stage_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader MeshOutputWrongStageSPIRV {
+            compute {
+                void main() {
+                    SetVertex(0, vec4(0.0, 0.0, 0.0, 1.0));
+                    SetPrimitive(0, uvec3(0u, 1u, 2u));
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "WARNING: SPIR-V mesh SetVertex is only valid in mesh stages" in spv_code
+        assert (
+            "WARNING: SPIR-V mesh SetPrimitive is only valid in mesh stages" in spv_code
+        )
+        assert not re.search(r"OpExtInst [^\n]*\bSetVertex\b", spv_code)
+        assert not re.search(r"OpExtInst [^\n]*\bSetPrimitive\b", spv_code)
+        assert "PrimitiveTriangleIndicesEXT" not in spv_code
+        assert "BuiltIn Position" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_output_helpers_reject_negative_literal_indices(self, tmp_path):
+        source_code = """
+        shader MeshOutputNegativeIndexSPIRV {
+            mesh {
+                layout(triangles, max_vertices = 3, max_primitives = 1) out;
+
+                void main() {
+                    SetMeshOutputCounts(3, 1);
+                    SetVertex(-1, vec4(0.0, 0.0, 0.0, 1.0));
+                    SetPrimitive(-1, uvec3(0u, 1u, 2u));
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh SetVertex literal index must be non-negative"
+            in spv_code
+        )
+        assert (
+            "WARNING: SPIR-V mesh SetPrimitive literal index must be non-negative"
+            in spv_code
+        )
+        assert "BuiltIn Position" not in spv_code
+        assert "PrimitiveTriangleIndicesEXT" not in spv_code
+        assert not re.search(r"OpExtInst [^\n]*\bSetVertex\b", spv_code)
+        assert not re.search(r"OpExtInst [^\n]*\bSetPrimitive\b", spv_code)
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_task_stage_dispatch_mesh_emits_ext_terminator(self, tmp_path):
         source_code = """
         shader TaskSPIRV {
@@ -3097,6 +5606,147 @@ class TestVulkanSPIRVCodeGen:
         assert "OpReturn" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_task_stage_dispatch_mesh_payload_emits_ext_operand(self, tmp_path):
+        source_code = """
+        shader TaskPayloadSPIRV {
+            struct TaskPayload {
+                uint meshlet;
+            };
+
+            task {
+                @taskPayloadSharedEXT TaskPayload payload;
+
+                void main() @numthreads(1, 1, 1) {
+                    TaskPayload localPayload;
+                    localPayload.meshlet = 7u;
+                    DispatchMesh(2, 3, 4, localPayload);
+                    int afterDispatch = 1;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint TaskEXT %(\d+) "main"([^\n]*)', spv_code)
+        assert entry_match is not None
+        entry_id = entry_match.group(1)
+        payload_match = re.search(r'OpName %(\d+) "payload"', spv_code)
+        assert payload_match is not None
+        payload_id = payload_match.group(1)
+        assert f"%{payload_id}" in entry_match.group(2).split()
+        assert "OpCapability MeshShadingEXT" in spv_code
+        assert 'OpExtension "SPV_EXT_mesh_shader"' in spv_code
+        assert "OpTypePointer TaskPayloadWorkgroupEXT" in spv_code
+        assert re.search(
+            rf"%{payload_id} = OpVariable %\d+ TaskPayloadWorkgroupEXT", spv_code
+        )
+        assert f"OpExecutionMode %{entry_id} LocalSize 1 1 1" in spv_code
+        assert re.search(rf"OpStore %{payload_id} %\d+", spv_code)
+        assert re.search(rf"OpEmitMeshTasksEXT %\d+ %\d+ %\d+ %{payload_id}", spv_code)
+        assert "payload argument requires taskPayloadSharedEXT storage" not in spv_code
+        assert "afterDispatch" not in spv_code
+        assert "OpReturn" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_task_stage_dispatch_mesh_named_payload_disambiguates_targets(
+        self, tmp_path
+    ):
+        source_code = """
+        shader TaskNamedPayloadSPIRV {
+            struct TaskPayload {
+                uint meshlet;
+            };
+
+            task {
+                @taskPayloadSharedEXT TaskPayload payloadA;
+                @taskPayloadSharedEXT TaskPayload payloadB;
+
+                void main() @numthreads(1, 1, 1) {
+                    payloadA.meshlet = 7u;
+                    DispatchMesh(2, 3, 4, payloadA);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint TaskEXT %(\d+) "main"([^\n]*)', spv_code)
+        assert entry_match is not None
+        payload_a_match = re.search(r'OpName %(\d+) "payloadA"', spv_code)
+        payload_b_match = re.search(r'OpName %(\d+) "payloadB"', spv_code)
+        assert payload_a_match is not None
+        assert payload_b_match is not None
+        payload_a_id = payload_a_match.group(1)
+        payload_b_id = payload_b_match.group(1)
+        entry_operands = entry_match.group(2).split()
+        assert f"%{payload_a_id}" in entry_operands
+        assert f"%{payload_b_id}" not in entry_operands
+        assert re.search(
+            rf"OpEmitMeshTasksEXT %\d+ %\d+ %\d+ %{payload_a_id}", spv_code
+        )
+        assert "payload target is ambiguous" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_task_stage_dispatch_mesh_payload_rejects_ambiguous_targets(self):
+        source_code = """
+        shader TaskAmbiguousPayloadSPIRV {
+            struct TaskPayload {
+                uint meshlet;
+            };
+
+            task {
+                @taskPayloadSharedEXT TaskPayload payloadA;
+                @taskPayloadSharedEXT TaskPayload payloadB;
+
+                void main() {
+                    TaskPayload localPayload;
+                    DispatchMesh(2, 3, 4, localPayload);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh DispatchMesh payload target is ambiguous "
+            "for TaskPayload: payloadA, payloadB"
+        ) in spv_code
+        assert "OpEmitMeshTasksEXT" not in spv_code
+
+    def test_task_stage_dispatch_mesh_payload_requires_shared_storage(self):
+        source_code = """
+        shader TaskPayloadMissingSPIRV {
+            struct TaskPayload {
+                uint meshlet;
+            };
+
+            task {
+                void main() {
+                    TaskPayload localPayload;
+                    DispatchMesh(2, 3, 4, localPayload);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh DispatchMesh payload argument requires "
+            "taskPayloadSharedEXT storage"
+        ) in spv_code
+        assert "TaskPayloadWorkgroupEXT" not in spv_code
+        assert "OpEmitMeshTasksEXT" not in spv_code
 
     def test_task_stage_dispatch_mesh_rejects_bad_arity(self):
         source_code = """
@@ -4688,6 +7338,82 @@ class TestVulkanSPIRVCodeGen:
         ):
             VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
+    @pytest.mark.parametrize(
+        ("source_code", "resource_name"),
+        [
+            (
+                """
+                shader Resources {
+                    compute {
+                        void main() {
+                            sampler2d localMap;
+                        }
+                    }
+                }
+                """,
+                "localMap",
+            ),
+            (
+                """
+                shader Resources {
+                    vec4 sampleGrid(
+                        sampler2d grids[][3],
+                        int layer,
+                        int slot,
+                        vec2 uv
+                    ) {
+                        return texture(grids[layer][slot], uv);
+                    }
+
+                    compute {
+                        void main() {
+                            sampler2d localGrid[2][3];
+                            vec2 uv = vec2(0.5, 0.25);
+                            vec4 color = sampleGrid(localGrid, 1, 2, uv);
+                        }
+                    }
+                }
+                """,
+                "localGrid",
+            ),
+            (
+                """
+                shader Resources {
+                    compute {
+                        void main() {
+                            RWStructuredBuffer<float> localData;
+                        }
+                    }
+                }
+                """,
+                "localData",
+            ),
+            (
+                """
+                shader Resources {
+                    compute {
+                        void main() {
+                            accelerationStructureEXT localScene;
+                        }
+                    }
+                }
+                """,
+                "localScene",
+            ),
+        ],
+    )
+    def test_function_local_descriptor_resources_raise_spirv_diagnostic(
+        self, source_code, resource_name
+    ):
+        with pytest.raises(
+            ValueError,
+            match=(
+                f"SPIR-V descriptor resource '{resource_name}' cannot be declared "
+                "inside a function"
+            ),
+        ):
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
     def test_cbuffer_globals_emit_spirv_uniform_blocks_and_bindings(self):
         source_code = """
         shader UniformBlocks {
@@ -4853,6 +7579,46 @@ class TestVulkanSPIRVCodeGen:
         )
 
         assert "WARNING: buffer_store requires an RWStructuredBuffer" in spv_code
+
+    def test_structured_buffer_helpers_reject_excess_operands(self, tmp_path):
+        source_code = """
+        shader StorageBuffers {
+            struct Particle {
+                vec4 position;
+                float mass;
+            };
+
+            RWStructuredBuffer<Particle> particles;
+            StructuredBuffer<float> weights;
+
+            compute {
+                void main() {
+                    Particle p = buffer_load(particles, 0u, 1u);
+                    float weight = buffer_load(weights, 1u, 2u);
+                    buffer_store(particles, 2u, p, weight);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count(
+                "; WARNING: buffer_load accepts only buffer and index operands"
+            )
+            == 2
+        )
+        assert (
+            "; WARNING: buffer_store accepts only buffer, index, and value operands"
+            in spv_code
+        )
+        assert "OpAccessChain" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_glsl_buffer_blocks_emit_spirv_buffer_block_layout(self):
         source_code = """
@@ -5973,6 +8739,42 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "OpAtomic" not in spv_code
 
+    def test_glsl_buffer_block_atomics_reject_excess_operands(self, tmp_path):
+        source_code = """
+        shader StorageBufferAtomics {
+            struct AtomicBlock {
+                uint counter;
+            };
+
+            AtomicBlock atomicBlock @glsl_buffer_block(std430);
+
+            compute {
+                void main() {
+                    uint addOld = atomicAdd(atomicBlock.counter, 1u, 2u);
+                    uint casOld = atomicCompSwap(
+                        atomicBlock.counter,
+                        addOld,
+                        7u,
+                        9u
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "; WARNING: atomicAdd accepts only target and value operands" in spv_code
+        assert (
+            "; WARNING: atomicCompSwap accepts only target, compare, and value operands"
+            in spv_code
+        )
+        assert "OpAtomic" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_storage_buffer_memory_qualifiers_emit_member_decorations(self):
         source_code = """
         shader StorageBuffers {
@@ -6207,6 +9009,90 @@ class TestVulkanSPIRVCodeGen:
             "storage image access for argument counters passed to parameter image: "
             "got readonly"
         ) in spv_code
+
+    def test_storage_image_operations_reject_malformed_operand_shapes(self, tmp_path):
+        source_code = """
+        shader StorageImageMalformedOperands {
+            image2D colorImage @rgba16f;
+            uimage2D counters @r32ui;
+            image2DMS msColor @rgba16f;
+            uimage2DMS msCounters @r32ui;
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(0, 1);
+                    ivec3 wrongPixel = ivec3(0, 1, 2);
+                    uvec2 badSample = uvec2(0u, 1u);
+                    vec3 shortColor = vec3(1.0, 0.0, 0.0);
+                    vec4 wideValue = vec4(1.0, 2.0, 3.0, 4.0);
+
+                    vec4 rejectedLoad = imageLoad(colorImage, wrongPixel);
+                    vec4 rejectedSampleLoad =
+                        imageLoad(msColor, pixel, badSample);
+                    imageStore(colorImage, wrongPixel, wideValue);
+                    imageStore(colorImage, pixel, shortColor);
+                    imageStore(counters, pixel, wideValue);
+                    imageStore(msColor, pixel, badSample, wideValue);
+                    uint rejectedAtomicCoord =
+                        imageAtomicAdd(counters, wrongPixel, 1u);
+                    uint rejectedAtomicValue =
+                        imageAtomicAdd(counters, pixel, wideValue);
+                    uint rejectedAtomicSample =
+                        imageAtomicAdd(msCounters, pixel, badSample, 1u);
+                    uint rejectedAtomicCompare =
+                        imageAtomicCompSwap(counters, pixel, wideValue, 1u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: imageLoad requires a 2-component integer coordinate for image2D"
+            in spv_code
+        )
+        assert (
+            "WARNING: imageStore requires a 2-component integer coordinate for image2D"
+            in spv_code
+        )
+        assert "WARNING: imageLoad requires a scalar integer sample operand" in spv_code
+        assert (
+            "WARNING: imageStore requires a scalar integer sample operand" in spv_code
+        )
+        assert (
+            "WARNING: imageAtomicAdd requires a scalar integer sample operand"
+            in spv_code
+        )
+        assert (
+            "WARNING: imageAtomicAdd requires a 2-component integer coordinate "
+            "for uimage2D"
+        ) in spv_code
+        assert (
+            "WARNING: imageStore value operand does not match v4float "
+            "storage image texel type"
+        ) in spv_code
+        assert (
+            "WARNING: imageStore value operand does not match uint "
+            "storage image texel type"
+        ) in spv_code
+        assert (
+            "WARNING: imageAtomicAdd value operand does not match uint "
+            "storage image texel type"
+        ) in spv_code
+        assert (
+            "WARNING: imageAtomicCompSwap compare operand does not match uint "
+            "storage image texel type"
+        ) in spv_code
+        assert "OpImageRead" not in spv_code
+        assert "OpImageWrite" not in spv_code
+        assert "OpImageTexelPointer" not in spv_code
+        assert "OpAtomicIAdd" not in spv_code
+        assert "OpAtomicCompareExchange" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_image_globals_emit_spirv_storage_image_types(self):
         source_code = """
@@ -6692,6 +9578,288 @@ class TestVulkanSPIRVCodeGen:
         assert "texelFetch" not in spv_code
         assert "texelFetchOffset" not in spv_code
         assert "WARNING" not in spv_code
+
+    def test_sampled_texture_operations_reject_malformed_operands(self, tmp_path):
+        source_code = """
+        shader Resources {
+            sampler2d colorMap;
+            sampler2dms msMap;
+            samplerCube cubeMap;
+
+            compute {
+                void main() {
+                    float scalarCoord = 0.5;
+                    vec2 uv = vec2(0.25, 0.75);
+                    vec3 cubeCoord = vec3(1.0, 0.0, 0.0);
+                    ivec2 pixel = ivec2(4, 8);
+                    ivec2 offset = ivec2(1, 0);
+                    ivec3 wideOffset = ivec3(1, 0, 0);
+                    vec2 floatOffset = vec2(1.0, 0.0);
+                    vec2 vectorLod = vec2(1.0, 2.0);
+                    vec2 grad = vec2(0.1, 0.0);
+                    vec3 wideGrad = vec3(0.1, 0.0, 0.0);
+
+                    vec4 badTextureScalarCoord = texture(colorMap, scalarCoord);
+                    vec4 badTextureIntCoord = texture(colorMap, pixel);
+                    vec4 badTextureExtra = texture(colorMap, uv, 0.5, 1.0);
+                    vec4 badOffsetWidth = textureOffset(
+                        colorMap,
+                        uv,
+                        wideOffset
+                    );
+                    vec4 badOffsetFloat = textureOffset(
+                        colorMap,
+                        uv,
+                        floatOffset
+                    );
+                    vec4 badOffsetCube = textureOffset(
+                        cubeMap,
+                        cubeCoord,
+                        wideOffset
+                    );
+                    vec4 badLodVector = textureLod(colorMap, uv, vectorLod);
+                    vec4 badGradXScalar = textureGrad(
+                        colorMap,
+                        uv,
+                        scalarCoord,
+                        grad
+                    );
+                    vec4 badGradYWide = textureGrad(
+                        colorMap,
+                        uv,
+                        grad,
+                        wideGrad
+                    );
+                    vec4 badGradOffset = textureGradOffset(
+                        colorMap,
+                        uv,
+                        grad,
+                        grad,
+                        wideOffset
+                    );
+                    vec4 badGatherCoord = textureGather(colorMap, scalarCoord);
+                    vec4 badGatherComponent = textureGather(
+                        colorMap,
+                        uv,
+                        vectorLod
+                    );
+                    vec4 badGatherOffset = textureGatherOffset(
+                        colorMap,
+                        uv,
+                        wideOffset
+                    );
+                    vec4 badGatherOffsetComponent = textureGatherOffset(
+                        colorMap,
+                        uv,
+                        offset,
+                        vectorLod
+                    );
+                    vec4 badGatherOffsetsValue = textureGatherOffsets(
+                        colorMap,
+                        uv,
+                        wideOffset
+                    );
+                    vec4 badGatherOffsetsComponent = textureGatherOffsets(
+                        colorMap,
+                        uv,
+                        offset,
+                        offset,
+                        offset,
+                        offset,
+                        vectorLod
+                    );
+                    vec4 badFetchCoord = texelFetch(colorMap, uv, 0);
+                    vec4 badFetchLod = texelFetch(colorMap, pixel, vectorLod);
+                    vec4 badFetchSample = texelFetch(msMap, pixel, vectorLod);
+                    vec4 badFetchOffset = texelFetchOffset(
+                        colorMap,
+                        pixel,
+                        0,
+                        wideOffset
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        for warning in [
+            "; WARNING: texture requires a 2-component floating-point coordinate operand",
+            "; WARNING: texture accepts only texture, optional sampler, coordinate, and optional bias operands",
+            "; WARNING: textureOffset requires a 2-component integer offset operand",
+            "; WARNING: textureOffset offsets are not valid for cube images",
+            "; WARNING: textureLod requires a scalar floating-point LOD operand",
+            "; WARNING: textureGrad requires a 2-component floating-point dx gradient operand",
+            "; WARNING: textureGrad requires a 2-component floating-point dy gradient operand",
+            "; WARNING: textureGradOffset requires a 2-component integer offset operand",
+            "; WARNING: textureGather requires a 2-component floating-point coordinate operand",
+            "; WARNING: textureGather requires a scalar integer component operand",
+            "; WARNING: textureGatherOffset requires a 2-component integer offset operand",
+            "; WARNING: textureGatherOffset requires a scalar integer component operand",
+            "; WARNING: textureGatherOffsets requires a 2-component integer offset operand",
+            "; WARNING: textureGatherOffsets requires a scalar integer component operand",
+            "; WARNING: texelFetch requires a 2-component integer coordinate operand",
+            "; WARNING: texelFetch requires a scalar integer LOD operand",
+            "; WARNING: texelFetch requires a scalar integer sample operand",
+            "; WARNING: texelFetchOffset requires a 2-component integer offset operand",
+        ]:
+            assert warning in spv_code
+
+        for opcode in [
+            "OpImageSampleExplicitLod",
+            "OpImageSampleImplicitLod",
+            "OpImageGather",
+            "OpImageFetch",
+        ]:
+            assert opcode not in spv_code
+        assert "OpCapability ImageGatherExtended" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_sampled_texture_operations_reject_excess_operands(self, tmp_path):
+        source_code = """
+        shader Resources {
+            sampler2d colorMap;
+            sampler linearSampler;
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.25, 0.75);
+                    ivec2 pixel = ivec2(4, 8);
+                    ivec2 offset = ivec2(1, 0);
+                    vec2 grad = vec2(0.1, 0.0);
+
+                    vec4 badLod = textureLod(colorMap, uv, 1.0, 2.0);
+                    vec4 badLodSampler = textureLod(
+                        colorMap,
+                        linearSampler,
+                        uv,
+                        1.0,
+                        2.0
+                    );
+                    vec4 badLodOffset = textureLodOffset(
+                        colorMap,
+                        uv,
+                        1.0,
+                        offset,
+                        2.0
+                    );
+                    vec4 badGrad = textureGrad(
+                        colorMap,
+                        uv,
+                        grad,
+                        grad,
+                        1.0
+                    );
+                    vec4 badGradOffset = textureGradOffset(
+                        colorMap,
+                        uv,
+                        grad,
+                        grad,
+                        offset,
+                        1.0
+                    );
+                    vec4 badOffset = textureOffset(
+                        colorMap,
+                        uv,
+                        offset,
+                        0.5,
+                        1.0
+                    );
+                    vec4 badGather = textureGather(colorMap, uv, 1, 2);
+                    vec4 badGatherOffset = textureGatherOffset(
+                        colorMap,
+                        uv,
+                        offset,
+                        1,
+                        2
+                    );
+                    vec4 badGatherOffsetsShort = textureGatherOffsets(
+                        colorMap,
+                        uv,
+                        offset,
+                        offset,
+                        1
+                    );
+                    vec4 badGatherOffsetsLong = textureGatherOffsets(
+                        colorMap,
+                        uv,
+                        offset,
+                        offset,
+                        offset,
+                        offset,
+                        1,
+                        2
+                    );
+                    vec4 badFetch = texelFetch(colorMap, pixel, 0, 1);
+                    vec4 badFetchSampler = texelFetch(
+                        colorMap,
+                        linearSampler,
+                        pixel,
+                        0,
+                        1
+                    );
+                    vec4 badFetchOffset = texelFetchOffset(
+                        colorMap,
+                        pixel,
+                        0,
+                        offset,
+                        1
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        for warning in [
+            "; WARNING: textureLod accepts only texture, optional sampler, coordinate, and LOD operands",
+            "; WARNING: textureLodOffset accepts only texture, optional sampler, coordinate, and LOD and offset operands",
+            "; WARNING: textureGrad accepts only texture, optional sampler, coordinate, and dx and dy gradient operands",
+            "; WARNING: textureGradOffset accepts only texture, optional sampler, coordinate, and dx and dy gradient and offset operands",
+            "; WARNING: textureOffset accepts only texture, optional sampler, coordinate, offset, and optional bias operands",
+            "; WARNING: textureGather accepts only texture, optional sampler, coordinate, and optional component operands",
+            "; WARNING: textureGatherOffset accepts only texture, optional sampler, coordinate, offset, and optional component operands",
+            "; WARNING: textureGatherOffsets accepts only texture, optional sampler, coordinate, and one offsets value or four offsets and optional component operands",
+            "; WARNING: texelFetch accepts only texture, optional sampler, coordinate, and LOD/sample operands",
+            "; WARNING: texelFetchOffset accepts only texture, optional sampler, coordinate, and LOD/sample and offset operands",
+        ]:
+            assert warning in spv_code
+
+        assert (
+            spv_code.count(
+                "; WARNING: textureLod accepts only texture, optional sampler, coordinate, and LOD operands"
+            )
+            == 2
+        )
+        assert (
+            spv_code.count(
+                "; WARNING: textureGatherOffsets accepts only texture, optional sampler, coordinate, and one offsets value or four offsets and optional component operands"
+            )
+            == 2
+        )
+        assert (
+            spv_code.count(
+                "; WARNING: texelFetch accepts only texture, optional sampler, coordinate, and LOD/sample operands"
+            )
+            == 2
+        )
+        for opcode in [
+            "OpImageSampleExplicitLod",
+            "OpImageSampleImplicitLod",
+            "OpImageGather",
+            "OpImageFetch",
+        ]:
+            assert opcode not in spv_code
+        assert "OpCapability ImageGatherExtended" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_literal_texture_offsets_emit_spirv_const_offset_operands(self):
         source_code = """
@@ -7539,6 +10707,195 @@ class TestVulkanSPIRVCodeGen:
         assert "textureSize(" not in spv_code
         assert "imageSize(" not in spv_code
         assert "WARNING" not in spv_code
+
+    def test_dynamic_resource_array_parameters_reject_conflicting_sizes(self):
+        source_code = """
+        shader Resources {
+            sampler2d smallGrid[2][3];
+            sampler2d largeGrid[4][3];
+
+            vec4 sampleGrid(
+                sampler2d grids[][3],
+                int layer,
+                int slot,
+                vec2 uv
+            ) {
+                return texture(grids[layer][slot], uv);
+            }
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    vec4 small = sampleGrid(smallGrid, 1, 2, uv);
+                    vec4 large = sampleGrid(largeGrid, 1, 2, uv);
+                }
+            }
+        }
+        """
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                "Conflicting SPIR-V resource array parameter sizes for "
+                "'grids': sampler2D\\[2\\]\\[3\\] and sampler2D\\[4\\]\\[3\\]"
+            ),
+        ):
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    @pytest.mark.parametrize(
+        ("source_code", "expected_message"),
+        [
+            (
+                """
+                shader Resources {
+                    sampler2d badGrid[2][4];
+
+                    vec4 sampleGrid(
+                        sampler2d grids[][3],
+                        int layer,
+                        int slot,
+                        vec2 uv
+                    ) {
+                        return texture(grids[layer][slot], uv);
+                    }
+
+                    compute {
+                        void main() {
+                            vec2 uv = vec2(0.5, 0.25);
+                            vec4 color = sampleGrid(badGrid, 1, 2, uv);
+                        }
+                    }
+                }
+                """,
+                (
+                    "Incompatible SPIR-V resource array parameter shape for "
+                    "'grids': expected sampler2D\\[\\]\\[3\\], "
+                    "got sampler2D\\[2\\]\\[4\\]"
+                ),
+            ),
+            (
+                """
+                shader Resources {
+                    sampler2d singleTexture;
+
+                    vec4 sampleGrid(
+                        sampler2d grids[][3],
+                        int layer,
+                        int slot,
+                        vec2 uv
+                    ) {
+                        return texture(grids[layer][slot], uv);
+                    }
+
+                    compute {
+                        void main() {
+                            vec2 uv = vec2(0.5, 0.25);
+                            vec4 color = sampleGrid(singleTexture, 0, 0, uv);
+                        }
+                    }
+                }
+                """,
+                (
+                    "Incompatible SPIR-V resource array parameter shape for "
+                    "'grids': expected sampler2D\\[\\]\\[3\\], got sampler2D"
+                ),
+            ),
+            (
+                """
+                shader Resources {
+                    image2D images @rgba16f[2][3];
+
+                    vec4 sampleGrid(
+                        sampler2d grids[][3],
+                        int layer,
+                        int slot,
+                        vec2 uv
+                    ) {
+                        return texture(grids[layer][slot], uv);
+                    }
+
+                    compute {
+                        void main() {
+                            vec2 uv = vec2(0.5, 0.25);
+                            vec4 color = sampleGrid(images, 1, 2, uv);
+                        }
+                    }
+                }
+                """,
+                (
+                    "Incompatible SPIR-V resource array parameter shape for "
+                    "'grids': expected sampler2D\\[\\]\\[3\\], "
+                    "got image2D\\[2\\]\\[3\\]"
+                ),
+            ),
+            (
+                """
+                shader Resources {
+                    vec4 sampleGrid(
+                        sampler2d grids[][3],
+                        int layer,
+                        int slot,
+                        vec2 uv
+                    ) {
+                        return texture(grids[layer][slot], uv);
+                    }
+
+                    vec4 forwardWrongShape(
+                        sampler2d grids[][4],
+                        int layer,
+                        int slot,
+                        vec2 uv
+                    ) {
+                        return sampleGrid(grids, layer, slot, uv);
+                    }
+
+                    compute {
+                        void main() {
+                        }
+                    }
+                }
+                """,
+                (
+                    "Incompatible SPIR-V resource array parameter shape for "
+                    "'grids': expected sampler2D\\[\\]\\[3\\], "
+                    "got sampler2D\\[\\]\\[4\\]"
+                ),
+            ),
+            (
+                """
+                shader Resources {
+                    image2D badImages @rgba16f[2][4];
+
+                    vec4 readGrid(
+                        image2D images[][3] @rgba16f,
+                        int layer,
+                        int slot,
+                        ivec2 pixel
+                    ) {
+                        return imageLoad(images[layer][slot], pixel);
+                    }
+
+                    compute {
+                        void main() {
+                            ivec2 pixel = ivec2(0, 0);
+                            vec4 color = readGrid(badImages, 1, 2, pixel);
+                        }
+                    }
+                }
+                """,
+                (
+                    "Incompatible SPIR-V resource array parameter shape for "
+                    "'images': expected image2D\\[\\]\\[3\\], "
+                    "got image2D\\[2\\]\\[4\\]"
+                ),
+            ),
+        ],
+    )
+    def test_dynamic_resource_array_parameters_reject_incompatible_shapes(
+        self, source_code, expected_message
+    ):
+        with pytest.raises(ValueError, match=expected_message):
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
     def test_forwarded_dynamic_resource_arrays_use_spirv_fixed_pointer_signatures(self):
         source_code = """
@@ -10698,6 +14055,87 @@ class TestVulkanSPIRVCodeGen:
         assert "textureQueryLod" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_resource_queries_reject_malformed_operands(self, tmp_path):
+        source_code = """
+        shader Resources {
+            sampler2d colorMap;
+            sampler2dms msTex;
+            image2D colorImage @rgba16f;
+            image2DMS msColor @rgba16f;
+            sampler querySampler;
+
+            compute {
+                void main() {
+                    int lodValue = 1;
+                    float floatLod = 1.0;
+                    vec2 vectorLod = vec2(0.0, 1.0);
+                    float scalarCoord = 0.5;
+                    ivec2 intCoord = ivec2(1, 2);
+                    vec2 uv = vec2(0.25, 0.75);
+
+                    ivec2 badTextureVectorLod = textureSize(colorMap, vectorLod);
+                    ivec2 badTextureFloatLod = textureSize(colorMap, floatLod);
+                    ivec2 badTextureResource = textureSize(colorImage, lodValue);
+                    ivec2 badImageResource = imageSize(colorMap);
+                    ivec2 badImageArity = imageSize(colorImage, lodValue);
+                    int badTextureSamplesArity = textureSamples(msTex, lodValue);
+                    int badTextureSamplesResource = textureSamples(colorMap);
+                    int badImageSamplesResource = imageSamples(colorImage);
+                    int badTextureSamplesKind = textureSamples(msColor);
+                    int badImageSamplesKind = imageSamples(msTex);
+                    int badLevelsArity = textureQueryLevels(colorMap, lodValue);
+                    int badLevelsKind = textureQueryLevels(colorImage);
+                    int badLevelsMs = textureQueryLevels(msTex);
+                    vec2 badLodMissingCoord = textureQueryLod(
+                        colorMap,
+                        querySampler
+                    );
+                    vec2 badLodExtra = textureQueryLod(colorMap, uv, uv);
+                    vec2 badLodKind = textureQueryLod(colorImage, uv);
+                    vec2 badLodScalar = textureQueryLod(colorMap, scalarCoord);
+                    vec2 badLodInt = textureQueryLod(colorMap, intCoord);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        for warning in [
+            "; WARNING: textureSize requires a scalar integer LOD operand",
+            "; WARNING: textureSize requires a sampled_image operand",
+            "; WARNING: imageSize requires a storage_image operand",
+            "; WARNING: imageSize accepts only an image operand",
+            "; WARNING: textureSamples accepts only an image operand",
+            "; WARNING: textureSamples requires a multisample 2D image",
+            "; WARNING: imageSamples requires a multisample 2D image",
+            "; WARNING: textureSamples requires a sampled_image operand",
+            "; WARNING: imageSamples requires a storage_image operand",
+            "; WARNING: textureQueryLevels accepts only a texture operand",
+            "; WARNING: textureQueryLevels requires a sampled image operand",
+            "; WARNING: textureQueryLevels requires a non-multisample sampled image operand",
+            "; WARNING: textureQueryLod requires a coordinate operand after the sampler",
+            "; WARNING: textureQueryLod accepts only texture and coordinate operands unless the second operand is a sampler",
+            "; WARNING: textureQueryLod requires a sampled image operand",
+            "; WARNING: textureQueryLod requires a 2-component floating-point coordinate operand",
+        ]:
+            assert warning in spv_code
+
+        for opcode in [
+            "OpImageQuerySizeLod",
+            "OpImageQuerySize",
+            "OpImageQuerySamples",
+            "OpImageQueryLevels",
+            "OpImageQueryLod",
+        ]:
+            assert opcode not in spv_code
+
+        assert "OpCapability ImageQuery" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_multisample_texture_samples_query_emits_image_query_samples(self):
         source_code = """
         shader Resources {
@@ -10978,6 +14416,323 @@ class TestVulkanSPIRVCodeGen:
         assert "textureGatherCompareOffset" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_shadow_texture_compare_operations_reject_malformed_operands(
+        self, tmp_path
+    ):
+        source_code = """
+        shader Resources {
+            sampler2d colorMap;
+            sampler2dshadow shadowMap;
+            samplerCubeShadow cubeShadow;
+
+            compute {
+                void main() {
+                    float scalarCoord = 0.5;
+                    vec2 uv = vec2(0.25, 0.75);
+                    vec3 cubeCoord = vec3(1.0, 0.0, 0.0);
+                    vec2 vectorDepth = vec2(0.5, 0.25);
+                    vec2 vectorLod = vec2(1.0, 2.0);
+                    vec2 grad = vec2(0.1, 0.0);
+                    vec3 wideGrad = vec3(0.1, 0.0, 0.0);
+                    ivec2 offset = ivec2(1, 0);
+                    ivec3 wideOffset = ivec3(1, 0, 0);
+                    vec2 floatOffset = vec2(1.0, 0.0);
+
+                    float badResource = textureCompare(colorMap, uv, 0.5);
+                    float badCoord = textureCompare(shadowMap, scalarCoord, 0.5);
+                    float badDepth = textureCompare(shadowMap, uv, vectorDepth);
+                    float badLod = textureCompareLod(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        vectorLod
+                    );
+                    float badLodOffset = textureCompareLodOffset(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        1.0,
+                        wideOffset
+                    );
+                    float badGradX = textureCompareGrad(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        scalarCoord,
+                        grad
+                    );
+                    float badGradY = textureCompareGrad(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        grad,
+                        wideGrad
+                    );
+                    float badGradOffset = textureCompareGradOffset(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        grad,
+                        grad,
+                        wideOffset
+                    );
+                    float badOffsetFloat = textureCompareOffset(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        floatOffset
+                    );
+                    float badOffsetCube = textureCompareOffset(
+                        cubeShadow,
+                        cubeCoord,
+                        0.5,
+                        wideOffset
+                    );
+                    vec4 badGatherResource = textureGatherCompare(
+                        colorMap,
+                        uv,
+                        0.5
+                    );
+                    vec4 badGatherCoord = textureGatherCompare(
+                        shadowMap,
+                        scalarCoord,
+                        0.5
+                    );
+                    vec4 badGatherDepth = textureGatherCompare(
+                        shadowMap,
+                        uv,
+                        vectorDepth
+                    );
+                    vec4 badGatherOffset = textureGatherCompareOffset(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        wideOffset
+                    );
+                    vec4 badGatherCubeOffset = textureGatherCompareOffset(
+                        cubeShadow,
+                        cubeCoord,
+                        0.5,
+                        wideOffset
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        for warning in [
+            "; WARNING: textureCompare requires a shadow sampled image operand",
+            "; WARNING: textureCompare requires a 2-component floating-point coordinate operand",
+            "; WARNING: textureCompare requires a scalar floating-point depth operand",
+            "; WARNING: textureCompareLod requires a scalar floating-point LOD operand",
+            "; WARNING: textureCompareLodOffset requires a 2-component integer offset operand",
+            "; WARNING: textureCompareGrad requires a 2-component floating-point dx gradient operand",
+            "; WARNING: textureCompareGrad requires a 2-component floating-point dy gradient operand",
+            "; WARNING: textureCompareGradOffset requires a 2-component integer offset operand",
+            "; WARNING: textureCompareOffset requires a 2-component integer offset operand",
+            "; WARNING: textureCompareOffset offsets are not valid for cube images",
+            "; WARNING: textureGatherCompare requires a shadow sampled image operand",
+            "; WARNING: textureGatherCompare requires a 2-component floating-point coordinate operand",
+            "; WARNING: textureGatherCompare requires a scalar floating-point depth operand",
+            "; WARNING: textureGatherCompareOffset requires a 2-component integer offset operand",
+            "; WARNING: textureGatherCompareOffset offsets are not valid for cube images",
+        ]:
+            assert warning in spv_code
+
+        for opcode in [
+            "OpImageSampleDrefExplicitLod",
+            "OpImageSampleDrefImplicitLod",
+            "OpImageDrefGather",
+        ]:
+            assert opcode not in spv_code
+        assert "OpCapability ImageGatherExtended" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_shadow_texture_compare_operations_reject_excess_operands(self, tmp_path):
+        source_code = """
+        shader Resources {
+            sampler2dshadow shadowMap;
+            sampler compareSampler;
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.25, 0.75);
+                    vec3 uvq = vec3(0.25, 0.75, 2.0);
+                    vec2 grad = vec2(0.1, 0.0);
+                    ivec2 offset = ivec2(1, 0);
+
+                    float compareExtra = textureCompare(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        1.0
+                    );
+                    float compareSamplerExtra = textureCompare(
+                        shadowMap,
+                        compareSampler,
+                        uv,
+                        0.5,
+                        1.0
+                    );
+                    float compareOffsetExtra = textureCompareOffset(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        offset,
+                        1.0
+                    );
+                    float compareLodExtra = textureCompareLod(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        1.0,
+                        2.0
+                    );
+                    float compareLodOffsetExtra = textureCompareLodOffset(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        1.0,
+                        offset,
+                        2.0
+                    );
+                    float compareGradExtra = textureCompareGrad(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        grad,
+                        grad,
+                        1.0
+                    );
+                    float compareGradOffsetExtra = textureCompareGradOffset(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        grad,
+                        grad,
+                        offset,
+                        1.0
+                    );
+                    vec4 gatherCompareExtra = textureGatherCompare(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        1.0
+                    );
+                    vec4 gatherCompareOffsetExtra = textureGatherCompareOffset(
+                        shadowMap,
+                        uv,
+                        0.5,
+                        offset,
+                        1.0
+                    );
+                    float compareProjExtra = textureCompareProj(
+                        shadowMap,
+                        uvq,
+                        0.5,
+                        1.0
+                    );
+                    float compareProjSamplerExtra = textureCompareProj(
+                        shadowMap,
+                        compareSampler,
+                        uvq,
+                        0.5,
+                        1.0
+                    );
+                    float compareProjOffsetExtra = textureCompareProjOffset(
+                        shadowMap,
+                        uvq,
+                        0.5,
+                        offset,
+                        1.0
+                    );
+                    float compareProjLodExtra = textureCompareProjLod(
+                        shadowMap,
+                        uvq,
+                        0.5,
+                        1.0,
+                        2.0
+                    );
+                    float compareProjLodOffsetExtra = textureCompareProjLodOffset(
+                        shadowMap,
+                        uvq,
+                        0.5,
+                        1.0,
+                        offset,
+                        2.0
+                    );
+                    float compareProjGradExtra = textureCompareProjGrad(
+                        shadowMap,
+                        uvq,
+                        0.5,
+                        grad,
+                        grad,
+                        1.0
+                    );
+                    float compareProjGradOffsetExtra = textureCompareProjGradOffset(
+                        shadowMap,
+                        uvq,
+                        0.5,
+                        grad,
+                        grad,
+                        offset,
+                        1.0
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        for warning in [
+            "; WARNING: textureCompare accepts only texture, optional sampler, coordinate, and depth operands",
+            "; WARNING: textureCompareOffset accepts only texture, optional sampler, coordinate, depth, and offset operands",
+            "; WARNING: textureCompareLod accepts only texture, optional sampler, coordinate, depth, and LOD operands",
+            "; WARNING: textureCompareLodOffset accepts only texture, optional sampler, coordinate, depth, and LOD and offset operands",
+            "; WARNING: textureCompareGrad accepts only texture, optional sampler, coordinate, depth, and dx and dy gradient operands",
+            "; WARNING: textureCompareGradOffset accepts only texture, optional sampler, coordinate, depth, and dx and dy gradient and offset operands",
+            "; WARNING: textureGatherCompare accepts only texture, optional sampler, coordinate, and depth operands",
+            "; WARNING: textureGatherCompareOffset accepts only texture, optional sampler, coordinate, depth, and offset operands",
+            "; WARNING: textureCompareProj accepts only texture, optional sampler, coordinate, and depth operands",
+            "; WARNING: textureCompareProjOffset accepts only texture, optional sampler, coordinate, depth, and offset operands",
+            "; WARNING: textureCompareProjLod accepts only texture, optional sampler, coordinate, depth, and LOD operands",
+            "; WARNING: textureCompareProjLodOffset accepts only texture, optional sampler, coordinate, depth, and LOD and offset operands",
+            "; WARNING: textureCompareProjGrad accepts only texture, optional sampler, coordinate, depth, and dx and dy gradient operands",
+            "; WARNING: textureCompareProjGradOffset accepts only texture, optional sampler, coordinate, depth, and dx and dy gradient and offset operands",
+        ]:
+            assert warning in spv_code
+
+        assert (
+            spv_code.count(
+                "; WARNING: textureCompare accepts only texture, optional sampler, coordinate, and depth operands"
+            )
+            == 2
+        )
+        assert (
+            spv_code.count(
+                "; WARNING: textureCompareProj accepts only texture, optional sampler, coordinate, and depth operands"
+            )
+            == 2
+        )
+        for opcode in [
+            "OpImageSampleDrefExplicitLod",
+            "OpImageSampleDrefImplicitLod",
+            "OpImageDrefGather",
+            "OpFDiv",
+        ]:
+            assert opcode not in spv_code
+        assert "OpCapability ImageGatherExtended" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_projected_texture_operations_emit_divided_spirv_coordinates(self):
         source_code = """
         shader Resources {
@@ -11058,6 +14813,202 @@ class TestVulkanSPIRVCodeGen:
         ]:
             assert function_name not in spv_code
         assert "WARNING" not in spv_code
+
+    def test_projected_texture_operations_reject_malformed_operands(self, tmp_path):
+        source_code = """
+        shader Resources {
+            sampler2d colorMap;
+            sampler2darray layerMap;
+            samplerCube cubeMap;
+            samplerCubeArray cubeArrayMap;
+
+            compute {
+                void main() {
+                    float scalarCoord = 0.5;
+                    vec2 shortCoord = vec2(0.25, 0.75);
+                    ivec3 integerCoord = ivec3(1, 2, 1);
+                    vec3 uvq = vec3(0.25, 0.75, 2.0);
+                    vec4 cubeCoord = vec4(1.0, 0.0, 0.0, 2.0);
+                    vec4 cubeArrayCoord = vec4(1.0, 0.0, 0.0, 1.0);
+                    vec2 vectorLod = vec2(1.0, 2.0);
+                    vec2 grad = vec2(0.1, 0.0);
+                    vec3 wideGrad = vec3(0.1, 0.0, 0.0);
+                    ivec3 wideOffset = ivec3(1, 0, 0);
+                    vec2 floatOffset = vec2(1.0, 0.0);
+
+                    vec4 badScalarCoord = textureProj(colorMap, scalarCoord);
+                    vec4 badIntegerCoord = textureProj(colorMap, integerCoord);
+                    vec4 badShortCoord = textureProj(colorMap, shortCoord);
+                    vec4 badArrayProjection = textureProj(layerMap, uvq);
+                    vec4 badCubeArrayProjection = textureProj(
+                        cubeArrayMap,
+                        cubeArrayCoord
+                    );
+                    vec4 badLod = textureProjLod(colorMap, uvq, vectorLod);
+                    vec4 badLodOffset = textureProjLodOffset(
+                        colorMap,
+                        uvq,
+                        1.0,
+                        wideOffset
+                    );
+                    vec4 badGradX = textureProjGrad(
+                        colorMap,
+                        uvq,
+                        scalarCoord,
+                        grad
+                    );
+                    vec4 badGradY = textureProjGrad(
+                        colorMap,
+                        uvq,
+                        grad,
+                        wideGrad
+                    );
+                    vec4 badGradOffset = textureProjGradOffset(
+                        colorMap,
+                        uvq,
+                        grad,
+                        grad,
+                        wideOffset
+                    );
+                    vec4 badOffsetFloat = textureProjOffset(
+                        colorMap,
+                        uvq,
+                        floatOffset
+                    );
+                    vec4 badOffsetCube = textureProjOffset(
+                        cubeMap,
+                        cubeCoord,
+                        wideOffset
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        for warning in [
+            "; WARNING: textureProj requires a projected vector coordinate",
+            "; WARNING: textureProj requires a floating-point projected coordinate",
+            "; WARNING: textureProj requires a projection component after the texture coordinate",
+            "; WARNING: textureProjLod requires a scalar floating-point LOD operand",
+            "; WARNING: textureProjLodOffset requires a 2-component integer offset operand",
+            "; WARNING: textureProjGrad requires a 2-component floating-point dx gradient operand",
+            "; WARNING: textureProjGrad requires a 2-component floating-point dy gradient operand",
+            "; WARNING: textureProjGradOffset requires a 2-component integer offset operand",
+            "; WARNING: textureProjOffset requires a 2-component integer offset operand",
+            "; WARNING: textureProjOffset offsets are not valid for cube images",
+        ]:
+            assert warning in spv_code
+
+        assert (
+            spv_code.count(
+                "requires a projection component after the texture coordinate"
+            )
+            >= 3
+        )
+        for opcode in [
+            "OpImageSampleExplicitLod",
+            "OpImageSampleImplicitLod",
+            "OpFDiv",
+        ]:
+            assert opcode not in spv_code
+        assert "OpCapability ImageGatherExtended" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_projected_texture_operations_reject_excess_operands(self, tmp_path):
+        source_code = """
+        shader Resources {
+            sampler2d colorMap;
+            sampler linearSampler;
+
+            compute {
+                void main() {
+                    vec3 uvq = vec3(0.25, 0.75, 2.0);
+                    vec2 grad = vec2(0.1, 0.0);
+                    ivec2 offset = ivec2(1, 0);
+
+                    vec4 badProj = textureProj(colorMap, uvq, 0.5, 1.0);
+                    vec4 badProjSampler = textureProj(
+                        colorMap,
+                        linearSampler,
+                        uvq,
+                        0.5,
+                        1.0
+                    );
+                    vec4 badProjOffset = textureProjOffset(
+                        colorMap,
+                        uvq,
+                        offset,
+                        0.25,
+                        1.0
+                    );
+                    vec4 badProjLod = textureProjLod(
+                        colorMap,
+                        uvq,
+                        1.0,
+                        2.0
+                    );
+                    vec4 badProjLodOffset = textureProjLodOffset(
+                        colorMap,
+                        uvq,
+                        1.0,
+                        offset,
+                        2.0
+                    );
+                    vec4 badProjGrad = textureProjGrad(
+                        colorMap,
+                        uvq,
+                        grad,
+                        grad,
+                        0.5
+                    );
+                    vec4 badProjGradOffset = textureProjGradOffset(
+                        colorMap,
+                        uvq,
+                        grad,
+                        grad,
+                        offset,
+                        0.5
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        for warning in [
+            "; WARNING: textureProj accepts only texture, optional sampler, coordinate, and optional bias operands",
+            "; WARNING: textureProjOffset accepts only texture, optional sampler, coordinate, and offset and optional bias operands",
+            "; WARNING: textureProjLod accepts only texture, optional sampler, coordinate, and LOD operands",
+            "; WARNING: textureProjLodOffset accepts only texture, optional sampler, coordinate, and LOD and offset operands",
+            "; WARNING: textureProjGrad accepts only texture, optional sampler, coordinate, and dx and dy gradient operands",
+            "; WARNING: textureProjGradOffset accepts only texture, optional sampler, coordinate, and dx and dy gradient and offset operands",
+        ]:
+            assert warning in spv_code
+
+        assert (
+            spv_code.count(
+                "textureProj accepts only texture, optional sampler, "
+                "coordinate, and optional bias operands"
+            )
+            == 2
+        )
+        for opcode in [
+            "OpImageSampleExplicitLod",
+            "OpImageSampleImplicitLod",
+            "OpFDiv",
+        ]:
+            assert opcode not in spv_code
+        assert "OpCapability ImageGatherExtended" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_projected_shadow_compare_operations_emit_dref_sampling(self):
         source_code = """
@@ -11145,6 +15096,159 @@ class TestVulkanSPIRVCodeGen:
         ]:
             assert function_name not in spv_code
         assert "WARNING" not in spv_code
+
+    def test_projected_shadow_compare_operations_reject_malformed_operands(
+        self, tmp_path
+    ):
+        source_code = """
+        shader Resources {
+            sampler2d colorMap;
+            sampler2dshadow shadowMap;
+            sampler2darrayshadow shadowArray;
+            samplerCubeShadow cubeShadow;
+            samplerCubeArrayShadow cubeArrayShadow;
+
+            compute {
+                void main() {
+                    float scalarCoord = 0.5;
+                    vec2 shortCoord = vec2(0.25, 0.75);
+                    ivec3 integerCoord = ivec3(1, 2, 1);
+                    vec3 uvq = vec3(0.25, 0.75, 2.0);
+                    vec4 cubeCoord = vec4(1.0, 0.0, 0.0, 2.0);
+                    vec4 cubeArrayCoord = vec4(1.0, 0.0, 0.0, 1.0);
+                    vec2 vectorDepth = vec2(0.5, 0.25);
+                    vec2 vectorLod = vec2(1.0, 2.0);
+                    vec2 grad = vec2(0.1, 0.0);
+                    vec3 wideGrad = vec3(0.1, 0.0, 0.0);
+                    ivec2 offset = ivec2(1, 0);
+                    ivec3 wideOffset = ivec3(1, 0, 0);
+                    vec2 floatOffset = vec2(1.0, 0.0);
+
+                    float badResource = textureCompareProj(colorMap, uvq, 0.5);
+                    float badScalarCoord = textureCompareProj(
+                        shadowMap,
+                        scalarCoord,
+                        0.5
+                    );
+                    float badIntegerCoord = textureCompareProj(
+                        shadowMap,
+                        integerCoord,
+                        0.5
+                    );
+                    float badShortCoord = textureCompareProj(
+                        shadowMap,
+                        shortCoord,
+                        0.5
+                    );
+                    float badDepth = textureCompareProj(
+                        shadowMap,
+                        uvq,
+                        vectorDepth
+                    );
+                    float badLod = textureCompareProjLod(
+                        shadowMap,
+                        uvq,
+                        0.5,
+                        vectorLod
+                    );
+                    float badLodOffset = textureCompareProjLodOffset(
+                        shadowMap,
+                        uvq,
+                        0.5,
+                        1.0,
+                        wideOffset
+                    );
+                    float badGradX = textureCompareProjGrad(
+                        shadowMap,
+                        uvq,
+                        0.5,
+                        scalarCoord,
+                        grad
+                    );
+                    float badGradY = textureCompareProjGrad(
+                        shadowMap,
+                        uvq,
+                        0.5,
+                        grad,
+                        wideGrad
+                    );
+                    float badGradOffset = textureCompareProjGradOffset(
+                        shadowMap,
+                        uvq,
+                        0.5,
+                        grad,
+                        grad,
+                        wideOffset
+                    );
+                    float badOffsetFloat = textureCompareProjOffset(
+                        shadowMap,
+                        uvq,
+                        0.5,
+                        floatOffset
+                    );
+                    float badOffsetCube = textureCompareProjOffset(
+                        cubeShadow,
+                        cubeCoord,
+                        0.5,
+                        wideOffset
+                    );
+                    float badArrayProjection = textureCompareProj(
+                        shadowArray,
+                        uvq,
+                        0.5
+                    );
+                    float badCubeArrayProjection = textureCompareProj(
+                        cubeArrayShadow,
+                        cubeArrayCoord,
+                        0.5
+                    );
+                    float badValidOffsetButDepth = textureCompareProjOffset(
+                        shadowMap,
+                        uvq,
+                        vectorDepth,
+                        offset
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        for warning in [
+            "; WARNING: textureCompareProj requires a shadow sampled image operand",
+            "; WARNING: textureCompareProj requires a projected vector coordinate",
+            "; WARNING: textureCompareProj requires a floating-point projected coordinate",
+            "; WARNING: textureCompareProj requires a projection component after the texture coordinate",
+            "; WARNING: textureCompareProj requires a scalar floating-point depth operand",
+            "; WARNING: textureCompareProjLod requires a scalar floating-point LOD operand",
+            "; WARNING: textureCompareProjLodOffset requires a 2-component integer offset operand",
+            "; WARNING: textureCompareProjGrad requires a 2-component floating-point dx gradient operand",
+            "; WARNING: textureCompareProjGrad requires a 2-component floating-point dy gradient operand",
+            "; WARNING: textureCompareProjGradOffset requires a 2-component integer offset operand",
+            "; WARNING: textureCompareProjOffset requires a 2-component integer offset operand",
+            "; WARNING: textureCompareProjOffset offsets are not valid for cube images",
+            "; WARNING: textureCompareProjOffset requires a scalar floating-point depth operand",
+        ]:
+            assert warning in spv_code
+
+        assert (
+            spv_code.count(
+                "requires a projection component after the texture coordinate"
+            )
+            >= 3
+        )
+        for opcode in [
+            "OpImageSampleDrefExplicitLod",
+            "OpImageSampleDrefImplicitLod",
+            "OpFDiv",
+        ]:
+            assert opcode not in spv_code
+        assert "OpCapability ImageGatherExtended" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_projected_cube_texture_operations_and_diagnostics(self):
         source_code = """
@@ -11318,6 +15422,13 @@ class TestVulkanSPIRVCodeGen:
                         uvq,
                         0.5
                     );
+                    vec4 projectedOffsetBias = textureProjOffset(
+                        colorMap,
+                        linearSampler,
+                        uvq,
+                        ivec2(1, 0),
+                        0.25
+                    );
                 }
             }
         }
@@ -11337,6 +15448,10 @@ class TestVulkanSPIRVCodeGen:
         )
         assert (
             "WARNING: textureProj bias is not valid for explicit-lod SPIR-V sampling"
+            in spv_code
+        )
+        assert (
+            "WARNING: textureProjOffset bias is not valid for explicit-lod SPIR-V sampling"
             in spv_code
         )
         assert "OpTexture" not in spv_code

@@ -128,8 +128,8 @@ class HLSLToCrossGLConverter:
             "RWBuffer": "imageBuffer",
             "StructuredBuffer": "buffer",
             "RWStructuredBuffer": "buffer",
-            "ByteAddressBuffer": "buffer",
-            "RWByteAddressBuffer": "buffer",
+            "ByteAddressBuffer": "ByteAddressBuffer",
+            "RWByteAddressBuffer": "RWByteAddressBuffer",
             "RasterizerOrderedByteAddressBuffer": "RWByteAddressBuffer",
             "AppendStructuredBuffer": "buffer",
             "ConsumeStructuredBuffer": "buffer",
@@ -154,6 +154,23 @@ class HLSLToCrossGLConverter:
         self.function_map = {
             "lerp": "mix",
             "rsqrt": "inverseSqrt",
+            "EvaluateAttributeAtSample": "interpolateAtSample",
+            "EvaluateAttributeSnapped": "interpolateAtOffset",
+            "EvaluateAttributeCentroid": "interpolateAtCentroid",
+            "GroupMemoryBarrierWithGroupSync": "workgroupBarrier",
+            "GroupMemoryBarrier": "groupMemoryBarrier",
+            "DeviceMemoryBarrier": "deviceMemoryBarrier",
+            "AllMemoryBarrier": "allMemoryBarrier",
+        }
+        self.function_statement_sequences = {
+            "DeviceMemoryBarrierWithGroupSync": (
+                "deviceMemoryBarrier",
+                "workgroupBarrier",
+            ),
+            "AllMemoryBarrierWithGroupSync": (
+                "allMemoryBarrier",
+                "workgroupBarrier",
+            ),
         }
         self.interlocked_map = {
             "InterlockedAdd": "atomicAdd",
@@ -171,6 +188,9 @@ class HLSLToCrossGLConverter:
             "SampleGrad": "textureGrad",
             "SampleBias": "texture",
             "SampleCmp": "textureCompare",
+            "SampleCmpLevel": "textureCompareLod",
+            "SampleCmpGrad": "textureCompareGrad",
+            "SampleCmpBias": "textureCompare",
             "SampleCmpLevelZero": "textureCompare",
             "Load": "texelFetch",
             "Gather": "textureGather",
@@ -182,6 +202,12 @@ class HLSLToCrossGLConverter:
             "GatherGreen": "1",
             "GatherBlue": "2",
             "GatherAlpha": "3",
+        }
+        self.texture_gather_compare_component_map = {
+            "GatherCmpRed": "0",
+            "GatherCmpGreen": "1",
+            "GatherCmpBlue": "2",
+            "GatherCmpAlpha": "3",
         }
         self.buffer_method_map = {
             "Load": "buffer_load",
@@ -312,6 +338,7 @@ class HLSLToCrossGLConverter:
         self.global_resource_array_dims = {}
         self.current_variable_types = {}
         self.current_resource_array_dims = {}
+        self.struct_member_types = {}
         self.suppress_storage_image_index_lowering = False
 
     @staticmethod
@@ -395,7 +422,9 @@ class HLSLToCrossGLConverter:
         if member == "GetDimensions":
             texture_function = self.texture_method_map[member]
             buffer_function = self.buffer_method_map[member]
-            use_buffer = arg_count is not None and arg_count <= 1
+            use_buffer = self.is_buffer_resource_type(resource_type)
+            if resource_type is None:
+                use_buffer = arg_count is not None and arg_count <= 1
             return {
                 "member": member,
                 "function": buffer_function if use_buffer else texture_function,
@@ -405,6 +434,68 @@ class HLSLToCrossGLConverter:
                 "usage": "regular" if member == "Load" else None,
                 "buffer_when_max_args": 1,
             }
+        if member in {"CalculateLevelOfDetail", "CalculateLevelOfDetailUnclamped"}:
+            resource_base = self.raw_type_base(resource_type)
+            diagnostic_reason = None
+            if arg_count != 2:
+                diagnostic_reason = "expected sampler and coordinate arguments"
+            elif resource_base and self.is_multisample_texture_type(resource_type):
+                diagnostic_reason = f"{member} is unavailable for multisample textures"
+            elif resource_base and (
+                self.is_rw_texture_type(resource_type)
+                or self.is_buffer_resource_type(resource_type)
+                or not resource_base.startswith("Texture")
+            ):
+                diagnostic_reason = f"{member} is only available on sampled textures"
+
+            descriptor = {
+                "member": member,
+                "function": "textureQueryLod",
+                "texture_function": "textureQueryLod",
+                "buffer_function": None,
+                "component": None,
+                "usage": None if diagnostic_reason else "regular",
+                "buffer_when_max_args": None,
+                "result_component": (
+                    ".x" if member == "CalculateLevelOfDetailUnclamped" else ".y"
+                ),
+            }
+            if resource_type is not None:
+                descriptor["resource_type"] = resource_type
+            if diagnostic_reason:
+                descriptor["diagnostic_reason"] = diagnostic_reason
+                descriptor["fallback_expression"] = "0.0"
+            return descriptor
+        if member == "GetSamplePosition":
+            resource_base = self.raw_type_base(resource_type)
+            diagnostic_reason = None
+            if arg_count != 1:
+                diagnostic_reason = "expected sample-index argument"
+            elif resource_base and resource_base not in {
+                "Texture2DMS",
+                "Texture2DMSArray",
+            }:
+                diagnostic_reason = (
+                    "GetSamplePosition is only available on sampled multisample "
+                    "textures"
+                )
+
+            descriptor = {
+                "member": member,
+                "function": "textureSamplePosition",
+                "texture_function": "textureSamplePosition",
+                "buffer_function": None,
+                "component": None,
+                "usage": None if diagnostic_reason else "regular",
+                "buffer_when_max_args": None,
+                "diagnostic_label": "texture sample-position query",
+            }
+            if resource_type is not None:
+                descriptor["resource_type"] = resource_type
+            if diagnostic_reason:
+                descriptor["diagnostic_reason"] = diagnostic_reason
+                descriptor["fallback_expression"] = "vec2(0.0, 0.0)"
+            return descriptor
         if member in self.texture_gather_component_map:
             dropped_parameters = []
             if cube_family_resource and arg_count == 3:
@@ -432,6 +523,44 @@ class HLSLToCrossGLConverter:
                 },
                 dropped_parameters,
             )
+        if member in self.texture_gather_compare_component_map:
+            component = self.texture_gather_compare_component_map[member]
+            descriptor = {
+                "member": member,
+                "function": "textureGatherCompare",
+                "texture_function": "textureGatherCompare",
+                "buffer_function": None,
+                "component": None,
+                "usage": "comparison",
+                "buffer_when_max_args": None,
+                "diagnostic_label": "texture gather-compare component",
+            }
+            if resource_type is not None:
+                descriptor["resource_type"] = resource_type
+            if component != "0":
+                descriptor["diagnostic_reason"] = (
+                    f"{member} requires a compare-gather component selector; "
+                    "CrossGL only represents the default/red compare gather"
+                )
+                descriptor["fallback_expression"] = "vec4(0.0)"
+                return descriptor
+            if arg_count in {7, 8}:
+                descriptor["diagnostic_reason"] = (
+                    "GatherCmpRed four-offset overload has no CrossGL helper yet"
+                )
+                descriptor["fallback_expression"] = "vec4(0.0)"
+                return descriptor
+
+            dropped_parameters = []
+            resource_base = self.raw_type_base(resource_type)
+            if resource_base in {"TextureCube", "TextureCubeArray"} and arg_count == 4:
+                dropped_parameters.append("status output")
+            elif arg_count in {4, 5}:
+                descriptor["function"] = "textureGatherCompareOffset"
+                descriptor["texture_function"] = "textureGatherCompareOffset"
+                if arg_count == 5:
+                    dropped_parameters.append("status output")
+            return with_dropped_parameters(descriptor, dropped_parameters)
         if member in self.texture_method_map:
             texture_function = self.texture_method_map[member]
             dropped_parameters = []
@@ -514,6 +643,66 @@ class HLSLToCrossGLConverter:
                     dropped_parameters.append("LOD clamp")
                 elif arg_count == 6:
                     dropped_parameters.extend(["LOD clamp", "status output"])
+            elif member == "SampleCmpLevel" and cube_family_resource and arg_count == 5:
+                texture_function = "textureCompareLod"
+                dropped_parameters.append("status output")
+            elif member == "SampleCmpLevel" and arg_count in {5, 6}:
+                texture_function = "textureCompareLodOffset"
+                if arg_count == 6:
+                    dropped_parameters.append("status output")
+            elif (
+                member == "SampleCmpGrad"
+                and cube_family_resource
+                and arg_count
+                in {
+                    6,
+                    7,
+                }
+            ):
+                texture_function = "textureCompareGrad"
+                if arg_count == 6:
+                    dropped_parameters.append("LOD clamp")
+                else:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif member == "SampleCmpGrad" and arg_count in {6, 7, 8}:
+                texture_function = "textureCompareGradOffset"
+                if arg_count == 7:
+                    dropped_parameters.append("LOD clamp")
+                elif arg_count == 8:
+                    dropped_parameters.extend(["LOD clamp", "status output"])
+            elif (
+                member == "SampleCmpBias"
+                and cube_family_resource
+                and arg_count
+                in {
+                    4,
+                    5,
+                    6,
+                }
+            ):
+                texture_function = "textureCompare"
+                if arg_count == 4:
+                    dropped_parameters.append("LOD bias")
+                elif arg_count == 5:
+                    dropped_parameters.extend(["LOD bias", "LOD clamp"])
+                else:
+                    dropped_parameters.extend(
+                        ["LOD bias", "LOD clamp", "status output"]
+                    )
+            elif member == "SampleCmpBias" and arg_count in {4, 5, 6, 7}:
+                if arg_count == 4:
+                    texture_function = "textureCompare"
+                    dropped_parameters.append("LOD bias")
+                else:
+                    texture_function = "textureCompareOffset"
+                    if arg_count == 5:
+                        dropped_parameters.append("LOD bias")
+                    elif arg_count == 6:
+                        dropped_parameters.extend(["LOD bias", "LOD clamp"])
+                    else:
+                        dropped_parameters.extend(
+                            ["LOD bias", "LOD clamp", "status output"]
+                        )
             elif (
                 member == "SampleCmpLevelZero"
                 and cube_family_resource
@@ -541,7 +730,15 @@ class HLSLToCrossGLConverter:
                     dropped_parameters.append("status output")
             usage = (
                 "comparison"
-                if member in {"SampleCmp", "SampleCmpLevelZero", "GatherCmp"}
+                if member
+                in {
+                    "SampleCmp",
+                    "SampleCmpLevel",
+                    "SampleCmpGrad",
+                    "SampleCmpBias",
+                    "SampleCmpLevelZero",
+                    "GatherCmp",
+                }
                 else "regular"
             )
             return with_dropped_parameters(
@@ -580,13 +777,23 @@ class HLSLToCrossGLConverter:
                 "SampleGrad": "sample_grad",
                 "SampleBias": "sample_bias",
                 "SampleCmp": "sample_compare",
+                "SampleCmpLevel": "sample_compare_lod",
+                "SampleCmpGrad": "sample_compare_grad",
+                "SampleCmpBias": "sample_compare_bias",
                 "SampleCmpLevelZero": "sample_compare",
+                "CalculateLevelOfDetail": "query_lod",
+                "CalculateLevelOfDetailUnclamped": "query_lod",
+                "GetSamplePosition": "query_sample_position",
                 "Gather": "gather",
                 "GatherRed": "gather",
                 "GatherGreen": "gather",
                 "GatherBlue": "gather",
                 "GatherAlpha": "gather",
                 "GatherCmp": "gather_compare",
+                "GatherCmpRed": "gather_compare",
+                "GatherCmpGreen": "gather_compare",
+                "GatherCmpBlue": "gather_compare",
+                "GatherCmpAlpha": "gather_compare",
             }.get(member)
             return descriptor
 
@@ -616,7 +823,7 @@ class HLSLToCrossGLConverter:
         self, obj, member, rendered_args, descriptor, raw_args=None, is_main=False
     ):
         drop_trailing_args = descriptor.get("drop_trailing_args", 0)
-        if drop_trailing_args:
+        if drop_trailing_args and member != "SampleCmpBias":
             rendered_args = rendered_args[:-drop_trailing_args]
             if raw_args is not None:
                 raw_args = raw_args[:-drop_trailing_args]
@@ -636,12 +843,63 @@ class HLSLToCrossGLConverter:
         ):
             sampler, coords, bias, offset = rendered_args[:4]
             method_args = [obj, sampler, coords, offset, bias]
+        elif member == "SampleCmpBias" and descriptor["function"] == "textureCompare":
+            sampler, coords, compare = rendered_args[:3]
+            method_args = [obj, sampler, coords, compare]
+        elif (
+            member == "SampleCmpBias"
+            and descriptor["function"] == "textureCompareOffset"
+            and len(rendered_args) >= 5
+        ):
+            sampler, coords, compare, _bias, offset = rendered_args[:5]
+            method_args = [obj, sampler, coords, compare, offset]
         else:
             method_args = [obj, *rendered_args]
 
         if descriptor["component"] is not None:
             method_args.append(descriptor["component"])
         return method_args
+
+    def texture_gather_compare_red_offsets_expression(self, obj, rendered_args):
+        sampler, coord, compare, *offset_args = rendered_args[:7]
+        components = ("x", "y", "z", "w")
+        values = []
+        for offset, component in zip(offset_args, components):
+            gather = (
+                f"textureGatherCompareOffset({obj}, {sampler}, {coord}, "
+                f"{compare}, {offset})"
+            )
+            values.append(f"{gather}.{component}")
+        return f"vec4({', '.join(values)})"
+
+    def refine_texture_load_status_descriptor(self, member, args, descriptor):
+        if (
+            member != "Load"
+            or descriptor.get("diagnostic_kind") != "tiled_resource_status"
+        ):
+            return descriptor
+
+        resource_type = descriptor.get("resource_type")
+        if self.is_rw_texture_type(resource_type):
+            return descriptor
+
+        resource_base = self.raw_type_base(resource_type)
+        if not resource_base.startswith(("Texture", "FeedbackTexture")):
+            return descriptor
+
+        status_arg_count = 3 if self.is_multisample_texture_type(resource_type) else 2
+        if len(args) != status_arg_count:
+            return descriptor
+
+        status_type = self.raw_type_base(self.expression_raw_type(args[-1]))
+        if status_type != "uint":
+            return descriptor
+
+        descriptor = dict(descriptor)
+        descriptor["function"] = descriptor["texture_function"]
+        descriptor["drop_trailing_args"] = 1
+        descriptor["dropped_parameters"] = ["status output"]
+        return descriptor
 
     def texture_load_method_arguments(
         self, obj, rendered_args, descriptor, raw_args, is_main=False
@@ -705,6 +963,14 @@ class HLSLToCrossGLConverter:
         return coord, lod
 
     def resource_method_diagnostic(self, member, descriptor):
+        diagnostic_reason = descriptor.get("diagnostic_reason")
+        if diagnostic_reason:
+            resource = self.raw_type_base(descriptor.get("resource_type")) or "resource"
+            label = descriptor.get("diagnostic_label", "texture LOD query")
+            return (
+                f"/* unsupported DirectX {label} for {resource}: "
+                f"{diagnostic_reason} */"
+            )
         dropped_parameters = descriptor.get("dropped_parameters")
         if not dropped_parameters:
             return None
@@ -790,6 +1056,50 @@ class HLSLToCrossGLConverter:
             lines += "    " * indent + "@ globallycoherent\n"
         return lines
 
+    def format_storage_qualifier_prefix(self, node, allowed_qualifiers):
+        qualifiers = []
+        allowed = {str(qualifier).lower() for qualifier in allowed_qualifiers}
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            qualifier_name = str(qualifier).lower()
+            if qualifier_name in allowed:
+                qualifiers.append(qualifier_name)
+        return f"{' '.join(qualifiers)} " if qualifiers else ""
+
+    def format_inline_parameter_attributes(self, parameter):
+        mesh_role_attributes = {"mesh_payload", "vertices", "indices", "primitives"}
+        rendered = []
+        for attr in getattr(parameter, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", ""))
+            if attr_name.lower() not in mesh_role_attributes:
+                continue
+            args = getattr(attr, "args", getattr(attr, "arguments", []))
+            if args:
+                rendered_args = ", ".join(self.generate_expression(arg) for arg in args)
+                rendered.append(f"@ {attr_name}({rendered_args})")
+            else:
+                rendered.append(f"@ {attr_name}")
+        return " ".join(rendered)
+
+    def format_parameter(self, parameter):
+        prefixes = []
+        attributes = self.format_inline_parameter_attributes(parameter)
+        if attributes:
+            prefixes.append(attributes)
+            qualifier_prefix = self.format_storage_qualifier_prefix(
+                parameter, {"in", "out", "inout", "const"}
+            ).strip()
+            if qualifier_prefix:
+                prefixes.append(qualifier_prefix)
+        parameter_text = (
+            f"{self.map_variable_type(parameter)} {parameter.name}"
+            f"{self.format_array_suffixes(parameter)}"
+        )
+        semantic = self.map_semantic(parameter.semantic)
+        if semantic:
+            parameter_text += f" {semantic}"
+        prefixes.append(parameter_text)
+        return " ".join(prefixes)
+
     def record_variable_type(self, node, type_map=None, array_dim_map=None):
         name = getattr(node, "name", None)
         if not name:
@@ -812,7 +1122,78 @@ class HLSLToCrossGLConverter:
             return self.expression_base_name(expr.object)
         return None
 
+    def collect_struct_member_types(self, structs):
+        member_types = {}
+        for struct in structs or []:
+            if not isinstance(struct, StructNode):
+                continue
+            member_types[struct.name] = {
+                member.name: getattr(member, "vtype", None)
+                for member in getattr(struct, "members", []) or []
+            }
+        return member_types
+
+    def vector_swizzle_raw_type(self, type_name, swizzle):
+        if not type_name or not isinstance(swizzle, str):
+            return None
+        component_sets = ("xyzw", "rgba")
+        component_positions = None
+        for components in component_sets:
+            if all(component in components for component in swizzle):
+                component_positions = [
+                    components.index(component) for component in swizzle
+                ]
+                break
+        if component_positions is None:
+            return None
+
+        base = str(type_name).strip()
+        scalar_prefixes = (
+            "min16float",
+            "min10float",
+            "min16uint",
+            "min16int",
+            "min12int",
+            "double",
+            "float",
+            "uint",
+            "int",
+            "bool",
+        )
+        for scalar in scalar_prefixes:
+            for width in range(2, 5):
+                if base != f"{scalar}{width}":
+                    continue
+                if max(component_positions) >= width:
+                    continue
+                if len(swizzle) == 1:
+                    return scalar
+                if len(swizzle) <= 4:
+                    return f"{scalar}{len(swizzle)}"
+        return None
+
+    def member_access_raw_type(self, object_type, member):
+        if not object_type:
+            return None
+
+        object_base = str(object_type).strip()
+        if "[" in object_base:
+            object_base = object_base.split("[", 1)[0]
+
+        struct_members = self.struct_member_types.get(object_base)
+        if struct_members and member in struct_members:
+            return struct_members[member]
+
+        return self.vector_swizzle_raw_type(object_base, member)
+
     def expression_raw_type(self, expr):
+        if isinstance(expr, MemberAccessNode):
+            object_type = self.expression_raw_type(expr.object)
+            member_type = self.member_access_raw_type(object_type, expr.member)
+            return member_type if member_type is not None else object_type
+        if isinstance(expr, ArrayAccessNode):
+            return self.expression_raw_type(expr.array)
+
         name = self.expression_base_name(expr)
         if not name:
             return None
@@ -844,6 +1225,31 @@ class HLSLToCrossGLConverter:
         return self.raw_type_base(type_name).startswith(
             ("RWTexture", "RasterizerOrderedTexture")
         )
+
+    def is_multisample_texture_type(self, type_name):
+        return self.raw_type_base(type_name) in {
+            "Texture2DMS",
+            "Texture2DMSArray",
+            "RWTexture2DMS",
+            "RWTexture2DMSArray",
+            "RasterizerOrderedTexture2DMS",
+            "RasterizerOrderedTexture2DMSArray",
+        }
+
+    def is_buffer_resource_type(self, type_name):
+        return self.raw_type_base(type_name) in {
+            "Buffer",
+            "RWBuffer",
+            "StructuredBuffer",
+            "RWStructuredBuffer",
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+            "ByteAddressBuffer",
+            "RWByteAddressBuffer",
+            "RasterizerOrderedBuffer",
+            "RasterizerOrderedStructuredBuffer",
+            "RasterizerOrderedByteAddressBuffer",
+        }
 
     def is_rw_typed_buffer_type(self, type_name):
         return self.raw_type_base(type_name) in {
@@ -1270,6 +1676,7 @@ class HLSLToCrossGLConverter:
         self.global_resource_array_dims = {}
         self.current_variable_types = {}
         self.current_resource_array_dims = {}
+        self.struct_member_types = self.collect_struct_member_types(ast.structs)
         code = "shader main {\n"
         typedefs = getattr(ast, "typedefs", []) or []
         enums = getattr(ast, "enums", []) or []
@@ -1317,8 +1724,12 @@ class HLSLToCrossGLConverter:
             code += self.format_attributes(getattr(node, "attributes", []), 1)
             code += self.format_resource_qualifier_attributes(node, 1)
             code += self.format_binding_attributes(node, 1)
+            storage_prefix = self.format_storage_qualifier_prefix(node, {"groupshared"})
             array_suffix = self.format_array_suffixes(node)
-            code += f"    {self.map_variable_type(node)} {node.name}{array_suffix};\n"
+            code += (
+                f"    {storage_prefix}{self.map_variable_type(node)} "
+                f"{node.name}{array_suffix};\n"
+            )
         if ast.cbuffers:
             code += "    // Constant Buffers\n"
             code += self.generate_cbuffers(ast)
@@ -1379,11 +1790,7 @@ class HLSLToCrossGLConverter:
         self.current_resource_array_dims = dict(self.global_resource_array_dims)
         for param in func.params:
             self.record_variable_type(param)
-        params = ", ".join(
-            f"{self.map_variable_type(p)} {p.name}{self.format_array_suffixes(p)}"
-            f"{(' ' + self.map_semantic(p.semantic)) if self.map_semantic(p.semantic) else ''}"
-            for p in func.params
-        )
+        params = ", ".join(self.format_parameter(p) for p in func.params)
         semantic = self.map_semantic(func.semantic)
         semantic = f" {semantic}" if semantic else ""
         code += (
@@ -1398,6 +1805,9 @@ class HLSLToCrossGLConverter:
     def generate_function_body(self, body, indent=0, is_main=False):
         code = ""
         for stmt in body:
+            if isinstance(stmt, FunctionCallNode):
+                code += self.generate_function_call_statement(stmt, indent, is_main)
+                continue
             code += "    " * indent
             if isinstance(stmt, VariableNode):
                 array_suffix = self.format_array_suffixes(stmt, is_main)
@@ -1440,13 +1850,234 @@ class HLSLToCrossGLConverter:
                 code += "break;\n"
             elif isinstance(stmt, ContinueNode):
                 code += "continue;\n"
-            elif isinstance(stmt, FunctionCallNode):
-                code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, str):
                 code += f"{stmt};\n"
             else:
                 code += f"// Unhandled statement type: {type(stmt).__name__}\n"
         return code
+
+    def generate_function_call_statement(self, stmt, indent=0, is_main=False):
+        lowered_sequence = self.generate_function_call_statement_sequence(stmt, indent)
+        if lowered_sequence is not None:
+            return lowered_sequence
+        lowered_get_dimensions = self.generate_get_dimensions_statement(
+            stmt, indent, is_main
+        )
+        if lowered_get_dimensions is not None:
+            return lowered_get_dimensions
+        return "    " * indent + f"{self.generate_expression(stmt, is_main)};\n"
+
+    def generate_function_call_statement_sequence(self, stmt, indent=0):
+        if not isinstance(stmt.name, str):
+            return None
+        sequence = self.function_statement_sequences.get(stmt.name)
+        if sequence is None or stmt.args:
+            return None
+        indent_text = "    " * indent
+        return "".join(f"{indent_text}{func_name}();\n" for func_name in sequence)
+
+    def generate_get_dimensions_statement(self, stmt, indent=0, is_main=False):
+        if not isinstance(stmt.name, MemberAccessNode):
+            return None
+        if stmt.name.member != "GetDimensions":
+            return None
+
+        resource_type = self.expression_raw_type(stmt.name.object)
+        resource_base = self.raw_type_base(resource_type)
+        if not resource_base:
+            return None
+
+        obj = self.generate_expression(stmt.name.object, is_main)
+        rendered_args = [self.generate_expression(arg, is_main) for arg in stmt.args]
+        indent_text = "    " * indent
+
+        if self.is_buffer_resource_type(resource_type):
+            return (
+                indent_text
+                + f"buffer_dimensions({', '.join([obj, *rendered_args])});\n"
+            )
+
+        assignments = self.get_dimensions_assignments(
+            resource_base, obj, stmt.args, rendered_args, is_main
+        )
+        if assignments is None:
+            descriptor = self.resource_method_descriptor(
+                "GetDimensions", len(stmt.args), resource_type
+            )
+            function = descriptor["function"] if descriptor else "texture_dimensions"
+            diagnostic = (
+                f"/* unsupported DirectX GetDimensions overload for {resource_base}: "
+                "preserved dimension helper call */"
+            )
+            return (
+                indent_text
+                + f"{diagnostic} {function}({', '.join([obj, *rendered_args])});\n"
+            )
+        return "".join(indent_text + assignment + ";\n" for assignment in assignments)
+
+    def get_dimensions_assignments(
+        self, resource_base, obj, raw_args, rendered_args, is_main=False
+    ):
+        layout = self.get_dimensions_layout(resource_base, obj, rendered_args)
+        if layout is None:
+            return None
+
+        size_expr = layout["size_expr"]
+        component_suffixes = layout["component_suffixes"]
+        assignments = []
+        for target, suffix, arg_index in zip(
+            layout["dimension_targets"],
+            component_suffixes,
+            layout["dimension_indices"],
+        ):
+            value = f"{size_expr}{suffix}"
+            assignments.append(
+                f"{target} = {self.cast_get_dimensions_value(value, raw_args[arg_index])}"
+            )
+
+        if layout.get("levels_target") is not None:
+            value = f"textureQueryLevels({obj})"
+            assignments.append(
+                f"{layout['levels_target']} = "
+                f"{self.cast_get_dimensions_value(value, raw_args[layout['levels_index']])}"
+            )
+        if layout.get("samples_target") is not None:
+            value = f"textureSamples({obj})"
+            assignments.append(
+                f"{layout['samples_target']} = "
+                f"{self.cast_get_dimensions_value(value, raw_args[layout['samples_index']])}"
+            )
+        return assignments
+
+    def get_dimensions_layout(self, resource_base, obj, rendered_args):
+        args_count = len(rendered_args)
+        if args_count == 0:
+            return None
+
+        texture_dimensions = {
+            "Texture1D": 1,
+            "Texture1DArray": 2,
+            "Texture2D": 2,
+            "Texture2DArray": 3,
+            "Texture3D": 3,
+            "TextureCube": 2,
+            "TextureCubeArray": 3,
+            "FeedbackTexture2D": 2,
+            "FeedbackTexture2DArray": 3,
+        }
+        image_dimensions = {
+            "RWTexture1D": 1,
+            "RWTexture1DArray": 2,
+            "RWTexture2D": 2,
+            "RWTexture2DArray": 3,
+            "RWTexture3D": 3,
+            "RWTextureCube": 2,
+            "RWTextureCubeArray": 3,
+            "RasterizerOrderedTexture1D": 1,
+            "RasterizerOrderedTexture1DArray": 2,
+            "RasterizerOrderedTexture2D": 2,
+            "RasterizerOrderedTexture2DArray": 3,
+            "RasterizerOrderedTexture3D": 3,
+        }
+        multisample_dimensions = {
+            "Texture2DMS": 2,
+            "Texture2DMSArray": 3,
+            "RWTexture2DMS": 2,
+            "RWTexture2DMSArray": 3,
+            "RasterizerOrderedTexture2DMS": 2,
+            "RasterizerOrderedTexture2DMSArray": 3,
+        }
+
+        if resource_base in multisample_dimensions:
+            dimensions = multisample_dimensions[resource_base]
+            if args_count not in {dimensions, dimensions + 1}:
+                return None
+            size_function = (
+                "imageSize"
+                if resource_base.startswith(("RWTexture", "RasterizerOrderedTexture"))
+                else "textureSize"
+            )
+            return {
+                "size_expr": f"{size_function}({obj})",
+                "dimension_targets": rendered_args[:dimensions],
+                "dimension_indices": list(range(dimensions)),
+                "component_suffixes": self.dimension_component_suffixes(dimensions),
+                "samples_target": (
+                    rendered_args[dimensions] if args_count == dimensions + 1 else None
+                ),
+                "samples_index": dimensions if args_count == dimensions + 1 else None,
+            }
+
+        if resource_base in image_dimensions:
+            dimensions = image_dimensions[resource_base]
+            if args_count != dimensions:
+                return None
+            return {
+                "size_expr": f"imageSize({obj})",
+                "dimension_targets": rendered_args,
+                "dimension_indices": list(range(dimensions)),
+                "component_suffixes": self.dimension_component_suffixes(dimensions),
+            }
+
+        dimensions = texture_dimensions.get(resource_base)
+        if dimensions is None:
+            return None
+
+        lod = "0"
+        out_start = 0
+        levels_index = None
+        if args_count == dimensions:
+            pass
+        elif args_count == dimensions + 1:
+            levels_index = dimensions
+        elif args_count == dimensions + 2:
+            lod = rendered_args[0]
+            out_start = 1
+            levels_index = dimensions + 1
+        else:
+            return None
+
+        dimension_targets = rendered_args[out_start : out_start + dimensions]
+        if len(dimension_targets) != dimensions:
+            return None
+        return {
+            "size_expr": f"textureSize({obj}, {lod})",
+            "dimension_targets": dimension_targets,
+            "dimension_indices": list(range(out_start, out_start + dimensions)),
+            "component_suffixes": self.dimension_component_suffixes(dimensions),
+            "levels_target": (
+                rendered_args[levels_index] if levels_index is not None else None
+            ),
+            "levels_index": levels_index,
+        }
+
+    def dimension_component_suffixes(self, dimensions):
+        if dimensions == 1:
+            return [""]
+        return [f".{component}" for component in ("x", "y", "z")[:dimensions]]
+
+    def cast_get_dimensions_value(self, value, target_arg):
+        if self.get_dimensions_target_scalar_type(target_arg) == "uint":
+            return f"uint({value})"
+        return value
+
+    def get_dimensions_target_scalar_type(self, target_arg):
+        if target_arg is None:
+            return None
+
+        mapped_type = self.map_type(self.expression_raw_type(target_arg))
+        if mapped_type == "uint":
+            return "uint"
+
+        if not isinstance(target_arg, MemberAccessNode):
+            return mapped_type
+
+        if target_arg.member not in {"x", "y", "z", "w", "r", "g", "b", "a"}:
+            return mapped_type
+
+        if mapped_type in {"uvec2", "uvec3", "uvec4"}:
+            return "uint"
+        return mapped_type
 
     def format_float(self, value: float) -> str:
         text = format(value, ".10f")
@@ -1577,19 +2208,43 @@ class HLSLToCrossGLConverter:
                 ]
                 args = ", ".join(rendered_args)
                 resource_type = self.expression_raw_type(expr.name.object)
+                resource_base = self.raw_type_base(resource_type)
+                if (
+                    member == "GatherCmpRed"
+                    and len(rendered_args) in {7, 8}
+                    and resource_base in {"Texture2D", "Texture2DArray"}
+                ):
+                    call = self.texture_gather_compare_red_offsets_expression(
+                        obj, rendered_args[:7]
+                    )
+                    if len(rendered_args) == 8:
+                        diagnostic = self.resource_method_diagnostic(
+                            member, {"dropped_parameters": ["status output"]}
+                        )
+                        return f"{diagnostic} {call}"
+                    return call
                 descriptor = self.resource_method_descriptor(
                     member, len(expr.args), resource_type
                 )
                 if descriptor:
-                    method_args = self.resource_method_arguments(
-                        obj,
-                        member,
-                        rendered_args,
-                        descriptor,
-                        expr.args,
-                        is_main,
+                    descriptor = self.refine_texture_load_status_descriptor(
+                        member, expr.args, descriptor
                     )
-                    call = f"{descriptor['function']}({', '.join(method_args)})"
+                    if descriptor.get("fallback_expression") is not None:
+                        call = descriptor["fallback_expression"]
+                    else:
+                        method_args = self.resource_method_arguments(
+                            obj,
+                            member,
+                            rendered_args,
+                            descriptor,
+                            expr.args,
+                            is_main,
+                        )
+                        call = f"{descriptor['function']}({', '.join(method_args)})"
+                        result_component = descriptor.get("result_component")
+                        if result_component:
+                            call = f"{call}{result_component}"
                     diagnostic = self.resource_method_diagnostic(member, descriptor)
                     if diagnostic:
                         return f"{diagnostic} {call}"

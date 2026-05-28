@@ -1260,16 +1260,43 @@ def test_native_hip_external_interop_parses_and_compiles_if_available(tmp_path):
 
     void external_interop_lifecycle(hipStream_t stream) {
         hipExternalMemory_t external_memory;
-        hipExternalMemoryHandleDesc memory_desc;
-        hipExternalMemoryBufferDesc buffer_desc;
-        hipExternalMemoryMipmappedArrayDesc mipmap_desc;
+        hipExternalMemoryHandleDesc memory_desc = {0};
+        hipExternalMemoryBufferDesc buffer_desc = {0};
+        hipExternalMemoryMipmappedArrayDesc mipmap_desc = {0};
         hipMipmappedArray_t mipmapped_array;
         hipExternalSemaphore_t external_semaphore;
-        hipExternalSemaphoreHandleDesc semaphore_desc;
-        hipExternalSemaphoreSignalParams signal_params;
-        hipExternalSemaphoreWaitParams wait_params;
+        hipExternalSemaphoreHandleDesc semaphore_desc = {0};
+        hipExternalSemaphoreSignalParams signal_params = {0};
+        hipExternalSemaphoreWaitParams wait_params = {0};
+        hipChannelFormatDesc channel_desc;
         void* mapped_ptr = NULL;
 
+        memory_desc.type = hipExternalMemoryHandleTypeOpaqueFd;
+        memory_desc.fd = 7;
+        memory_desc.size = 4096;
+        memory_desc.flags = 0;
+        buffer_desc.offset = 128;
+        buffer_desc.size = 1024;
+        buffer_desc.flags = 0;
+        mipmap_desc.offset = 256;
+        mipmap_desc.formatDesc = channel_desc;
+        mipmap_desc.extent = make_hipExtent(16, 8, 1);
+        mipmap_desc.flags = hipArrayLayered;
+        mipmap_desc.numLevels = 4;
+        semaphore_desc.type = hipExternalSemaphoreHandleTypeOpaqueFd;
+        semaphore_desc.fd = 9;
+        semaphore_desc.flags = 0;
+        signal_params.value = 5;
+        signal_params.fence = NULL;
+        signal_params.reserved = 0;
+        signal_params.key = 2;
+        signal_params.flags = 0;
+        wait_params.value = 5;
+        wait_params.fence = NULL;
+        wait_params.reserved = 0;
+        wait_params.key = 2;
+        wait_params.timeoutMs = 1000;
+        wait_params.flags = 0;
         hipImportExternalMemory(&external_memory, &memory_desc);
         hipExternalMemoryGetMappedBuffer(
             &mapped_ptr, external_memory, &buffer_desc
@@ -1295,15 +1322,46 @@ def test_native_hip_external_interop_parses_and_compiles_if_available(tmp_path):
     assert "// Function: external_interop_lifecycle" in crossgl
     assert "void external_interop_lifecycle(hipStream_t stream)" in crossgl
     assert "var external_memory: hipExternalMemory_t;" in crossgl
-    assert "var memory_desc: hipExternalMemoryHandleDesc;" in crossgl
-    assert "var buffer_desc: hipExternalMemoryBufferDesc;" in crossgl
-    assert "var mipmap_desc: hipExternalMemoryMipmappedArrayDesc;" in crossgl
+    assert "var memory_desc: hipExternalMemoryHandleDesc = {0};" in crossgl
+    assert "var buffer_desc: hipExternalMemoryBufferDesc = {0};" in crossgl
+    assert "var mipmap_desc: hipExternalMemoryMipmappedArrayDesc = {0};" in crossgl
     assert "var mipmapped_array: hipMipmappedArray_t;" in crossgl
     assert "var external_semaphore: hipExternalSemaphore_t;" in crossgl
-    assert "var semaphore_desc: hipExternalSemaphoreHandleDesc;" in crossgl
-    assert "var signal_params: hipExternalSemaphoreSignalParams;" in crossgl
-    assert "var wait_params: hipExternalSemaphoreWaitParams;" in crossgl
+    assert "var semaphore_desc: hipExternalSemaphoreHandleDesc = {0};" in crossgl
+    assert "var signal_params: hipExternalSemaphoreSignalParams = {0};" in crossgl
+    assert "var wait_params: hipExternalSemaphoreWaitParams = {0};" in crossgl
+    assert "var channel_desc: hipChannelFormatDesc;" in crossgl
     assert "var mapped_ptr: ptr<void> = NULL;" in crossgl
+    expected_fields = (
+        "memory_desc.type = hipExternalMemoryHandleTypeOpaqueFd;",
+        "memory_desc.fd = 7;",
+        "memory_desc.size = 4096;",
+        "memory_desc.flags = 0;",
+        "buffer_desc.offset = 128;",
+        "buffer_desc.size = 1024;",
+        "buffer_desc.flags = 0;",
+        "mipmap_desc.offset = 256;",
+        "mipmap_desc.formatDesc = channel_desc;",
+        "mipmap_desc.extent = make_hipExtent(16, 8, 1);",
+        "mipmap_desc.flags = hipArrayLayered;",
+        "mipmap_desc.numLevels = 4;",
+        "semaphore_desc.type = hipExternalSemaphoreHandleTypeOpaqueFd;",
+        "semaphore_desc.fd = 9;",
+        "semaphore_desc.flags = 0;",
+        "signal_params.value = 5;",
+        "signal_params.fence = NULL;",
+        "signal_params.reserved = 0;",
+        "signal_params.key = 2;",
+        "signal_params.flags = 0;",
+        "wait_params.value = 5;",
+        "wait_params.fence = NULL;",
+        "wait_params.reserved = 0;",
+        "wait_params.key = 2;",
+        "wait_params.timeoutMs = 1000;",
+        "wait_params.flags = 0;",
+    )
+    for expected in expected_fields:
+        assert expected in crossgl
     assert (
         "// HIP import external memory: output: external_memory, "
         "descriptor: (&memory_desc)"

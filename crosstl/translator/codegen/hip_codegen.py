@@ -14,6 +14,7 @@ from ..ast import (
     CbufferNode,
     ContinueNode,
     ForInNode,
+    FunctionCallNode,
     FunctionNode,
     IdentifierNode,
     LiteralNode,
@@ -38,6 +39,28 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
     """Emit HIP source from the shared CrossGL translator AST."""
 
     resource_diagnostic_backend = "HIP"
+    sampled_resource_type_aliases = {
+        "Texture1D": "sampler1D",
+        "Texture1DArray": "sampler1DArray",
+        "Texture2D": "sampler2D",
+        "Texture2DArray": "sampler2DArray",
+        "Texture2DMS": "sampler2DMS",
+        "Texture2DMSArray": "sampler2DMSArray",
+        "Texture3D": "sampler3D",
+        "TextureCube": "samplerCube",
+        "TextureCubeArray": "samplerCubeArray",
+    }
+    storage_resource_type_aliases = {
+        "RWTexture1D": "image1D",
+        "RWTexture1DArray": "image1DArray",
+        "RWTexture2D": "image2D",
+        "RWTexture2DArray": "image2DArray",
+        "RWTexture2DMS": "image2DMS",
+        "RWTexture2DMSArray": "image2DMSArray",
+        "RWTexture3D": "image3D",
+        "RWTextureCube": "imageCube",
+        "RWTextureCubeArray": "imageCubeArray",
+    }
 
     def __init__(self):
         """Initialize HIP type maps and per-generation visitor state."""
@@ -52,6 +75,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.query_resource_names = set()
         self.query_metadata_function_params = {}
         self.query_functions_by_name = {}
+        self.structured_buffer_length_names = set()
+        self.structured_buffer_length_function_params = {}
+        self.current_structured_buffer_length_parameters = {}
         self.current_function_name = None
         self.resource_query_info_required = False
 
@@ -138,19 +164,30 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "samplerCubeArrayShadow": "hipTextureObject_t",
             "sampler2DMS": "hipTextureObject_t",
             "sampler2DMSArray": "hipTextureObject_t",
+            "image1D": "hipSurfaceObject_t",
+            "image1DArray": "hipSurfaceObject_t",
             "image2D": "hipSurfaceObject_t",
             "image3D": "hipSurfaceObject_t",
             "imageCube": "hipSurfaceObject_t",
+            "imageCubeArray": "hipSurfaceObject_t",
             "image2DArray": "hipSurfaceObject_t",
             "image2DMS": "hipSurfaceObject_t",
             "image2DMSArray": "hipSurfaceObject_t",
+            "iimage1D": "hipSurfaceObject_t",
+            "iimage1DArray": "hipSurfaceObject_t",
             "iimage2D": "hipSurfaceObject_t",
             "iimage3D": "hipSurfaceObject_t",
+            "iimageCube": "hipSurfaceObject_t",
+            "iimageCubeArray": "hipSurfaceObject_t",
             "iimage2DArray": "hipSurfaceObject_t",
             "iimage2DMS": "hipSurfaceObject_t",
             "iimage2DMSArray": "hipSurfaceObject_t",
+            "uimage1D": "hipSurfaceObject_t",
+            "uimage1DArray": "hipSurfaceObject_t",
             "uimage2D": "hipSurfaceObject_t",
             "uimage3D": "hipSurfaceObject_t",
+            "uimageCube": "hipSurfaceObject_t",
+            "uimageCubeArray": "hipSurfaceObject_t",
             "uimage2DArray": "hipSurfaceObject_t",
             "uimage2DMS": "hipSurfaceObject_t",
             "uimage2DMSArray": "hipSurfaceObject_t",
@@ -321,6 +358,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             self.query_resource_names,
             self.query_metadata_function_params,
         ) = self.collect_resource_query_requirements(node)
+        (
+            self.structured_buffer_length_names,
+            self.structured_buffer_length_function_params,
+        ) = self.collect_structured_buffer_length_requirements(node)
         self.query_functions_by_name = {
             getattr(func, "name", None): func
             for func in self.query_collect_functions(node)
@@ -424,7 +465,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         saved_variable_types = self.variable_types.copy()
         self.current_function = node.name
         saved_current_function_name = self.current_function_name
+        saved_structured_buffer_length_parameters = (
+            self.current_structured_buffer_length_parameters
+        )
         self.current_function_name = node.name
+        self.current_structured_buffer_length_parameters = {}
 
         qualifiers = []
         if hasattr(node, "qualifiers") and node.qualifiers:
@@ -459,6 +504,19 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             metadata_param = self.query_metadata_parameter(param_name, param_type)
             if metadata_param:
                 param_declarations.append(metadata_param)
+            length_param = self.structured_buffer_length_parameter(
+                node.name, param_name, param_type
+            )
+            if length_param:
+                self.current_structured_buffer_length_parameters[param_name] = (
+                    self.structured_buffer_length_name(param_name)
+                )
+                param_declarations.append(length_param)
+            counter_param = self.structured_buffer_counter_parameter(
+                param_name, param_type
+            )
+            if counter_param:
+                param_declarations.append(counter_param)
         params = ", ".join(param_declarations)
 
         qualifier_str = " ".join(qualifiers)
@@ -481,6 +539,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.current_function = None
         self.variable_types = saved_variable_types
         self.current_function_name = saved_current_function_name
+        self.current_structured_buffer_length_parameters = (
+            saved_structured_buffer_length_parameters
+        )
         return ""
 
     def visit_parameter(self, param) -> str:
@@ -532,6 +593,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         metadata_declaration = self.query_metadata_declaration(node.name, var_type)
         if metadata_declaration:
             self.add_line(f"{metadata_declaration};")
+        length_declaration = self.structured_buffer_length_declaration(
+            node.name, var_type
+        )
+        if length_declaration:
+            self.add_line(f"{length_declaration};")
+        counter_declaration = self.structured_buffer_counter_declaration(
+            node.name, var_type
+        )
+        if counter_declaration:
+            self.add_line(f"{counter_declaration};")
         return ""
 
     def format_variable_declaration(self, node: VariableNode) -> str:
@@ -952,13 +1023,27 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         is_user_function = self.is_user_defined_function(func_name)
         if not is_user_function:
+            buffer_call = self.generate_buffer_call(
+                func_expr, func_name, raw_args, args
+            )
+            if buffer_call is not None:
+                return buffer_call
+
+            structured_atomic_call = self.generate_structured_buffer_atomic_call(
+                func_name, raw_args, args
+            )
+            if structured_atomic_call is not None:
+                return structured_atomic_call
+
             resource_call = self.generate_resource_call(func_name, raw_args, args)
             if resource_call is not None:
                 return resource_call
 
-        args = self.query_metadata_call_arguments(func_name, raw_args, args)
         if is_user_function:
+            args = self.hip_user_function_call_arguments(func_name, raw_args, args)
             return f"{callee}({', '.join(args)})"
+
+        args = self.query_metadata_call_arguments(func_name, raw_args, args)
 
         # Map function name
         mapped_name = self.function_map.get(func_name, func_name)
@@ -1569,6 +1654,24 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def require_surface_read_helper(self, helper_name):
         helpers = {
+            "cgl_surf1Dread": (
+                "template <typename T>\n"
+                "__device__ T cgl_surf1Dread(hipSurfaceObject_t surfObj, int x)\n"
+                "{\n"
+                "    T value;\n"
+                "    surf1Dread(&value, surfObj, x);\n"
+                "    return value;\n"
+                "}"
+            ),
+            "cgl_surf1DLayeredread": (
+                "template <typename T>\n"
+                "__device__ T cgl_surf1DLayeredread(hipSurfaceObject_t surfObj, int x, int layer)\n"
+                "{\n"
+                "    T value;\n"
+                "    surf1DLayeredread(&value, surfObj, x, layer);\n"
+                "    return value;\n"
+                "}"
+            ),
             "cgl_surf2Dread": (
                 "template <typename T>\n"
                 "__device__ T cgl_surf2Dread(hipSurfaceObject_t surfObj, int x, int y)\n"
@@ -1596,8 +1699,219 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 "    return value;\n"
                 "}"
             ),
+            "cgl_surfCubemapread": (
+                "template <typename T>\n"
+                "__device__ T cgl_surfCubemapread(hipSurfaceObject_t surfObj, int x, int y, int face)\n"
+                "{\n"
+                "    T value;\n"
+                "    surfCubemapread(&value, surfObj, x, y, face);\n"
+                "    return value;\n"
+                "}"
+            ),
+            "cgl_surfCubemapLayeredread": (
+                "template <typename T>\n"
+                "__device__ T cgl_surfCubemapLayeredread(hipSurfaceObject_t surfObj, int x, int y, int face, int layer)\n"
+                "{\n"
+                "    T value;\n"
+                "    surfCubemapLayeredread(&value, surfObj, x, y, face, layer);\n"
+                "    return value;\n"
+                "}"
+            ),
         }
         self.require_helper_function(helper_name, helpers[helper_name])
+
+    def vector_component_count_for_type(self, type_name):
+        if not isinstance(type_name, str):
+            return None
+
+        base_type = type_name.split("[", 1)[0].strip()
+        scalar_types = {
+            "bool",
+            "double",
+            "f16",
+            "f32",
+            "f64",
+            "float",
+            "half",
+            "i32",
+            "int",
+            "u32",
+            "uint",
+        }
+        if base_type in scalar_types:
+            return 1
+
+        vector_prefixes = (
+            "bvec",
+            "dvec",
+            "ivec",
+            "uvec",
+            "vec",
+            "bool",
+            "double",
+            "float",
+            "half",
+            "int",
+            "uint",
+        )
+        for prefix in vector_prefixes:
+            if not base_type.startswith(prefix):
+                continue
+            suffix = base_type[len(prefix) :]
+            if suffix and suffix[0] in {"2", "3", "4"}:
+                return int(suffix[0])
+        return None
+
+    def texel_fetch_coordinate_count(self, raw_coord):
+        coord_type = self.get_expression_type(raw_coord)
+        if coord_type is None:
+            coord_type = self.expression_result_type(raw_coord)
+        return self.vector_component_count_for_type(coord_type)
+
+    def expected_texel_fetch_coordinate_count(self, texture_type):
+        return {
+            "sampler1D": 1,
+            "sampler1DArray": 2,
+            "sampler2D": 2,
+            "sampler2DArray": 3,
+            "sampler3D": 3,
+        }.get(texture_type)
+
+    def expected_texture_coordinate_count(self, texture_type):
+        return {
+            "sampler1D": 1,
+            "sampler1DArray": 2,
+            "sampler2D": 2,
+            "sampler2DArray": 3,
+            "sampler3D": 3,
+            "samplerCube": 3,
+            "samplerCubeArray": 4,
+        }.get(texture_type)
+
+    def texture_coordinate_rank_diagnostic(self, func_name, texture_type, raw_coord):
+        expected_coord_count = self.expected_texture_coordinate_count(texture_type)
+        actual_coord_count = self.texel_fetch_coordinate_count(raw_coord)
+        if (
+            expected_coord_count is not None
+            and actual_coord_count is not None
+            and actual_coord_count != expected_coord_count
+        ):
+            return self.unsupported_sampled_resource_call(
+                f"{func_name} coordinate rank",
+                texture_type,
+                [],
+            )
+        return None
+
+    def expected_texture_gradient_coordinate_counts(self, texture_type):
+        return {
+            "sampler1D": {1},
+            "sampler1DArray": {1},
+            "sampler2D": {2},
+            "sampler2DArray": {2},
+            "sampler3D": {3, 4},
+            "samplerCube": {3, 4},
+            "samplerCubeArray": {3, 4},
+        }.get(texture_type)
+
+    def texture_gradient_rank_diagnostic(self, texture_type, *raw_gradients):
+        expected_gradient_counts = self.expected_texture_gradient_coordinate_counts(
+            texture_type
+        )
+        if expected_gradient_counts is None:
+            return None
+
+        for raw_gradient in raw_gradients:
+            actual_gradient_count = self.texel_fetch_coordinate_count(raw_gradient)
+            if (
+                actual_gradient_count is not None
+                and actual_gradient_count not in expected_gradient_counts
+            ):
+                return self.unsupported_sampled_resource_call(
+                    "textureGrad derivative rank",
+                    texture_type,
+                    [],
+                )
+        return None
+
+    def hip_texture_gradient_argument(self, texture_type, raw_gradient, gradient):
+        if texture_type not in {"sampler3D", "samplerCube", "samplerCubeArray"}:
+            return gradient
+
+        gradient_count = self.texel_fetch_coordinate_count(raw_gradient)
+        if gradient_count == 3:
+            return (
+                f"make_float4({self.coord_component(gradient, 'x')}, "
+                f"{self.coord_component(gradient, 'y')}, "
+                f"{self.coord_component(gradient, 'z')}, 0.0f)"
+            )
+        return gradient
+
+    def expected_image_coordinate_count(self, image_type):
+        image_type = self.resource_base_type(image_type)
+        if not isinstance(image_type, str):
+            return None
+        if "1DArray" in image_type:
+            return 2
+        if "1D" in image_type:
+            return 1
+        if "CubeArray" in image_type:
+            return 4
+        if "3D" in image_type:
+            return 3
+        if "Cube" in image_type:
+            return 3
+        if "Array" in image_type:
+            return 3
+        if "2D" in image_type:
+            return 2
+        return None
+
+    def unsupported_image_coordinate_rank_call(self, func_name, image_type):
+        fallback = "((void)0)"
+        if func_name == "imageLoad":
+            fallback = self.zero_value_for_type(self.image_value_type(image_type))
+        return (
+            f"/* unsupported {self.resource_backend_name()} image resource call: "
+            f"{func_name} coordinate rank on {image_type} */ {fallback}"
+        )
+
+    def image_coordinate_rank_diagnostic(self, func_name, image_type, raw_coord):
+        expected_coord_count = self.expected_image_coordinate_count(image_type)
+        actual_coord_count = self.texel_fetch_coordinate_count(raw_coord)
+        if (
+            expected_coord_count is not None
+            and actual_coord_count is not None
+            and actual_coord_count != expected_coord_count
+        ):
+            return self.unsupported_image_coordinate_rank_call(func_name, image_type)
+        return None
+
+    def unsupported_image_atomic_coordinate_rank_call(self, func_name, image_type):
+        image_type = image_type or "unknown resource"
+        return (
+            f"/* unsupported {self.resource_backend_name()} image atomic resource call: "
+            f"{func_name} coordinate rank on {image_type} */ "
+            f"{self.image_atomic_zero_value(image_type)}"
+        )
+
+    def image_atomic_coordinate_rank_diagnostic(self, func_name, image_type, raw_coord):
+        expected_coord_count = self.expected_image_coordinate_count(image_type)
+        actual_coord_count = self.texel_fetch_coordinate_count(raw_coord)
+        if (
+            expected_coord_count is not None
+            and actual_coord_count is not None
+            and actual_coord_count != expected_coord_count
+        ):
+            return self.unsupported_image_atomic_coordinate_rank_call(
+                func_name, image_type
+            )
+        return None
+
+    def image_surface_x_offset(self, coord, value_type, image_type):
+        if "1D" in image_type and "Array" not in image_type:
+            return f"{coord} * sizeof({value_type})"
+        return self.surface_x_offset(coord, value_type)
 
     def generate_resource_call(self, func_name, raw_args, args):
         if func_name in {"textureSize", "imageSize"}:
@@ -1629,6 +1943,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 "textureCompareLod",
                 "textureCompareGrad",
                 "textureCompareOffset",
+                "textureCompareLodOffset",
+                "textureCompareGradOffset",
+                "textureCompareProj",
+                "textureCompareProjOffset",
+                "textureCompareProjLod",
+                "textureCompareProjLodOffset",
+                "textureCompareProjGrad",
+                "textureCompareProjGradOffset",
                 "textureGatherCompare",
                 "textureGatherCompareOffset",
             }
@@ -1659,6 +1981,38 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     func_name, texture_type, args
                 )
 
+        if (
+            func_name
+            in {
+                "textureOffset",
+                "textureLodOffset",
+                "textureGradOffset",
+                "textureProj",
+                "textureProjOffset",
+                "textureProjLod",
+                "textureProjLodOffset",
+                "textureProjGrad",
+                "textureProjGradOffset",
+                "texelFetchOffset",
+            }
+            and raw_args
+        ):
+            texture_type = self.resource_base_type(
+                self.get_expression_type(raw_args[0])
+            )
+            if texture_type is not None:
+                if self.is_shadow_resource_type(texture_type):
+                    return self.unsupported_shadow_resource_call(
+                        func_name, texture_type, args
+                    )
+                if self.is_multisample_resource_type(texture_type):
+                    return self.unsupported_multisample_resource_call(
+                        func_name, texture_type, args
+                    )
+                return self.unsupported_sampled_resource_call(
+                    func_name, texture_type, args
+                )
+
         if func_name in {
             "imageAtomicAdd",
             "imageAtomicMin",
@@ -1674,6 +2028,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 image_type = self.resource_base_type(
                     self.get_expression_type(raw_args[0])
                 )
+            if len(raw_args) >= 2:
+                coordinate_diagnostic = self.image_atomic_coordinate_rank_diagnostic(
+                    func_name, image_type, raw_args[1]
+                )
+                if coordinate_diagnostic is not None:
+                    return coordinate_diagnostic
             return self.unsupported_image_atomic_resource_call(
                 func_name, image_type, args
             )
@@ -1686,6 +2046,31 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 return self.unsupported_multisample_resource_call(
                     func_name, texture_type, args
                 )
+            coordinate_diagnostic = self.texture_coordinate_rank_diagnostic(
+                func_name, texture_type, raw_args[1]
+            )
+            if coordinate_diagnostic is not None:
+                return coordinate_diagnostic
+            grad_x = None
+            grad_y = None
+            if func_name == "textureGrad" and len(args) >= 4:
+                gradient_diagnostic = self.texture_gradient_rank_diagnostic(
+                    texture_type,
+                    raw_args[2],
+                    raw_args[3],
+                )
+                if gradient_diagnostic is not None:
+                    return gradient_diagnostic
+                grad_x = self.hip_texture_gradient_argument(
+                    texture_type,
+                    raw_args[2],
+                    args[2],
+                )
+                grad_y = self.hip_texture_gradient_argument(
+                    texture_type,
+                    raw_args[3],
+                    args[3],
+                )
 
             texture_name = args[0]
             coord = args[1]
@@ -1697,7 +2082,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 if func_name == "textureGrad" and len(args) >= 4:
                     return (
                         f"tex1DGrad<float4>"
-                        f"({texture_name}, {coord}, {args[2]}, {args[3]})"
+                        f"({texture_name}, {coord}, {grad_x}, {grad_y})"
                     )
 
             if texture_type == "sampler2D":
@@ -1711,7 +2096,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 if func_name == "textureLod" and len(args) >= 3:
                     return f"tex2DLod<float4>({coord_args}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
-                    return f"tex2DGrad<float4>" f"({coord_args}, {args[2]}, {args[3]})"
+                    return f"tex2DGrad<float4>" f"({coord_args}, {grad_x}, {grad_y})"
 
             if texture_type == "sampler1DArray":
                 coord_args = (
@@ -1726,7 +2111,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 if func_name == "textureGrad" and len(args) >= 4:
                     return (
                         f"tex1DLayeredGrad<float4>"
-                        f"({coord_args}, {args[2]}, {args[3]})"
+                        f"({coord_args}, {grad_x}, {grad_y})"
                     )
 
             if texture_type == "sampler2DArray":
@@ -1743,7 +2128,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 if func_name == "textureGrad" and len(args) >= 4:
                     return (
                         f"tex2DLayeredGrad<float4>"
-                        f"({coord_args}, {args[2]}, {args[3]})"
+                        f"({coord_args}, {grad_x}, {grad_y})"
                     )
 
             if texture_type == "sampler3D":
@@ -1758,7 +2143,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 if func_name == "textureLod" and len(args) >= 3:
                     return f"tex3DLod<float4>({coord_args}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
-                    return f"tex3DGrad<float4>({coord_args}, {args[2]}, {args[3]})"
+                    return f"tex3DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
 
             if texture_type == "samplerCube":
                 coord_args = (
@@ -1773,8 +2158,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     return f"texCubemapLod<float4>({coord_args}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
                     return (
-                        f"texCubemapGrad<float4>"
-                        f"({coord_args}, {args[2]}, {args[3]})"
+                        f"texCubemapGrad<float4>" f"({coord_args}, {grad_x}, {grad_y})"
                     )
 
             if texture_type == "samplerCubeArray":
@@ -1792,7 +2176,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 if func_name == "textureGrad" and len(args) >= 4:
                     return (
                         f"texCubemapLayeredGrad<float4>"
-                        f"({coord_args}, {args[2]}, {args[3]})"
+                        f"({coord_args}, {grad_x}, {grad_y})"
                     )
 
         if func_name == "texelFetch" and len(args) >= 3:
@@ -1803,9 +2187,35 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 return self.unsupported_multisample_resource_call(
                     func_name, texture_type, args
                 )
+            if texture_type in {"samplerCube", "samplerCubeArray"}:
+                return self.unsupported_sampled_resource_call(
+                    func_name, texture_type, args
+                )
 
             texture_name = args[0]
             coord = args[1]
+            expected_coord_count = self.expected_texel_fetch_coordinate_count(
+                texture_type
+            )
+            actual_coord_count = self.texel_fetch_coordinate_count(raw_args[1])
+            if (
+                expected_coord_count is not None
+                and actual_coord_count is not None
+                and actual_coord_count != expected_coord_count
+            ):
+                return self.unsupported_sampled_resource_call(
+                    "texelFetch coordinate rank",
+                    texture_type,
+                    args,
+                )
+            if texture_type == "sampler1D":
+                return f"tex1Dfetch<float4>({texture_name}, {coord})"
+            if texture_type == "sampler1DArray":
+                return (
+                    f"tex1DLayered<float4>({texture_name}, "
+                    f"{self.coord_component(coord, 'x')}, "
+                    f"{self.coord_component(coord, 'y')})"
+                )
             if texture_type == "sampler2D":
                 return (
                     f"tex2D<float4>({texture_name}, "
@@ -1838,10 +2248,40 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
             image_name = args[0]
             coord = args[1]
+            coordinate_diagnostic = self.image_coordinate_rank_diagnostic(
+                func_name, image_type, raw_args[1]
+            )
+            if coordinate_diagnostic is not None:
+                return coordinate_diagnostic
             value_type = self.image_value_type(image_type)
-            x = self.surface_x_offset(coord, value_type)
+            x = self.image_surface_x_offset(coord, value_type, image_type)
             y = self.coord_component(coord, "y")
 
+            if "1DArray" in image_type:
+                self.require_surface_read_helper("cgl_surf1DLayeredread")
+                layer = self.coord_component(coord, "y")
+                return (
+                    f"cgl_surf1DLayeredread<{value_type}>"
+                    f"({image_name}, {x}, {layer})"
+                )
+            if "1D" in image_type:
+                self.require_surface_read_helper("cgl_surf1Dread")
+                return f"cgl_surf1Dread<{value_type}>({image_name}, {x})"
+            if "CubeArray" in image_type:
+                self.require_surface_read_helper("cgl_surfCubemapLayeredread")
+                face = self.coord_component(coord, "z")
+                layer = self.coord_component(coord, "w")
+                return (
+                    f"cgl_surfCubemapLayeredread<{value_type}>"
+                    f"({image_name}, {x}, {y}, {face}, {layer})"
+                )
+            if "Cube" in image_type:
+                self.require_surface_read_helper("cgl_surfCubemapread")
+                face = self.coord_component(coord, "z")
+                return (
+                    f"cgl_surfCubemapread<{value_type}>"
+                    f"({image_name}, {x}, {y}, {face})"
+                )
             if "3D" in image_type:
                 self.require_surface_read_helper("cgl_surf3Dread")
                 z = self.coord_component(coord, "z")
@@ -1869,10 +2309,30 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             image_name = args[0]
             coord = args[1]
             value = args[2]
+            coordinate_diagnostic = self.image_coordinate_rank_diagnostic(
+                func_name, image_type, raw_args[1]
+            )
+            if coordinate_diagnostic is not None:
+                return coordinate_diagnostic
             value_type = self.image_value_type(image_type)
-            x = self.surface_x_offset(coord, value_type)
+            x = self.image_surface_x_offset(coord, value_type, image_type)
             y = self.coord_component(coord, "y")
 
+            if "1DArray" in image_type:
+                layer = self.coord_component(coord, "y")
+                return f"surf1DLayeredwrite({value}, {image_name}, {x}, {layer})"
+            if "1D" in image_type:
+                return f"surf1Dwrite({value}, {image_name}, {x})"
+            if "CubeArray" in image_type:
+                face = self.coord_component(coord, "z")
+                layer = self.coord_component(coord, "w")
+                return (
+                    f"surfCubemapLayeredwrite"
+                    f"({value}, {image_name}, {x}, {y}, {face}, {layer})"
+                )
+            if "Cube" in image_type:
+                face = self.coord_component(coord, "z")
+                return f"surfCubemapwrite({value}, {image_name}, {x}, {y}, {face})"
             if "3D" in image_type:
                 z = self.coord_component(coord, "z")
                 return f"surf3Dwrite({value}, {image_name}, {x}, {y}, {z})"
@@ -1883,6 +2343,944 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 return f"surf2Dwrite({value}, {image_name}, {x}, {y})"
 
         return None
+
+    def generate_buffer_call(self, function_expr, func_name, raw_args, args):
+        """Lower structured and byte-address buffer calls to HIP pointer forms."""
+        byte_address_call = self.generate_byte_address_buffer_call(
+            function_expr, func_name, raw_args, args
+        )
+        if byte_address_call is not None:
+            return byte_address_call
+
+        member_call = self.structured_buffer_member_call(function_expr)
+        if member_call is not None:
+            buffer_expr, operation, buffer_type = member_call
+            if operation == "Append" and args:
+                return self.generate_structured_buffer_append(
+                    buffer_expr, buffer_type, args[0], operation
+                )
+            if operation == "Consume":
+                return self.generate_structured_buffer_consume(
+                    buffer_expr, buffer_type, operation
+                )
+            if operation == "GetDimensions":
+                return self.generate_structured_buffer_dimensions(
+                    buffer_expr, buffer_type, raw_args, args, operation
+                )
+            access = self.format_structured_buffer_access(buffer_expr, raw_args, args)
+            if access is None:
+                return None
+            if operation == "Load":
+                return access
+            if operation == "Store":
+                if self.structured_buffer_is_writable(buffer_type) and len(args) >= 2:
+                    return f"{access} = {args[1]}"
+                return self.structured_buffer_diagnostic_call(
+                    "Store", buffer_type, "((void)0)"
+                )
+            return None
+
+        if func_name == "buffer_load" and len(args) >= 2:
+            buffer_type = self.expression_result_type(raw_args[0])
+            if self.structured_buffer_type_parts(buffer_type) is None:
+                return None
+            return f"{args[0]}[{args[1]}]"
+
+        if func_name == "buffer_append" and len(args) >= 2:
+            buffer_type = self.expression_result_type(raw_args[0])
+            if self.structured_buffer_type_parts(buffer_type) is None:
+                return None
+            return self.generate_structured_buffer_append(
+                raw_args[0], buffer_type, args[1], func_name
+            )
+
+        if func_name == "buffer_consume" and args:
+            buffer_type = self.expression_result_type(raw_args[0])
+            if self.structured_buffer_type_parts(buffer_type) is None:
+                return None
+            return self.generate_structured_buffer_consume(
+                raw_args[0], buffer_type, func_name
+            )
+
+        if func_name == "buffer_dimensions" and args:
+            buffer_type = self.expression_result_type(raw_args[0])
+            if self.structured_buffer_type_parts(buffer_type) is None:
+                return None
+            return self.generate_structured_buffer_dimensions(
+                raw_args[0], buffer_type, raw_args[1:], args[1:], func_name
+            )
+
+        if func_name == "buffer_store" and len(args) >= 3:
+            buffer_type = self.expression_result_type(raw_args[0])
+            if self.structured_buffer_type_parts(buffer_type) is None:
+                return None
+            if self.structured_buffer_is_writable(buffer_type):
+                return f"{args[0]}[{args[1]}] = {args[2]}"
+            return self.structured_buffer_diagnostic_call(
+                "buffer_store", buffer_type, "((void)0)"
+            )
+
+        return None
+
+    def generate_byte_address_buffer_call(
+        self, function_expr, func_name, raw_args, args
+    ):
+        """Lower byte-address buffer loads and stores to typed HIP helpers."""
+        member_call = self.byte_address_buffer_member_call(function_expr)
+        if member_call is not None:
+            buffer_expr, operation, buffer_type = member_call
+            if operation == "GetDimensions":
+                return self.generate_byte_address_buffer_dimensions(
+                    buffer_expr, buffer_type, raw_args, args, operation
+                )
+
+            if operation in self.byte_address_buffer_atomic_operations():
+                return self.generate_byte_address_buffer_atomic(
+                    buffer_expr, buffer_type, operation, args
+                )
+
+            component_count = self.byte_address_buffer_component_count(operation)
+            if component_count is None:
+                return None
+
+            buffer_name = self.visit(buffer_expr)
+            if operation.startswith("Load") and len(args) >= 1:
+                helper_name = self.require_byte_address_load_helper(component_count)
+                return f"{helper_name}({buffer_name}, {args[0]})"
+
+            if operation.startswith("Store") and len(args) >= 2:
+                if self.byte_address_buffer_is_writable(buffer_type):
+                    helper_name = self.require_byte_address_store_helper(
+                        component_count
+                    )
+                    return f"{helper_name}({buffer_name}, {args[0]}, {args[1]})"
+                return self.byte_address_buffer_diagnostic_call(
+                    operation, buffer_type, "((void)0)"
+                )
+            return None
+
+        if func_name == "buffer_load" and len(args) >= 2:
+            buffer_type = self.expression_result_type(raw_args[0])
+            if self.byte_address_buffer_base_type(buffer_type) is None:
+                return None
+            helper_name = self.require_byte_address_load_helper(1)
+            return f"{helper_name}({args[0]}, {args[1]})"
+
+        if func_name == "buffer_dimensions" and args:
+            buffer_type = self.expression_result_type(raw_args[0])
+            if self.byte_address_buffer_base_type(buffer_type) is None:
+                return None
+            return self.generate_byte_address_buffer_dimensions(
+                raw_args[0], buffer_type, raw_args[1:], args[1:], func_name
+            )
+
+        if func_name == "buffer_store" and len(args) >= 3:
+            buffer_type = self.expression_result_type(raw_args[0])
+            if self.byte_address_buffer_base_type(buffer_type) is None:
+                return None
+            if self.byte_address_buffer_is_writable(buffer_type):
+                helper_name = self.require_byte_address_store_helper(1)
+                return f"{helper_name}({args[0]}, {args[1]}, {args[2]})"
+            return self.byte_address_buffer_diagnostic_call(
+                "buffer_store", buffer_type, "((void)0)"
+            )
+
+        return None
+
+    def generate_structured_buffer_dimensions(
+        self, buffer_expr, buffer_type, raw_dimension_args, dimension_args, operation
+    ):
+        """Lower structured-buffer dimensions through an explicit length sidecar."""
+        if self.structured_buffer_type_parts(buffer_type) is None:
+            return None
+
+        length_expr = self.structured_buffer_length_expression(buffer_expr)
+        if length_expr is None:
+            length_expr = (
+                "0 /* HIP structured buffer dimensions "
+                "requires explicit length sidecar */"
+            )
+
+        if dimension_args:
+            return f"{dimension_args[0]} = {length_expr}"
+        return length_expr
+
+    def generate_structured_buffer_append(
+        self, buffer_expr, buffer_type, value, operation
+    ):
+        """Lower AppendStructuredBuffer writes through an explicit counter."""
+        parts = self.structured_buffer_type_parts(buffer_type)
+        if parts is None or parts[0] != "AppendStructuredBuffer":
+            return self.structured_buffer_diagnostic_call(
+                operation, buffer_type, "((void)0)"
+            )
+
+        counter = self.structured_buffer_counter_expression(buffer_expr)
+        if counter is None:
+            return self.structured_buffer_diagnostic_call(
+                operation, buffer_type, "((void)0)"
+            )
+
+        helper_name = self.require_structured_buffer_append_helper()
+        buffer_name = self.visit(buffer_expr)
+        return f"{helper_name}({buffer_name}, {counter}, {value})"
+
+    def generate_structured_buffer_consume(self, buffer_expr, buffer_type, operation):
+        """Lower ConsumeStructuredBuffer reads through an explicit counter."""
+        parts = self.structured_buffer_type_parts(buffer_type)
+        if parts is None or parts[0] != "ConsumeStructuredBuffer":
+            fallback = self.diagnostic_zero_value_for_type(
+                parts[1] if parts is not None else None
+            )
+            return self.structured_buffer_diagnostic_call(
+                operation, buffer_type, fallback
+            )
+
+        counter = self.structured_buffer_counter_expression(buffer_expr)
+        if counter is None:
+            return self.structured_buffer_diagnostic_call(
+                operation,
+                buffer_type,
+                self.diagnostic_zero_value_for_type(parts[1]),
+            )
+
+        helper_name = self.require_structured_buffer_consume_helper()
+        buffer_name = self.visit(buffer_expr)
+        return f"{helper_name}({buffer_name}, {counter})"
+
+    def require_structured_buffer_append_helper(self):
+        """Register the HIP helper for AppendStructuredBuffer operations."""
+        helper_name = "cgl_append_structured_buffer"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        helper = (
+            "template <typename T>\n"
+            "__device__ inline void "
+            f"{helper_name}(T* buffer, uint* counter, const T& value)\n"
+            "{\n"
+            "    uint index = atomicAdd(counter, 1u);\n"
+            "    buffer[index] = value;\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def require_structured_buffer_consume_helper(self):
+        """Register the HIP helper for ConsumeStructuredBuffer operations."""
+        helper_name = "cgl_consume_structured_buffer"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        helper = (
+            "template <typename T>\n"
+            "__device__ inline T "
+            f"{helper_name}(const T* buffer, uint* counter)\n"
+            "{\n"
+            "    uint index = atomicSub(counter, 1u) - 1u;\n"
+            "    return buffer[index];\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def structured_buffer_atomic_operations(self):
+        """Return generic atomic mappings for RWStructuredBuffer element targets."""
+        integer_kinds = {"int", "uint"}
+        add_exchange_kinds = {*integer_kinds, "float"}
+        return {
+            "atomicAdd": ("atomicAdd", 2, add_exchange_kinds, "int/uint/float"),
+            "atomicSub": ("atomicSub", 2, integer_kinds, "int/uint"),
+            "atomicMin": ("atomicMin", 2, integer_kinds, "int/uint"),
+            "atomicMax": ("atomicMax", 2, integer_kinds, "int/uint"),
+            "atomicAnd": ("atomicAnd", 2, integer_kinds, "int/uint"),
+            "atomicOr": ("atomicOr", 2, integer_kinds, "int/uint"),
+            "atomicXor": ("atomicXor", 2, integer_kinds, "int/uint"),
+            "atomicInc": ("atomicInc", 2, {"uint"}, "uint"),
+            "atomicDec": ("atomicDec", 2, {"uint"}, "uint"),
+            "atomicExchange": ("atomicExch", 2, add_exchange_kinds, "int/uint/float"),
+            "atomicCompareExchange": ("atomicCAS", 3, integer_kinds, "int/uint"),
+            "atomicCompSwap": ("atomicCAS", 3, integer_kinds, "int/uint"),
+        }
+
+    def generate_structured_buffer_atomic_call(self, func_name, raw_args, args):
+        """Lower atomics on RWStructuredBuffer element lvalues to HIP atomics."""
+        operation = self.structured_buffer_atomic_operations().get(func_name)
+        if operation is None or not raw_args:
+            return None
+
+        target = self.structured_buffer_atomic_target(raw_args[0])
+        if target is None:
+            return None
+
+        intrinsic, required_arg_count, supported_kinds, supported_kinds_label = (
+            operation
+        )
+        target_type = target["target_type"]
+        fallback = self.diagnostic_zero_value_for_type(target_type)
+
+        if len(args) != required_arg_count:
+            return self.unsupported_structured_buffer_atomic_call(
+                func_name,
+                target["buffer_type"],
+                f"requires {required_arg_count} argument(s)",
+                fallback,
+            )
+
+        buffer_base_type, _ = self.structured_buffer_type_parts(target["buffer_type"])
+        if buffer_base_type != "RWStructuredBuffer":
+            return self.unsupported_structured_buffer_atomic_call(
+                func_name,
+                target["buffer_type"],
+                "requires RWStructuredBuffer target",
+                fallback,
+            )
+
+        scalar_kind = self.hip_atomic_scalar_kind(target_type)
+        if scalar_kind not in supported_kinds:
+            return self.unsupported_structured_buffer_atomic_call(
+                func_name,
+                target["buffer_type"],
+                f"requires supported scalar {supported_kinds_label} target",
+                fallback,
+            )
+
+        target_expr = args[0]
+        value_args = ", ".join(args[1:])
+        return f"{intrinsic}(&{target_expr}, {value_args})"
+
+    def structured_buffer_atomic_target(self, target_expr):
+        """Return RWStructuredBuffer target metadata for an atomic lvalue."""
+        element_access = self.structured_buffer_element_access(target_expr)
+        if element_access is None:
+            return None
+
+        array_expr = getattr(
+            element_access, "array_expr", getattr(element_access, "array", None)
+        )
+        buffer_type = self.expression_result_type(array_expr)
+        parts = self.structured_buffer_type_parts(buffer_type)
+        if parts is None:
+            return None
+
+        target_type = self.expression_result_type(target_expr) or parts[1]
+        return {
+            "buffer_type": buffer_type,
+            "target_type": target_type,
+        }
+
+    def structured_buffer_element_access(self, target_expr):
+        """Return the structured-buffer element access inside an atomic lvalue."""
+        if isinstance(target_expr, ArrayAccessNode):
+            array_expr = getattr(
+                target_expr, "array_expr", getattr(target_expr, "array", None)
+            )
+            buffer_type = self.expression_result_type(array_expr)
+            if self.structured_buffer_type_parts(buffer_type) is not None:
+                return target_expr
+
+        if isinstance(target_expr, MemberAccessNode):
+            object_expr = getattr(
+                target_expr, "object_expr", getattr(target_expr, "object", None)
+            )
+            return self.structured_buffer_element_access(object_expr)
+
+        return None
+
+    def hip_atomic_scalar_kind(self, type_name):
+        """Return the HIP atomic scalar kind supported for structured buffers."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+
+        mapped_type = self.map_type(type_name)
+        if type_name in {"uint", "u32"} or mapped_type in {"uint", "unsigned int"}:
+            return "uint"
+        if type_name in {"int", "i32"} or mapped_type == "int":
+            return "int"
+        if type_name in {"float", "f32"} or mapped_type == "float":
+            return "float"
+        return None
+
+    def unsupported_structured_buffer_atomic_call(
+        self, operation, buffer_type, reason, fallback
+    ):
+        """Return diagnostic code for unsupported structured-buffer atomics."""
+        buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
+        return (
+            f"/* unsupported {self.resource_backend_name()} structured buffer atomic: "
+            f"{operation} on {buffer_type} {reason} */ {fallback}"
+        )
+
+    def generate_byte_address_buffer_dimensions(
+        self, buffer_expr, buffer_type, raw_dimension_args, dimension_args, operation
+    ):
+        """Lower byte-address buffer dimensions through a byte-length sidecar."""
+        if self.byte_address_buffer_base_type(buffer_type) is None:
+            return None
+
+        length_expr = self.structured_buffer_length_expression(buffer_expr)
+        if length_expr is None:
+            length_expr = (
+                "0 /* HIP byte-address buffer dimensions "
+                "requires explicit byte-length sidecar */"
+            )
+
+        if dimension_args:
+            return f"{dimension_args[0]} = {length_expr}"
+        return length_expr
+
+    def structured_buffer_member_call(self, function_expr):
+        """Return structured-buffer member-call pieces, if applicable."""
+        if not isinstance(function_expr, MemberAccessNode):
+            return None
+
+        buffer_expr = getattr(
+            function_expr, "object_expr", getattr(function_expr, "object", None)
+        )
+        buffer_type = self.expression_result_type(buffer_expr)
+        if self.structured_buffer_type_parts(buffer_type) is None:
+            return None
+
+        return buffer_expr, getattr(function_expr, "member", ""), buffer_type
+
+    def format_structured_buffer_access(self, buffer_expr, raw_args, args):
+        """Format one HIP pointer access for a structured-buffer operation."""
+        if not raw_args or not args:
+            return None
+        buffer_name = self.visit(buffer_expr)
+        return f"{buffer_name}[{args[0]}]"
+
+    def structured_buffer_diagnostic_call(self, operation, buffer_type, fallback):
+        """Return diagnostic code for rejected structured-buffer operations."""
+        buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
+        return (
+            f"/* unsupported {self.resource_backend_name()} structured buffer call: "
+            f"{operation} on {buffer_type} */ {fallback}"
+        )
+
+    def diagnostic_zero_value_for_type(self, type_name):
+        """Return a HIP fallback expression for rejected value-producing calls."""
+        if type_name is None:
+            return "0"
+
+        mapped_type = self.map_type(type_name)
+        vector_info = self.vector_type_info(mapped_type) or self.vector_type_info(
+            self.type_name_string(type_name)
+        )
+        if vector_info is not None:
+            component_type = vector_info["component_type"]
+            if component_type == "uint":
+                zero = "0u"
+            elif component_type == "double":
+                zero = "0.0"
+            elif component_type == "float":
+                zero = "0.0f"
+            elif component_type == "bool":
+                zero = "false"
+            else:
+                zero = "0"
+            values = ", ".join([zero] * len(vector_info["components"]))
+            return f"{vector_info['constructor']}({values})"
+
+        if mapped_type == "bool":
+            return "false"
+        if mapped_type in {"float", "half"}:
+            return "0.0f"
+        if mapped_type == "double":
+            return "0.0"
+        if mapped_type in {"uint", "unsigned int", "u32"}:
+            return "0u"
+        if mapped_type in {
+            "int",
+            "short",
+            "char",
+            "long long",
+            "unsigned char",
+            "unsigned short",
+            "unsigned long long",
+        }:
+            return "0"
+        return f"{mapped_type}{{}}"
+
+    def collect_structured_buffer_length_requirements(self, root):
+        """Collect buffers that need explicit length sidecar parameters."""
+        functions = self.query_collect_functions(root)
+        functions_by_name = {getattr(func, "name", None): func for func in functions}
+        functions_by_name = {
+            name: func for name, func in functions_by_name.items() if name
+        }
+        param_names = {
+            func_name: {
+                getattr(param, "name", None)
+                for param in getattr(func, "parameters", getattr(func, "params", []))
+            }
+            for func_name, func in functions_by_name.items()
+        }
+        param_names = {
+            func_name: {name for name in names if name}
+            for func_name, names in param_names.items()
+        }
+
+        global_length_names = set()
+        function_param_length_names = {
+            func_name: set() for func_name in functions_by_name
+        }
+
+        def mark_resource_name(func_name, resource_name):
+            if not resource_name:
+                return False
+            if resource_name in param_names.get(func_name, set()):
+                before = len(function_param_length_names[func_name])
+                function_param_length_names[func_name].add(resource_name)
+                return len(function_param_length_names[func_name]) != before
+            before = len(global_length_names)
+            global_length_names.add(resource_name)
+            return len(global_length_names) != before
+
+        for func_name, func in functions_by_name.items():
+            for call in self.query_walk_nodes(getattr(func, "body", [])):
+                if not isinstance(call, FunctionCallNode):
+                    continue
+                buffer_expr = self.structured_buffer_dimensions_target(call)
+                if buffer_expr is None:
+                    continue
+                mark_resource_name(func_name, self.get_expression_name(buffer_expr))
+
+        changed = True
+        while changed:
+            changed = False
+            for caller_name, caller in functions_by_name.items():
+                caller_params = param_names.get(caller_name, set())
+                for call in self.query_walk_nodes(getattr(caller, "body", [])):
+                    if not isinstance(call, FunctionCallNode):
+                        continue
+                    callee_name = self.raw_function_call_name(call)
+                    callee = functions_by_name.get(callee_name)
+                    if callee is None:
+                        continue
+
+                    callee_required = function_param_length_names.get(
+                        callee_name, set()
+                    )
+                    if not callee_required:
+                        continue
+
+                    callee_params = getattr(
+                        callee, "parameters", getattr(callee, "params", [])
+                    )
+                    raw_args = getattr(call, "arguments", getattr(call, "args", []))
+                    for index, param in enumerate(callee_params):
+                        if index >= len(raw_args):
+                            continue
+                        param_name = getattr(param, "name", None)
+                        if param_name not in callee_required:
+                            continue
+
+                        arg_name = self.get_expression_name(raw_args[index])
+                        if not arg_name:
+                            continue
+                        if arg_name in caller_params:
+                            before = len(function_param_length_names[caller_name])
+                            function_param_length_names[caller_name].add(arg_name)
+                            changed = (
+                                changed
+                                or len(function_param_length_names[caller_name])
+                                != before
+                            )
+                        else:
+                            before = len(global_length_names)
+                            global_length_names.add(arg_name)
+                            changed = changed or len(global_length_names) != before
+
+        return (
+            global_length_names,
+            {
+                func_name: names
+                for func_name, names in function_param_length_names.items()
+                if names
+            },
+        )
+
+    def structured_buffer_dimensions_target(self, call):
+        """Return the buffer expression queried by a dimensions call."""
+        func_name = self.raw_function_call_name(call)
+        raw_args = getattr(call, "arguments", getattr(call, "args", []))
+        if func_name == "buffer_dimensions" and raw_args:
+            return raw_args[0]
+
+        function_expr = getattr(call, "function", getattr(call, "name", None))
+        if isinstance(function_expr, MemberAccessNode):
+            member = getattr(function_expr, "member", None)
+            if member == "GetDimensions":
+                return getattr(
+                    function_expr,
+                    "object_expr",
+                    getattr(function_expr, "object", None),
+                )
+        return None
+
+    def structured_buffer_length_name(self, name):
+        """Return the sidecar length parameter/declaration name for a buffer."""
+        return f"{name}_length"
+
+    def structured_buffer_requires_length(self, name):
+        """Return whether a global buffer needs a length sidecar."""
+        return bool(name and name in self.structured_buffer_length_names)
+
+    def structured_buffer_parameter_requires_length(
+        self, func_name, name, type_name=None
+    ):
+        """Return whether a function parameter needs a length sidecar."""
+        if not name:
+            return False
+        if name not in self.structured_buffer_length_function_params.get(
+            func_name, set()
+        ):
+            return False
+        return type_name is None or self.buffer_type_supports_length(type_name)
+
+    def buffer_type_supports_length(self, type_name):
+        """Return whether a resource type can use a HIP length sidecar."""
+        return (
+            self.structured_buffer_type_parts(type_name) is not None
+            or self.byte_address_buffer_base_type(type_name) is not None
+        )
+
+    def structured_buffer_length_declaration(self, name, type_name):
+        """Format a global/local sidecar length declaration when required."""
+        if not self.structured_buffer_requires_length(name):
+            return None
+        if not self.buffer_type_supports_length(type_name):
+            return None
+        return self.format_structured_buffer_length_declarator(type_name, name)
+
+    def structured_buffer_length_parameter(self, func_name, name, type_name):
+        """Format a sidecar length parameter when required."""
+        if not self.structured_buffer_parameter_requires_length(
+            func_name, name, type_name
+        ):
+            return None
+        return self.format_structured_buffer_length_declarator(type_name, name)
+
+    def format_structured_buffer_length_declarator(self, type_name, name):
+        """Format the HIP uint pointer sidecar matching a buffer declarator."""
+        type_name = self.type_name_string(type_name)
+        length_name = self.structured_buffer_length_name(name)
+        if "[" not in type_name or "]" not in type_name:
+            return f"const uint* {length_name}"
+
+        array_suffix = type_name[type_name.find("[") :]
+        return format_array_declarator("const uint*", length_name, array_suffix)
+
+    def structured_buffer_length_data_expression(self, buffer_expr):
+        """Return the sidecar length pointer paired with a buffer expression."""
+        if isinstance(buffer_expr, ArrayAccessNode):
+            array_expr = getattr(
+                buffer_expr, "array_expr", getattr(buffer_expr, "array", None)
+            )
+            index_expr = getattr(
+                buffer_expr, "index_expr", getattr(buffer_expr, "index", None)
+            )
+            base_length = self.structured_buffer_length_data_expression(array_expr)
+            if base_length is None:
+                return None
+            return f"{base_length}[{self.visit(index_expr)}]"
+
+        name = self.get_expression_name(buffer_expr)
+        if not name:
+            return None
+
+        length_parameter = self.current_structured_buffer_length_parameters.get(name)
+        if length_parameter is not None:
+            return length_parameter
+
+        if self.structured_buffer_requires_length(name):
+            return self.structured_buffer_length_name(name)
+        return None
+
+    def structured_buffer_length_expression(self, buffer_expr):
+        """Return the scalar length expression for a buffer resource."""
+        length_data = self.structured_buffer_length_data_expression(buffer_expr)
+        if length_data is None:
+            return None
+        return f"{length_data}[0]"
+
+    def structured_buffer_counter_name(self, name):
+        """Return the sidecar counter parameter/declaration name for a buffer."""
+        return f"{name}_counter"
+
+    def structured_buffer_counter_declaration(self, name, type_name):
+        """Format a global/local sidecar counter declaration when required."""
+        if not self.structured_buffer_requires_counter(type_name):
+            return None
+        return self.format_structured_buffer_counter_declarator(type_name, name)
+
+    def structured_buffer_counter_parameter(self, name, type_name):
+        """Format a sidecar counter parameter when required."""
+        if not self.structured_buffer_requires_counter(type_name):
+            return None
+        return self.format_structured_buffer_counter_declarator(type_name, name)
+
+    def format_structured_buffer_counter_declarator(self, type_name, name):
+        """Format the HIP uint pointer sidecar matching a buffer declarator."""
+        type_name = self.type_name_string(type_name)
+        counter_name = self.structured_buffer_counter_name(name)
+        if "[" not in type_name or "]" not in type_name:
+            return f"uint* {counter_name}"
+
+        array_suffix = type_name[type_name.find("[") :]
+        return format_array_declarator("uint*", counter_name, array_suffix)
+
+    def structured_buffer_counter_expression(self, buffer_expr):
+        """Return the sidecar counter expression paired with a buffer expression."""
+        if isinstance(buffer_expr, ArrayAccessNode):
+            array_expr = getattr(
+                buffer_expr, "array_expr", getattr(buffer_expr, "array", None)
+            )
+            index_expr = getattr(
+                buffer_expr, "index_expr", getattr(buffer_expr, "index", None)
+            )
+            base_counter = self.structured_buffer_counter_expression(array_expr)
+            if base_counter is None:
+                return None
+            return f"{base_counter}[{self.visit(index_expr)}]"
+
+        name = self.get_expression_name(buffer_expr)
+        if not name:
+            return None
+        return self.structured_buffer_counter_name(name)
+
+    def hip_user_function_call_arguments(self, func_name, raw_args, args):
+        """Expand user calls with HIP sidecar resource arguments."""
+        callee = self.query_functions_by_name.get(func_name)
+        if callee is None:
+            return args
+
+        params = getattr(callee, "parameters", getattr(callee, "params", []))
+        query_params = self.query_metadata_function_params.get(func_name, set())
+        expanded_args = []
+        for index, arg in enumerate(args):
+            expanded_args.append(arg)
+            if index >= len(params) or index >= len(raw_args):
+                continue
+
+            param = params[index]
+            param_name = getattr(param, "name", None)
+            if param_name in query_params:
+                metadata_arg = self.query_metadata_expression(raw_args[index])
+                if metadata_arg:
+                    expanded_args.append(metadata_arg)
+
+            param_type = self.get_parameter_type(param)
+            if self.structured_buffer_parameter_requires_length(
+                func_name, param_name, param_type
+            ):
+                length_arg = self.structured_buffer_length_data_expression(
+                    raw_args[index]
+                )
+                if length_arg:
+                    expanded_args.append(length_arg)
+
+            if self.structured_buffer_requires_counter(param_type):
+                counter_arg = self.structured_buffer_counter_expression(raw_args[index])
+                if counter_arg:
+                    expanded_args.append(counter_arg)
+
+        return expanded_args
+
+    def byte_address_buffer_member_call(self, function_expr):
+        """Return byte-address buffer member-call pieces, if applicable."""
+        if not isinstance(function_expr, MemberAccessNode):
+            return None
+
+        buffer_expr = getattr(
+            function_expr, "object_expr", getattr(function_expr, "object", None)
+        )
+        buffer_type = self.expression_result_type(buffer_expr)
+        if self.byte_address_buffer_base_type(buffer_type) is None:
+            return None
+
+        return buffer_expr, getattr(function_expr, "member", ""), buffer_type
+
+    def byte_address_buffer_component_count(self, operation):
+        """Return the uint lane count for byte-address load/store operations."""
+        operation_counts = {
+            "Load": 1,
+            "Load2": 2,
+            "Load3": 3,
+            "Load4": 4,
+            "Store": 1,
+            "Store2": 2,
+            "Store3": 3,
+            "Store4": 4,
+        }
+        return operation_counts.get(operation)
+
+    def byte_address_buffer_atomic_operations(self):
+        """Return supported RWByteAddressBuffer atomic method mappings."""
+        return {
+            "InterlockedAdd": ("add", "atomicAdd", 2),
+            "InterlockedMin": ("min", "atomicMin", 2),
+            "InterlockedMax": ("max", "atomicMax", 2),
+            "InterlockedAnd": ("and", "atomicAnd", 2),
+            "InterlockedOr": ("or", "atomicOr", 2),
+            "InterlockedXor": ("xor", "atomicXor", 2),
+            "InterlockedExchange": ("exchange", "atomicExch", 2),
+            "InterlockedCompareExchange": ("compare_exchange", "atomicCAS", 3),
+        }
+
+    def generate_byte_address_buffer_atomic(
+        self, buffer_expr, buffer_type, operation, args
+    ):
+        """Lower RWByteAddressBuffer Interlocked* methods to HIP atomics."""
+        operation_info = self.byte_address_buffer_atomic_operations().get(operation)
+        if operation_info is None:
+            return None
+
+        operation_name, intrinsic, required_args = operation_info
+        has_out_arg = len(args) == required_args + 1
+        fallback = "((void)0)" if has_out_arg else "0u"
+        if len(args) < required_args or len(args) > required_args + 1:
+            return self.byte_address_buffer_diagnostic_call(
+                operation, buffer_type, fallback
+            )
+        if not self.byte_address_buffer_is_writable(buffer_type):
+            return self.byte_address_buffer_diagnostic_call(
+                operation, buffer_type, fallback
+            )
+
+        helper_name = self.require_byte_address_atomic_helper(operation_name, intrinsic)
+        buffer_name = self.visit(buffer_expr)
+        helper_args = [buffer_name, *args[:required_args]]
+        call = f"{helper_name}({', '.join(helper_args)})"
+        if has_out_arg:
+            return f"{args[required_args]} = {call}"
+        return call
+
+    def byte_address_atomic_helper_name(self, operation):
+        """Return a stable HIP helper name for a byte-address atomic operation."""
+        return f"cgl_byte_address_atomic_{operation}_uint"
+
+    def require_byte_address_atomic_helper(self, operation, intrinsic):
+        """Register a HIP byte-address atomic helper and return its name."""
+        helper_name = self.byte_address_atomic_helper_name(operation)
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        pointer_expr = "reinterpret_cast<unsigned int*>(buffer + offset)"
+        if operation == "compare_exchange":
+            helper = (
+                "__device__ inline uint "
+                f"{helper_name}(unsigned char* buffer, uint offset, "
+                "uint compare_value, uint value)\n"
+                "{\n"
+                f"    return {intrinsic}({pointer_expr}, compare_value, value);\n"
+                "}"
+            )
+            self.helper_functions[helper_name] = helper
+            return helper_name
+
+        helper = (
+            "__device__ inline uint "
+            f"{helper_name}(unsigned char* buffer, uint offset, uint value)\n"
+            "{\n"
+            f"    return {intrinsic}({pointer_expr}, value);\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def byte_address_buffer_value_type(self, component_count):
+        """Return the HIP uint vector type for a byte-address operation."""
+        if component_count == 1:
+            return "uint"
+        return f"uint{component_count}"
+
+    def byte_address_helper_suffix(self, component_count):
+        """Return a stable helper-name suffix for byte-address operations."""
+        if component_count == 1:
+            return "uint"
+        return f"uint{component_count}"
+
+    def require_byte_address_load_helper(self, component_count):
+        """Register a HIP byte-address load helper and return its name."""
+        helper_name = (
+            f"cgl_byte_address_load_{self.byte_address_helper_suffix(component_count)}"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        if component_count == 1:
+            helper = (
+                "__device__ inline uint "
+                f"{helper_name}(const unsigned char* buffer, uint offset)\n"
+                "{\n"
+                "    return *reinterpret_cast<const uint*>(buffer + offset);\n"
+                "}"
+            )
+            self.helper_functions[helper_name] = helper
+            return helper_name
+
+        scalar_helper = self.require_byte_address_load_helper(1)
+        components = ("x", "y", "z", "w")[:component_count]
+        args = [
+            f"{scalar_helper}(buffer, offset + {index * 4}u)"
+            for index, _ in enumerate(components)
+        ]
+        value_type = self.byte_address_buffer_value_type(component_count)
+        constructor = self.function_map.get(value_type, value_type)
+        helper = (
+            f"__device__ inline {value_type} "
+            f"{helper_name}(const unsigned char* buffer, uint offset)\n"
+            "{\n"
+            f"    return {constructor}({', '.join(args)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def require_byte_address_store_helper(self, component_count):
+        """Register a HIP byte-address store helper and return its name."""
+        helper_name = (
+            f"cgl_byte_address_store_{self.byte_address_helper_suffix(component_count)}"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        value_type = self.byte_address_buffer_value_type(component_count)
+        if component_count == 1:
+            helper = (
+                "__device__ inline void "
+                f"{helper_name}(unsigned char* buffer, uint offset, uint value)\n"
+                "{\n"
+                "    *reinterpret_cast<uint*>(buffer + offset) = value;\n"
+                "}"
+            )
+            self.helper_functions[helper_name] = helper
+            return helper_name
+
+        scalar_helper = self.require_byte_address_store_helper(1)
+        components = ("x", "y", "z", "w")[:component_count]
+        lines = [
+            f"    {scalar_helper}(buffer, offset + {index * 4}u, value.{component});"
+            for index, component in enumerate(components)
+        ]
+        helper = (
+            f"__device__ inline void {helper_name}"
+            f"(unsigned char* buffer, uint offset, {value_type} value)\n"
+            "{\n" + "\n".join(lines) + "\n}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def byte_address_buffer_diagnostic_call(self, operation, buffer_type, fallback):
+        """Return diagnostic code for rejected byte-address buffer operations."""
+        buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
+        return (
+            f"/* unsupported {self.resource_backend_name()} byte-address buffer call: "
+            f"{operation} on {buffer_type} */ {fallback}"
+        )
 
     def visit_str(self, node) -> str:
         return str(node)
@@ -2066,6 +3464,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.add_line()
         return ""
 
+    def type_name_string(self, type_name):
+        """Return a stable string spelling for TypeNode or legacy type values."""
+        if type_name is None:
+            return None
+        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+            return self.convert_type_node_to_string(type_name)
+        return str(type_name)
+
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
         if hasattr(type_node, "name"):
@@ -2112,10 +3518,256 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if "[" in type_str and "]" in type_str:
             base_type = type_str.split("[")[0]
             array_part = type_str[type_str.find("[") :]
-            mapped_base = self.type_map.get(base_type, base_type)
+            canonical_base = self.canonical_resource_type(base_type)
+            mapped_base = self.map_type(canonical_base or base_type)
             return f"{mapped_base}{array_part}"
 
-        return self.type_map.get(type_str, type_str)
+        structured_buffer_type = self.hip_structured_buffer_type(type_str)
+        if structured_buffer_type is not None:
+            return structured_buffer_type
+
+        byte_address_buffer_type = self.hip_byte_address_buffer_type(type_str)
+        if byte_address_buffer_type is not None:
+            return byte_address_buffer_type
+
+        canonical_type = self.canonical_resource_type(type_str)
+        return self.type_map.get(canonical_type or type_str, type_str)
+
+    def generic_type_parts(self, type_name):
+        """Split a generic type name into base name and top-level arguments."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+
+        base_type = type_name.split("[", 1)[0].strip()
+        generic_start = base_type.find("<")
+        generic_end = base_type.rfind(">")
+        if generic_start == -1 or generic_end < generic_start:
+            return None
+
+        base_name = base_type[:generic_start].strip()
+        args_text = base_type[generic_start + 1 : generic_end].strip()
+        args = []
+        depth = 0
+        current = []
+        for char in args_text:
+            if char == "<":
+                depth += 1
+                current.append(char)
+            elif char == ">":
+                depth -= 1
+                current.append(char)
+            elif char == "," and depth == 0:
+                args.append("".join(current).strip())
+                current = []
+            else:
+                current.append(char)
+
+        trailing_arg = "".join(current).strip()
+        if trailing_arg:
+            args.append(trailing_arg)
+        return base_name, args
+
+    def structured_buffer_type_parts(self, type_name):
+        """Return structured-buffer base and element type, if applicable."""
+        parts = self.generic_type_parts(type_name)
+        if parts is None:
+            return None
+
+        base_name, args = parts
+        if (
+            base_name
+            not in {
+                "StructuredBuffer",
+                "RWStructuredBuffer",
+                "AppendStructuredBuffer",
+                "ConsumeStructuredBuffer",
+            }
+            or not args
+        ):
+            return None
+        return base_name, args[0]
+
+    def structured_buffer_is_writable(self, type_name):
+        """Return whether a structured-buffer type permits writes."""
+        parts = self.structured_buffer_type_parts(type_name)
+        return parts is not None and parts[0] == "RWStructuredBuffer"
+
+    def structured_buffer_requires_counter(self, type_name):
+        """Return whether a structured-buffer type needs an explicit counter."""
+        parts = self.structured_buffer_type_parts(type_name)
+        return parts is not None and parts[0] in {
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+        }
+
+    def hip_structured_buffer_type(self, type_name):
+        """Map structured-buffer resources to HIP pointer types."""
+        parts = self.structured_buffer_type_parts(type_name)
+        if parts is None:
+            return None
+
+        base_name, element_type = parts
+        hip_element_type = self.map_type(element_type)
+        if base_name in {"StructuredBuffer", "ConsumeStructuredBuffer"}:
+            return f"const {hip_element_type}*"
+        return f"{hip_element_type}*"
+
+    def byte_address_buffer_base_type(self, type_name):
+        """Return the byte-address buffer base type, if applicable."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+        base_type = type_name.split("[", 1)[0].strip()
+        if base_type in {"ByteAddressBuffer", "RWByteAddressBuffer"}:
+            return base_type
+        return None
+
+    def byte_address_buffer_is_writable(self, type_name):
+        """Return whether a byte-address buffer type permits writes."""
+        return self.byte_address_buffer_base_type(type_name) == "RWByteAddressBuffer"
+
+    def hip_byte_address_buffer_type(self, type_name):
+        """Map ByteAddressBuffer and RWByteAddressBuffer to HIP byte pointers."""
+        base_type = self.byte_address_buffer_base_type(type_name)
+        if base_type == "ByteAddressBuffer":
+            return "const unsigned char*"
+        if base_type == "RWByteAddressBuffer":
+            return "unsigned char*"
+        return None
+
+    def array_access_element_type(self, type_name):
+        """Return the element type for HIP arrays and structured buffers."""
+        array_element_type = super().array_access_element_type(type_name)
+        if array_element_type is not None:
+            return array_element_type
+
+        parts = self.structured_buffer_type_parts(type_name)
+        if parts is not None:
+            return parts[1]
+        return None
+
+    def expression_result_type(self, node):
+        """Infer expression result types with HIP buffer operations."""
+        if isinstance(node, FunctionCallNode):
+            buffer_result_type = self.buffer_call_result_type(node)
+            if buffer_result_type is not None:
+                return buffer_result_type
+        return super().expression_result_type(node)
+
+    def buffer_call_result_type(self, node):
+        """Infer result type for structured and byte-address buffer read calls."""
+        function_expr = getattr(node, "function", getattr(node, "name", None))
+        raw_args = getattr(node, "arguments", getattr(node, "args", []))
+
+        byte_member_call = self.byte_address_buffer_member_call(function_expr)
+        if byte_member_call is not None:
+            _, operation, _ = byte_member_call
+            if operation == "GetDimensions":
+                return "uint"
+            if operation in self.byte_address_buffer_atomic_operations():
+                return "uint"
+            if operation.startswith("Load") and raw_args:
+                component_count = self.byte_address_buffer_component_count(operation)
+                if component_count is not None:
+                    return self.byte_address_buffer_value_type(component_count)
+            return None
+
+        member_call = self.structured_buffer_member_call(function_expr)
+        if member_call is not None:
+            _, operation, buffer_type = member_call
+            if operation == "Load" and raw_args:
+                return self.structured_buffer_type_parts(buffer_type)[1]
+            if operation == "Consume":
+                return self.structured_buffer_type_parts(buffer_type)[1]
+            if operation == "GetDimensions" and not raw_args:
+                return "uint"
+            return None
+
+        func_name = getattr(function_expr, "name", function_expr)
+        if func_name == "buffer_load" and raw_args:
+            buffer_type = self.expression_result_type(raw_args[0])
+            if self.byte_address_buffer_base_type(buffer_type) is not None:
+                return "uint"
+            parts = self.structured_buffer_type_parts(buffer_type)
+            if parts is not None:
+                return parts[1]
+        if func_name == "buffer_consume" and raw_args:
+            buffer_type = self.expression_result_type(raw_args[0])
+            parts = self.structured_buffer_type_parts(buffer_type)
+            if parts is not None:
+                return parts[1]
+        if func_name == "buffer_dimensions" and raw_args:
+            buffer_type = self.expression_result_type(raw_args[0])
+            if self.buffer_type_supports_length(buffer_type):
+                return "uint"
+        if func_name in self.structured_buffer_atomic_operations() and raw_args:
+            target = self.structured_buffer_atomic_target(raw_args[0])
+            if target is not None:
+                return target["target_type"]
+        return None
+
+    def canonical_sampled_resource_type(self, type_name):
+        """Return the sampler spelling for HLSL-style sampled resources."""
+        if not isinstance(type_name, str):
+            return None
+        base_type = type_name.split("[", 1)[0].split("<", 1)[0].strip()
+        return self.sampled_resource_type_aliases.get(base_type)
+
+    def canonical_storage_resource_type(self, type_name):
+        """Return the image spelling for HLSL-style writable resources."""
+        if not isinstance(type_name, str):
+            return None
+
+        base_type = type_name.split("[", 1)[0].strip()
+        base_name = base_type.split("<", 1)[0].strip()
+        image_type = self.storage_resource_type_aliases.get(base_name)
+        if image_type is None:
+            return None
+
+        if "<" not in base_type or ">" not in base_type:
+            return image_type
+
+        value_type = base_type.split("<", 1)[1].rsplit(">", 1)[0].strip()
+        value_type = value_type.split(",", 1)[0].strip().lower()
+        if value_type in {"int", "i32"}:
+            return f"i{image_type}"
+        if value_type in {"uint", "u32"}:
+            return f"u{image_type}"
+        return image_type
+
+    def canonical_resource_type(self, type_name):
+        """Return the canonical sampler/image resource type for an alias."""
+        return self.canonical_sampled_resource_type(
+            type_name
+        ) or self.canonical_storage_resource_type(type_name)
+
+    def dimension_query_spec(self, type_name):
+        """Return HIP-specific resource metadata dimensions before shared specs."""
+        base_type = self.resource_base_type(type_name)
+        hip_specs = {
+            "image1D": (("width",), False, False),
+            "iimage1D": (("width",), False, False),
+            "uimage1D": (("width",), False, False),
+            "image1DArray": (("width", "elements"), False, False),
+            "iimage1DArray": (("width", "elements"), False, False),
+            "uimage1DArray": (("width", "elements"), False, False),
+            "iimageCube": (("width", "height"), False, False),
+            "uimageCube": (("width", "height"), False, False),
+            "imageCubeArray": (("width", "height", "elements"), False, False),
+            "iimageCubeArray": (("width", "height", "elements"), False, False),
+            "uimageCubeArray": (("width", "height", "elements"), False, False),
+        }
+        spec = hip_specs.get(base_type)
+        if spec is None:
+            return super().dimension_query_spec(base_type)
+        dimensions, mip, samples = spec
+        return {"dimensions": dimensions, "mip": mip, "samples": samples}
+
+    def resource_base_type(self, type_name):
+        """Normalize resource aliases before resource dispatch decisions."""
+        base_type = ResourceDiagnosticMixin.resource_base_type(self, type_name)
+        return self.canonical_resource_type(base_type) or base_type
 
     def format_typed_declarator(self, type_name, name, dynamic_array_as_pointer=True):
         if hasattr(type_name, "name") or hasattr(type_name, "element_type"):

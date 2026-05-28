@@ -247,6 +247,47 @@ class TestHipCodeGen:
         assert "out[1] = atan2(y, x);" in result
         assert "atan2f" not in result
 
+    def test_threadfence_converts_to_crossgl_memory_barrier(self):
+        """Test HIP thread fence variants convert back to CrossGL memoryBarrier."""
+        code = """
+        __global__ void fence(float* out) {
+            __threadfence();
+            __threadfence_block();
+            __threadfence_system();
+            __syncthreads();
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert result.count("memoryBarrier();") == 3
+        assert "workgroupBarrier();" in result
+        assert "__threadfence" not in result
+
+    def test_syncwarp_mask_emits_explicit_diagnostic(self):
+        """Test HIP warp synchronization emits an explicit CrossGL diagnostic."""
+        code = """
+        __global__ void sync(unsigned int mask) {
+            __syncwarp(mask);
+            __syncwarp();
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// __syncwarp(mask) not directly supported in CrossGL" in result
+        assert "// __syncwarp() not directly supported in CrossGL" in result
+        assert "Warp sync not directly supported in CrossGL" not in result
+        assert "None" not in result
+
     def test_atomic_builtins_parse_and_convert_to_crossgl(self):
         """Test HIP atomic builtins parse and convert back to CrossGL names."""
         code = """
@@ -801,6 +842,443 @@ class TestHipCodeGen:
         assert "tex2D<" not in result
         assert "surf2D" not in result
         assert "surf1D" not in result
+
+    def test_hip_sparse_texture_fetch_helpers_emit_diagnostics(self):
+        """Test sparse HIP texture fetches import as explicit diagnostics."""
+        code = """
+        void sparseTextureOps(
+            hipTextureObject_t lineTex,
+            hipTextureObject_t tex,
+            hipTextureObject_t volumeTex,
+            hipTextureObject_t layerTex,
+            bool* resident,
+            float x,
+            float2 uv,
+            float3 uvw,
+            int layer,
+            float lod
+        ) {
+            float4 sparseFetched = tex1Dfetch<float4>(lineTex, 3, resident);
+            float4 sparseLine = tex1D<float4>(lineTex, x, resident);
+            float4 sparseSample = tex2D<float4>(tex, uv.x, uv.y, resident);
+            float4 sparseLod = tex2DLod<float4>(tex, uv.x, uv.y, lod, resident);
+            float4 sparseGrad = tex2DGrad<float4>(
+                tex,
+                uv.x,
+                uv.y,
+                uv,
+                uv,
+                resident
+            );
+            float4 sparseVolume = tex3D<float4>(
+                volumeTex,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                resident
+            );
+            float4 sparseLayer = tex2DLayered<float4>(
+                layerTex,
+                uv.x,
+                uv.y,
+                layer,
+                resident
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "sampler1D lineTex" in result
+        assert "sampler2D tex" in result
+        assert "sampler3D volumeTex" in result
+        assert "sampler2DArray layerTex" in result
+        for name, helper in (
+            ("sparseFetched", "tex1Dfetch"),
+            ("sparseLine", "tex1D"),
+            ("sparseSample", "tex2D"),
+            ("sparseLod", "tex2DLod"),
+            ("sparseGrad", "tex2DGrad"),
+            ("sparseVolume", "tex3D"),
+            ("sparseLayer", "tex2DLayered"),
+        ):
+            assert (
+                f"var {name}: vec4<f32> = "
+                f"(/* hip texture.{helper} sparse residency not directly "
+                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
+            ) in result
+            assert f"{helper}<float4>(" not in result
+
+    def test_hip_sparse_texture_layered_cube_helpers_emit_diagnostics(self):
+        """Test sparse HIP layered/cube texture forms emit diagnostics."""
+        code = """
+        void sparseTextureFamilyOps(
+            hipTextureObject_t lineLayerTex,
+            hipTextureObject_t volumeTex,
+            hipTextureObject_t cubeTex,
+            hipTextureObject_t cubeLayerTex,
+            bool* resident,
+            float x,
+            float dx,
+            float dy,
+            float3 uvw,
+            float3 dPdx,
+            float3 dPdy,
+            int layer,
+            float lod
+        ) {
+            float4 sparse1DLayer = tex1DLayered<float4>(
+                lineLayerTex,
+                x,
+                layer,
+                resident
+            );
+            float4 sparse1DLayerLod = tex1DLayeredLod<float4>(
+                lineLayerTex,
+                x,
+                layer,
+                lod,
+                resident
+            );
+            float4 sparse1DLayerGrad = tex1DLayeredGrad<float4>(
+                lineLayerTex,
+                x,
+                layer,
+                dx,
+                dy,
+                resident
+            );
+            float4 sparse3DLod = tex3DLod<float4>(
+                volumeTex,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                lod,
+                resident
+            );
+            float4 sparse3DGrad = tex3DGrad<float4>(
+                volumeTex,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                dPdx,
+                dPdy,
+                resident
+            );
+            float4 sparseCube = texCubemap<float4>(
+                cubeTex,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                resident
+            );
+            float4 sparseCubeLod = texCubemapLod<float4>(
+                cubeTex,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                lod,
+                resident
+            );
+            float4 sparseCubeGrad = texCubemapGrad<float4>(
+                cubeTex,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                dPdx,
+                dPdy,
+                resident
+            );
+            float4 sparseCubeLayer = texCubemapLayered<float4>(
+                cubeLayerTex,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                layer,
+                resident
+            );
+            float4 sparseCubeLayerLod = texCubemapLayeredLod<float4>(
+                cubeLayerTex,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                layer,
+                lod,
+                resident
+            );
+            float4 sparseCubeLayerGrad = texCubemapLayeredGrad<float4>(
+                cubeLayerTex,
+                uvw.x,
+                uvw.y,
+                uvw.z,
+                layer,
+                dPdx,
+                dPdy,
+                resident
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "sampler1DArray lineLayerTex" in result
+        assert "sampler3D volumeTex" in result
+        assert "samplerCube cubeTex" in result
+        assert "samplerCubeArray cubeLayerTex" in result
+        for name, helper in (
+            ("sparse1DLayer", "tex1DLayered"),
+            ("sparse1DLayerLod", "tex1DLayeredLod"),
+            ("sparse1DLayerGrad", "tex1DLayeredGrad"),
+            ("sparse3DLod", "tex3DLod"),
+            ("sparse3DGrad", "tex3DGrad"),
+            ("sparseCube", "texCubemap"),
+            ("sparseCubeLod", "texCubemapLod"),
+            ("sparseCubeGrad", "texCubemapGrad"),
+            ("sparseCubeLayer", "texCubemapLayered"),
+            ("sparseCubeLayerLod", "texCubemapLayeredLod"),
+            ("sparseCubeLayerGrad", "texCubemapLayeredGrad"),
+        ):
+            assert (
+                f"var {name}: vec4<f32> = "
+                f"(/* hip texture.{helper} sparse residency not directly "
+                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
+            ) in result
+            assert f"{helper}<float4>(" not in result
+
+    def test_hip_texture_scalar_coordinates_emit_rank_diagnostics(self):
+        """Test malformed scalar texture coordinates emit explicit diagnostics."""
+        code = """
+        void textureCoordinateRankOps(
+            hipTextureObject_t lineLayerTex,
+            hipTextureObject_t layerTex,
+            hipTextureObject_t cubeTex,
+            hipTextureObject_t cubeLayerTex,
+            float x,
+            float2 uv,
+            float3 uvw,
+            float4 uvwl,
+            float lod,
+            float3 dPdx,
+            float3 dPdy,
+            float4 d4Pdx,
+            float4 d4Pdy
+        ) {
+            float4 badLineLayer = tex1DLayered<float4>(lineLayerTex, x);
+            float4 badLayerGrad = tex2DLayeredGrad<float4>(
+                layerTex,
+                uv,
+                dPdx,
+                dPdy
+            );
+            float4 badCube = texCubemap<float4>(cubeTex, x);
+            float4 badCubeLayerLod = texCubemapLayeredLod<float4>(
+                cubeLayerTex,
+                uvw,
+                lod
+            );
+            float4 goodLineLayer = tex1DLayered<float4>(lineLayerTex, uv);
+            float4 goodLayerGrad = tex2DLayeredGrad<float4>(
+                layerTex,
+                uvw,
+                dPdx,
+                dPdy
+            );
+            float4 goodCube = texCubemap<float4>(cubeTex, uvw);
+            float4 goodCubeLayerLod = texCubemapLayeredLod<float4>(
+                cubeLayerTex,
+                uvwl,
+                lod
+            );
+            float4 goodCubeLayerGrad = texCubemapLayeredGrad<float4>(
+                cubeLayerTex,
+                uvwl,
+                d4Pdx,
+                d4Pdy
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "sampler1DArray lineLayerTex" in result
+        assert "sampler2DArray layerTex" in result
+        assert "samplerCube cubeTex" in result
+        assert "samplerCubeArray cubeLayerTex" in result
+        for name, helper in (
+            ("badLineLayer", "tex1DLayered"),
+            ("badLayerGrad", "tex2DLayeredGrad"),
+            ("badCube", "texCubemap"),
+            ("badCubeLayerLod", "texCubemapLayeredLod"),
+        ):
+            assert (
+                f"var {name}: vec4<f32> = "
+                f"(/* hip texture.{helper} coordinate rank mismatch not directly "
+                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
+            ) in result
+
+        assert "texture(lineLayerTex, x)" not in result
+        assert "textureGrad(layerTex, uv, dPdx, dPdy)" not in result
+        assert "texture(cubeTex, x)" not in result
+        assert "textureLod(cubeLayerTex, uvw, lod)" not in result
+        assert "var goodLineLayer: vec4<f32> = texture(lineLayerTex, uv);" in result
+        assert (
+            "var goodLayerGrad: vec4<f32> = textureGrad("
+            "layerTex, uvw, dPdx, dPdy);" in result
+        )
+        assert "var goodCube: vec4<f32> = texture(cubeTex, uvw);" in result
+        assert (
+            "var goodCubeLayerLod: vec4<f32> = textureLod("
+            "cubeLayerTex, uvwl, lod);" in result
+        )
+        assert (
+            "var goodCubeLayerGrad: vec4<f32> = textureGrad("
+            "cubeLayerTex, uvwl, d4Pdx, d4Pdy);" in result
+        )
+
+    def test_hip_surface_malformed_coordinates_emit_rank_diagnostics(self):
+        """Test malformed surface coordinates emit explicit diagnostics."""
+        code = """
+        void surfaceCoordinateRankOps(
+            hipSurfaceObject_t lineLayerSurface,
+            hipSurfaceObject_t layerSurface,
+            hipSurfaceObject_t cubeSurface,
+            hipSurfaceObject_t cubeLayerSurface,
+            int x,
+            int y,
+            int layer,
+            int face,
+            int2 pixel,
+            int3 xyz,
+            float4 value
+        ) {
+            float4 badLineLayer = surf1DLayeredread<float4>(
+                lineLayerSurface,
+                x * sizeof(float4)
+            );
+            float4 badCubeVector = surfCubemapread<float4>(
+                cubeSurface,
+                pixel,
+                face
+            );
+            float4 badCubeLayerVector = surfCubemapLayeredread<float4>(
+                cubeLayerSurface,
+                xyz,
+                face,
+                layer,
+                0
+            );
+            float4 badLayerByPointer;
+            surf2DLayeredread<float4>(
+                &badLayerByPointer,
+                layerSurface,
+                pixel,
+                layer
+            );
+            surf2DLayeredwrite(value, layerSurface, pixel, layer);
+            surfCubemapLayeredwrite(
+                value,
+                cubeLayerSurface,
+                xyz,
+                face,
+                layer,
+                0
+            );
+            float4 goodLineLayer = surf1DLayeredread<float4>(
+                lineLayerSurface,
+                x * sizeof(float4),
+                layer
+            );
+            float4 goodCube = surfCubemapread<float4>(
+                cubeSurface,
+                x * sizeof(float4),
+                y,
+                face
+            );
+            surf2DLayeredwrite(
+                value,
+                layerSurface,
+                x * sizeof(float4),
+                y,
+                layer
+            );
+            surfCubemapLayeredwrite(
+                value,
+                cubeLayerSurface,
+                x * sizeof(float4),
+                y,
+                face,
+                layer
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "image1DArray lineLayerSurface" in result
+        assert "image2DArray layerSurface" in result
+        assert "imageCube cubeSurface" in result
+        assert "imageCubeArray cubeLayerSurface" in result
+        for name, helper in (
+            ("badLineLayer", "surf1DLayeredread"),
+            ("badCubeVector", "surfCubemapread"),
+            ("badCubeLayerVector", "surfCubemapLayeredread"),
+        ):
+            assert (
+                f"var {name}: vec4<f32> = "
+                f"(/* hip surface.{helper} coordinate shape mismatch not directly "
+                "supported in CrossGL */ vec4<f32>(0.0, 0.0, 0.0, 0.0));"
+            ) in result
+
+        assert (
+            "badLayerByPointer = "
+            "(/* hip surface.surf2DLayeredread coordinate shape mismatch "
+            "not directly supported in CrossGL */ "
+            "vec4<f32>(0.0, 0.0, 0.0, 0.0));"
+        ) in result
+        for helper in ("surf2DLayeredwrite", "surfCubemapLayeredwrite"):
+            assert (
+                f"(/* hip surface.{helper} coordinate shape mismatch not directly "
+                "supported in CrossGL */ 0);"
+            ) in result
+
+        assert "imageLoad(cubeSurface, vec3<i32>(pixel, face" not in result
+        assert (
+            "imageLoad(cubeLayerSurface, vec4<i32>(xyz, face, layer, 0))" not in result
+        )
+        assert "imageStore(layerSurface, vec3<i32>(pixel, layer), value)" not in result
+        assert (
+            "imageStore(cubeLayerSurface, vec4<i32>(xyz, face, layer, 0), value)"
+            not in result
+        )
+        assert (
+            "var goodLineLayer: vec4<f32> = imageLoad("
+            "lineLayerSurface, vec2<i32>(x, layer));"
+        ) in result
+        assert (
+            "var goodCube: vec4<f32> = imageLoad("
+            "cubeSurface, vec3<i32>(x, y, face));"
+        ) in result
+        assert "imageStore(layerSurface, vec3<i32>(x, y, layer), value);" in result
+        assert (
+            "imageStore(cubeLayerSurface, vec4<i32>(x, y, face, layer), value);"
+            in result
+        )
 
     def test_kernel_launch_conversion(self):
         """Test HIP kernel launch configuration conversion"""
@@ -2549,6 +3027,2192 @@ class TestHipCodeGen:
         assert "hipArrayDestroy(" not in result
         assert "err = hipDeviceSynchronize();" not in result
 
+    def test_hip_memory_pointer_occupancy_expression_contexts_emit_status(self):
+        """Test memory, pointer, and occupancy expressions emit status metadata."""
+        code = """
+        hipError_t memoryExpressions(
+            size_t bytes,
+            hipStream_t stream,
+            hipMemPool_t pool,
+            bool retry
+        ) {
+            float* devicePtr;
+            float* managedPtr;
+            float* pooledPtr;
+            float* hostPtr;
+            float* pitchedPtr;
+            size_t pitch;
+            size_t freeMem;
+            size_t totalMem;
+            size_t pointerSize;
+            void* virtualAddress;
+            void* preferredAddress;
+            hipDeviceptr_t driverPtr;
+            hipDeviceptr_t driverPitchedPtr;
+            hipMemGenericAllocationHandle_t allocationHandle;
+            hipMemPoolProps poolProps;
+            hipMemLocation location;
+            hipMemAccessDesc accessDesc;
+            hipPointerAttribute_t pointerAttrs;
+            hipPointer_attribute pointerAttribute;
+            void* attributeData;
+            unsigned long long accessFlags;
+            int pointerAttrValue;
+            int gridSize;
+            int blockSize;
+            int activeBlocks;
+            void* kernel;
+            bool allocated =
+                hipMalloc((void**)&devicePtr, bytes) == hipSuccess;
+            bool managed =
+                hipMallocManaged((void**)&managedPtr, bytes) == hipSuccess;
+            bool extended =
+                hipExtMallocWithFlags(
+                    (void**)&devicePtr,
+                    bytes,
+                    hipDeviceMallocDefault
+                ) == hipSuccess;
+            bool asyncAllocated =
+                hipMallocAsync((void**)&devicePtr, bytes, stream) == hipSuccess;
+            bool pooled =
+                hipMallocFromPoolAsync(
+                    (void**)&pooledPtr,
+                    bytes,
+                    pool,
+                    stream
+                ) == hipSuccess;
+            bool hostAllocated =
+                hipHostMalloc(
+                    (void**)&hostPtr,
+                    bytes,
+                    hipHostMallocMapped
+                ) == hipSuccess;
+            bool pitched =
+                hipMallocPitch((void**)&pitchedPtr, &pitch, bytes, 4) == hipSuccess;
+            bool poolCreated =
+                hipMemPoolCreate(&pool, &poolProps) == hipSuccess;
+            bool infoReady = hipMemGetInfo(&freeMem, &totalMem) == hipSuccess;
+            bool pointerReady =
+                hipPointerGetAttributes(&pointerAttrs, devicePtr) == hipSuccess;
+            bool driverPointerReady =
+                hipDrvPointerGetAttributes(
+                    1,
+                    &pointerAttribute,
+                    &attributeData,
+                    driverPtr
+                ) == hipSuccess;
+            bool pointerAttrReady =
+                hipPointerGetAttribute(
+                    &pointerAttrValue,
+                    hipPointerAttributeMemoryType,
+                    devicePtr
+                ) == hipSuccess;
+            bool pointerAttrSet =
+                hipPointerSetAttribute(
+                    &pointerAttrValue,
+                    hipPointerAttributeMemoryType,
+                    devicePtr
+                ) == hipSuccess;
+            bool pointerInfoReady =
+                hipMemPtrGetInfo(devicePtr, &pointerSize) == hipSuccess;
+            bool occupancyReady =
+                hipOccupancyMaxPotentialBlockSize(
+                    &gridSize,
+                    &blockSize,
+                    kernel,
+                    0,
+                    0
+                ) == hipSuccess;
+            bool occupancyVariableReady =
+                hipOccupancyMaxPotentialBlockSizeVariableSMemWithFlags(
+                    &gridSize,
+                    &blockSize,
+                    kernel,
+                    0,
+                    256,
+                    1
+                ) == hipSuccess;
+            bool activeReady =
+                hipOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
+                    &activeBlocks,
+                    kernel,
+                    blockSize,
+                    0,
+                    1
+                ) == hipSuccess;
+            if (hipMemAlloc(&driverPtr, bytes) != hipSuccess) {
+                return hipMemGetAddressRange(
+                    &driverPitchedPtr,
+                    &pointerSize,
+                    driverPtr
+                );
+            }
+            if (hipMemAllocPitch(&driverPitchedPtr, &pitch, bytes, 4, 4) == hipSuccess) {
+                hipError_t selectedDriver =
+                    retry ? hipMemFree(driverPitchedPtr) : hipMemAllocHost(&hostPtr, bytes);
+                return selectedDriver;
+            }
+            if (hipMemAddressReserve(&virtualAddress, bytes, 0, preferredAddress, 0) == hipSuccess) {
+                hipError_t selectedVirtual =
+                    retry ? hipMemMap(virtualAddress, bytes, 0, allocationHandle, 0) : hipMemSetAccess(virtualAddress, bytes, &accessDesc, 1);
+                return selectedVirtual;
+            }
+            if (hipMemGetAccess(&accessFlags, &location, virtualAddress) == hipSuccess) {
+                return hipMemAddressFree(virtualAddress, bytes);
+            }
+            hipError_t selected =
+                retry ? hipFree(devicePtr) : hipMemPoolDestroy(pool);
+            return selected;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var allocated: bool = ((/* HIP memory allocate: devicePtr, "
+            "bytes: bytes */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var managed: bool = ((/* HIP memory allocate: managedPtr, "
+            "bytes: bytes */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var extended: bool = ((/* HIP extended memory allocate: "
+            "devicePtr, bytes: bytes, flags: hipDeviceMallocDefault */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "var pooled: bool = ((/* HIP async memory allocate from pool: "
+            "pooledPtr, bytes: bytes, pool: pool, stream: stream */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "var hostAllocated: bool = ((/* HIP host memory allocate: hostPtr, "
+            "bytes: bytes, flags: hipHostMallocMapped */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var infoReady: bool = ((/* HIP memory info: free output: freeMem, "
+            "total output: totalMem */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var pointerReady: bool = ((/* HIP pointer attributes: output: "
+            "pointerAttrs, pointer: devicePtr */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var driverPointerReady: bool = ((/* HIP driver pointer attributes: "
+            "count: 1, attributes: (&pointerAttribute), data: (&attributeData), "
+            "pointer: driverPtr */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var pointerAttrSet: bool = ((/* HIP pointer set attribute: value: "
+            "pointerAttrValue, attribute: hipPointerAttributeMemoryType, "
+            "pointer: devicePtr */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var occupancyReady: bool = ((/* HIP occupancy max potential block "
+            "size: grid output: gridSize, block output: blockSize, kernel: "
+            "kernel, dynamic shared memory: 0, block size limit: 0 */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "var activeReady: bool = ((/* HIP occupancy active blocks per "
+            "multiprocessor: output: activeBlocks, kernel: kernel, block size: "
+            "blockSize, dynamic shared memory: 0, flags: 1 */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP driver memory allocate: output: driverPtr, "
+            "bytes: bytes */ hipSuccess) != hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP driver memory address range: base output: "
+            "driverPitchedPtr, size output: pointerSize, pointer: driverPtr */ "
+            "hipSuccess);"
+        ) in result
+        assert (
+            "var selectedDriver: hipError_t = (retry ? "
+            "(/* HIP driver memory free: driverPitchedPtr */ hipSuccess) : "
+            "(/* HIP driver host memory allocate: output: hostPtr, bytes: bytes */ "
+            "hipSuccess));"
+        ) in result
+        assert (
+            "var selectedVirtual: hipError_t = (retry ? "
+            "(/* HIP virtual memory map: pointer: virtualAddress, bytes: bytes, "
+            "offset: 0, handle: allocationHandle, flags: 0 */ hipSuccess) : "
+            "(/* HIP virtual memory set access: pointer: virtualAddress, "
+            "bytes: bytes, descriptors: (&accessDesc), count: 1 */ hipSuccess));"
+        ) in result
+        assert (
+            "return (/* HIP virtual memory free address: pointer: "
+            "virtualAddress, bytes: bytes */ hipSuccess);"
+        ) in result
+        assert (
+            "var selected: hipError_t = (retry ? "
+            "(/* HIP memory free: devicePtr */ hipSuccess) : "
+            "(/* HIP memory pool destroy: pool */ hipSuccess));"
+        ) in result
+        for function_name in [
+            "hipMalloc",
+            "hipMallocManaged",
+            "hipExtMallocWithFlags",
+            "hipMallocAsync",
+            "hipMallocFromPoolAsync",
+            "hipHostMalloc",
+            "hipMallocPitch",
+            "hipMemPoolCreate",
+            "hipMemGetInfo",
+            "hipPointerGetAttributes",
+            "hipDrvPointerGetAttributes",
+            "hipPointerGetAttribute",
+            "hipPointerSetAttribute",
+            "hipMemPtrGetInfo",
+            "hipOccupancyMaxPotentialBlockSize",
+            "hipOccupancyMaxPotentialBlockSizeVariableSMemWithFlags",
+            "hipOccupancyMaxActiveBlocksPerMultiprocessorWithFlags",
+            "hipMemAlloc",
+            "hipMemGetAddressRange",
+            "hipMemAllocPitch",
+            "hipMemFree",
+            "hipMemAllocHost",
+            "hipMemAddressReserve",
+            "hipMemMap",
+            "hipMemSetAccess",
+            "hipMemGetAccess",
+            "hipMemAddressFree",
+            "hipFree",
+            "hipMemPoolDestroy",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_hip_array_mipmapped_expression_contexts_emit_status(self):
+        """Test array and mipmapped-array expressions emit status metadata."""
+        code = """
+        hipError_t acceptStatus(hipError_t status) {
+            return status;
+        }
+
+        hipError_t arrayMipmapExpressions(
+            HIP_ARRAY_DESCRIPTOR* arrayDesc,
+            HIP_ARRAY3D_DESCRIPTOR* array3DDesc,
+            hipChannelFormatDesc* channelDesc,
+            hipExtent extent,
+            size_t width,
+            bool release
+        ) {
+            hipArray_t array;
+            hipArray_t array3D;
+            hipArray_t levelArray;
+            hipMipmappedArray_t mipmappedArray;
+            bool allocated =
+                hipMallocArray(
+                    &array,
+                    channelDesc,
+                    width,
+                    4,
+                    hipArrayDefault
+                ) == hipSuccess;
+            bool allocated3D =
+                hipMalloc3DArray(
+                    &array3D,
+                    channelDesc,
+                    extent,
+                    hipArrayLayered
+                ) == hipSuccess;
+            bool created = hipArrayCreate(&array, arrayDesc) == hipSuccess;
+            if (hipArray3DCreate(&array3D, array3DDesc) != hipSuccess) {
+                return hipArrayDestroy(array3D);
+            }
+            if (hipMallocMipmappedArray(
+                &mipmappedArray,
+                channelDesc,
+                extent,
+                4,
+                hipArrayDefault
+            ) == hipSuccess) {
+                hipError_t selectedLevel =
+                    release ? hipMipmappedArrayDestroy(mipmappedArray) : hipGetMipmappedArrayLevel(&levelArray, mipmappedArray, 1);
+                return selectedLevel;
+            }
+            hipError_t selectedCreate =
+                release ? hipFreeArray(array) : hipMipmappedArrayCreate(&mipmappedArray, array3DDesc, 3);
+            return acceptStatus(
+                release ? hipMipmappedArrayGetLevel(&levelArray, mipmappedArray, 2) : hipArrayDestroy(array)
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var allocated: bool = ((/* HIP array allocate: array, desc: "
+            "channelDesc, width: width, height: 4, flags: hipArrayDefault */ "
+            "hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var allocated3D: bool = ((/* HIP 3D array allocate: array3D, "
+            "desc: channelDesc, extent: extent, flags: hipArrayLayered */ "
+            "hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var created: bool = ((/* HIP array create: output: array, "
+            "descriptor: arrayDesc */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP 3D array create: output: array3D, "
+            "descriptor: array3DDesc */ hipSuccess) != hipSuccess))"
+        ) in result
+        assert "return (/* HIP array free: array3D */ hipSuccess);" in result
+        assert (
+            "if (((/* HIP mipmapped array allocate: output: mipmappedArray, "
+            "desc: channelDesc, extent: extent, levels: 4, "
+            "flags: hipArrayDefault */ hipSuccess) == hipSuccess))"
+        ) in result
+        assert (
+            "var selectedLevel: hipError_t = (release ? (/* HIP free "
+            "mipmapped array: mipmappedArray */ hipSuccess) : (/* HIP "
+            "mipmapped array get level: output: levelArray, mipmapped array: "
+            "mipmappedArray, level: 1 */ hipSuccess));"
+        ) in result
+        assert (
+            "var selectedCreate: hipError_t = (release ? (/* HIP array free: "
+            "array */ hipSuccess) : (/* HIP mipmapped array create: output: "
+            "mipmappedArray, descriptor: array3DDesc, levels: 3 */ hipSuccess));"
+        ) in result
+        assert (
+            "return acceptStatus((release ? (/* HIP mipmapped array get level: "
+            "output: levelArray, mipmapped array: mipmappedArray, level: 2 */ "
+            "hipSuccess) : (/* HIP array free: array */ hipSuccess)));"
+        ) in result
+        for function_name in [
+            "hipMallocArray",
+            "hipMalloc3DArray",
+            "hipArrayCreate",
+            "hipArray3DCreate",
+            "hipArrayDestroy",
+            "hipMallocMipmappedArray",
+            "hipMipmappedArrayDestroy",
+            "hipGetMipmappedArrayLevel",
+            "hipFreeArray",
+            "hipMipmappedArrayCreate",
+            "hipMipmappedArrayGetLevel",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_hip_copy_memset_symbol_expression_contexts_emit_status(self):
+        """Test HIP copy/memset/symbol expressions emit status metadata."""
+        code = """
+        hipError_t copyExpressions(
+            float* dst,
+            float* src,
+            hipDeviceptr_t driverDst,
+            hipDeviceptr_t driverSrc,
+            hipStream_t stream,
+            hipArray_t array,
+            bool useAsync
+        ) {
+            size_t bytes;
+            size_t pitch;
+            size_t height;
+            size_t count;
+            size_t symbolBytes;
+            float symbol;
+            hipPitchedPtr pitched;
+            hipExtent extent;
+            hip_Memcpy2D copy2DParams;
+            void* copyParams;
+            HIP_MEMCPY3D driverCopyParams;
+            hipMemcpy3DPeerParms peerCopyParams;
+            void** copyDsts;
+            void** copySrcs;
+            size_t* copySizes;
+            hipMemcpyAttributes copyAttrs;
+            size_t* copyAttrIndices;
+            size_t failIndex;
+            hipMemcpy3DBatchOp batch3DOp;
+            bool copied =
+                hipMemcpy(dst, src, bytes, hipMemcpyDeviceToDevice) == hipSuccess;
+            bool copiedAsync =
+                hipMemcpyAsync(
+                    dst,
+                    src,
+                    bytes,
+                    hipMemcpyDeviceToDevice,
+                    stream
+                ) == hipSuccess;
+            bool copiedWithStream =
+                hipMemcpyWithStream(
+                    dst,
+                    src,
+                    bytes,
+                    hipMemcpyDeviceToDevice,
+                    stream
+                ) == hipSuccess;
+            bool copiedPeer =
+                hipMemcpyPeer(dst, 1, src, 0, bytes) == hipSuccess;
+            bool copied2D =
+                hipMemcpy2D(
+                    dst,
+                    pitch,
+                    src,
+                    pitch,
+                    bytes,
+                    height,
+                    hipMemcpyDeviceToDevice
+                ) == hipSuccess;
+            bool copiedToArray =
+                hipMemcpyToArray(
+                    array,
+                    0,
+                    0,
+                    src,
+                    bytes,
+                    hipMemcpyDeviceToDevice
+                ) == hipSuccess;
+            bool copiedFromArray =
+                hipMemcpyFromArray(
+                    dst,
+                    array,
+                    0,
+                    0,
+                    bytes,
+                    hipMemcpyDeviceToDevice
+                ) == hipSuccess;
+            bool copiedArray =
+                hipMemcpyArrayToArray(
+                    array,
+                    0,
+                    0,
+                    array,
+                    4,
+                    0,
+                    bytes,
+                    hipMemcpyDeviceToDevice
+                ) == hipSuccess;
+            bool copiedParam2D =
+                hipMemcpyParam2D(&copy2DParams) == hipSuccess;
+            bool copied3D =
+                hipMemcpy3D(&copyParams) == hipSuccess;
+            bool copiedDriver3D =
+                hipDrvMemcpy3D(&driverCopyParams) == hipSuccess;
+            bool copiedBatch =
+                hipMemcpyBatchAsync(
+                    copyDsts,
+                    copySrcs,
+                    copySizes,
+                    1,
+                    &copyAttrs,
+                    copyAttrIndices,
+                    1,
+                    &failIndex,
+                    stream
+                ) == hipSuccess;
+            bool copiedBatch3D =
+                hipMemcpy3DBatchAsync(
+                    1,
+                    &batch3DOp,
+                    &failIndex,
+                    0ull,
+                    stream
+                ) == hipSuccess;
+            bool symbolAddressReady =
+                hipGetSymbolAddress((void**)&dst, symbol) == hipSuccess;
+            bool symbolSizeReady =
+                hipGetSymbolSize(&symbolBytes, symbol) == hipSuccess;
+            bool copiedToSymbol =
+                hipMemcpyToSymbol(
+                    symbol,
+                    src,
+                    bytes,
+                    0,
+                    hipMemcpyDeviceToDevice
+                ) == hipSuccess;
+            bool copiedFromSymbol =
+                hipMemcpyFromSymbol(
+                    dst,
+                    symbol,
+                    bytes,
+                    0,
+                    hipMemcpyDeviceToDevice
+                ) == hipSuccess;
+            bool memset1D =
+                hipMemset(dst, 0, bytes) == hipSuccess;
+            bool memset2D =
+                hipMemset2D(dst, pitch, 0, bytes, height) == hipSuccess;
+            bool memset3D =
+                hipMemset3D(pitched, 0, extent) == hipSuccess;
+            bool driverCopied =
+                hipMemcpyHtoD(driverDst, src, bytes) == hipSuccess;
+            bool driverArrayCopied =
+                hipMemcpyAtoH(dst, array, 0, bytes) == hipSuccess;
+            bool driverMemset =
+                hipMemsetD32(driverDst, 0, count) == hipSuccess;
+            bool driverMemset2D =
+                hipMemsetD2D32(driverDst, pitch, 0, count, height) == hipSuccess;
+            if (hipMemcpy2DFromArray(
+                dst,
+                pitch,
+                array,
+                0,
+                0,
+                bytes,
+                height,
+                hipMemcpyDeviceToDevice
+            ) != hipSuccess) {
+                return hipMemcpyDtoH(dst, driverSrc, bytes);
+            }
+            if (hipMemcpy3DPeer(&peerCopyParams) == hipSuccess) {
+                return hipMemcpyAtoD(driverDst, array, 0, bytes);
+            }
+            hipError_t selected = useAsync ? hipMemcpy3DAsync(&copyParams, stream) : hipMemsetAsync(dst, 0, bytes, stream);
+            hipError_t selectedDriver = useAsync ? hipMemcpyHtoAAsync(array, 0, src, bytes, stream) : hipMemsetD2D32Async(driverDst, pitch, 0, count, height, stream);
+            return useAsync ? selected : selectedDriver;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var copied: bool = ((/* HIP memory copy: src -> dst, bytes: bytes, "
+            "kind: hipMemcpyDeviceToDevice */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var copiedAsync: bool = ((/* HIP memory copy: src -> dst, bytes: "
+            "bytes, kind: hipMemcpyDeviceToDevice, stream: stream */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "var copiedPeer: bool = ((/* HIP peer memory copy: source: src, "
+            "source device: 0, destination: dst, destination device: 1, "
+            "bytes: bytes */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var copied2D: bool = ((/* HIP 2D memory copy: src -> dst, dst pitch: "
+            "pitch, src pitch: pitch, width: bytes, height: height, "
+            "kind: hipMemcpyDeviceToDevice */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var copiedToArray: bool = ((/* HIP memory copy to array: source: "
+            "src, destination array: array, w offset: 0, h offset: 0, "
+            "bytes: bytes, kind: hipMemcpyDeviceToDevice */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "var copiedParam2D: bool = ((/* HIP 2D parameterized memory copy: "
+            "params: copy2DParams */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var copiedBatch: bool = ((/* HIP batched memory copy: destinations: "
+            "copyDsts, sources: copySrcs, sizes: copySizes, count: 1, "
+            "attributes: (&copyAttrs), attribute indices: copyAttrIndices, "
+            "attribute count: 1, fail index output: failIndex, stream: stream */ "
+            "hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var symbolAddressReady: bool = ((/* HIP get symbol address: "
+            "output: dst, symbol: symbol */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var copiedToSymbol: bool = ((/* HIP symbol copy to: symbol, "
+            "source: src, bytes: bytes, offset: 0, kind: hipMemcpyDeviceToDevice "
+            "*/ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var memset2D: bool = ((/* HIP 2D memory set: dst, pitch: pitch, "
+            "value: 0, width: bytes, height: height */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var driverCopied: bool = ((/* HIP driver memory copy host to device: "
+            "source: src, destination: driverDst, bytes: bytes */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP 2D memory copy from array: source array: array, "
+            "w offset: 0, h offset: 0, destination: dst, destination pitch: "
+            "pitch, width: bytes, height: height, kind: hipMemcpyDeviceToDevice "
+            "*/ hipSuccess) != hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP driver memory copy device to host: source: "
+            "driverSrc, destination: dst, bytes: bytes */ hipSuccess);"
+        ) in result
+        assert (
+            "return (/* HIP driver memory copy array to device: source array: "
+            "array, source offset: 0, destination device: driverDst, "
+            "bytes: bytes */ hipSuccess);"
+        ) in result
+        assert (
+            "var selected: hipError_t = (useAsync ? "
+            "(/* HIP 3D memory copy: params: copyParams, stream: stream */ "
+            "hipSuccess) : (/* HIP memory set: dst, value: 0, bytes: bytes, "
+            "stream: stream */ hipSuccess));"
+        ) in result
+        assert (
+            "var selectedDriver: hipError_t = (useAsync ? "
+            "(/* HIP driver memory copy host to array: source host: src, "
+            "destination array: array, destination offset: 0, bytes: bytes, "
+            "stream: stream */ hipSuccess) : (/* HIP driver 2D memory set "
+            "32-bit: pointer: driverDst, pitch: pitch, value: 0, width: count, "
+            "height: height, stream: stream */ hipSuccess));"
+        ) in result
+        for function_name in [
+            "hipMemcpy",
+            "hipMemcpyAsync",
+            "hipMemcpyWithStream",
+            "hipMemcpyPeer",
+            "hipMemcpy2D",
+            "hipMemcpyToArray",
+            "hipMemcpyFromArray",
+            "hipMemcpyArrayToArray",
+            "hipMemcpyParam2D",
+            "hipMemcpy3D",
+            "hipDrvMemcpy3D",
+            "hipMemcpyBatchAsync",
+            "hipMemcpy3DBatchAsync",
+            "hipGetSymbolAddress",
+            "hipGetSymbolSize",
+            "hipMemcpyToSymbol",
+            "hipMemcpyFromSymbol",
+            "hipMemset",
+            "hipMemset2D",
+            "hipMemset3D",
+            "hipMemcpyHtoD",
+            "hipMemcpyDtoH",
+            "hipMemcpyAtoH",
+            "hipMemcpyHtoAAsync",
+            "hipMemcpyAtoD",
+            "hipMemsetD32",
+            "hipMemsetD2D32",
+            "hipMemsetD2D32Async",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_hip_surface_object_descriptor_query_is_explicitly_unsupported(self):
+        """Test CUDA-parity surface descriptor queries stay explicit for HIP."""
+        code = """
+        void querySurfaceObject(hipSurfaceObject_t surfaceObj) {
+            hipResourceDesc resourceDesc;
+            hipGetSurfaceObjectResourceDesc(&resourceDesc, surfaceObj);
+            hipError_t err = hipGetSurfaceObjectResourceDesc(
+                &resourceDesc,
+                surfaceObj
+            );
+            err = hipGetSurfaceObjectResourceDesc(&resourceDesc, surfaceObj);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        unsupported_query = (
+            "// HIP surface object resource descriptor query not supported "
+            "by HIP runtime: surface: surfaceObj, output: resourceDesc"
+        )
+        assert result.count(unsupported_query) == 3
+        assert "var err: hipError_t = hipErrorNotSupported;" in result
+        assert "err = hipErrorNotSupported;" in result
+        assert "hipGetSurfaceObjectResourceDesc(" not in result
+
+    def test_hip_object_descriptor_query_expression_contexts_emit_status(self):
+        """Test object descriptor queries in expressions stay explicit."""
+        code = """
+        hipError_t queryObjectExpressions(
+            hipTextureObject_t texObj,
+            hipSurfaceObject_t surfaceObj
+        ) {
+            hipResourceDesc resourceDesc;
+            hipTextureDesc textureDesc;
+            hipResourceViewDesc viewDesc;
+            bool resourceOk =
+                hipGetTextureObjectResourceDesc(&resourceDesc, texObj) == hipSuccess;
+            bool textureOk =
+                hipGetTextureObjectTextureDesc(&textureDesc, texObj) == hipSuccess;
+            if (hipGetSurfaceObjectResourceDesc(&resourceDesc, surfaceObj) != hipSuccess) {
+                return hipGetSurfaceObjectResourceDesc(&resourceDesc, surfaceObj);
+            }
+            if (hipTexObjectGetResourceViewDesc(&viewDesc, texObj) == hipSuccess) {
+                return hipTexObjectGetResourceDesc(&resourceDesc, texObj);
+            }
+            return hipTexObjectGetTextureDesc(&textureDesc, texObj);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var resourceOk: bool = ((/* HIP texture object get resource desc: "
+            "output: resourceDesc, texture: texObj */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var textureOk: bool = ((/* HIP texture object get texture desc: "
+            "output: textureDesc, texture: texObj */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP surface object resource descriptor query not supported "
+            "by HIP runtime: surface: surfaceObj, output: resourceDesc */ "
+            "hipErrorNotSupported) != hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP surface object resource descriptor query not supported "
+            "by HIP runtime: surface: surfaceObj, output: resourceDesc */ "
+            "hipErrorNotSupported);"
+        ) in result
+        assert (
+            "if (((/* HIP texture object get resource view desc: output: viewDesc, "
+            "texture: texObj */ hipSuccess) == hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP texture object get resource desc: output: resourceDesc, "
+            "texture: texObj */ hipSuccess);"
+        ) in result
+        assert (
+            "return (/* HIP texture object get texture desc: output: textureDesc, "
+            "texture: texObj */ hipSuccess);"
+        ) in result
+        assert "hipGetTextureObjectResourceDesc(" not in result
+        assert "hipGetTextureObjectTextureDesc(" not in result
+        assert "hipGetSurfaceObjectResourceDesc(" not in result
+        assert "hipTexObjectGetResourceViewDesc(" not in result
+        assert "hipTexObjectGetResourceDesc(" not in result
+        assert "hipTexObjectGetTextureDesc(" not in result
+
+    def test_hip_object_descriptor_alias_expression_contexts_emit_status(self):
+        """Test texture/surface descriptor aliases stay explicit in expressions."""
+        code = """
+        hipError_t acceptStatus(hipError_t status) {
+            return status;
+        }
+
+        hipError_t queryObjectAliasExpressions(
+            hipTextureObject_t texObj,
+            hipSurfaceObject_t surfaceObj,
+            bool useSurface
+        ) {
+            hipResourceDesc resourceDesc;
+            hipTextureDesc textureDesc;
+            hipResourceViewDesc viewDesc;
+            bool viewReady =
+                hipGetTextureObjectResourceViewDesc(&viewDesc, texObj) == hipSuccess;
+            hipError_t selected = useSurface ? hipGetSurfaceObjectResourceDesc(&resourceDesc, surfaceObj) : hipTexObjectGetResourceDesc(&resourceDesc, texObj);
+            hipError_t textureStatus =
+                hipTexObjectGetTextureDesc(&textureDesc, texObj);
+            if (hipGetTextureObjectResourceViewDesc(&viewDesc, texObj) != hipSuccess) {
+                return hipGetSurfaceObjectResourceDesc(&resourceDesc, surfaceObj);
+            }
+            return acceptStatus(useSurface ? hipGetSurfaceObjectResourceDesc(&resourceDesc, surfaceObj) : hipGetTextureObjectTextureDesc(&textureDesc, texObj));
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var viewReady: bool = ((/* HIP texture object get resource view "
+            "desc: output: viewDesc, texture: texObj */ hipSuccess) == "
+            "hipSuccess);"
+        ) in result
+        assert (
+            "var selected: hipError_t = (useSurface ? (/* HIP surface object "
+            "resource descriptor query not supported by HIP runtime: surface: "
+            "surfaceObj, output: resourceDesc */ hipErrorNotSupported) : "
+            "(/* HIP texture object get resource desc: output: resourceDesc, "
+            "texture: texObj */ hipSuccess));"
+        ) in result
+        assert (
+            "// HIP texture object get texture desc: output: textureDesc, "
+            "texture: texObj"
+        ) in result
+        assert ("var textureStatus: hipError_t = hipSuccess;") in result
+        assert (
+            "if (((/* HIP texture object get resource view desc: output: "
+            "viewDesc, texture: texObj */ hipSuccess) != hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP surface object resource descriptor query not "
+            "supported by HIP runtime: surface: surfaceObj, output: "
+            "resourceDesc */ hipErrorNotSupported);"
+        ) in result
+        assert (
+            "return acceptStatus((useSurface ? (/* HIP surface object resource "
+            "descriptor query not supported by HIP runtime: surface: "
+            "surfaceObj, output: resourceDesc */ hipErrorNotSupported) : "
+            "(/* HIP texture object get texture desc: output: textureDesc, "
+            "texture: texObj */ hipSuccess)));"
+        ) in result
+        assert "hipGetTextureObjectResourceViewDesc(" not in result
+        assert "hipTexObjectGetResourceDesc(" not in result
+        assert "hipTexObjectGetTextureDesc(" not in result
+        assert "hipGetTextureObjectTextureDesc(" not in result
+        assert "hipGetSurfaceObjectResourceDesc(" not in result
+
+    def test_hip_channel_descriptor_expression_contexts_emit_status(self):
+        """Test channel and array descriptor queries in expressions stay explicit."""
+        code = """
+        hipError_t acceptStatus(hipError_t status) {
+            return status;
+        }
+
+        hipError_t queryChannelDescriptorExpressions(
+            hipArray_t array,
+            bool useChannel
+        ) {
+            hipChannelFormatDesc channelDesc;
+            HIP_ARRAY_DESCRIPTOR arrayDesc;
+            HIP_ARRAY3D_DESCRIPTOR array3DDesc;
+            hipExtent extent;
+            unsigned int flags;
+            bool channelReady =
+                hipGetChannelDesc(&channelDesc, array) == hipSuccess;
+            bool arrayReady =
+                hipArrayGetDescriptor(&arrayDesc, array) == hipSuccess;
+            if (hipArray3DGetDescriptor(&array3DDesc, array) != hipSuccess) {
+                return hipArrayGetInfo(&channelDesc, &extent, &flags, array);
+            }
+            hipError_t selected = useChannel ? hipGetChannelDesc(&channelDesc, array) : hipArrayGetDescriptor(&arrayDesc, array);
+            return acceptStatus(hipGetChannelDesc(&channelDesc, array));
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var channelReady: bool = ((/* HIP get channel desc: output: "
+            "channelDesc, array: array */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var arrayReady: bool = ((/* HIP array get descriptor: output: "
+            "arrayDesc, array: array */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP array get 3D descriptor: output: array3DDesc, "
+            "array: array */ hipSuccess) != hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP array get info: desc output: channelDesc, "
+            "extent output: extent, flags output: flags, array: array */ "
+            "hipSuccess);"
+        ) in result
+        assert (
+            "var selected: hipError_t = (useChannel ? "
+            "(/* HIP get channel desc: output: channelDesc, array: array */ "
+            "hipSuccess) : (/* HIP array get descriptor: output: arrayDesc, "
+            "array: array */ hipSuccess));"
+        ) in result
+        assert (
+            "return acceptStatus((/* HIP get channel desc: output: "
+            "channelDesc, array: array */ hipSuccess));"
+        ) in result
+        assert "hipGetChannelDesc(" not in result
+        assert "hipArrayGetDescriptor(" not in result
+        assert "hipArray3DGetDescriptor(" not in result
+        assert "hipArrayGetInfo(" not in result
+
+    def test_hip_object_lifecycle_expression_contexts_emit_status(self):
+        """Test object lifecycle calls in expressions stay explicit."""
+        code = """
+        hipError_t lifecycleObjectExpressions(
+            hipResourceDesc* resourceDesc,
+            hipTextureDesc* textureDesc,
+            hipResourceViewDesc* viewDesc,
+            bool retry
+        ) {
+            hipTextureObject_t texObj;
+            hipSurfaceObject_t surfObj;
+            bool created =
+                hipCreateTextureObject(
+                    &texObj,
+                    resourceDesc,
+                    textureDesc,
+                    viewDesc
+                ) == hipSuccess;
+            bool aliasCreated =
+                hipTexObjectCreate(
+                    &texObj,
+                    resourceDesc,
+                    textureDesc,
+                    viewDesc
+                ) == hipSuccess;
+            if (hipCreateSurfaceObject(&surfObj, resourceDesc) == hipSuccess) {
+                return hipDestroySurfaceObject(surfObj);
+            }
+            if (hipTexObjectDestroy(texObj) != hipSuccess) {
+                hipError_t selected = retry ? hipDestroyTextureObject(texObj) : hipCreateSurfaceObject(&surfObj, resourceDesc);
+                return selected;
+            }
+            return hipDestroyTextureObject(texObj);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var created: bool = ((/* HIP texture object create: texObj, "
+            "resource: resourceDesc, texture desc: textureDesc, resource view: "
+            "viewDesc */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var aliasCreated: bool = ((/* HIP texture object create: texObj, "
+            "resource: resourceDesc, texture desc: textureDesc, resource view: "
+            "viewDesc */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP surface object create: surfObj, resource: resourceDesc */ "
+            "hipSuccess) == hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP surface object destroy: surfObj */ hipSuccess);" in result
+        )
+        assert (
+            "if (((/* HIP texture object destroy: texObj */ hipSuccess) != "
+            "hipSuccess))"
+        ) in result
+        assert (
+            "var selected: hipError_t = (retry ? "
+            "(/* HIP texture object destroy: texObj */ hipSuccess) : "
+            "(/* HIP surface object create: surfObj, resource: resourceDesc */ "
+            "hipSuccess));"
+        ) in result
+        assert "return selected;" in result
+        assert "return (/* HIP texture object destroy: texObj */ hipSuccess);" in result
+        assert "hipCreateTextureObject(" not in result
+        assert "hipTexObjectCreate(" not in result
+        assert "hipCreateSurfaceObject(" not in result
+        assert "hipDestroySurfaceObject(" not in result
+        assert "hipTexObjectDestroy(" not in result
+        assert "hipDestroyTextureObject(" not in result
+
+    def test_hip_stream_event_graph_expression_contexts_emit_status(self):
+        """Test stream/event/graph calls in expressions stay explicit."""
+        code = """
+        hipError_t streamEventGraphExpressions(
+            hipStream_t stream,
+            hipGraph_t graph,
+            hipGraphExec_t exec,
+            hipEvent_t event,
+            hipGraphNode_t* deps,
+            size_t numDeps,
+            bool replay
+        ) {
+            hipGraph_t captured;
+            hipStreamCaptureStatus captureStatus;
+            unsigned long long captureId = 0ull;
+            bool capturing =
+                hipStreamBeginCapture(
+                    stream,
+                    hipStreamCaptureModeGlobal
+                ) == hipSuccess;
+            bool infoReady =
+                hipStreamGetCaptureInfo(
+                    stream,
+                    &captureStatus,
+                    &captureId
+                ) == hipSuccess;
+            bool eventReady = hipEventQuery(event) == hipSuccess;
+            if (hipStreamIsCapturing(stream, &captureStatus) != hipSuccess) {
+                return hipStreamEndCapture(stream, &captured);
+            }
+            if (hipGraphLaunch(exec, stream) == hipSuccess) {
+                hipError_t selected = replay ? hipGraphUpload(exec, stream) : hipStreamUpdateCaptureDependencies(stream, deps, numDeps, 0);
+                return selected;
+            }
+            return hipEventRecord(event, stream);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var capturing: bool = ((/* HIP stream begin capture: "
+            "stream: stream, mode: hipStreamCaptureModeGlobal */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "var infoReady: bool = ((/* HIP stream capture info: "
+            "stream: stream, status output: captureStatus, id output: "
+            "captureId */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var eventReady: bool = ((/* HIP event query: event */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP stream is capturing: stream: stream, output: "
+            "captureStatus */ hipSuccess) != hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP stream end capture: stream: stream, graph output: "
+            "captured */ hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP graph launch: exec: exec, stream: stream */ "
+            "hipSuccess) == hipSuccess))"
+        ) in result
+        assert (
+            "var selected: hipError_t = (replay ? "
+            "(/* HIP graph upload: exec: exec, stream: stream */ hipSuccess) : "
+            "(/* HIP stream update capture dependencies: stream: stream, "
+            "dependencies: deps, count: numDeps, flags: 0 */ hipSuccess));"
+        ) in result
+        assert "return selected;" in result
+        assert (
+            "return (/* HIP event record: event, stream: stream */ hipSuccess);"
+            in result
+        )
+        for function_name in [
+            "hipStreamBeginCapture",
+            "hipStreamGetCaptureInfo",
+            "hipEventQuery",
+            "hipStreamIsCapturing",
+            "hipStreamEndCapture",
+            "hipGraphLaunch",
+            "hipGraphUpload",
+            "hipStreamUpdateCaptureDependencies",
+            "hipEventRecord",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_hip_graph_lifecycle_expression_contexts_emit_status(self):
+        """Test core graph lifecycle calls in expressions stay explicit."""
+        code = """
+        hipError_t acceptStatus(hipError_t status) {
+            return status;
+        }
+
+        hipError_t graphLifecycleExpressions(
+            hipGraph_t source,
+            hipGraphExec_t exec,
+            hipGraphNode_t node,
+            hipGraphNode_t* deps,
+            size_t* count,
+            bool cloneFirst
+        ) {
+            hipGraph_t graph;
+            hipGraph_t clone;
+            hipGraphNode_t cloneNode;
+            hipGraphNode_t* nodes;
+            hipGraphNode_t* roots;
+            hipGraphNode_t* fromNodes;
+            hipGraphNode_t* toNodes;
+            hipGraphNodeType nodeType;
+            hipGraphNode_t errorNode;
+            char log[64];
+            hipGraphExecUpdateResult updateResult;
+
+            bool created = hipGraphCreate(&graph, 0) == hipSuccess;
+            bool cloned = hipGraphClone(&clone, source) == hipSuccess;
+            if (hipGraphGetNodes(graph, nodes, count) != hipSuccess) {
+                return hipGraphDestroy(graph);
+            }
+            if (hipGraphGetRootNodes(graph, roots, count) == hipSuccess) {
+                hipError_t selected = cloneFirst ? hipGraphNodeFindInClone(&cloneNode, node, clone) : hipGraphNodeGetType(node, &nodeType);
+                return selected;
+            }
+            if (hipGraphGetEdges(graph, fromNodes, toNodes, count) != hipSuccess) {
+                return hipGraphExecDestroy(exec);
+            }
+            hipError_t dependencyStatus = cloneFirst ? hipGraphNodeGetDependencies(node, deps, count) : hipGraphNodeGetDependentNodes(node, deps, count);
+            if (hipGraphInstantiate(&exec, graph, &errorNode, log, 64) != hipSuccess) {
+                return hipGraphInstantiateWithFlags(&exec, graph, 0);
+            }
+            if (hipGraphExecUpdate(exec, graph, &errorNode, &updateResult) == hipSuccess) {
+                return dependencyStatus;
+            }
+            return acceptStatus(cloneFirst ? hipGraphDestroyNode(node) : hipGraphDestroy(clone));
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var created: bool = ((/* HIP graph create: output: graph, "
+            "flags: 0 */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var cloned: bool = ((/* HIP graph clone: output: clone, "
+            "source: source */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP graph get nodes: graph: graph, nodes output: nodes, "
+            "count output: count */ hipSuccess) != hipSuccess))"
+        ) in result
+        assert "return (/* HIP graph destroy: graph */ hipSuccess);" in result
+        assert (
+            "if (((/* HIP graph get root nodes: graph: graph, nodes output: "
+            "roots, count output: count */ hipSuccess) == hipSuccess))"
+        ) in result
+        assert (
+            "var selected: hipError_t = (cloneFirst ? (/* HIP graph node find "
+            "in clone: output: cloneNode, original: node, clone graph: clone */ "
+            "hipSuccess) : (/* HIP graph node get type: node: node, output: "
+            "nodeType */ hipSuccess));"
+        ) in result
+        assert (
+            "if (((/* HIP graph get edges: graph: graph, from output: fromNodes, "
+            "to output: toNodes, count output: count */ hipSuccess) != "
+            "hipSuccess))"
+        ) in result
+        assert "return (/* HIP graph exec destroy: exec */ hipSuccess);" in result
+        assert (
+            "var dependencyStatus: hipError_t = (cloneFirst ? (/* HIP graph "
+            "node get dependencies: node: node, nodes output: deps, count "
+            "output: count */ hipSuccess) : (/* HIP graph node get dependent "
+            "nodes: node: node, nodes output: deps, count output: count */ "
+            "hipSuccess));"
+        ) in result
+        assert (
+            "if (((/* HIP graph instantiate: output: exec, graph: graph, "
+            "error node output: errorNode, log buffer: log, log bytes: 64 */ "
+            "hipSuccess) != hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP graph instantiate with flags: output: exec, "
+            "graph: graph, flags: 0 */ hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP graph exec update: exec: exec, graph: graph, "
+            "error node output: errorNode, result output: updateResult */ "
+            "hipSuccess) == hipSuccess))"
+        ) in result
+        assert "return dependencyStatus;" in result
+        assert (
+            "return acceptStatus((cloneFirst ? (/* HIP graph destroy node: "
+            "node */ hipSuccess) : (/* HIP graph destroy: clone */ hipSuccess)));"
+        ) in result
+        for function_name in [
+            "hipGraphCreate",
+            "hipGraphClone",
+            "hipGraphGetNodes",
+            "hipGraphDestroy",
+            "hipGraphGetRootNodes",
+            "hipGraphNodeFindInClone",
+            "hipGraphNodeGetType",
+            "hipGraphGetEdges",
+            "hipGraphExecDestroy",
+            "hipGraphNodeGetDependencies",
+            "hipGraphNodeGetDependentNodes",
+            "hipGraphInstantiate",
+            "hipGraphInstantiateWithFlags",
+            "hipGraphExecUpdate",
+            "hipGraphDestroyNode",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_hip_user_object_expression_contexts_emit_status(self):
+        """Test HIP user object calls in expressions emit status metadata."""
+        code = """
+        hipError_t acceptStatus(hipError_t status) {
+            return status;
+        }
+
+        hipError_t userObjectExpressions(
+            hipGraph_t graph,
+            hipUserObject_t userObject,
+            hipHostFn_t destructor,
+            void* resource,
+            bool retain
+        ) {
+            bool created =
+                hipUserObjectCreate(
+                    &userObject,
+                    resource,
+                    destructor,
+                    1,
+                    0
+                ) == hipSuccess;
+            if (hipUserObjectRetain(userObject, 2) != hipSuccess) {
+                return hipUserObjectRelease(userObject, 1);
+            }
+            hipError_t selected =
+                retain ? hipGraphRetainUserObject(graph, userObject, 1, 0) : hipGraphReleaseUserObject(graph, userObject, 1);
+            return acceptStatus(
+                retain ? hipUserObjectRetain(userObject, 1) : hipUserObjectRelease(userObject, 1)
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var created: bool = ((/* HIP user object create: output: "
+            "userObject, resource: resource, destructor: destructor, initial "
+            "refcount: 1, flags: 0 */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP user object retain: object: userObject, count: 2 */ "
+            "hipSuccess) != hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP user object release: object: userObject, count: 1 */ "
+            "hipSuccess);"
+        ) in result
+        assert (
+            "var selected: hipError_t = (retain ? (/* HIP graph retain user "
+            "object: graph: graph, object: userObject, count: 1, flags: 0 */ "
+            "hipSuccess) : (/* HIP graph release user object: graph: graph, "
+            "object: userObject, count: 1 */ hipSuccess));"
+        ) in result
+        assert (
+            "return acceptStatus((retain ? (/* HIP user object retain: object: "
+            "userObject, count: 1 */ hipSuccess) : (/* HIP user object release: "
+            "object: userObject, count: 1 */ hipSuccess)));"
+        ) in result
+        for function_name in [
+            "hipUserObjectCreate",
+            "hipUserObjectRetain",
+            "hipUserObjectRelease",
+            "hipGraphRetainUserObject",
+            "hipGraphReleaseUserObject",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_hip_graph_memory_memcpy_expression_contexts_emit_status(self):
+        """Test HIP graph memory/memcpy calls in expressions emit status."""
+        code = """
+        hipError_t acceptStatus(hipError_t status) {
+            return status;
+        }
+
+        hipError_t graphMemoryMemcpyExpressions(
+            hipGraph_t graph,
+            hipGraphExec_t exec,
+            hipGraphNode_t* deps,
+            size_t numDeps,
+            void* dst,
+            void* src,
+            void* symbol,
+            void* devicePtr,
+            bool updateExec
+        ) {
+            hipGraphNode_t allocNode;
+            hipGraphNode_t freeNode;
+            hipGraphNode_t copyNode;
+            hipGraphNode_t fromSymbolNode;
+            hipGraphNode_t toSymbolNode;
+            hipMemAllocNodeParams allocParams;
+            size_t bytes;
+            bool allocAdded =
+                hipGraphAddMemAllocNode(
+                    &allocNode,
+                    graph,
+                    deps,
+                    numDeps,
+                    &allocParams
+                ) == hipSuccess;
+            bool copyAdded =
+                hipGraphAddMemcpyNode1D(
+                    &copyNode,
+                    graph,
+                    deps,
+                    numDeps,
+                    dst,
+                    src,
+                    bytes,
+                    hipMemcpyDeviceToDevice
+                ) == hipSuccess;
+            if (hipGraphMemAllocNodeGetParams(allocNode, &allocParams) != hipSuccess) {
+                return hipGraphAddMemFreeNode(&freeNode, graph, deps, numDeps, devicePtr);
+            }
+            if (hipGraphMemFreeNodeGetParams(freeNode, &devicePtr) == hipSuccess) {
+                hipError_t selectedCopy =
+                    updateExec ? hipGraphExecMemcpyNodeSetParams1D(exec, copyNode, dst, src, bytes, hipMemcpyDeviceToDevice) : hipGraphMemcpyNodeSetParams1D(copyNode, dst, src, bytes, hipMemcpyDeviceToDevice);
+                return selectedCopy;
+            }
+            if (hipGraphAddMemcpyNodeFromSymbol(
+                &fromSymbolNode,
+                graph,
+                deps,
+                numDeps,
+                dst,
+                symbol,
+                bytes,
+                4,
+                hipMemcpyDeviceToDevice
+            ) == hipSuccess) {
+                hipError_t selectedSymbol =
+                    updateExec ? hipGraphExecMemcpyNodeSetParamsFromSymbol(exec, fromSymbolNode, dst, symbol, bytes, 4, hipMemcpyDeviceToDevice) : hipGraphMemcpyNodeSetParamsFromSymbol(fromSymbolNode, dst, symbol, bytes, 4, hipMemcpyDeviceToDevice);
+                return selectedSymbol;
+            }
+            return acceptStatus(
+                updateExec ? hipGraphExecMemcpyNodeSetParamsToSymbol(exec, toSymbolNode, symbol, src, bytes, 8, hipMemcpyDeviceToDevice) : hipGraphAddMemcpyNodeToSymbol(&toSymbolNode, graph, deps, numDeps, symbol, src, bytes, 8, hipMemcpyDeviceToDevice)
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var allocAdded: bool = ((/* HIP graph add memory alloc node: "
+            "output: allocNode, graph: graph, dependencies: deps, count: "
+            "numDeps, params: (&allocParams) */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var copyAdded: bool = ((/* HIP graph add memcpy 1D node: output: "
+            "copyNode, graph: graph, dependencies: deps, count: numDeps, "
+            "destination: dst, source: src, bytes: bytes, kind: "
+            "hipMemcpyDeviceToDevice */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP graph memory alloc node get params: node: allocNode, "
+            "params output: allocParams */ hipSuccess) != hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP graph add memory free node: output: freeNode, "
+            "graph: graph, dependencies: deps, count: numDeps, pointer: "
+            "devicePtr */ hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP graph memory free node get params: node: freeNode, "
+            "pointer output: devicePtr */ hipSuccess) == hipSuccess))"
+        ) in result
+        assert (
+            "var selectedCopy: hipError_t = (updateExec ? (/* HIP graph exec "
+            "memcpy 1D node set params: exec: exec, node: copyNode, "
+            "destination: dst, source: src, bytes: bytes, kind: "
+            "hipMemcpyDeviceToDevice */ hipSuccess) : (/* HIP graph memcpy 1D "
+            "node set params: node: copyNode, destination: dst, source: src, "
+            "bytes: bytes, kind: hipMemcpyDeviceToDevice */ hipSuccess));"
+        ) in result
+        assert (
+            "if (((/* HIP graph add memcpy from symbol node: output: "
+            "fromSymbolNode, graph: graph, dependencies: deps, count: numDeps, "
+            "destination: dst, source: symbol, bytes: bytes, offset: 4, kind: "
+            "hipMemcpyDeviceToDevice */ hipSuccess) == hipSuccess))"
+        ) in result
+        assert (
+            "var selectedSymbol: hipError_t = (updateExec ? (/* HIP graph exec "
+            "memcpy from symbol node set params: exec: exec, node: "
+            "fromSymbolNode, destination: dst, source: symbol, bytes: bytes, "
+            "offset: 4, kind: hipMemcpyDeviceToDevice */ hipSuccess) : (/* HIP "
+            "graph memcpy from symbol node set params: node: fromSymbolNode, "
+            "destination: dst, source: symbol, bytes: bytes, offset: 4, kind: "
+            "hipMemcpyDeviceToDevice */ hipSuccess));"
+        ) in result
+        assert (
+            "return acceptStatus((updateExec ? (/* HIP graph exec memcpy to "
+            "symbol node set params: exec: exec, node: toSymbolNode, "
+            "destination: symbol, source: src, bytes: bytes, offset: 8, kind: "
+            "hipMemcpyDeviceToDevice */ hipSuccess) : (/* HIP graph add memcpy "
+            "to symbol node: output: toSymbolNode, graph: graph, dependencies: "
+            "deps, count: numDeps, destination: symbol, source: src, bytes: "
+            "bytes, offset: 8, kind: hipMemcpyDeviceToDevice */ hipSuccess)));"
+        ) in result
+        for function_name in [
+            "hipGraphAddMemAllocNode",
+            "hipGraphMemAllocNodeGetParams",
+            "hipGraphAddMemFreeNode",
+            "hipGraphMemFreeNodeGetParams",
+            "hipGraphAddMemcpyNode1D",
+            "hipGraphMemcpyNodeSetParams1D",
+            "hipGraphExecMemcpyNodeSetParams1D",
+            "hipGraphAddMemcpyNodeFromSymbol",
+            "hipGraphMemcpyNodeSetParamsFromSymbol",
+            "hipGraphExecMemcpyNodeSetParamsFromSymbol",
+            "hipGraphAddMemcpyNodeToSymbol",
+            "hipGraphExecMemcpyNodeSetParamsToSymbol",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_hip_driver_graph_memcpy_node_emits_metadata_and_status(self):
+        """Test HIP driver graph memcpy node calls emit metadata/status."""
+        code = """
+        hipError_t acceptStatus(hipError_t status) {
+            return status;
+        }
+
+        hipError_t driverGraphMemcpyNode(
+            hipGraph_t graph,
+            hipGraphNode_t* deps,
+            size_t numDeps,
+            HIP_MEMCPY3D* params,
+            hipCtx_t ctx,
+            bool retry
+        ) {
+            hipGraphNode_t node;
+            hipDrvGraphAddMemcpyNode(&node, graph, deps, numDeps, params, ctx);
+            hipError_t err = hipDrvGraphAddMemcpyNode(&node, graph, deps, numDeps, params, ctx);
+            if (hipDrvGraphAddMemcpyNode(&node, graph, deps, numDeps, params, ctx) != hipSuccess) {
+                return hipDrvGraphAddMemcpyNode(&node, graph, deps, numDeps, params, ctx);
+            }
+            hipError_t selected = retry ? hipDrvGraphAddMemcpyNode(&node, graph, deps, numDeps, params, ctx) : hipSuccess;
+            return acceptStatus(hipDrvGraphAddMemcpyNode(&node, graph, deps, numDeps, params, ctx));
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        metadata = (
+            "HIP driver graph add memcpy node: output: node, graph: graph, "
+            "dependencies: deps, count: numDeps, params: params, context: ctx"
+        )
+        assert result.count(f"// {metadata}") == 2
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert f"if (((/* {metadata} */ hipSuccess) != hipSuccess))" in result
+        assert f"return (/* {metadata} */ hipSuccess);" in result
+        assert (
+            f"var selected: hipError_t = (retry ? (/* {metadata} */ hipSuccess) "
+            ": hipSuccess);"
+        ) in result
+        assert f"return acceptStatus((/* {metadata} */ hipSuccess));" in result
+        assert "hipDrvGraphAddMemcpyNode(" not in result
+
+    def test_hip_driver_graph_memory_node_apis_emit_metadata_and_status(self):
+        """Test HIP driver graph memory node calls emit metadata/status."""
+        code = """
+        hipError_t acceptStatus(hipError_t status) {
+            return status;
+        }
+
+        hipError_t driverGraphMemoryNodes(
+            hipGraph_t graph,
+            hipGraphExec_t exec,
+            hipGraphNode_t* deps,
+            size_t numDeps,
+            HIP_MEMCPY3D* copyParams,
+            hipMemsetParams* memsetParams,
+            hipCtx_t ctx,
+            hipDeviceptr_t ptr,
+            bool updateExec
+        ) {
+            hipGraphNode_t copyNode;
+            hipGraphNode_t memsetNode;
+            hipGraphNode_t freeNode;
+            hipDrvGraphAddMemsetNode(&memsetNode, graph, deps, numDeps, memsetParams, ctx);
+            hipError_t err = hipDrvGraphAddMemFreeNode(&freeNode, graph, deps, numDeps, ptr);
+            if (hipDrvGraphMemcpyNodeGetParams(copyNode, copyParams) != hipSuccess) {
+                return hipDrvGraphMemcpyNodeSetParams(copyNode, copyParams);
+            }
+            hipError_t selected = updateExec ? hipDrvGraphExecMemcpyNodeSetParams(exec, copyNode, copyParams, ctx) : hipDrvGraphExecMemsetNodeSetParams(exec, memsetNode, memsetParams, ctx);
+            return acceptStatus(hipDrvGraphAddMemsetNode(&memsetNode, graph, deps, numDeps, memsetParams, ctx));
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        add_memset = (
+            "HIP driver graph add memset node: output: memsetNode, graph: graph, "
+            "dependencies: deps, count: numDeps, params: memsetParams, context: ctx"
+        )
+        add_free = (
+            "HIP driver graph add memory free node: output: freeNode, graph: graph, "
+            "dependencies: deps, count: numDeps, pointer: ptr"
+        )
+        get_params = (
+            "HIP driver graph memcpy node get params: node: copyNode, "
+            "params output: copyParams"
+        )
+        set_params = (
+            "HIP driver graph memcpy node set params: node: copyNode, "
+            "params: copyParams"
+        )
+        exec_copy = (
+            "HIP driver graph exec memcpy node set params: exec: exec, "
+            "node: copyNode, params: copyParams, context: ctx"
+        )
+        exec_memset = (
+            "HIP driver graph exec memset node set params: exec: exec, "
+            "node: memsetNode, params: memsetParams, context: ctx"
+        )
+
+        assert f"// {add_memset}" in result
+        assert f"// {add_free}" in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert f"if (((/* {get_params} */ hipSuccess) != hipSuccess))" in result
+        assert f"return (/* {set_params} */ hipSuccess);" in result
+        assert (
+            f"var selected: hipError_t = (updateExec ? (/* {exec_copy} */ "
+            f"hipSuccess) : (/* {exec_memset} */ hipSuccess));"
+        ) in result
+        assert f"return acceptStatus((/* {add_memset} */ hipSuccess));" in result
+        for function_name in [
+            "hipDrvGraphAddMemsetNode",
+            "hipDrvGraphAddMemFreeNode",
+            "hipDrvGraphMemcpyNodeGetParams",
+            "hipDrvGraphMemcpyNodeSetParams",
+            "hipDrvGraphExecMemcpyNodeSetParams",
+            "hipDrvGraphExecMemsetNodeSetParams",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_hip_graph_external_semaphore_expression_contexts_emit_status(self):
+        """Test HIP graph external semaphore calls in expressions emit status."""
+        code = """
+        hipError_t acceptStatus(hipError_t status) {
+            return status;
+        }
+
+        hipError_t graphSemaphoreExpressions(
+            hipGraph_t graph,
+            hipGraphExec_t exec,
+            hipGraphNode_t* deps,
+            size_t numDeps,
+            bool signalFirst
+        ) {
+            hipGraphNode_t signalNode;
+            hipGraphNode_t waitNode;
+            hipExternalSemaphoreSignalNodeParams signalParams;
+            hipExternalSemaphoreWaitNodeParams waitParams;
+            bool signalAdded =
+                hipGraphAddExternalSemaphoresSignalNode(
+                    &signalNode,
+                    graph,
+                    deps,
+                    numDeps,
+                    &signalParams
+                ) == hipSuccess;
+            if (hipGraphExternalSemaphoresSignalNodeGetParams(signalNode, &signalParams) != hipSuccess) {
+                return hipGraphExternalSemaphoresSignalNodeSetParams(signalNode, &signalParams);
+            }
+            hipError_t selected =
+                signalFirst ? hipGraphExecExternalSemaphoresSignalNodeSetParams(exec, signalNode, &signalParams) : hipGraphAddExternalSemaphoresWaitNode(&waitNode, graph, deps, numDeps, &waitParams);
+            if (hipGraphExternalSemaphoresWaitNodeGetParams(waitNode, &waitParams) == hipSuccess) {
+                return selected;
+            }
+            return acceptStatus(
+                signalFirst ? hipGraphExecExternalSemaphoresWaitNodeSetParams(exec, waitNode, &waitParams) : hipGraphExternalSemaphoresWaitNodeSetParams(waitNode, &waitParams)
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var signalAdded: bool = ((/* HIP graph add external semaphore "
+            "signal node: output: signalNode, graph: graph, dependencies: "
+            "deps, count: numDeps, params: (&signalParams) */ hipSuccess) == "
+            "hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP graph external semaphore signal node get params: "
+            "node: signalNode, params: (&signalParams) */ hipSuccess) != "
+            "hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP graph external semaphore signal node set params: "
+            "node: signalNode, params: (&signalParams) */ hipSuccess);"
+        ) in result
+        assert (
+            "var selected: hipError_t = (signalFirst ? (/* HIP graph exec "
+            "external semaphore signal node set params: exec: exec, node: "
+            "signalNode, params: (&signalParams) */ hipSuccess) : (/* HIP "
+            "graph add external semaphore wait node: output: waitNode, graph: "
+            "graph, dependencies: deps, count: numDeps, params: (&waitParams) "
+            "*/ hipSuccess));"
+        ) in result
+        assert (
+            "if (((/* HIP graph external semaphore wait node get params: "
+            "node: waitNode, params: (&waitParams) */ hipSuccess) == "
+            "hipSuccess))"
+        ) in result
+        assert "return selected;" in result
+        assert (
+            "return acceptStatus((signalFirst ? (/* HIP graph exec external "
+            "semaphore wait node set params: exec: exec, node: waitNode, "
+            "params: (&waitParams) */ hipSuccess) : (/* HIP graph external "
+            "semaphore wait node set params: node: waitNode, params: "
+            "(&waitParams) */ hipSuccess)));"
+        ) in result
+        for function_name in [
+            "hipGraphAddExternalSemaphoresSignalNode",
+            "hipGraphExternalSemaphoresSignalNodeGetParams",
+            "hipGraphExternalSemaphoresSignalNodeSetParams",
+            "hipGraphExecExternalSemaphoresSignalNodeSetParams",
+            "hipGraphAddExternalSemaphoresWaitNode",
+            "hipGraphExternalSemaphoresWaitNodeGetParams",
+            "hipGraphExternalSemaphoresWaitNodeSetParams",
+            "hipGraphExecExternalSemaphoresWaitNodeSetParams",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_hip_extended_graph_expression_contexts_emit_status(self):
+        """Test extended HIP graph calls in expressions emit status metadata."""
+        code = """
+        hipError_t acceptStatus(hipError_t status) {
+            return status;
+        }
+
+        hipError_t extendedGraphExpressions(
+            hipGraph_t graph,
+            hipGraphExec_t exec,
+            hipGraphNode_t genericNode,
+            hipGraphNode_t kernelNode,
+            hipGraphNode_t childNode,
+            bool update
+        ) {
+            hipGraph_t embeddedGraph;
+            hipGraphNodeParams nodeParams;
+            hipGraphInstantiateParams instantiateParams;
+            hipKernelNodeAttrValue attrValue;
+            unsigned long long execFlags = 0ull;
+            size_t bytes = 0;
+            int device = 0;
+            bool paramsSet =
+                hipGraphNodeSetParams(genericNode, &nodeParams) == hipSuccess;
+            if (hipGraphExecNodeSetParams(exec, genericNode, &nodeParams) != hipSuccess) {
+                return hipGraphInstantiateWithParams(&exec, graph, &instantiateParams);
+            }
+            hipError_t selected =
+                update ? hipGraphExecGetFlags(exec, &execFlags) : hipDeviceGetGraphMemAttribute(device, hipGraphMemAttrUsedMemCurrent, &bytes);
+            if (hipDeviceSetGraphMemAttribute(device, hipGraphMemAttrReserveMemCurrent, &bytes) == hipSuccess) {
+                return selected;
+            }
+            if (hipGraphChildGraphNodeGetGraph(childNode, &embeddedGraph) != hipSuccess) {
+                return hipGraphKernelNodeSetAttribute(kernelNode, hipKernelNodeAttributeCooperative, &attrValue);
+            }
+            hipError_t trimOrPrint =
+                update ? hipDeviceGraphMemTrim(device) : hipGraphDebugDotPrint(graph, "graph.dot", 0);
+            return acceptStatus(
+                update ? hipGraphKernelNodeGetAttribute(kernelNode, hipKernelNodeAttributeCooperative, &attrValue) : trimOrPrint
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var paramsSet: bool = ((/* HIP graph generic node set params: "
+            "node: genericNode, params: (&nodeParams) */ hipSuccess) == "
+            "hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP graph exec generic node set params: exec: exec, "
+            "node: genericNode, params: (&nodeParams) */ hipSuccess) != "
+            "hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP graph instantiate with params: output: exec, "
+            "graph: graph, params: (&instantiateParams) */ hipSuccess);"
+        ) in result
+        assert (
+            "var selected: hipError_t = (update ? (/* HIP graph exec get flags: "
+            "exec: exec, output: execFlags */ hipSuccess) : (/* HIP device "
+            "graph memory get attribute: device: device, attribute: "
+            "hipGraphMemAttrUsedMemCurrent, output: bytes */ hipSuccess));"
+        ) in result
+        assert (
+            "if (((/* HIP device graph memory set attribute: device: device, "
+            "attribute: hipGraphMemAttrReserveMemCurrent, value: bytes */ "
+            "hipSuccess) == hipSuccess))"
+        ) in result
+        assert "return selected;" in result
+        assert (
+            "if (((/* HIP graph child node get graph: node: childNode, output: "
+            "embeddedGraph */ hipSuccess) != hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP graph kernel node set attribute: node: kernelNode, "
+            "attribute: hipKernelNodeAttributeCooperative, value: attrValue */ "
+            "hipSuccess);"
+        ) in result
+        assert (
+            "var trimOrPrint: hipError_t = (update ? (/* HIP device graph "
+            "memory trim: device: device */ hipSuccess) : (/* HIP graph debug "
+            'dot print: graph: graph, path: "graph.dot", flags: 0 */ '
+            "hipSuccess));"
+        ) in result
+        assert (
+            "return acceptStatus((update ? (/* HIP graph kernel node get "
+            "attribute: node: kernelNode, attribute: "
+            "hipKernelNodeAttributeCooperative, output: attrValue */ "
+            "hipSuccess) : trimOrPrint));"
+        ) in result
+        for function_name in [
+            "hipGraphNodeSetParams",
+            "hipGraphExecNodeSetParams",
+            "hipGraphInstantiateWithParams",
+            "hipGraphExecGetFlags",
+            "hipDeviceGetGraphMemAttribute",
+            "hipDeviceSetGraphMemAttribute",
+            "hipGraphChildGraphNodeGetGraph",
+            "hipGraphKernelNodeSetAttribute",
+            "hipDeviceGraphMemTrim",
+            "hipGraphDebugDotPrint",
+            "hipGraphKernelNodeGetAttribute",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_hip_interop_ipc_launch_expression_contexts_emit_status(self):
+        """Test interop, IPC, profiler, and launch support expressions."""
+        code = """
+        hipError_t interopIpcLaunchExpressions(
+            hipStream_t stream,
+            hipGraphicsResource_t* resources,
+            hipGraphicsResource_t imageResource,
+            hipIpcMemHandle_t ipcMemHandle,
+            hipIpcEventHandle_t ipcEventHandle,
+            hipLaunchConfig_t* config,
+            HIP_LAUNCH_CONFIG* driverConfig,
+            hipFunction_t function,
+            void* kernel,
+            void** args,
+            hipLaunchParams* launchParams,
+            bool retry
+        ) {
+            hipGraphicsResource_t resource;
+            hipArray_t array;
+            hipEvent_t event;
+            hipEvent_t startEvent;
+            hipEvent_t stopEvent;
+            void* mappedPointer;
+            size_t ptrSize;
+            dim3 grid;
+            dim3 block;
+            dim3 outGrid;
+            dim3 outBlock;
+            size_t sharedMem;
+            hipStream_t outStream;
+            int value;
+            unsigned int glBuffer;
+            unsigned int glImage;
+            unsigned int glTarget;
+            hipIpcMemHandle_t exportedHandle;
+            hipIpcEventHandle_t exportedEventHandle;
+            bool registered =
+                hipGraphicsGLRegisterBuffer(
+                    &resource,
+                    glBuffer,
+                    hipGraphicsRegisterFlagsWriteDiscard
+                ) == hipSuccess;
+            bool registeredImage =
+                hipGraphicsGLRegisterImage(
+                    &imageResource,
+                    glImage,
+                    glTarget,
+                    hipGraphicsRegisterFlagsSurfaceLoadStore
+                ) == hipSuccess;
+            bool mapped =
+                hipGraphicsMapResources(1, resources, stream) == hipSuccess;
+            bool unregistered =
+                hipGraphicsUnregisterResource(resource) == hipSuccess;
+            bool exported =
+                hipIpcGetMemHandle(&exportedHandle, mappedPointer) == hipSuccess;
+            bool opened =
+                hipIpcOpenMemHandle(
+                    &mappedPointer,
+                    ipcMemHandle,
+                    hipIpcMemLazyEnablePeerAccess
+                ) == hipSuccess;
+            bool closed = hipIpcCloseMemHandle(mappedPointer) == hipSuccess;
+            bool eventExported =
+                hipIpcGetEventHandle(&exportedEventHandle, event) == hipSuccess;
+            bool configured =
+                hipConfigureCall(grid, block, 0, stream) == hipSuccess;
+            bool pushed =
+                __hipPushCallConfiguration(grid, block, 0, stream) == hipSuccess;
+            bool profiled = hipProfilerStart() == hipSuccess;
+            bool stopped = hipProfilerStop() == hipSuccess;
+            bool driverLaunched =
+                hipDrvLaunchKernelEx(driverConfig, function, args, NULL) == hipSuccess;
+            bool extendedLaunched =
+                hipExtLaunchKernel(
+                    (const void*)kernel,
+                    grid,
+                    block,
+                    args,
+                    0,
+                    stream,
+                    startEvent,
+                    stopEvent,
+                    hipExtAnyOrderLaunch
+                ) == hipSuccess;
+            bool gglLaunched =
+                hipExtLaunchKernelGGL(
+                    kernel,
+                    grid,
+                    block,
+                    0,
+                    stream,
+                    startEvent,
+                    stopEvent,
+                    hipExtAnyOrderLaunch,
+                    kernel,
+                    args
+                ) == hipSuccess;
+            bool multiLaunched =
+                hipExtLaunchMultiKernelMultiDevice(
+                    launchParams,
+                    2,
+                    hipExtAnyOrderLaunch
+                ) == hipSuccess;
+            if (hipGraphicsResourceGetMappedPointer(&mappedPointer, &ptrSize, resource) != hipSuccess) {
+                return hipIpcOpenEventHandle(&event, ipcEventHandle);
+            }
+            if (__hipPopCallConfiguration(&outGrid, &outBlock, &sharedMem, &outStream) == hipSuccess) {
+                hipError_t selected = retry ? hipGraphicsUnmapResources(1, resources, stream) : hipSetupArgument(&value, sizeof(value), 0);
+                return selected;
+            }
+            if (hipLaunchKernelExC(config, kernel, args) == hipSuccess) {
+                return hipLaunchByPtr(kernel);
+            }
+            if (hipExtModuleLaunchKernel(function, 512, 1, 1, 64, 1, 1, 0, stream, args, NULL, startEvent, stopEvent, hipExtAnyOrderLaunch) == hipSuccess) {
+                return hipHccModuleLaunchKernel(function, 512, 1, 1, 64, 1, 1, 0, stream, args, NULL, startEvent, stopEvent, hipExtAnyOrderLaunch);
+            }
+            if (hipLaunchCooperativeKernel(function, grid, block, args, 0, stream) == hipSuccess) {
+                return hipLaunchCooperativeKernelMultiDevice(launchParams, 2, 0);
+            }
+            if (hipModuleLaunchCooperativeKernel(function, 8, 1, 1, 32, 1, 1, 0, stream, args) == hipSuccess) {
+                return hipModuleLaunchCooperativeKernelMultiDevice(launchParams, 2, 0);
+            }
+            return hipGraphicsSubResourceGetMappedArray(
+                &array,
+                imageResource,
+                0,
+                0
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var registered: bool = ((/* HIP OpenGL register buffer: output: "
+            "resource, buffer: glBuffer, flags: hipGraphicsRegisterFlagsWriteDiscard "
+            "*/ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var registeredImage: bool = ((/* HIP OpenGL register image: "
+            "output: imageResource, image: glImage, target: glTarget, "
+            "flags: hipGraphicsRegisterFlagsSurfaceLoadStore */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "var mapped: bool = ((/* HIP graphics map resources: count: 1, "
+            "resources: resources, stream: stream */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var unregistered: bool = ((/* HIP graphics unregister resource: "
+            "resource */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var exported: bool = ((/* HIP IPC get memory handle: output: "
+            "exportedHandle, pointer: mappedPointer */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var opened: bool = ((/* HIP IPC open memory handle: output: "
+            "mappedPointer, handle: ipcMemHandle, flags: "
+            "hipIpcMemLazyEnablePeerAccess */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var closed: bool = ((/* HIP IPC close memory handle: pointer: "
+            "mappedPointer */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var eventExported: bool = ((/* HIP IPC get event handle: output: "
+            "exportedEventHandle, event: event */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var configured: bool = ((/* HIP configure call: grid: grid, block: "
+            "block, shared memory: 0, stream: stream */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var pushed: bool = ((/* HIP push call configuration: grid: grid, "
+            "block: block, shared memory: 0, stream: stream */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "var profiled: bool = ((/* HIP profiler start */ hipSuccess) == "
+            "hipSuccess);"
+        ) in result
+        assert (
+            "var stopped: bool = ((/* HIP profiler stop */ hipSuccess) == "
+            "hipSuccess);"
+        ) in result
+        assert (
+            "var driverLaunched: bool = ((/* HIP driver launch kernel ex: "
+            "config: driverConfig, function: function, params: args, extra: "
+            "NULL */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var extendedLaunched: bool = ((/* HIP extended kernel launch: "
+            "function: kernel, grid: grid, block: block, args: args, shared "
+            "memory: 0, stream: stream, start event: startEvent, stop event: "
+            "stopEvent, flags: hipExtAnyOrderLaunch */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var gglLaunched: bool = ((/* HIP extended kernel launch GGL: "
+            "function: kernel, grid: grid, block: block, shared memory: 0, "
+            "stream: stream, start event: startEvent, stop event: stopEvent, "
+            "flags: hipExtAnyOrderLaunch, args: kernel, args */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "var multiLaunched: bool = ((/* HIP extended multi-kernel "
+            "multi-device launch: params: launchParams, devices: 2, flags: "
+            "hipExtAnyOrderLaunch */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP graphics mapped pointer: pointer output: mappedPointer, "
+            "size output: ptrSize, resource: resource */ hipSuccess) != hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP IPC open event handle: output: event, "
+            "handle: ipcEventHandle */ hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP pop call configuration: grid output: outGrid, "
+            "block output: outBlock, shared memory output: sharedMem, "
+            "stream output: outStream */ hipSuccess) == hipSuccess))"
+        ) in result
+        assert (
+            "var selected: hipError_t = (retry ? "
+            "(/* HIP graphics unmap resources: count: 1, resources: resources, "
+            "stream: stream */ hipSuccess) : "
+            "(/* HIP setup kernel argument: value: (&value), bytes: sizeof(value), "
+            "offset: 0 */ hipSuccess));"
+        ) in result
+        assert "return selected;" in result
+        assert (
+            "if (((/* HIP launch kernel ex: config: config, function: kernel, "
+            "args: args */ hipSuccess) == hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP launch by pointer: function: kernel */ hipSuccess);"
+            in result
+        )
+        assert (
+            "if (((/* HIP extended module launch kernel: function: function, "
+            "global work size: (512, 1, 1), local work size: (64, 1, 1), "
+            "shared memory: 0, stream: stream, params: args, extra: NULL, "
+            "start event: startEvent, stop event: stopEvent, flags: "
+            "hipExtAnyOrderLaunch */ hipSuccess) == hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP HCC module launch kernel: function: function, "
+            "global work size: (512, 1, 1), local work size: (64, 1, 1), "
+            "shared memory: 0, stream: stream, params: args, extra: NULL, "
+            "start event: startEvent, stop event: stopEvent, flags: "
+            "hipExtAnyOrderLaunch */ hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP cooperative kernel launch: function: function, "
+            "grid: grid, block: block, params: args, shared memory: 0, "
+            "stream: stream */ hipSuccess) == hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP cooperative multi-device launch: params: "
+            "launchParams, devices: 2, flags: 0 */ hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP module cooperative kernel launch: function: function, "
+            "grid: (8, 1, 1), block: (32, 1, 1), shared memory: 0, "
+            "stream: stream, params: args */ hipSuccess) == hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP module cooperative multi-device launch: params: "
+            "launchParams, devices: 2, flags: 0 */ hipSuccess);"
+        ) in result
+        assert (
+            "return (/* HIP graphics mapped subresource array: output: array, "
+            "resource: imageResource, array index: 0, mip level: 0 */ hipSuccess);"
+        ) in result
+        for function_name in [
+            "hipGraphicsGLRegisterBuffer",
+            "hipGraphicsGLRegisterImage",
+            "hipGraphicsMapResources",
+            "hipGraphicsUnregisterResource",
+            "hipIpcGetMemHandle",
+            "hipIpcOpenMemHandle",
+            "hipIpcCloseMemHandle",
+            "hipIpcGetEventHandle",
+            "hipConfigureCall",
+            "__hipPushCallConfiguration",
+            "hipProfilerStart",
+            "hipProfilerStop",
+            "hipDrvLaunchKernelEx",
+            "hipExtLaunchKernel",
+            "hipExtLaunchKernelGGL",
+            "hipExtLaunchMultiKernelMultiDevice",
+            "hipGraphicsResourceGetMappedPointer",
+            "hipIpcOpenEventHandle",
+            "__hipPopCallConfiguration",
+            "hipGraphicsUnmapResources",
+            "hipSetupArgument",
+            "hipLaunchKernelExC",
+            "hipLaunchByPtr",
+            "hipExtModuleLaunchKernel",
+            "hipHccModuleLaunchKernel",
+            "hipLaunchCooperativeKernel",
+            "hipLaunchCooperativeKernelMultiDevice",
+            "hipModuleLaunchCooperativeKernel",
+            "hipModuleLaunchCooperativeKernelMultiDevice",
+            "hipGraphicsSubResourceGetMappedArray",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_hip_external_memory_semaphore_expression_contexts_emit_status(self):
+        """Test external memory and semaphore expressions emit status metadata."""
+        code = """
+        hipError_t externalInteropExpressions(
+            hipStream_t stream,
+            hipExternalMemory_t memory,
+            hipExternalSemaphore_t semaphore,
+            hipExternalMemoryHandleDesc* memoryDesc,
+            hipExternalMemoryBufferDesc* bufferDesc,
+            hipExternalMemoryMipmappedArrayDesc* mipmapDesc,
+            hipExternalSemaphoreHandleDesc* semaphoreDesc,
+            hipExternalSemaphoreSignalParams* signalParams,
+            hipExternalSemaphoreWaitParams* waitParams,
+            bool release
+        ) {
+            hipExternalMemory_t importedMemory;
+            hipExternalSemaphore_t importedSemaphore;
+            void* mappedPointer;
+            hipMipmappedArray_t mipmappedArray;
+            bool imported =
+                hipImportExternalMemory(&importedMemory, memoryDesc) == hipSuccess;
+            bool mapped =
+                hipExternalMemoryGetMappedBuffer(
+                    &mappedPointer,
+                    memory,
+                    bufferDesc
+                ) == hipSuccess;
+            bool mipmapped =
+                hipExternalMemoryGetMappedMipmappedArray(
+                    &mipmappedArray,
+                    memory,
+                    mipmapDesc
+                ) == hipSuccess;
+            bool freed = hipFreeMipmappedArray(mipmappedArray) == hipSuccess;
+            bool semaphoreImported =
+                hipImportExternalSemaphore(
+                    &importedSemaphore,
+                    semaphoreDesc
+                ) == hipSuccess;
+            if (hipSignalExternalSemaphoresAsync(&semaphore, signalParams, 1, stream) != hipSuccess) {
+                return hipWaitExternalSemaphoresAsync(
+                    &semaphore,
+                    waitParams,
+                    1,
+                    stream
+                );
+            }
+            hipError_t selected = release ? hipDestroyExternalSemaphore(importedSemaphore) : hipDestroyExternalMemory(importedMemory);
+            return selected;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var imported: bool = ((/* HIP import external memory: output: "
+            "importedMemory, descriptor: memoryDesc */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var mapped: bool = ((/* HIP external memory mapped buffer: output: "
+            "mappedPointer, memory: memory, descriptor: bufferDesc */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "var mipmapped: bool = ((/* HIP external memory mapped mipmapped "
+            "array: output: mipmappedArray, memory: memory, descriptor: "
+            "mipmapDesc */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var freed: bool = ((/* HIP free mipmapped array: mipmappedArray */ "
+            "hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var semaphoreImported: bool = ((/* HIP import external semaphore: "
+            "output: importedSemaphore, descriptor: semaphoreDesc */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP signal external semaphores: semaphores: (&semaphore), "
+            "params: signalParams, count: 1, stream: stream */ hipSuccess) != "
+            "hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP wait external semaphores: semaphores: (&semaphore), "
+            "params: waitParams, count: 1, stream: stream */ hipSuccess);"
+        ) in result
+        assert (
+            "var selected: hipError_t = (release ? "
+            "(/* HIP destroy external semaphore: importedSemaphore */ hipSuccess) "
+            ": (/* HIP destroy external memory: importedMemory */ hipSuccess));"
+        ) in result
+        assert "return selected;" in result
+        for function_name in [
+            "hipImportExternalMemory",
+            "hipExternalMemoryGetMappedBuffer",
+            "hipExternalMemoryGetMappedMipmappedArray",
+            "hipFreeMipmappedArray",
+            "hipImportExternalSemaphore",
+            "hipSignalExternalSemaphoresAsync",
+            "hipWaitExternalSemaphoresAsync",
+            "hipDestroyExternalSemaphore",
+            "hipDestroyExternalMemory",
+        ]:
+            assert f"{function_name}(" not in result
+
     def test_hip_runtime_memset_async_conversion(self):
         """Test hipMemsetAsync emits metadata comments and status success"""
         code = """
@@ -2605,6 +5269,51 @@ class TestHipCodeGen:
         assert "hipPeekAtLastError(" not in result
         assert "hipGetErrorString(" not in result
         assert "hipGetErrorName(" not in result
+
+    def test_hip_runtime_last_error_expression_contexts_emit_status(self):
+        """Test HIP last-error calls in expressions stay explicit."""
+        code = """
+        hipError_t acceptStatus(hipError_t status) {
+            return status;
+        }
+
+        hipError_t queryLastErrorExpressions(bool retry) {
+            bool lastOk = hipGetLastError() == hipSuccess;
+            if (hipPeekAtLastError() != hipSuccess) {
+                return hipGetLastError();
+            }
+            hipError_t selected = retry ? hipPeekAtLastError() : hipGetLastError();
+            return acceptStatus(
+                retry ? hipGetLastError() : hipPeekAtLastError()
+            );
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var lastOk: bool = ((/* HIP get last error */ hipSuccess) == "
+            "hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP peek at last error */ hipSuccess) != hipSuccess))" in result
+        )
+        assert "return (/* HIP get last error */ hipSuccess);" in result
+        assert (
+            "var selected: hipError_t = (retry ? "
+            "(/* HIP peek at last error */ hipSuccess) : "
+            "(/* HIP get last error */ hipSuccess));"
+        ) in result
+        assert (
+            "return acceptStatus((retry ? (/* HIP get last error */ "
+            "hipSuccess) : (/* HIP peek at last error */ hipSuccess)));"
+        ) in result
+        assert "hipGetLastError(" not in result
+        assert "hipPeekAtLastError(" not in result
 
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
@@ -2975,6 +5684,77 @@ class TestHipCodeGen:
         assert "// HIP stream create: stream, flags: hipStreamNonBlocking" in result
         assert "var err: hipError_t = hipSuccess;" in result
         assert "hipStreamCreateWithFlags(" not in result
+
+    def test_hip_stream_memory_operations_emit_metadata_and_status(self):
+        """Test HIP stream memory operation APIs emit metadata comments."""
+        code = """
+        void stream_memory_ops(
+            hipStream_t stream,
+            unsigned int* ptr32,
+            unsigned long long* ptr64,
+            hipStreamBatchMemOpParams* params,
+            bool retry
+        ) {
+            hipStreamWaitValue32(stream, ptr32, 7u, hipStreamWaitValueEq);
+            hipStreamWriteValue32(stream, ptr32, 9u, 0);
+            hipStreamWaitValue64(stream, ptr64, 11ull, hipStreamWaitValueGte);
+            hipStreamWriteValue64(stream, ptr64, 13ull, 0);
+            hipStreamBatchMemOp(stream, 2, params, 0);
+            hipError_t err = hipStreamWaitValue32(stream, ptr32, 1u, 0);
+            bool wrote = hipStreamWriteValue64(stream, ptr64, 2ull, 0) == hipSuccess;
+            hipError_t selected = retry ? hipStreamBatchMemOp(stream, 2, params, 0) : hipStreamWriteValue32(stream, ptr32, 3u, 0);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// HIP stream wait value32: stream: stream, address: ptr32, "
+            "value: 7u, flags: hipStreamWaitValueEq"
+        ) in result
+        assert (
+            "// HIP stream write value32: stream: stream, address: ptr32, "
+            "value: 9u, flags: 0"
+        ) in result
+        assert (
+            "// HIP stream wait value64: stream: stream, address: ptr64, "
+            "value: 11ull, flags: hipStreamWaitValueGte"
+        ) in result
+        assert (
+            "// HIP stream write value64: stream: stream, address: ptr64, "
+            "value: 13ull, flags: 0"
+        ) in result
+        assert (
+            "// HIP stream batch memory op: stream: stream, count: 2, "
+            "params: params, flags: 0"
+        ) in result
+        assert (
+            "// HIP stream wait value32: stream: stream, address: ptr32, "
+            "value: 1u, flags: 0"
+        ) in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert (
+            "var wrote: bool = "
+            "((/* HIP stream write value64: stream: stream, address: ptr64, "
+            "value: 2ull, flags: 0 */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var selected: hipError_t = "
+            "(retry ? (/* HIP stream batch memory op: stream: stream, count: 2, "
+            "params: params, flags: 0 */ hipSuccess) : "
+            "(/* HIP stream write value32: stream: stream, address: ptr32, "
+            "value: 3u, flags: 0 */ hipSuccess));"
+        ) in result
+        assert "hipStreamWaitValue32(" not in result
+        assert "hipStreamWaitValue64(" not in result
+        assert "hipStreamWriteValue32(" not in result
+        assert "hipStreamWriteValue64(" not in result
+        assert "hipStreamBatchMemOp(" not in result
 
     def test_hip_runtime_module_api_conversion(self):
         """Test HIP module and function APIs emit metadata comments."""
@@ -3463,6 +6243,699 @@ class TestHipCodeGen:
         assert "hiprtcLinkComplete(" not in result
         assert "hiprtcLinkDestroy(" not in result
 
+    def test_hip_module_library_link_rtc_expression_contexts_emit_status(self):
+        """Test module, library, link, and HIPRTC expressions emit status metadata."""
+        code = """
+        hipError_t moduleLibraryLinkExpressions(hipStream_t stream, bool retry) {
+            hipModule_t module;
+            hipFunction_t function;
+            hipFunction_t symbolFunction;
+            hipFunction_t libraryFunction;
+            hipFuncAttributes attrs;
+            hipLibrary_t library;
+            hipLibrary_t libraryFromKernel;
+            hipKernel_t libraryKernel;
+            hipKernel_t* libraryKernels;
+            int attrValue;
+            int device;
+            unsigned int moduleFunctionCount;
+            unsigned int libraryKernelCount;
+            void* globalPtr;
+            size_t globalBytes;
+            size_t paramOffset;
+            size_t paramSize;
+            void** params;
+            void** extra;
+            void* image;
+            void* fatBinary;
+            void* driverEntry;
+            void* addressHandle;
+            void* linkedImage;
+            hipDeviceptr_t devicePtr;
+            hipJitOption options;
+            hipLibraryOption libraryOptions;
+            void* optionValues;
+            void* libraryOptionValues;
+            hipDriverEntryPointQueryResult driverStatus;
+            textureReference* texRef;
+            const char* kernelName;
+            hipLinkState_t runtimeLinkState;
+            hipJitInputType runtimeInputType;
+
+            bool loadedFile = hipModuleLoad(&module, "kernel.hsaco") == hipSuccess;
+            bool loadedData = hipModuleLoadData(&module, image) == hipSuccess;
+            bool loadedDataEx =
+                hipModuleLoadDataEx(
+                    &module,
+                    image,
+                    1,
+                    &options,
+                    &optionValues
+                ) == hipSuccess;
+            bool loadedFat =
+                hipModuleLoadFatBinary(&module, fatBinary) == hipSuccess;
+            bool functionCountReady =
+                hipModuleGetFunctionCount(&moduleFunctionCount, module) == hipSuccess;
+            bool functionBySymbol =
+                hipGetFuncBySymbol(&symbolFunction, function) == hipSuccess;
+            bool functionAttribute =
+                hipFuncGetAttribute(
+                    &attrValue,
+                    HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
+                    function
+                ) == hipSuccess;
+            bool functionAttributes =
+                hipFuncGetAttributes(&attrs, function) == hipSuccess;
+            bool functionAttributeSet =
+                hipFuncSetAttribute(
+                    function,
+                    HIP_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                    1024
+                ) == hipSuccess;
+            bool functionCacheSet =
+                hipFuncSetCacheConfig(function, hipFuncCachePreferL1) == hipSuccess;
+            bool functionSharedSet =
+                hipFuncSetSharedMemConfig(
+                    function,
+                    hipSharedMemBankSizeEightByte
+                ) == hipSuccess;
+            bool globalReady =
+                hipModuleGetGlobal(
+                    &globalPtr,
+                    &globalBytes,
+                    module,
+                    "symbol"
+                ) == hipSuccess;
+            bool texReady = hipModuleGetTexRef(&texRef, module, "tex") == hipSuccess;
+            bool entryReady =
+                hipGetDriverEntryPoint(
+                    "hipMalloc",
+                    &driverEntry,
+                    0,
+                    &driverStatus
+                ) == hipSuccess;
+            bool libraryDataReady =
+                hipLibraryLoadData(
+                    &library,
+                    image,
+                    &options,
+                    &optionValues,
+                    1,
+                    &libraryOptions,
+                    &libraryOptionValues,
+                    1
+                ) == hipSuccess;
+            bool kernelCountReady =
+                hipLibraryGetKernelCount(&libraryKernelCount, library) == hipSuccess;
+            bool kernelsEnumerated =
+                hipLibraryEnumerateKernels(
+                    libraryKernels,
+                    libraryKernelCount,
+                    library
+                ) == hipSuccess;
+            bool kernelLibraryReady =
+                hipKernelGetLibrary(&libraryFromKernel, libraryKernel) == hipSuccess;
+            bool kernelNameReady =
+                hipKernelGetName(&kernelName, libraryKernel) == hipSuccess;
+            bool kernelParamReady =
+                hipKernelGetParamInfo(
+                    libraryKernel,
+                    0,
+                    &paramOffset,
+                    &paramSize
+                ) == hipSuccess;
+            bool kernelFunctionAttribute =
+                hipKernelGetAttribute(
+                    &attrValue,
+                    HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
+                    libraryKernel,
+                    device
+                ) == hipSuccess;
+            bool kernelAttributeSet =
+                hipKernelSetAttribute(
+                    HIP_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                    2048,
+                    libraryKernel,
+                    device
+                ) == hipSuccess;
+            bool linked =
+                hipLinkComplete(
+                    runtimeLinkState,
+                    &linkedImage,
+                    &globalBytes
+                ) == hipSuccess;
+            bool launched =
+                hipModuleLaunchKernel(
+                    function,
+                    8,
+                    1,
+                    1,
+                    64,
+                    1,
+                    1,
+                    0,
+                    stream,
+                    params,
+                    extra
+                ) == hipSuccess;
+
+            if (hipModuleGetFunction(&function, module, "kernel") != hipSuccess) {
+                return hipModuleUnload(module);
+            }
+            if (hipLibraryLoadFromFile(&library, "kernel.hipfb", &options, &optionValues, 1, &libraryOptions, &libraryOptionValues, 1) == hipSuccess) {
+                hipError_t selected = retry ? hipLibraryGetKernel(&libraryKernel, library, "kernel") : hipLibraryUnload(library);
+                return selected;
+            }
+            if (hipLinkCreate(1, &options, &optionValues, &runtimeLinkState) == hipSuccess) {
+                hipError_t selectedLink = retry ? hipLinkAddFile(runtimeLinkState, runtimeInputType, "kernel.bc", 0, &options, &optionValues) : hipLinkAddData(runtimeLinkState, runtimeInputType, image, globalBytes, "kernel", 0, &options, &optionValues);
+                return selectedLink;
+            }
+            if (hipMemGetHandleForAddressRange(addressHandle, devicePtr, globalBytes, hipMemRangeHandleTypeDmaBuf, 0) == hipSuccess) {
+                return hipLinkDestroy(runtimeLinkState);
+            }
+            return hipKernelGetFunction(&libraryFunction, libraryKernel);
+        }
+
+        hiprtcResult rtcExpressions(bool preferLog) {
+            hiprtcProgram program;
+            hiprtcLinkState linkState;
+            hiprtcJIT_option jitOptions;
+            hiprtcJITInputType inputType;
+            const char* rtcSource;
+            const char** rtcHeaders;
+            const char** rtcIncludeNames;
+            const char** rtcOptions;
+            const char* loweredName;
+            char* rtcLog;
+            char* rtcCode;
+            char* rtcBitcode;
+            void* optionValues;
+            void* linkedBinary;
+            size_t globalBytes;
+            size_t logSize;
+            size_t codeSize;
+            size_t bitcodeSize;
+            int rtcMajor;
+            int rtcMinor;
+
+            bool versionReady = hiprtcVersion(&rtcMajor, &rtcMinor) == HIPRTC_SUCCESS;
+            bool programReady =
+                hiprtcCreateProgram(
+                    &program,
+                    rtcSource,
+                    "kernel.hip",
+                    0,
+                    rtcHeaders,
+                    rtcIncludeNames
+                ) == HIPRTC_SUCCESS;
+            bool logSized =
+                hiprtcGetProgramLogSize(program, &logSize) == HIPRTC_SUCCESS;
+            bool codeSized = hiprtcGetCodeSize(program, &codeSize) == HIPRTC_SUCCESS;
+            bool bitcodeSized =
+                hiprtcGetBitcodeSize(program, &bitcodeSize) == HIPRTC_SUCCESS;
+            bool named =
+                hiprtcAddNameExpression(program, "kernel") == HIPRTC_SUCCESS;
+
+            if (hiprtcCompileProgram(program, 1, rtcOptions) != HIPRTC_SUCCESS) {
+                return hiprtcDestroyProgram(&program);
+            }
+            if (hiprtcGetLoweredName(program, "kernel", &loweredName) == HIPRTC_SUCCESS) {
+                hiprtcResult selectedRtc = preferLog ? hiprtcGetProgramLog(program, rtcLog) : hiprtcGetCode(program, rtcCode);
+                return selectedRtc;
+            }
+            if (hiprtcLinkCreate(1, &jitOptions, &optionValues, &linkState) == HIPRTC_SUCCESS) {
+                hiprtcResult selectedLink = preferLog ? hiprtcLinkAddFile(linkState, inputType, "kernel.bc", 0, &jitOptions, &optionValues) : hiprtcLinkAddData(linkState, inputType, rtcCode, codeSize, "kernel", 0, &jitOptions, &optionValues);
+                return selectedLink;
+            }
+            if (hiprtcLinkComplete(linkState, &linkedBinary, &globalBytes) == HIPRTC_SUCCESS) {
+                return hiprtcLinkDestroy(linkState);
+            }
+            return hiprtcGetBitcode(program, rtcBitcode);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var loadedFile: bool = ((/* HIP module load: output: module, "
+            'file: "kernel.hsaco" */ hipSuccess) == hipSuccess);'
+        ) in result
+        assert (
+            "var functionBySymbol: bool = ((/* HIP get function by symbol: "
+            "output: symbolFunction, symbol: function */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var entryReady: bool = ((/* HIP get driver entry point: symbol: "
+            '"hipMalloc", output: driverEntry, flags: 0, status output: '
+            "driverStatus */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var kernelNameReady: bool = ((/* HIP kernel get name: output: "
+            "kernelName, kernel: libraryKernel */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var launched: bool = ((/* HIP module launch kernel: "
+            "function: function, grid: (8, 1, 1), block: (64, 1, 1), "
+            "shared memory: 0, stream: stream, params: params, extra: extra */ "
+            "hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP module get function: output: function, module: module, "
+            'name: "kernel" */ hipSuccess) != hipSuccess))'
+        ) in result
+        assert "return (/* HIP module unload: module */ hipSuccess);" in result
+        assert (
+            "var selected: hipError_t = (retry ? "
+            "(/* HIP library get kernel: output: libraryKernel, library: library, "
+            'name: "kernel" */ hipSuccess) : '
+            "(/* HIP library unload: library */ hipSuccess));"
+        ) in result
+        assert (
+            "var selectedLink: hipError_t = (retry ? "
+            "(/* HIP link add file: state: runtimeLinkState, input type: "
+            'runtimeInputType, path: "kernel.bc", options: 0, option keys: '
+            "(&options), option values: (&optionValues) */ hipSuccess) : "
+            "(/* HIP link add data: state: runtimeLinkState, input type: "
+            'runtimeInputType, image: image, bytes: globalBytes, name: "kernel", '
+            "options: 0, option keys: (&options), option values: "
+            "(&optionValues) */ hipSuccess));"
+        ) in result
+        assert (
+            "return (/* HIP kernel get function: output: libraryFunction, "
+            "kernel: libraryKernel */ hipSuccess);"
+        ) in result
+
+        assert (
+            "var versionReady: bool = ((/* HIPRTC version: major output: "
+            "rtcMajor, minor output: rtcMinor */ HIPRTC_SUCCESS) == HIPRTC_SUCCESS);"
+        ) in result
+        assert (
+            "var named: bool = ((/* HIPRTC add name expression: program: "
+            'program, expression: "kernel" */ HIPRTC_SUCCESS) == HIPRTC_SUCCESS);'
+        ) in result
+        assert (
+            "if (((/* HIPRTC compile program: program: program, options: 1, "
+            "option values: rtcOptions */ HIPRTC_SUCCESS) != HIPRTC_SUCCESS))"
+        ) in result
+        assert (
+            "return (/* HIPRTC destroy program: output: program */ " "HIPRTC_SUCCESS);"
+        ) in result
+        assert (
+            "var selectedRtc: hiprtcResult = (preferLog ? "
+            "(/* HIPRTC get program log: program: program, output: rtcLog */ "
+            "HIPRTC_SUCCESS) : (/* HIPRTC get code: program: program, output: "
+            "rtcCode */ HIPRTC_SUCCESS));"
+        ) in result
+        assert (
+            "var selectedLink: hiprtcResult = (preferLog ? "
+            "(/* HIPRTC link add file: state: linkState, input type: inputType, "
+            'path: "kernel.bc", options: 0, option keys: (&jitOptions), option '
+            "values: (&optionValues) */ HIPRTC_SUCCESS) : "
+            "(/* HIPRTC link add data: state: linkState, input type: inputType, "
+            'image: rtcCode, bytes: codeSize, name: "kernel", options: 0, '
+            "option keys: (&jitOptions), option values: (&optionValues) */ "
+            "HIPRTC_SUCCESS));"
+        ) in result
+        assert (
+            "return (/* HIPRTC get bitcode: program: program, output: "
+            "rtcBitcode */ HIPRTC_SUCCESS);"
+        ) in result
+
+        for function_name in [
+            "hipModuleLoad",
+            "hipModuleLoadData",
+            "hipModuleLoadDataEx",
+            "hipModuleLoadFatBinary",
+            "hipModuleGetFunction",
+            "hipModuleGetFunctionCount",
+            "hipGetFuncBySymbol",
+            "hipFuncGetAttribute",
+            "hipFuncGetAttributes",
+            "hipFuncSetAttribute",
+            "hipFuncSetCacheConfig",
+            "hipFuncSetSharedMemConfig",
+            "hipModuleGetGlobal",
+            "hipModuleGetTexRef",
+            "hipGetDriverEntryPoint",
+            "hipLibraryLoadFromFile",
+            "hipLibraryLoadData",
+            "hipLibraryGetKernel",
+            "hipLibraryGetKernelCount",
+            "hipLibraryEnumerateKernels",
+            "hipKernelGetLibrary",
+            "hipKernelGetName",
+            "hipKernelGetParamInfo",
+            "hipKernelGetFunction",
+            "hipKernelGetAttribute",
+            "hipKernelSetAttribute",
+            "hipLinkCreate",
+            "hipLinkAddFile",
+            "hipLinkAddData",
+            "hipLinkComplete",
+            "hipLinkDestroy",
+            "hipMemGetHandleForAddressRange",
+            "hipLibraryUnload",
+            "hipModuleLaunchKernel",
+            "hipModuleUnload",
+            "hiprtcVersion",
+            "hiprtcCreateProgram",
+            "hiprtcDestroyProgram",
+            "hiprtcCompileProgram",
+            "hiprtcGetProgramLogSize",
+            "hiprtcGetProgramLog",
+            "hiprtcGetCodeSize",
+            "hiprtcGetCode",
+            "hiprtcGetBitcodeSize",
+            "hiprtcGetBitcode",
+            "hiprtcAddNameExpression",
+            "hiprtcGetLoweredName",
+            "hiprtcLinkCreate",
+            "hiprtcLinkAddFile",
+            "hiprtcLinkAddData",
+            "hiprtcLinkComplete",
+            "hiprtcLinkDestroy",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_hip_texture_reference_expression_contexts_emit_status(self):
+        """Test deprecated texture-reference helpers in expressions stay explicit."""
+        code = """
+        hipError_t acceptStatus(hipError_t status) {
+            return status;
+        }
+
+        hipError_t textureReferenceExpressions(
+            textureReference* texRef,
+            hipArray_t array,
+            hipMipmappedArray_t mipArray,
+            void* devicePtr,
+            hipChannelFormatDesc* desc,
+            void* symbol,
+            bool useMip
+        ) {
+            size_t offset;
+            textureReference* symbolRef;
+            bool boundLinear =
+                hipBindTexture(&offset, texRef, devicePtr, desc, 256) == hipSuccess;
+            bool bound2D =
+                hipBindTexture2D(
+                    &offset,
+                    texRef,
+                    devicePtr,
+                    desc,
+                    16,
+                    8,
+                    64
+                ) == hipSuccess;
+            bool gotReference =
+                hipGetTextureReference(&symbolRef, symbol) == hipSuccess;
+            bool aligned =
+                hipGetTextureAlignmentOffset(&offset, texRef) == hipSuccess;
+            if (hipBindTextureToArray(texRef, array, desc) != hipSuccess) {
+                return hipUnbindTexture(texRef);
+            }
+            hipError_t selected = useMip ? hipBindTextureToMipmappedArray(texRef, mipArray, desc) : hipBindTexture(&offset, texRef, devicePtr, desc, 512);
+            return acceptStatus(hipGetTextureAlignmentOffset(&offset, texRef));
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var boundLinear: bool = ((/* HIP texture reference bind: "
+            "offset output: offset, texture: texRef, pointer: devicePtr, "
+            "desc: desc, bytes: 256 */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var bound2D: bool = ((/* HIP texture reference bind 2D: "
+            "offset output: offset, texture: texRef, pointer: devicePtr, "
+            "desc: desc, width: 16, height: 8, pitch: 64 */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "var gotReference: bool = ((/* HIP get texture reference: "
+            "output: symbolRef, symbol: symbol */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var aligned: bool = ((/* HIP texture alignment offset query: "
+            "output: offset, texture: texRef */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP texture reference bind array: texture: texRef, "
+            "array: array, desc: desc */ hipSuccess) != hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP texture reference unbind: texRef */ hipSuccess);" in result
+        )
+        assert (
+            "var selected: hipError_t = (useMip ? "
+            "(/* HIP texture reference bind mipmapped array: texture: texRef, "
+            "mipmapped array: mipArray, desc: desc */ hipSuccess) : "
+            "(/* HIP texture reference bind: offset output: offset, texture: "
+            "texRef, pointer: devicePtr, desc: desc, bytes: 512 */ hipSuccess));"
+        ) in result
+        assert (
+            "return acceptStatus((/* HIP texture alignment offset query: "
+            "output: offset, texture: texRef */ hipSuccess));"
+        ) in result
+
+        for function_name in [
+            "hipBindTexture",
+            "hipBindTexture2D",
+            "hipBindTextureToArray",
+            "hipBindTextureToMipmappedArray",
+            "hipGetTextureReference",
+            "hipGetTextureAlignmentOffset",
+            "hipUnbindTexture",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_hip_texture_reference_get_set_expression_contexts_emit_status(self):
+        """Test deprecated texture-reference getter/setters stay explicit."""
+        code = """
+        hipError_t acceptStatus(hipError_t status) {
+            return status;
+        }
+
+        hipError_t textureReferenceGetSetExpressions(
+            textureReference* texRef,
+            hipArray_t array,
+            hipMipmappedArray_t mipArray,
+            hipDeviceptr_t devicePtr,
+            HIP_ARRAY_DESCRIPTOR* arrayDesc,
+            float* borderColor,
+            bool useMip
+        ) {
+            size_t byteOffset;
+            hipDeviceptr_t address;
+            hipTextureAddressMode addressMode;
+            hipTextureFilterMode filterMode;
+            unsigned int flags;
+            hipArray_Format format;
+            int channels;
+            int maxAniso;
+            float bias;
+            float minClamp;
+            float maxClamp;
+            hipArray_t gotArray;
+            hipMipmappedArray_t gotMipArray;
+            bool gotAddress =
+                hipTexRefGetAddress(&address, texRef) == hipSuccess;
+            bool gotMode =
+                hipTexRefGetAddressMode(&addressMode, texRef, 1) == hipSuccess;
+            bool gotArrayStatus =
+                hipTexRefGetArray(&gotArray, texRef) == hipSuccess;
+            bool gotBorder =
+                hipTexRefGetBorderColor(borderColor, texRef) == hipSuccess;
+            bool gotFilter =
+                hipTexRefGetFilterMode(&filterMode, texRef) == hipSuccess;
+            bool gotFlags =
+                hipTexRefGetFlags(&flags, texRef) == hipSuccess;
+            if (hipTexRefGetFormat(&format, &channels, texRef) != hipSuccess) {
+                return hipTexRefSetAddressMode(texRef, 0, addressMode);
+            }
+            hipError_t addressStatus =
+                hipTexRefSetAddress(&byteOffset, texRef, devicePtr, 1024);
+            bool address2D =
+                hipTexRefSetAddress2D(
+                    texRef,
+                    arrayDesc,
+                    devicePtr,
+                    128
+                ) == hipSuccess;
+            bool setArray =
+                hipTexRefSetArray(texRef, array, flags) == hipSuccess;
+            bool setBorder =
+                hipTexRefSetBorderColor(texRef, borderColor) == hipSuccess;
+            bool setFilter =
+                hipTexRefSetFilterMode(texRef, filterMode) == hipSuccess;
+            bool setFlags =
+                hipTexRefSetFlags(texRef, flags) == hipSuccess;
+            bool setFormat =
+                hipTexRefSetFormat(texRef, format, channels) == hipSuccess;
+            bool setAniso =
+                hipTexRefSetMaxAnisotropy(texRef, maxAniso) == hipSuccess;
+            hipError_t mipFilter = useMip ? hipTexRefSetMipmapFilterMode(texRef, filterMode) : hipTexRefGetMipmapFilterMode(&filterMode, texRef);
+            hipError_t mipBias = useMip ? hipTexRefSetMipmapLevelBias(texRef, bias) : hipTexRefGetMipmapLevelBias(&bias, texRef);
+            hipError_t mipClamp = useMip ? hipTexRefSetMipmapLevelClamp(texRef, minClamp, maxClamp) : hipTexRefGetMipmapLevelClamp(&minClamp, &maxClamp, texRef);
+            hipError_t mipArrayStatus = useMip ? hipTexRefSetMipmappedArray(texRef, mipArray, flags) : hipTexRefGetMipMappedArray(&gotMipArray, texRef);
+            return acceptStatus(useMip ? hipTexRefGetMaxAnisotropy(&maxAniso, texRef) : hipTexRefSetAddress(&byteOffset, texRef, devicePtr, 2048));
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_snippets = [
+            (
+                "var gotAddress: bool = ((/* HIP texture reference get address: "
+                "output: address, texture: texRef */ hipSuccess) == hipSuccess);"
+            ),
+            (
+                "var gotMode: bool = ((/* HIP texture reference get address mode: "
+                "output: addressMode, texture: texRef, dim: 1 */ hipSuccess) "
+                "== hipSuccess);"
+            ),
+            (
+                "var gotArrayStatus: bool = ((/* HIP texture reference get array: "
+                "output: gotArray, texture: texRef */ hipSuccess) == hipSuccess);"
+            ),
+            (
+                "var gotBorder: bool = ((/* HIP texture reference get border color: "
+                "output: borderColor, texture: texRef */ hipSuccess) == hipSuccess);"
+            ),
+            (
+                "var gotFilter: bool = ((/* HIP texture reference get filter mode: "
+                "output: filterMode, texture: texRef */ hipSuccess) == hipSuccess);"
+            ),
+            (
+                "var gotFlags: bool = ((/* HIP texture reference get flags: "
+                "output: flags, texture: texRef */ hipSuccess) == hipSuccess);"
+            ),
+            (
+                "if (((/* HIP texture reference get format: format output: format, "
+                "channels output: channels, texture: texRef */ hipSuccess) "
+                "!= hipSuccess))"
+            ),
+            (
+                "return (/* HIP texture reference set address mode: "
+                "texture: texRef, dim: 0, mode: addressMode */ hipSuccess);"
+            ),
+            (
+                "// HIP texture reference set address: offset output: byteOffset, "
+                "texture: texRef, pointer: devicePtr, bytes: 1024"
+            ),
+            "var addressStatus: hipError_t = hipSuccess;",
+            (
+                "var address2D: bool = ((/* HIP texture reference set address 2D: "
+                "texture: texRef, desc: arrayDesc, pointer: devicePtr, pitch: 128 */ "
+                "hipSuccess) == hipSuccess);"
+            ),
+            (
+                "var setArray: bool = ((/* HIP texture reference set array: "
+                "texture: texRef, array: array, flags: flags */ hipSuccess) "
+                "== hipSuccess);"
+            ),
+            (
+                "var setBorder: bool = ((/* HIP texture reference set border color: "
+                "texture: texRef, color: borderColor */ hipSuccess) == hipSuccess);"
+            ),
+            (
+                "var setFilter: bool = ((/* HIP texture reference set filter mode: "
+                "texture: texRef, mode: filterMode */ hipSuccess) == hipSuccess);"
+            ),
+            (
+                "var setFlags: bool = ((/* HIP texture reference set flags: "
+                "texture: texRef, flags: flags */ hipSuccess) == hipSuccess);"
+            ),
+            (
+                "var setFormat: bool = ((/* HIP texture reference set format: "
+                "texture: texRef, format: format, components: channels */ hipSuccess) "
+                "== hipSuccess);"
+            ),
+            (
+                "var setAniso: bool = ((/* HIP texture reference set max anisotropy: "
+                "texture: texRef, value: maxAniso */ hipSuccess) == hipSuccess);"
+            ),
+            (
+                "var mipFilter: hipError_t = (useMip ? "
+                "(/* HIP texture reference set mipmap filter mode: texture: texRef, "
+                "mode: filterMode */ hipSuccess) : "
+                "(/* HIP texture reference get mipmap filter mode: "
+                "output: filterMode, texture: texRef */ hipSuccess));"
+            ),
+            (
+                "var mipBias: hipError_t = (useMip ? "
+                "(/* HIP texture reference set mipmap level bias: texture: texRef, "
+                "bias: bias */ hipSuccess) : "
+                "(/* HIP texture reference get mipmap level bias: output: bias, "
+                "texture: texRef */ hipSuccess));"
+            ),
+            (
+                "var mipClamp: hipError_t = (useMip ? "
+                "(/* HIP texture reference set mipmap level clamp: texture: texRef, "
+                "min: minClamp, max: maxClamp */ hipSuccess) : "
+                "(/* HIP texture reference get mipmap level clamp: min output: "
+                "minClamp, max output: maxClamp, texture: texRef */ hipSuccess));"
+            ),
+            (
+                "var mipArrayStatus: hipError_t = (useMip ? "
+                "(/* HIP texture reference set mipmapped array: texture: texRef, "
+                "mipmapped array: mipArray, flags: flags */ hipSuccess) : "
+                "(/* HIP texture reference get mipmapped array: output: "
+                "gotMipArray, texture: texRef */ hipSuccess));"
+            ),
+            (
+                "return acceptStatus((useMip ? "
+                "(/* HIP texture reference get max anisotropy: output: maxAniso, "
+                "texture: texRef */ hipSuccess) : "
+                "(/* HIP texture reference set address: offset output: byteOffset, "
+                "texture: texRef, pointer: devicePtr, bytes: 2048 */ hipSuccess)));"
+            ),
+        ]
+        for snippet in expected_snippets:
+            assert snippet in result
+
+        for function_name in [
+            "hipTexRefGetAddress",
+            "hipTexRefGetAddressMode",
+            "hipTexRefGetArray",
+            "hipTexRefGetBorderColor",
+            "hipTexRefGetFilterMode",
+            "hipTexRefGetFlags",
+            "hipTexRefGetFormat",
+            "hipTexRefGetMaxAnisotropy",
+            "hipTexRefGetMipmapFilterMode",
+            "hipTexRefGetMipmapLevelBias",
+            "hipTexRefGetMipmapLevelClamp",
+            "hipTexRefGetMipMappedArray",
+            "hipTexRefSetAddress",
+            "hipTexRefSetAddress2D",
+            "hipTexRefSetAddressMode",
+            "hipTexRefSetArray",
+            "hipTexRefSetBorderColor",
+            "hipTexRefSetFilterMode",
+            "hipTexRefSetFlags",
+            "hipTexRefSetFormat",
+            "hipTexRefSetMaxAnisotropy",
+            "hipTexRefSetMipmapFilterMode",
+            "hipTexRefSetMipmapLevelBias",
+            "hipTexRefSetMipmapLevelClamp",
+            "hipTexRefSetMipmappedArray",
+        ]:
+            assert f"{function_name}(" not in result
+
     def test_hip_runtime_callback_activity_expression_conversion(self):
         """Test HIP callback/activity helper expressions lower to stable metadata."""
         code = """
@@ -3646,6 +7119,266 @@ class TestHipCodeGen:
             "hipDeviceEnablePeerAccess",
             "hipDeviceDisablePeerAccess",
             "hipExtGetLinkTypeAndHopCount",
+            "hipCtxCreate",
+            "hipCtxDestroy",
+            "hipCtxPopCurrent",
+            "hipCtxPushCurrent",
+            "hipCtxSetCurrent",
+            "hipCtxGetCurrent",
+            "hipCtxGetDevice",
+            "hipCtxGetApiVersion",
+            "hipCtxGetCacheConfig",
+            "hipCtxSetCacheConfig",
+            "hipCtxGetSharedMemConfig",
+            "hipCtxSetSharedMemConfig",
+            "hipCtxGetFlags",
+            "hipCtxSynchronize",
+            "hipDevicePrimaryCtxRetain",
+            "hipDevicePrimaryCtxRelease",
+            "hipDevicePrimaryCtxReset",
+            "hipDevicePrimaryCtxSetFlags",
+            "hipDevicePrimaryCtxGetState",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_hip_driver_device_context_expression_contexts_emit_status(self):
+        """Test driver, device, and context calls in expressions stay explicit."""
+        code = """
+        hipError_t driverDeviceContextExpressions(int ordinal, bool reuse) {
+            hipDevice_t device;
+            hipDevice_t peerDevice;
+            hipCtx_t ctx;
+            hipCtx_t current;
+            int driverVersion = 0;
+            int runtimeVersion = 0;
+            int currentDevice = 0;
+            int deviceCount = 0;
+            int validDevices[2];
+            int canAccess = 0;
+            int p2pAttribute = 0;
+            int attr = 0;
+            int major = 0;
+            int minor = 0;
+            int active = 0;
+            unsigned int apiVersion = 0;
+            unsigned int flags = 0;
+            unsigned int linkType = 0;
+            unsigned int hopCount = 0;
+            unsigned long long procFlags = 0ull;
+            size_t total = 0;
+            size_t limitValue = 0;
+            char deviceName[64];
+            char pciBusId[32];
+            void* proc;
+            hipUUID uuid;
+            hipDeviceProp_t props;
+            hipFuncCache_t cacheConfig;
+            hipFuncCache_t deviceCacheConfig;
+            hipSharedMemConfig sharedConfig;
+            hipSharedMemConfig deviceSharedConfig;
+            hipDriverProcAddressQueryResult queryStatus;
+
+            bool initialized = hipInit(0) == hipSuccess;
+            bool driverVersioned = hipDriverGetVersion(&driverVersion) == hipSuccess;
+            bool runtimeVersioned = hipRuntimeGetVersion(&runtimeVersion) == hipSuccess;
+            bool currentReady = hipGetDevice(&currentDevice) == hipSuccess;
+            bool countReady = hipGetDeviceCount(&deviceCount) == hipSuccess;
+            bool deviceSelected = hipSetDevice(ordinal) == hipSuccess;
+            bool validSet = hipSetValidDevices(validDevices, 2) == hipSuccess;
+            bool gotDevice = hipDeviceGet(&device, ordinal) == hipSuccess;
+            bool gotPeer = hipDeviceGet(&peerDevice, 1) == hipSuccess;
+            bool propsReady = hipGetDeviceProperties(&props, device) == hipSuccess;
+            bool attrReady =
+                hipDeviceGetAttribute(
+                    &attr,
+                    hipDeviceAttributeMaxThreadsPerBlock,
+                    device
+                ) == hipSuccess;
+            bool nameReady = hipDeviceGetName(deviceName, 64, device) == hipSuccess;
+            bool uuidReady = hipDeviceGetUuid(&uuid, device) == hipSuccess;
+            bool totalReady = hipDeviceTotalMem(&total, device) == hipSuccess;
+            bool capabilityReady =
+                hipDeviceComputeCapability(&major, &minor, device) == hipSuccess;
+            bool chosen = hipChooseDevice(&device, &props) == hipSuccess;
+            bool busReady =
+                hipDeviceGetPCIBusId(pciBusId, 32, device) == hipSuccess;
+            bool busLookup =
+                hipDeviceGetByPCIBusId(&device, pciBusId) == hipSuccess;
+            bool deviceCacheReady =
+                hipDeviceGetCacheConfig(&deviceCacheConfig) == hipSuccess;
+            bool deviceCacheSet =
+                hipDeviceSetCacheConfig(hipFuncCachePreferShared) == hipSuccess;
+            bool deviceSharedReady =
+                hipDeviceGetSharedMemConfig(&deviceSharedConfig) == hipSuccess;
+            bool deviceSharedSet =
+                hipDeviceSetSharedMemConfig(hipSharedMemBankSizeFourByte) == hipSuccess;
+            bool limitReady =
+                hipDeviceGetLimit(&limitValue, hipLimitMallocHeapSize) == hipSuccess;
+            bool limitSet =
+                hipDeviceSetLimit(hipLimitMallocHeapSize, limitValue) == hipSuccess;
+            bool deviceReset = hipDeviceReset() == hipSuccess;
+            bool deviceFlagsReady = hipGetDeviceFlags(&flags) == hipSuccess;
+            bool deviceFlagsSet =
+                hipSetDeviceFlags(hipDeviceScheduleAuto) == hipSuccess;
+            bool procReady =
+                hipGetProcAddress(
+                    "hipMalloc",
+                    &proc,
+                    runtimeVersion,
+                    procFlags,
+                    &queryStatus
+                ) == hipSuccess;
+            bool peerCheck =
+                hipDeviceCanAccessPeer(&canAccess, device, peerDevice) == hipSuccess;
+            bool p2pReady =
+                hipDeviceGetP2PAttribute(
+                    &p2pAttribute,
+                    hipDevP2PAttrPerformanceRank,
+                    device,
+                    peerDevice
+                ) == hipSuccess;
+            bool peerEnabled =
+                hipDeviceEnablePeerAccess(peerDevice, 0) == hipSuccess;
+            bool peerDisabled =
+                hipDeviceDisablePeerAccess(peerDevice) == hipSuccess;
+            bool linkReady =
+                hipExtGetLinkTypeAndHopCount(
+                    device,
+                    peerDevice,
+                    &linkType,
+                    &hopCount
+                ) == hipSuccess;
+            bool pushed = hipCtxPushCurrent(ctx) == hipSuccess;
+            bool gotCurrent = hipCtxGetCurrent(&current) == hipSuccess;
+            bool gotContextDevice = hipCtxGetDevice(&device) == hipSuccess;
+            bool gotCache = hipCtxGetCacheConfig(&cacheConfig) == hipSuccess;
+            bool setCache =
+                hipCtxSetCacheConfig(hipFuncCachePreferShared) == hipSuccess;
+            bool gotShared =
+                hipCtxGetSharedMemConfig(&sharedConfig) == hipSuccess;
+            bool setShared =
+                hipCtxSetSharedMemConfig(hipSharedMemBankSizeEightByte) == hipSuccess;
+            bool gotFlags = hipCtxGetFlags(&flags) == hipSuccess;
+            bool synchronized = hipCtxSynchronize() == hipSuccess;
+            bool popped = hipCtxPopCurrent(&current) == hipSuccess;
+            bool primaryFlags =
+                hipDevicePrimaryCtxSetFlags(device, flags) == hipSuccess;
+            bool reset = hipDevicePrimaryCtxReset(device) == hipSuccess;
+            if (hipCtxCreate(&ctx, 0, device) != hipSuccess) {
+                return hipCtxDestroy(ctx);
+            }
+            if (hipCtxGetApiVersion(ctx, &apiVersion) == hipSuccess) {
+                hipError_t selected = reuse ? hipCtxSetCurrent(current) : hipDevicePrimaryCtxRetain(&current, device);
+                return selected;
+            }
+            if (hipDevicePrimaryCtxGetState(device, &flags, &active) == hipSuccess) {
+                return hipDevicePrimaryCtxRelease(device);
+            }
+            return hipDevicePrimaryCtxReset(device);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var initialized: bool = ((/* HIP initialize runtime: flags: 0 */ "
+            "hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var currentReady: bool = ((/* HIP get current device: output: "
+            "currentDevice */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var gotDevice: bool = ((/* HIP get device handle: output: device, "
+            "ordinal: ordinal */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var propsReady: bool = ((/* HIP get device properties: props, "
+            "device: device */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var deviceCacheReady: bool = ((/* HIP get device cache config: "
+            "output: deviceCacheConfig */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var procReady: bool = ((/* HIP get proc address: symbol: "
+            '"hipMalloc", output: proc, version: runtimeVersion, flags: '
+            "procFlags, status output: queryStatus */ hipSuccess) == "
+            "hipSuccess);"
+        ) in result
+        assert (
+            "var peerCheck: bool = ((/* HIP device can access peer: output: "
+            "canAccess, device: device, peer device: peerDevice */ hipSuccess) "
+            "== hipSuccess);"
+        ) in result
+        assert (
+            "var linkReady: bool = ((/* HIP get link type and hop count: device "
+            "1: device, device 2: peerDevice, link type output: linkType, "
+            "hop count output: hopCount */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var gotCache: bool = ((/* HIP context get cache config: output: "
+            "cacheConfig */ hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "var synchronized: bool = ((/* HIP context synchronize */ "
+            "hipSuccess) == hipSuccess);"
+        ) in result
+        assert (
+            "if (((/* HIP context create: output: ctx, flags: 0, device: device "
+            "*/ hipSuccess) != hipSuccess))"
+        ) in result
+        assert "return (/* HIP context destroy: ctx */ hipSuccess);" in result
+        assert (
+            "var selected: hipError_t = (reuse ? "
+            "(/* HIP context set current: current */ hipSuccess) : "
+            "(/* HIP primary context retain: output: current, device: device */ "
+            "hipSuccess));"
+        ) in result
+        assert (
+            "if (((/* HIP primary context get state: device: device, flags "
+            "output: flags, active output: active */ hipSuccess) == hipSuccess))"
+        ) in result
+        assert (
+            "return (/* HIP primary context release: device: device */ " "hipSuccess);"
+        ) in result
+        for function_name in [
+            "hipInit",
+            "hipDriverGetVersion",
+            "hipRuntimeGetVersion",
+            "hipGetDevice",
+            "hipGetDeviceCount",
+            "hipSetDevice",
+            "hipSetValidDevices",
+            "hipGetDeviceProperties",
+            "hipDeviceGet",
+            "hipDeviceCanAccessPeer",
+            "hipDeviceGetP2PAttribute",
+            "hipDeviceEnablePeerAccess",
+            "hipDeviceDisablePeerAccess",
+            "hipExtGetLinkTypeAndHopCount",
+            "hipDeviceGetAttribute",
+            "hipDeviceGetName",
+            "hipDeviceGetUuid",
+            "hipDeviceTotalMem",
+            "hipDeviceComputeCapability",
+            "hipChooseDevice",
+            "hipDeviceGetPCIBusId",
+            "hipDeviceGetByPCIBusId",
+            "hipDeviceGetCacheConfig",
+            "hipDeviceSetCacheConfig",
+            "hipDeviceGetSharedMemConfig",
+            "hipDeviceSetSharedMemConfig",
+            "hipDeviceGetLimit",
+            "hipDeviceSetLimit",
+            "hipDeviceReset",
+            "hipGetDeviceFlags",
+            "hipSetDeviceFlags",
+            "hipGetProcAddress",
             "hipCtxCreate",
             "hipCtxDestroy",
             "hipCtxPopCurrent",

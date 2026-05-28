@@ -243,15 +243,11 @@ from .image_access_contracts import (
     texture_multisample_sample_type_error,
     validate_texture_operation_arity,
     requires_integer_coordinate,
-    unsupported_multisample_texture_call_vector_expression,
     unsupported_multisample_texture_compare_scalar_expression,
     unsupported_multisample_texture_gather_compare_vector_expression,
     unsupported_multisample_texture_query_lod_expression,
-    unsupported_multisample_texel_fetch_offset_expression,
-    unsupported_projected_texture_call_expression,
     unsupported_projected_texture_operation_error,
     unsupported_image_atomic_expression as image_atomic_diagnostic_expression,
-    unsupported_cube_texel_fetch_expression,
     unsupported_storage_image_texture_comparison_scalar_expression,
     unsupported_storage_image_texture_operation_vector_expression,
     unsupported_texture_gather_compare_call_expression,
@@ -276,6 +272,7 @@ class GLSLCodeGen:
     """Emit GLSL source from the shared CrossGL translator AST."""
 
     MESH_STAGE_NAMES = {"mesh", "task", "amplification", "object"}
+    TEXTURE_SIZE_NO_LOD_SUFFIXES = ("2DRect", "Buffer")
     RAY_STAGE_NAMES = {
         "ray_generation",
         "ray_intersection",
@@ -493,6 +490,46 @@ class GLSLCodeGen:
     }
     GLSL_PRECISION_QUALIFIERS = {"lowp", "mediump", "highp"}
     GLSL_RESERVED_IDENTIFIERS = {"active"}
+    GLSL_INTERPOLATION_FUNCTIONS = {
+        "interpolateAtCentroid": 1,
+        "interpolateAtSample": 2,
+        "interpolateAtOffset": 2,
+    }
+    GLSL_DERIVATIVE_FUNCTIONS = {
+        "dFdx": 1,
+        "dFdy": 1,
+        "fwidth": 1,
+        "dFdxFine": 1,
+        "dFdxCoarse": 1,
+        "dFdyFine": 1,
+        "dFdyCoarse": 1,
+        "fwidthFine": 1,
+        "fwidthCoarse": 1,
+    }
+    GLSL_DERIVATIVE_FUNCTION_ALIASES = {
+        "ddx": "dFdx",
+        "ddy": "dFdy",
+        "fwidth": "fwidth",
+        "ddx_fine": "dFdxFine",
+        "ddx_coarse": "dFdxCoarse",
+        "ddy_fine": "dFdyFine",
+        "ddy_coarse": "dFdyCoarse",
+        "fwidth_fine": "fwidthFine",
+        "fwidth_coarse": "fwidthCoarse",
+    }
+    GLSL_TESSELLATION_FACTOR_BUILTINS = {
+        "gl_TessLevelOuter",
+        "gl_TessLevelInner",
+    }
+    GLSL_TESSELLATION_FACTOR_COMPONENT_COUNTS = {
+        "gl_TessLevelOuter": 4,
+        "gl_TessLevelInner": 2,
+    }
+    GLSL_MESH_PRIMITIVE_INDEX_TYPES = {
+        "points": "uint",
+        "lines": "uvec2",
+        "triangles": "uvec3",
+    }
 
     def __init__(self):
         """Initialize GLSL type maps and per-generation stage/resource state."""
@@ -528,6 +565,7 @@ class GLSLCodeGen:
         self.current_identifier_aliases = {}
         self.current_mesh_output_parameters = {}
         self.current_mesh_output_topology = None
+        self.current_mesh_output_count_limits = {}
         self.task_payload_shared_variables = []
         self.current_target_stage = None
         self.stage_io_used_locations = {}
@@ -546,6 +584,7 @@ class GLSLCodeGen:
         self.current_function_return_type = None
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
+        self.function_fragment_only_requirements = {}
         self.current_expression_expected_type = None
         self.current_generic_function_substitutions = {}
         self.match_temp_variable_index = 0
@@ -605,10 +644,23 @@ class GLSLCodeGen:
             "gl_FragColor6": "layout(location = 6)",
             "gl_FragColor7": "layout(location = 7)",
             "gl_FragDepth": "gl_FragDepth",
+            "gl_SampleMask": "gl_SampleMask",
+            "SV_Coverage": "gl_SampleMask",
+            "sample_mask": "gl_SampleMask",
             # Additional fragment inputs
             "gl_FragCoord": "gl_FragCoord",
             "gl_FrontFacing": "gl_FrontFacing",
             "gl_PointCoord": "gl_PointCoord",
+            "gl_SampleID": "gl_SampleID",
+            "SV_SampleIndex": "gl_SampleID",
+            "sv_sample_index": "gl_SampleID",
+            "sv_sampleindex": "gl_SampleID",
+            "sample_id": "gl_SampleID",
+            "sample_index": "gl_SampleID",
+            "gl_SamplePosition": "gl_SamplePosition",
+            "sample_position": "gl_SamplePosition",
+            "gl_SampleMaskIn": "gl_SampleMaskIn",
+            "sample_mask_in": "gl_SampleMaskIn",
             # Compute shader specific
             "gl_GlobalInvocationID": "gl_GlobalInvocationID",
             "gl_LocalInvocationID": "gl_LocalInvocationID",
@@ -832,10 +884,34 @@ class GLSLCodeGen:
             "sampler2DArrayShadow": "sampler2DArrayShadow",
             "samplerCubeShadow": "samplerCubeShadow",
             "samplerCubeArrayShadow": "samplerCubeArrayShadow",
+            "isampler1D": "isampler1D",
+            "isampler1DArray": "isampler1DArray",
+            "isampler2D": "isampler2D",
+            "isampler2DArray": "isampler2DArray",
+            "isampler3D": "isampler3D",
+            "isamplerCube": "isamplerCube",
+            "isamplerCubeArray": "isamplerCubeArray",
+            "isampler2DRect": "isampler2DRect",
+            "isamplerBuffer": "isamplerBuffer",
+            "isampler2DMS": "isampler2DMS",
+            "isampler2DMSArray": "isampler2DMSArray",
+            "usampler1D": "usampler1D",
+            "usampler1DArray": "usampler1DArray",
+            "usampler2D": "usampler2D",
+            "usampler2DArray": "usampler2DArray",
+            "usampler3D": "usampler3D",
+            "usamplerCube": "usamplerCube",
+            "usamplerCubeArray": "usamplerCubeArray",
+            "usampler2DRect": "usampler2DRect",
+            "usamplerBuffer": "usamplerBuffer",
+            "usampler2DMS": "usampler2DMS",
+            "usampler2DMSArray": "usampler2DMSArray",
             "iimage1D": "iimage1D",
             "iimage1DArray": "iimage1DArray",
             "iimage2D": "iimage2D",
             "iimage3D": "iimage3D",
+            "iimageCube": "iimageCube",
+            "iimageCubeArray": "iimageCubeArray",
             "iimage2DArray": "iimage2DArray",
             "iimage2DMS": "iimage2DMS",
             "iimage2DMSArray": "iimage2DMSArray",
@@ -843,6 +919,8 @@ class GLSLCodeGen:
             "uimage1DArray": "uimage1DArray",
             "uimage2D": "uimage2D",
             "uimage3D": "uimage3D",
+            "uimageCube": "uimageCube",
+            "uimageCubeArray": "uimageCubeArray",
             "uimage2DArray": "uimage2DArray",
             "uimage2DMS": "uimage2DMS",
             "uimage2DMSArray": "uimage2DMSArray",
@@ -851,6 +929,7 @@ class GLSLCodeGen:
             "image2D": "image2D",
             "image3D": "image3D",
             "imageCube": "imageCube",
+            "imageCubeArray": "imageCubeArray",
             "image2DArray": "image2DArray",
             "image2DMS": "image2DMS",
             "image2DMSArray": "image2DMSArray",
@@ -879,6 +958,12 @@ class GLSLCodeGen:
             "textureQueryLevels": "textureQueryLevels",
             "textureQueryLod": "textureQueryLod",
             "texelFetch": "texelFetch",
+            "interpolate_at_centroid": "interpolateAtCentroid",
+            "interpolate_at_sample": "interpolateAtSample",
+            "interpolate_at_offset": "interpolateAtOffset",
+            "interpolateAtCentroid": "interpolateAtCentroid",
+            "interpolateAtSample": "interpolateAtSample",
+            "interpolateAtOffset": "interpolateAtOffset",
             "TraceRay": "traceRayEXT",
             "ReportHit": "reportIntersectionEXT",
             "ReportIntersection": "reportIntersectionEXT",
@@ -898,7 +983,13 @@ class GLSLCodeGen:
             "atomicCounterAdd": "atomicCounterAdd",
             "mul": "*",  # Matrix multiplication
             "ddx": "dFdx",
+            "ddx_fine": "dFdxFine",
+            "ddx_coarse": "dFdxCoarse",
             "ddy": "dFdy",
+            "ddy_fine": "dFdyFine",
+            "ddy_coarse": "dFdyCoarse",
+            "fwidth_fine": "fwidthFine",
+            "fwidth_coarse": "fwidthCoarse",
             "rsqrt": "inversesqrt",
             "sincos": "sin_cos",  # Custom function needed
             "clip": "discard",  # HLSL clip becomes GLSL discard
@@ -1137,6 +1228,7 @@ class GLSLCodeGen:
         self.current_function_return_type = None
         self.current_stage_return_type = None
         self.current_stage_entry_type = None
+        self.function_fragment_only_requirements = {}
         self.current_expression_expected_type = None
         self.match_temp_variable_index = 0
         self.local_variable_types = {}
@@ -1250,6 +1342,11 @@ class GLSLCodeGen:
         ) = self.collect_resource_array_size_hints(ast)
         self.unsupported_structured_buffer_array_functions = (
             self.collect_unsupported_structured_buffer_array_functions(functions)
+        )
+        self.function_fragment_only_requirements = (
+            self.collect_fragment_only_function_requirements(
+                self.function_definitions.values()
+            )
         )
         self.validate_global_resource_shadows(ast)
         code = "\n"
@@ -1654,7 +1751,17 @@ class GLSLCodeGen:
         self.prepare_glsl_resource_function_specializations(ast)
 
         functions = getattr(ast, "functions", [])
+        deferred_top_level_helpers_by_stage = (
+            self.collect_stage_deferred_top_level_helpers(ast, functions, target_stage)
+        )
+        deferred_top_level_helper_ids = {
+            id(func)
+            for helpers in deferred_top_level_helpers_by_stage.values()
+            for func in helpers
+        }
         for func in functions:
+            if id(func) in deferred_top_level_helper_ids:
+                continue
             # Handle both old and new AST function structures
             if hasattr(func, "qualifiers") and func.qualifiers:
                 qualifier = func.qualifiers[0] if func.qualifiers else None
@@ -1667,6 +1774,11 @@ class GLSLCodeGen:
 
             resource_specializations = self.glsl_resource_function_emission_list(
                 getattr(func, "name", None)
+            )
+            helper_stage_context = (
+                target_stage
+                if target_stage is not None and not qualifier_name
+                else None
             )
             if resource_specializations and qualifier_name not in {
                 "vertex",
@@ -1687,11 +1799,17 @@ class GLSLCodeGen:
                 "ray_callable",
             }:
                 for specialized_func in resource_specializations:
-                    code += self.generate_function(specialized_func)
+                    code += self.generate_function(
+                        specialized_func,
+                        stage_context=helper_stage_context,
+                    )
 
             if generic_function_parameters(func):
                 for specialized_func in generic_function_emission_list(self, func):
-                    code += self.generate_function(specialized_func)
+                    code += self.generate_function(
+                        specialized_func,
+                        stage_context=helper_stage_context,
+                    )
                 continue
 
             if qualifier_name == "vertex":
@@ -1716,7 +1834,10 @@ class GLSLCodeGen:
                     entry_name=combined_stage_entry_names.get(id(func)),
                 )
             else:
-                code += self.generate_function(func)
+                code += self.generate_function(
+                    func,
+                    stage_context=helper_stage_context,
+                )
 
         # Handle shader stages (new AST structure)
         if hasattr(ast, "stages") and ast.stages:
@@ -1726,8 +1847,14 @@ class GLSLCodeGen:
                     continue
 
                 stage_code = ""
+                stage_local_functions = list(
+                    getattr(stage, "local_functions", []) or []
+                )
+                deferred_top_level_helpers = deferred_top_level_helpers_by_stage.get(
+                    stage_name, []
+                )
                 for func in order_functions_by_dependencies(
-                    getattr(stage, "local_functions", []) or [],
+                    stage_local_functions + deferred_top_level_helpers,
                     self.walk_ast,
                     self.function_call_name,
                     FunctionCallNode,
@@ -1739,16 +1866,25 @@ class GLSLCodeGen:
                     )
                     if resource_specializations:
                         for specialized_func in resource_specializations:
-                            stage_code += self.generate_function(specialized_func)
+                            stage_code += self.generate_function(
+                                specialized_func,
+                                stage_context=stage_name,
+                            )
 
                     if generic_function_parameters(func):
                         for specialized_func in generic_function_emission_list(
                             self,
                             func,
                         ):
-                            stage_code += self.generate_function(specialized_func)
+                            stage_code += self.generate_function(
+                                specialized_func,
+                                stage_context=stage_name,
+                            )
                     else:
-                        stage_code += self.generate_function(func)
+                        stage_code += self.generate_function(
+                            func,
+                            stage_context=stage_name,
+                        )
 
                 if hasattr(stage, "entry_point"):
                     stage_code += self.generate_function(
@@ -1768,6 +1904,127 @@ class GLSLCodeGen:
                     code += stage_code
 
         return code
+
+    def collect_stage_deferred_top_level_helpers(self, ast, functions, target_stage):
+        if target_stage is None or not getattr(ast, "stages", None):
+            return {}
+
+        deferred_by_stage = {}
+        for stage_type, stage in ast.stages.items():
+            stage_name = normalize_stage_name(stage_type)
+            if not stage_matches(target_stage, stage_name):
+                continue
+
+            local_functions = list(getattr(stage, "local_functions", []) or [])
+            deferred = self.top_level_helpers_depending_on_stage_locals(
+                functions,
+                local_functions,
+            )
+            if deferred:
+                deferred_by_stage[stage_name] = deferred
+
+        return deferred_by_stage
+
+    def top_level_helpers_depending_on_stage_locals(self, functions, local_functions):
+        required_names = {
+            getattr(func, "name", None)
+            for func in local_functions
+            if getattr(func, "name", None)
+        }
+        if not required_names:
+            return []
+
+        deferred_ids = set()
+        changed = True
+        while changed:
+            changed = False
+            for func in functions:
+                func_name = getattr(func, "name", None)
+                if not func_name or id(func) in deferred_ids:
+                    continue
+                if normalize_stage_name(getattr(func, "qualifier", None)):
+                    continue
+                qualifiers = getattr(func, "qualifiers", []) or []
+                if qualifiers and normalize_stage_name(qualifiers[0]):
+                    continue
+
+                for node in self.walk_ast(getattr(func, "body", [])):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    if self.function_call_name(node) not in required_names:
+                        continue
+                    deferred_ids.add(id(func))
+                    required_names.add(func_name)
+                    changed = True
+                    break
+
+        return [func for func in functions if id(func) in deferred_ids]
+
+    def collect_fragment_only_function_requirements(self, functions):
+        """Mark helpers whose call graph requires fragment-stage GLSL builtins."""
+        functions_by_name = {}
+        duplicate_names = set()
+        for func in functions:
+            name = getattr(func, "name", None)
+            if not name:
+                continue
+            if name in functions_by_name:
+                duplicate_names.add(name)
+                continue
+            functions_by_name[name] = func
+        for name in duplicate_names:
+            functions_by_name.pop(name, None)
+
+        requirements = {
+            name: self.function_body_uses_fragment_only_call(func)
+            for name, func in functions_by_name.items()
+        }
+
+        changed = True
+        while changed:
+            changed = False
+            for name, func in functions_by_name.items():
+                if requirements.get(name):
+                    continue
+                for node in self.walk_ast(getattr(func, "body", [])):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    callee_name = self.function_call_name(node)
+                    if requirements.get(callee_name):
+                        requirements[name] = True
+                        changed = True
+                        break
+
+        return requirements
+
+    def function_body_uses_fragment_only_call(self, func):
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            if self.is_fragment_only_call_name(self.function_call_name(node)):
+                return True
+        return False
+
+    def is_fragment_only_call_name(self, func_name):
+        if not func_name:
+            return False
+        mapped_name = self.function_map.get(func_name, func_name)
+        return (
+            mapped_name in self.GLSL_DERIVATIVE_FUNCTIONS
+            or mapped_name in self.GLSL_INTERPOLATION_FUNCTIONS
+        )
+
+    def validate_fragment_only_helper_call(self, func_name):
+        if (
+            not func_name
+            or not self.function_fragment_only_requirements.get(func_name)
+            or self.current_stage_entry_type in (None, "fragment")
+        ):
+            return
+        raise ValueError(
+            f"OpenGL helper function '{func_name}' uses fragment-only operations "
+            "and is only valid in fragment stages"
+        )
 
     def prepare_glsl_resource_function_specializations(self, ast):
         """Create GLSL helper variants for concrete storage image arguments."""
@@ -2302,18 +2559,22 @@ class GLSLCodeGen:
         return parts
 
     def generate_geometry_stage_layout(self, func, stage_layout_qualifiers=None):
-        input_primitive = self.glsl_stage_bare_attribute(
-            func,
-            {
-                "points",
-                "lines",
-                "lines_adjacency",
-                "triangles",
-                "triangles_adjacency",
-            },
-            stage_layout_qualifiers,
-            "in",
+        input_primitive = self.glsl_single_stage_attribute_argument(
+            func, "inputtopology", stage_layout_qualifiers, "in"
         )
+        if input_primitive is None:
+            input_primitive = self.glsl_stage_bare_attribute(
+                func,
+                {
+                    "points",
+                    "lines",
+                    "lines_adjacency",
+                    "triangles",
+                    "triangles_adjacency",
+                },
+                stage_layout_qualifiers,
+                "in",
+            )
         output_primitive = self.glsl_single_stage_attribute_argument(
             func, "outputtopology", stage_layout_qualifiers, "out"
         )
@@ -2324,21 +2585,26 @@ class GLSLCodeGen:
                 stage_layout_qualifiers,
                 "out",
             )
-        max_vertices = self.glsl_single_stage_attribute_argument(
-            func, "max_vertices", stage_layout_qualifiers, "out"
+        max_vertices = self.glsl_stage_positive_int_layout_argument(
+            "geometry", func, "max_vertices", stage_layout_qualifiers, "out"
         )
         if max_vertices is None:
-            max_vertices = self.glsl_single_stage_attribute_argument(
-                func, "maxvertexcount", stage_layout_qualifiers, "out"
+            max_vertices = self.glsl_stage_positive_int_layout_argument(
+                "geometry",
+                func,
+                "maxvertexcount",
+                stage_layout_qualifiers,
+                "out",
+                layout_name="max_vertices",
             )
-        invocations = self.glsl_single_stage_attribute_argument(
-            func, "invocations", stage_layout_qualifiers, "in"
+        invocations = self.glsl_stage_positive_int_layout_argument(
+            "geometry", func, "invocations", stage_layout_qualifiers, "in"
         )
 
         code = ""
         input_layout = []
         if input_primitive:
-            input_layout.append(input_primitive)
+            input_layout.append(self.glsl_geometry_input_topology(input_primitive))
         if invocations is not None:
             input_layout.append(f"invocations = {invocations}")
         if input_layout:
@@ -2353,22 +2619,89 @@ class GLSLCodeGen:
             code += f"layout({', '.join(output_layout)}) out;\n"
         return code
 
+    def glsl_stage_positive_int_layout_argument(
+        self,
+        stage_name,
+        func,
+        attribute_name,
+        stage_layout_qualifiers=None,
+        direction=None,
+        layout_name=None,
+    ):
+        arguments = self.glsl_stage_attribute_arguments(
+            func, attribute_name, stage_layout_qualifiers, direction
+        )
+        if not arguments:
+            return None
+        if len(arguments) != 1:
+            raise ValueError(
+                f"GLSL stage attribute {attribute_name} requires exactly one argument"
+            )
+
+        argument = arguments[0]
+        literal = self.literal_int_value(argument, self.literal_int_constants)
+        if not isinstance(literal, int) or isinstance(literal, bool) or literal <= 0:
+            layout_name = layout_name or attribute_name
+            raise ValueError(
+                f"GLSL {stage_name} {layout_name} layout requires a positive "
+                "integer constant, got "
+                f"{self.glsl_attribute_argument_source(argument)}"
+            )
+        return self.generate_expression(argument)
+
+    def glsl_attribute_argument_source(self, argument):
+        try:
+            return self.generate_expression(argument)
+        except Exception:
+            return self.attribute_value_to_string(argument)
+
     def generate_tessellation_control_layout(self, func, stage_layout_qualifiers=None):
-        vertices = self.glsl_single_stage_attribute_argument(
-            func, "vertices", stage_layout_qualifiers, "out"
+        self.validate_glsl_tessellation_patchconstantfunc(func, stage_layout_qualifiers)
+        vertices = self.glsl_stage_positive_int_layout_argument(
+            "tessellation_control",
+            func,
+            "vertices",
+            stage_layout_qualifiers,
+            "out",
         )
         if vertices is None:
-            vertices = self.glsl_single_stage_attribute_argument(
-                func, "outputcontrolpoints", stage_layout_qualifiers, "out"
+            vertices = self.glsl_stage_positive_int_layout_argument(
+                "tessellation_control",
+                func,
+                "outputcontrolpoints",
+                stage_layout_qualifiers,
+                "out",
+                layout_name="vertices",
             )
         if vertices is None:
             return ""
         return f"layout(vertices = {vertices}) out;\n"
 
+    def validate_glsl_tessellation_patchconstantfunc(
+        self, func, stage_layout_qualifiers=None
+    ):
+        for attr in self.glsl_stage_attributes(
+            func, "patchconstantfunc", stage_layout_qualifiers
+        ):
+            arguments = getattr(attr, "arguments", []) or []
+            if len(arguments) != 1:
+                raise ValueError(
+                    "GLSL tessellation_control stage patchconstantfunc "
+                    "requires exactly one function name"
+                )
+            patch_name = self.attribute_value_to_string(arguments[0])
+            raise ValueError(
+                "GLSL tessellation_control stage patchconstantfunc "
+                f"'{patch_name}' is unsupported; write tessellation factors "
+                "directly to gl_TessLevelOuter and gl_TessLevelInner in the "
+                "tessellation_control entry point"
+            )
+
     def generate_tessellation_evaluation_layout(
         self, func, stage_layout_qualifiers=None
     ):
         layout_parts = []
+        mapped_domain = None
         domain = self.glsl_single_stage_attribute_argument(
             func, "domain", stage_layout_qualifiers, "in"
         )
@@ -2377,7 +2710,8 @@ class GLSLCodeGen:
                 func, {"triangles", "quads", "isolines"}, stage_layout_qualifiers, "in"
             )
         if domain:
-            layout_parts.append(self.glsl_tessellation_domain(domain))
+            mapped_domain = self.glsl_tessellation_domain(domain)
+            layout_parts.append(mapped_domain)
 
         partitioning = self.glsl_single_stage_attribute_argument(
             func, "partitioning", stage_layout_qualifiers, "in"
@@ -2399,12 +2733,28 @@ class GLSLCodeGen:
         winding = self.glsl_stage_bare_attribute(
             func, {"cw", "ccw"}, stage_layout_qualifiers, "in"
         )
+        output_topology = self.glsl_single_stage_attribute_argument(
+            func, "outputtopology", stage_layout_qualifiers
+        )
+        topology_winding, topology_point_mode = (
+            self.glsl_tessellation_output_topology_layout(
+                output_topology, mapped_domain
+            )
+        )
+        if topology_winding:
+            if winding and winding != topology_winding:
+                raise ValueError(
+                    "Conflicting GLSL tessellation outputtopology "
+                    f"{output_topology} with winding {winding}"
+                )
+            winding = topology_winding
         if winding:
             layout_parts.append(winding)
 
-        if self.glsl_stage_bare_attribute(
+        point_mode = self.glsl_stage_bare_attribute(
             func, {"point_mode"}, stage_layout_qualifiers, "in"
-        ):
+        )
+        if point_mode or topology_point_mode:
             layout_parts.append("point_mode")
 
         if not layout_parts:
@@ -2416,20 +2766,30 @@ class GLSLCodeGen:
             func, stage_layout_qualifiers
         )
 
-        max_vertices = self.glsl_single_stage_attribute_argument(
-            func, "max_vertices", stage_layout_qualifiers, "out"
+        max_vertices = self.glsl_stage_positive_int_layout_argument(
+            "mesh", func, "max_vertices", stage_layout_qualifiers, "out"
         )
         if max_vertices is None:
-            max_vertices = self.glsl_single_stage_attribute_argument(
-                func, "maxvertexcount", stage_layout_qualifiers, "out"
+            max_vertices = self.glsl_stage_positive_int_layout_argument(
+                "mesh",
+                func,
+                "maxvertexcount",
+                stage_layout_qualifiers,
+                "out",
+                layout_name="max_vertices",
             )
 
-        max_primitives = self.glsl_single_stage_attribute_argument(
-            func, "max_primitives", stage_layout_qualifiers, "out"
+        max_primitives = self.glsl_stage_positive_int_layout_argument(
+            "mesh", func, "max_primitives", stage_layout_qualifiers, "out"
         )
         if max_primitives is None:
-            max_primitives = self.glsl_single_stage_attribute_argument(
-                func, "maxprimitivecount", stage_layout_qualifiers, "out"
+            max_primitives = self.glsl_stage_positive_int_layout_argument(
+                "mesh",
+                func,
+                "maxprimitivecount",
+                stage_layout_qualifiers,
+                "out",
+                layout_name="max_primitives",
             )
 
         layout_parts = []
@@ -2487,13 +2847,21 @@ class GLSLCodeGen:
     def glsl_stage_attribute_arguments(
         self, func, attribute_name, stage_layout_qualifiers=None, direction=None
     ):
+        for attr in self.glsl_stage_attributes(
+            func, attribute_name, stage_layout_qualifiers, direction
+        ):
+            return getattr(attr, "arguments", []) or []
+        return []
+
+    def glsl_stage_attributes(
+        self, func, attribute_name, stage_layout_qualifiers=None, direction=None
+    ):
         for attr in getattr(func, "attributes", []) or []:
             if self.glsl_stage_control_attribute_name(attr) == attribute_name:
-                return getattr(attr, "arguments", []) or []
+                yield attr
         for attr in self.glsl_stage_layout_entries(stage_layout_qualifiers, direction):
             if self.glsl_stage_control_attribute_name(attr) == attribute_name:
-                return getattr(attr, "arguments", []) or []
-        return []
+                yield attr
 
     def glsl_stage_layout_entries(self, stage_layout_qualifiers, direction=None):
         if direction is not None:
@@ -2522,6 +2890,27 @@ class GLSLCodeGen:
         if mapped is None:
             raise ValueError(
                 f"GLSL geometry output topology cannot be lowered: {topology}"
+            )
+        return mapped
+
+    def glsl_geometry_input_topology(self, topology):
+        topology_name = str(topology).strip().strip('"').lower()
+        topology_map = {
+            "point": "points",
+            "points": "points",
+            "line": "lines",
+            "lines": "lines",
+            "line_adjacency": "lines_adjacency",
+            "lines_adjacency": "lines_adjacency",
+            "triangle": "triangles",
+            "triangles": "triangles",
+            "triangle_adjacency": "triangles_adjacency",
+            "triangles_adjacency": "triangles_adjacency",
+        }
+        mapped = topology_map.get(topology_name)
+        if mapped is None:
+            raise ValueError(
+                f"GLSL geometry input topology cannot be lowered: {topology}"
             )
         return mapped
 
@@ -2573,7 +2962,10 @@ class GLSLCodeGen:
 
     def glsl_dispatch_mesh_payload_target(self, payload_expr):
         if not self.task_payload_shared_variables:
-            return None
+            raise ValueError(
+                "GLSL DispatchMesh payload argument requires "
+                "taskPayloadSharedEXT storage"
+            )
 
         payload_name = self.expression_name(payload_expr)
         for info in self.task_payload_shared_variables:
@@ -2596,6 +2988,14 @@ class GLSLCodeGen:
                     "Ambiguous GLSL DispatchMesh payload target for "
                     f"{mapped_payload_type}: {names}"
                 )
+            expected_types = ", ".join(
+                sorted({info["type"] for info in self.task_payload_shared_variables})
+            )
+            raise ValueError(
+                "GLSL DispatchMesh payload argument type "
+                f"{mapped_payload_type} does not match taskPayloadSharedEXT "
+                f"payload type {expected_types}"
+            )
 
         if len(self.task_payload_shared_variables) == 1:
             return self.task_payload_shared_variables[0]
@@ -2627,24 +3027,31 @@ class GLSLCodeGen:
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         return bool(qualifiers & {"out", "inout"})
 
-    def mesh_output_parameter_element_type(self, node):
+    def mesh_output_parameter_array_shape(self, node):
         node_type = self.resource_node_type(node)
         if (
             hasattr(node_type, "element_type")
             and str(type(node_type)).find("ArrayType") != -1
         ):
-            node_type = node_type.element_type
-        return self.type_name_string(node_type)
+            return node_type.element_type, getattr(node_type, "size", None)
+        return node_type, None
+
+    def mesh_output_parameter_element_type(self, node):
+        element_type, _ = self.mesh_output_parameter_array_shape(node)
+        return self.type_name_string(element_type)
 
     def mesh_output_parameter_count(self, node):
-        node_type = self.resource_node_type(node)
-        if not (
-            hasattr(node_type, "element_type")
-            and str(type(node_type)).find("ArrayType") != -1
-        ):
-            return None
-        size = getattr(node_type, "size", None)
+        _, size = self.mesh_output_parameter_array_shape(node)
         return self.generate_expression(size) if size is not None else None
+
+    def mesh_output_parameter_count_value(self, node):
+        _, size = self.mesh_output_parameter_array_shape(node)
+        if size is None:
+            return None
+        value = self.literal_int_value(size)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        return None
 
     def mesh_primitive_index_builtin(self, topology):
         return {
@@ -2652,6 +3059,84 @@ class GLSLCodeGen:
             "lines": "gl_PrimitiveLineIndicesEXT",
             "triangles": "gl_PrimitiveTriangleIndicesEXT",
         }.get(topology)
+
+    def glsl_stage_attribute_literal_int(
+        self, func, attribute_name, stage_layout_qualifiers=None, direction=None
+    ):
+        arguments = self.glsl_stage_attribute_arguments(
+            func, attribute_name, stage_layout_qualifiers, direction
+        )
+        if not arguments:
+            return None
+        if len(arguments) != 1:
+            raise ValueError(
+                f"GLSL stage attribute {attribute_name} requires exactly one argument"
+            )
+        value = self.literal_int_value(arguments[0])
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        return None
+
+    def glsl_mesh_output_count_limits(self, func, stage_layout_qualifiers=None):
+        max_vertices = self.glsl_stage_attribute_literal_int(
+            func, "max_vertices", stage_layout_qualifiers, "out"
+        )
+        if max_vertices is None:
+            max_vertices = self.glsl_stage_attribute_literal_int(
+                func, "maxvertexcount", stage_layout_qualifiers, "out"
+            )
+
+        max_primitives = self.glsl_stage_attribute_literal_int(
+            func, "max_primitives", stage_layout_qualifiers, "out"
+        )
+        if max_primitives is None:
+            max_primitives = self.glsl_stage_attribute_literal_int(
+                func, "maxprimitivecount", stage_layout_qualifiers, "out"
+            )
+
+        return {
+            "vertices": max_vertices,
+            "indices": max_primitives,
+            "primitives": max_primitives,
+        }
+
+    def mesh_output_role_count_attribute(self, role):
+        return "max_vertices" if role == "vertices" else "max_primitives"
+
+    def validate_mesh_output_parameter_shape(
+        self, node, role, element_type, count, count_value, count_limit, topology
+    ):
+        if count is None:
+            raise ValueError(
+                "GLSL mesh output parameter "
+                f"@{role} '{node.name}' requires an array with explicit size"
+            )
+
+        if count_value is not None and count_limit is not None:
+            if count_value != count_limit:
+                attribute_name = self.mesh_output_role_count_attribute(role)
+                raise ValueError(
+                    "GLSL mesh output parameter "
+                    f"@{role} '{node.name}' array size {count_value} must match "
+                    f"{attribute_name} {count_limit}"
+                )
+
+        if role in {"vertices", "primitives"}:
+            if element_type not in self.structs_by_name:
+                raise ValueError(
+                    "GLSL mesh output parameter "
+                    f"@{role} '{node.name}' requires a struct element type, "
+                    f"got {element_type}"
+                )
+            return
+
+        expected_index_type = self.GLSL_MESH_PRIMITIVE_INDEX_TYPES.get(topology)
+        if expected_index_type is not None and element_type != expected_index_type:
+            raise ValueError(
+                "GLSL mesh output parameter "
+                f"@indices '{node.name}' for {topology} topology requires "
+                f"{expected_index_type} elements, got {element_type}"
+            )
 
     def mesh_output_parameter_infos(
         self, func, shader_type, stage_layout_qualifiers=None
@@ -2662,6 +3147,7 @@ class GLSLCodeGen:
         topology = self.glsl_mesh_stage_output_topology_name(
             func, stage_layout_qualifiers
         )
+        count_limits = self.glsl_mesh_output_count_limits(func, stage_layout_qualifiers)
         infos = {}
         for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
             if not self.is_mesh_output_parameter(param):
@@ -2669,11 +3155,23 @@ class GLSLCodeGen:
 
             role = self.mesh_output_parameter_role(param)
             element_type = self.mesh_output_parameter_element_type(param)
+            count = self.mesh_output_parameter_count(param)
+            count_value = self.mesh_output_parameter_count_value(param)
+            self.validate_mesh_output_parameter_shape(
+                param,
+                role,
+                element_type,
+                count,
+                count_value,
+                count_limits.get(role),
+                topology,
+            )
             info = {
                 "name": param.name,
                 "role": role,
                 "element_type": element_type,
-                "count": self.mesh_output_parameter_count(param),
+                "count": count,
+                "count_value": count_value,
                 "topology": topology,
                 "index_builtin": self.mesh_primitive_index_builtin(topology),
                 "members": {},
@@ -2835,6 +3333,38 @@ class GLSLCodeGen:
             )
         return mapped
 
+    def glsl_tessellation_output_topology_layout(self, topology, domain):
+        if topology is None:
+            return None, False
+
+        topology_name = str(topology).strip().strip('"').lower()
+        if topology_name in {"triangle_cw", "triangles_cw"}:
+            if domain != "triangles":
+                raise ValueError(
+                    "GLSL tessellation outputtopology triangle_cw requires "
+                    "triangles domain"
+                )
+            return "cw", False
+        if topology_name in {"triangle_ccw", "triangles_ccw"}:
+            if domain != "triangles":
+                raise ValueError(
+                    "GLSL tessellation outputtopology triangle_ccw requires "
+                    "triangles domain"
+                )
+            return "ccw", False
+        if topology_name in {"line", "lines"}:
+            if domain != "isolines":
+                raise ValueError(
+                    "GLSL tessellation outputtopology line requires isolines domain"
+                )
+            return None, False
+        if topology_name in {"point", "points"}:
+            return None, True
+
+        raise ValueError(
+            f"GLSL tessellation outputtopology cannot be lowered: {topology}"
+        )
+
     def generate_function(
         self,
         func,
@@ -2843,6 +3373,7 @@ class GLSLCodeGen:
         execution_config=None,
         entry_name=None,
         stage_layout_qualifiers=None,
+        stage_context=None,
     ):
         """Render a function or GLSL ``main`` stage entry point."""
         code = ""
@@ -3044,6 +3575,7 @@ class GLSLCodeGen:
         previous_stage_parameter_aliases = self.current_stage_parameter_aliases
         previous_mesh_output_parameters = self.current_mesh_output_parameters
         previous_mesh_output_topology = self.current_mesh_output_topology
+        previous_mesh_output_count_limits = self.current_mesh_output_count_limits
         previous_flattened_stage_variables = self.flattened_stage_variables
         previous_stage_return_type = self.current_stage_return_type
         previous_stage_entry_type = self.current_stage_entry_type
@@ -3083,11 +3615,16 @@ class GLSLCodeGen:
         )
         self.current_mesh_output_parameters = mesh_output_parameters
         self.current_mesh_output_topology = mesh_output_topology
+        self.current_mesh_output_count_limits = (
+            self.glsl_mesh_output_count_limits(func, stage_layout_qualifiers)
+            if shader_type == "mesh"
+            else {}
+        )
         self.flattened_stage_variables = set(self.current_stage_outputs)
         self.current_stage_return_type = self.type_node_name(
             getattr(func, "return_type", None)
         )
-        self.current_stage_entry_type = shader_type
+        self.current_stage_entry_type = shader_type or stage_context
         body = getattr(func, "body", [])
         if unsupported_buffer_array_info:
             code += self.unsupported_structured_buffer_array_function_body(
@@ -3111,6 +3648,7 @@ class GLSLCodeGen:
         self.current_stage_parameter_aliases = previous_stage_parameter_aliases
         self.current_mesh_output_parameters = previous_mesh_output_parameters
         self.current_mesh_output_topology = previous_mesh_output_topology
+        self.current_mesh_output_count_limits = previous_mesh_output_count_limits
         self.flattened_stage_variables = previous_flattened_stage_variables
         self.current_stage_return_type = previous_stage_return_type
         self.current_stage_entry_type = previous_stage_entry_type
@@ -3455,17 +3993,20 @@ class GLSLCodeGen:
         mapped_semantic = self.map_semantic(semantic)
         return mapped_semantic.startswith("gl_")
 
-    def parameter_has_mapped_semantic(self, parameter, expected_semantic):
+    def parameter_has_mapped_semantic(
+        self, parameter, expected_semantic, stage_name=None
+    ):
         semantic = self.semantic_from_node(parameter)
         if semantic is None:
             return False
-        return self.map_semantic(semantic).lower() == expected_semantic.lower()
+        mapped = self.map_stage_input_semantic(semantic, stage_name)
+        return mapped.lower() == expected_semantic.lower()
 
     def validate_exact_mapped_semantic_type(
         self, parameters, stage_name, semantic, expected_type, expected_description
     ):
         for parameter in parameters:
-            if not self.parameter_has_mapped_semantic(parameter, semantic):
+            if not self.parameter_has_mapped_semantic(parameter, semantic, stage_name):
                 continue
 
             mapped_type = self.map_type(self.resource_node_type(parameter))
@@ -3510,6 +4051,15 @@ class GLSLCodeGen:
         self.validate_exact_mapped_semantic_type(
             parameters, stage_name, "gl_PointCoord", "vec2", "vec2"
         )
+        self.validate_exact_mapped_semantic_type(
+            parameters, stage_name, "gl_SampleID", "int", "scalar int"
+        )
+        self.validate_exact_mapped_semantic_type(
+            parameters, stage_name, "gl_SamplePosition", "vec2", "vec2"
+        )
+        self.validate_exact_mapped_semantic_type(
+            parameters, stage_name, "gl_SampleMaskIn", "int", "scalar int"
+        )
 
     def validate_function_return_semantic(self, func, stage_name):
         semantic = self.function_return_semantic(func)
@@ -3534,6 +4084,9 @@ class GLSLCodeGen:
             "gl_FrontFacing",
             "gl_FragCoord",
             "gl_PointCoord",
+            "gl_SampleID",
+            "gl_SamplePosition",
+            "gl_SampleMaskIn",
             "gl_GlobalInvocationID",
             "gl_LocalInvocationID",
             "gl_WorkGroupID",
@@ -3550,9 +4103,10 @@ class GLSLCodeGen:
     def validate_function_return_semantic_stage(self, stage_name, semantic):
         mapped_semantic = self.map_semantic(semantic)
         semantic_text = str(semantic)
-        is_fragment_output = (
-            semantic_text == "gl_FragDepth" or semantic_text.startswith("gl_FragColor")
-        )
+        is_fragment_output = mapped_semantic in {
+            "gl_FragDepth",
+            "gl_SampleMask",
+        } or semantic_text.startswith("gl_FragColor")
         is_vertex_output = self.is_vertex_builtin_output(mapped_semantic)
 
         if stage_name == "vertex" and is_fragment_output:
@@ -3789,7 +4343,7 @@ class GLSLCodeGen:
                     member, reserved_names=reserved_names
                 )
                 member_map[member.name] = output_name
-                if output_name != "gl_FragDepth":
+                if not self.is_fragment_builtin_output_target(output_name):
                     reserved_names.add(output_name)
             maps[struct_name] = member_map
         return maps
@@ -3824,8 +4378,10 @@ class GLSLCodeGen:
             for member in getattr(struct, "members", []) or []:
                 output_name = self.fragment_output_member_name(member, struct_name)
                 layout = self.stage_io_layout_for_node(member)
-                if layout == "gl_FragDepth" or output_name == "gl_FragDepth":
-                    member_layouts[member.name] = "gl_FragDepth"
+                if self.is_fragment_builtin_output_target(
+                    layout
+                ) or self.is_fragment_builtin_output_target(output_name):
+                    member_layouts[member.name] = output_name
                     continue
                 if not layout.startswith("layout("):
                     continue
@@ -3958,7 +4514,7 @@ class GLSLCodeGen:
         for member in getattr(node, "members", []) or []:
             member_type = self.member_type_name(member)
             output_name = self.fragment_output_member_name(member, node.name)
-            if output_name == "gl_FragDepth":
+            if self.is_fragment_builtin_output_target(output_name):
                 continue
             layout = self.fragment_output_member_layout_maps.get(node.name, {}).get(
                 member.name
@@ -4008,10 +4564,15 @@ class GLSLCodeGen:
         mapped_semantic = self.map_semantic(self.semantic_from_node(member))
         if mapped_semantic == "gl_FragDepth":
             return mapped_semantic
+        if mapped_semantic == "gl_SampleMask":
+            return "gl_SampleMask[0]"
 
         if reserved_names is None:
             reserved_names = self.fragment_input_member_names
         return self.stage_io_name_avoiding_reserved(member.name, reserved_names)
+
+    def is_fragment_builtin_output_target(self, target):
+        return target in {"gl_FragDepth", "gl_SampleMask", "gl_SampleMask[0]"}
 
     def fragment_input_member_name(self, member, struct_name):
         if struct_name in self.vertex_output_struct_names:
@@ -4070,7 +4631,9 @@ class GLSLCodeGen:
         for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
             semantic = self.semantic_from_node(param)
             if self.is_stage_builtin_semantic(semantic):
-                aliases[param.name] = self.map_semantic(semantic)
+                aliases[param.name] = self.stage_input_builtin_alias(
+                    semantic, shader_type
+                )
         return aliases
 
     def stage_output_member_map(self, func, shader_type):
@@ -4215,15 +4778,21 @@ class GLSLCodeGen:
             return None
 
         semantic = self.function_return_semantic(func) or "gl_FragColor"
-        if semantic == "gl_FragDepth":
+        mapped_semantic = self.map_semantic(semantic)
+        if mapped_semantic == "gl_FragDepth":
             return {
                 "name": "gl_FragDepth",
+                "declaration": "",
+            }
+        if mapped_semantic == "gl_SampleMask":
+            return {
+                "name": "gl_SampleMask[0]",
                 "declaration": "",
             }
 
         layout = self.stage_io_layout_for_node(func)
         if not layout:
-            layout = self.map_semantic(semantic)
+            layout = mapped_semantic
         if not layout.startswith("layout("):
             layout = "layout(location = 0)"
 
@@ -4257,7 +4826,7 @@ class GLSLCodeGen:
         reserved_names = set(self.fragment_input_member_names)
         for member_map in self.fragment_output_member_name_maps.values():
             for name in member_map.values():
-                if name != "gl_FragDepth":
+                if not self.is_fragment_builtin_output_target(name):
                     reserved_names.add(name)
         reserved_names.update(self.stage_io_declared_names("fragment", "output"))
         return self.stage_io_name_avoiding_reserved(output_name, reserved_names)
@@ -4543,6 +5112,13 @@ class GLSLCodeGen:
         return "uniform "
 
     def generate_global_variable_declaration(self, node, declaration, vtype):
+        builtin_output = self.fragment_output_variable_builtin_target(node)
+        if builtin_output is not None:
+            self.current_identifier_aliases[self.resource_node_name(node, "")] = (
+                builtin_output
+            )
+            return ""
+
         qualifier = self.global_variable_qualifier(node)
         initializer = ""
         initial_value = getattr(node, "initial_value", None)
@@ -4559,6 +5135,14 @@ class GLSLCodeGen:
             f"{self.map_type(vtype)}{array_suffix}", self.resource_node_name(node, "")
         )
         return self.generate_global_variable_declaration(node, declaration, vtype)
+
+    def fragment_output_variable_builtin_target(self, node):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        if "out" not in qualifiers:
+            return None
+        if self.map_semantic(self.semantic_from_node(node)) == "gl_SampleMask":
+            return "gl_SampleMask[0]"
+        return None
 
     def glsl_variable_qualifier_prefix(self, node):
         qualifiers = [
@@ -4939,6 +5523,12 @@ class GLSLCodeGen:
                 return self.function_return_types[func_name]
             if func_name == "imageLoad" and args:
                 return self.image_load_result_type(args[0])
+            derivative_name = self.GLSL_DERIVATIVE_FUNCTION_ALIASES.get(
+                func_name,
+                func_name,
+            )
+            if derivative_name in self.GLSL_DERIVATIVE_FUNCTIONS and args:
+                return self.expression_result_type(args[0])
             constructor = self.glsl_constructor_type(func_name)
             if constructor:
                 return constructor
@@ -4950,6 +5540,44 @@ class GLSLCodeGen:
             return self.local_variable_types.get(getattr(expr, "name", None))
         return None
 
+    def validate_dispatch_mesh_count_argument(self, arg, index):
+        axis = ("x", "y", "z")[index]
+        arg_type = self.expression_result_type(arg)
+        if arg_type is not None:
+            mapped_type = self.map_type(arg_type)
+            if not self.is_scalar_integer_type(mapped_type):
+                raise ValueError(
+                    f"GLSL DispatchMesh {axis} group count requires a "
+                    "non-negative scalar integer value, "
+                    f"got {mapped_type}"
+                )
+
+        literal_count = self.literal_int_value(arg, self.literal_int_constants)
+        if literal_count is None:
+            return
+        if (
+            not isinstance(literal_count, int)
+            or isinstance(literal_count, bool)
+            or literal_count < 0
+        ):
+            raise ValueError(
+                f"GLSL DispatchMesh {axis} group count requires a "
+                "non-negative scalar integer value, got "
+                f"{self.glsl_attribute_argument_source(arg)}"
+            )
+
+    def validate_dispatch_mesh_count_arguments(self, args):
+        for index, arg in enumerate(args[:3]):
+            self.validate_dispatch_mesh_count_argument(arg, index)
+
+    def validate_dispatch_mesh_arguments(self, args):
+        if len(args) not in {3, 4}:
+            raise ValueError(
+                "GLSL DispatchMesh requires three group counts and optional "
+                "payload argument"
+            )
+        self.validate_dispatch_mesh_count_arguments(args)
+
     def generate_mesh_intrinsic_statement(self, node, indent=0):
         if not isinstance(node, MeshOpNode):
             return None
@@ -4960,8 +5588,7 @@ class GLSLCodeGen:
             return None
 
         args = getattr(node, "arguments", []) or []
-        if len(args) not in {3, 4}:
-            return None
+        self.validate_dispatch_mesh_arguments(args)
 
         indent_str = "    " * indent
         dispatch_args = ", ".join(self.generate_expression(arg) for arg in args[:3])
@@ -4970,12 +5597,7 @@ class GLSLCodeGen:
         if len(args) == 4:
             payload_expr = args[3]
             target = self.glsl_dispatch_mesh_payload_target(payload_expr)
-            if target is None:
-                statements.append(
-                    f"{indent_str}/* GLSL DispatchMesh payload argument "
-                    "requires taskPayloadSharedEXT storage */;"
-                )
-            elif self.expression_name(payload_expr) != target["name"]:
+            if self.expression_name(payload_expr) != target["name"]:
                 payload_value = self.generate_expression_with_expected(
                     payload_expr, target["raw_type"]
                 )
@@ -4983,6 +5605,87 @@ class GLSLCodeGen:
 
         statements.append(f"{indent_str}EmitMeshTasksEXT({dispatch_args});")
         return "\n".join(statements) + "\n"
+
+    def mesh_output_role_count_limit(self, roles):
+        for role in roles:
+            for info in self.current_mesh_output_parameters.values():
+                if info["role"] == role and info.get("count_value") is not None:
+                    return info["count_value"], f"@{role} array size"
+
+        for role in roles:
+            limit = self.current_mesh_output_count_limits.get(role)
+            if limit is not None:
+                return limit, self.mesh_output_role_count_attribute(role)
+        return None, None
+
+    def validate_mesh_output_count_argument(self, args, index, roles, label):
+        arg = args[index]
+        count_type = self.expression_result_type(arg)
+        if count_type is not None:
+            mapped_type = self.map_type(count_type)
+            if not self.is_scalar_integer_type(mapped_type):
+                raise ValueError(
+                    "GLSL mesh SetMeshOutputCounts "
+                    f"{label} count requires a non-negative scalar integer "
+                    f"value, got {mapped_type}"
+                )
+
+        value = self.literal_int_value(arg, self.literal_int_constants)
+        if value is None:
+            return
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(
+                "GLSL mesh SetMeshOutputCounts "
+                f"{label} count requires a non-negative scalar integer value, "
+                f"got {self.glsl_attribute_argument_source(arg)}"
+            )
+        limit, limit_label = self.mesh_output_role_count_limit(roles)
+        if limit is None or value <= limit:
+            return
+        raise ValueError(
+            "GLSL mesh SetMeshOutputCounts "
+            f"{label} count {value} exceeds {limit_label} {limit}"
+        )
+
+    def validate_mesh_output_index_expression(self, index_expr, context, limit):
+        index_type = self.expression_result_type(index_expr)
+        if index_type is not None:
+            mapped_type = self.map_type(index_type)
+            if not self.is_scalar_integer_type(mapped_type):
+                raise ValueError(
+                    f"GLSL mesh {context} index requires a scalar integer value, "
+                    f"got {mapped_type}"
+                )
+
+        literal_index = self.literal_int_value(index_expr, self.literal_int_constants)
+        if literal_index is None or limit is None:
+            return
+        if literal_index < 0 or literal_index >= limit:
+            raise ValueError(
+                f"GLSL mesh {context} index {literal_index} out of range; "
+                f"valid range is 0..{limit - 1}"
+            )
+
+    def validate_mesh_output_helper_index(self, index_expr, roles, context):
+        limit, _ = self.mesh_output_role_count_limit(roles)
+        self.validate_mesh_output_index_expression(index_expr, context, limit)
+
+    def generate_mesh_output_counts_call(self, func_name, args):
+        if func_name != "SetMeshOutputCounts":
+            return None
+        if self.current_stage_entry_type != "mesh":
+            return None
+        if len(args) != 2:
+            raise ValueError(
+                "GLSL mesh SetMeshOutputCounts requires exactly two arguments "
+                "(vertex count, primitive count)"
+            )
+        self.validate_mesh_output_count_argument(args, 0, ("vertices",), "vertex")
+        self.validate_mesh_output_count_argument(
+            args, 1, ("primitives", "indices"), "primitive"
+        )
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"SetMeshOutputsEXT({generated_args})"
 
     def generate_mesh_output_helper_call_statement(self, node, indent=0):
         if not isinstance(node, FunctionCallNode):
@@ -4993,35 +5696,107 @@ class GLSLCodeGen:
         func_name = self.function_call_name(node)
         args = getattr(node, "arguments", getattr(node, "args", [])) or []
         indent_str = "    " * indent
+        helper = self.mesh_output_helper_call_components(func_name, args)
+        if helper is None:
+            return None
 
-        if func_name == "SetVertex" and len(args) == 2:
+        if helper["kind"] == "comment":
+            return f"{indent_str}{helper['text']};\n"
+        if helper["kind"] == "vertex":
+            return (
+                f"{indent_str}gl_MeshVerticesEXT[{helper['index']}].gl_Position = "
+                f"{helper['value']};\n"
+            )
+        if helper["kind"] == "primitive":
+            return (
+                f"{indent_str}{helper['builtin']}[{helper['index']}] = "
+                f"{helper['value']};\n"
+            )
+        return None
+
+    def mesh_output_helper_call_components(self, func_name, args):
+        if func_name == "SetVertex":
+            if len(args) != 2:
+                raise ValueError(
+                    "GLSL mesh SetVertex helper requires exactly two arguments "
+                    "(vertex index, position)"
+                )
+            self.validate_mesh_output_helper_index(
+                args[0], ("vertices",), "SetVertex vertex"
+            )
             index = self.generate_expression(args[0])
             value = self.glsl_mesh_vertex_helper_value(args[1])
-            return (
-                f"{indent_str}gl_MeshVerticesEXT[{index}].gl_Position = " f"{value};\n"
-            )
+            return {"kind": "vertex", "index": index, "value": value}
 
-        if func_name == "SetPrimitive" and len(args) == 2:
+        if func_name == "SetPrimitive":
+            if len(args) != 2:
+                raise ValueError(
+                    "GLSL mesh SetPrimitive helper requires exactly two arguments "
+                    "(primitive index, primitive indices)"
+                )
             index_builtin = self.mesh_primitive_index_builtin(
                 self.current_mesh_output_topology
             )
             if index_builtin is None:
-                return (
-                    f"{indent_str}/* GLSL mesh SetPrimitive requires "
-                    "output topology */;\n"
-                )
+                return {
+                    "kind": "comment",
+                    "text": "/* GLSL mesh SetPrimitive requires output topology */",
+                }
+            self.validate_mesh_output_helper_index(
+                args[0], ("primitives", "indices"), "SetPrimitive primitive"
+            )
             index = self.generate_expression(args[0])
-            value = self.generate_expression_with_expected(args[1], None)
-            return f"{indent_str}{index_builtin}[{index}] = {value};\n"
+            value = self.glsl_mesh_primitive_helper_value(args[1])
+            return {
+                "kind": "primitive",
+                "builtin": index_builtin,
+                "index": index,
+                "value": value,
+            }
 
         return None
 
+    def reject_mesh_output_helper_expression_context(self, func_name, args):
+        if self.current_stage_entry_type != "mesh":
+            return
+        if func_name not in {"SetVertex", "SetPrimitive"}:
+            return
+        self.mesh_output_helper_call_components(func_name, args)
+        raise ValueError(
+            f"GLSL mesh {func_name} helper can only be used as a statement"
+        )
+
     def glsl_mesh_vertex_helper_value(self, expr):
+        result_type = self.expression_result_type(expr)
+        value_type = self.map_type(result_type) if result_type is not None else None
+        if value_type is not None and value_type not in {"vec3", "vec4"}:
+            raise ValueError(
+                "GLSL mesh SetVertex position requires vec3 or vec4, "
+                f"got {value_type}"
+            )
+
         value = self.generate_expression_with_expected(expr, None)
-        value_type = self.map_type(self.expression_result_type(expr))
         if value_type == "vec3":
             return f"vec4({value}, 1.0)"
         return value
+
+    def glsl_mesh_primitive_helper_value(self, expr):
+        expected_type = {
+            "points": "uint",
+            "lines": "uvec2",
+            "triangles": "uvec3",
+        }.get(self.current_mesh_output_topology)
+
+        result_type = self.expression_result_type(expr)
+        value_type = self.map_type(result_type) if result_type is not None else None
+        if expected_type and value_type is not None and value_type != expected_type:
+            raise ValueError(
+                "GLSL mesh SetPrimitive for "
+                f"{self.current_mesh_output_topology} topology requires "
+                f"{expected_type} primitive indices, got {value_type}"
+            )
+
+        return self.generate_expression_with_expected(expr, expected_type)
 
     def generate_mesh_output_assignment_statement(self, node, indent=0):
         if (
@@ -5052,6 +5827,8 @@ class GLSLCodeGen:
             if access is not None
             else None
         )
+        if constructor_values is None and access is not None:
+            self.validate_mesh_output_whole_assignment_value(access[0], right_node)
         right = self.generate_expression_with_expected(
             right_node, self.expression_result_type(left_node)
         )
@@ -5068,6 +5845,41 @@ class GLSLCodeGen:
                 value = self.generate_expression_with_expected(value_expr, member_type)
             code += f"{indent_str}{target} = {value};\n"
         return code
+
+    def validate_mesh_output_whole_assignment_value(self, info, expr):
+        expected_type = self.type_name_string(info.get("element_type"))
+        if expected_type is None:
+            return
+
+        if self.mesh_output_constructor_for_type(expr, expected_type):
+            raise ValueError(
+                "GLSL mesh output "
+                f"@{info['role']} '{info['name']}' assignment requires a "
+                f"complete {expected_type} constructor value"
+            )
+
+        result_type = self.type_name_string(self.expression_result_type(expr))
+        if result_type is None:
+            return
+
+        expected_label = self.map_type(expected_type)
+        result_label = self.map_type(result_type)
+        if result_label != expected_label:
+            raise ValueError(
+                "GLSL mesh output "
+                f"@{info['role']} '{info['name']}' assignment requires "
+                f"{expected_label} value, got {result_label}"
+            )
+
+    def mesh_output_constructor_for_type(self, expr, struct_name):
+        if isinstance(expr, FunctionCallNode):
+            return self.function_call_name(expr) == struct_name
+        if not isinstance(expr, ConstructorNode):
+            return False
+        constructor_type = self.type_name_string(
+            getattr(expr, "constructor_type", None)
+        )
+        return constructor_type == struct_name
 
     def mesh_output_constructor_assignment_values(self, info, expr):
         struct = self.structs_by_name.get(info["element_type"])
@@ -5158,7 +5970,19 @@ class GLSLCodeGen:
         if info is None:
             return None
         index_expr = getattr(node, "index", getattr(node, "index_expr", None))
+        limit, _ = self.mesh_output_index_limit(info)
+        self.validate_mesh_output_index_expression(
+            index_expr, f"output @{info['role']} '{info['name']}'", limit
+        )
         return info, self.generate_expression(index_expr)
+
+    def mesh_output_index_limit(self, info):
+        if info.get("count_value") is not None:
+            return info["count_value"], f"@{info['role']} array size"
+        limit = self.current_mesh_output_count_limits.get(info["role"])
+        if limit is not None:
+            return limit, self.mesh_output_role_count_attribute(info["role"])
+        return None, None
 
     def mesh_output_member_target(self, info, index, member_name):
         member_info = info["members"].get(member_name)
@@ -5178,13 +6002,98 @@ class GLSLCodeGen:
 
         return None
 
+    def glsl_tessellation_factor_assignment_expected_type(self, target):
+        target_kind = self.glsl_tessellation_factor_assignment_target_kind(target)
+        if target_kind is None:
+            return None
+
+        builtin_name, is_component, index_expr = target_kind
+        if self.current_stage_entry_type not in {None, "tessellation_control"}:
+            raise ValueError(
+                "GLSL tessellation factor assignments are only valid in "
+                "tessellation_control stages"
+            )
+        if not is_component:
+            raise ValueError(
+                f"GLSL tessellation factor {builtin_name} assignment requires "
+                "an indexed scalar component target"
+            )
+        self.validate_glsl_tessellation_factor_assignment_index(
+            builtin_name, index_expr
+        )
+        return "float"
+
+    def glsl_tessellation_factor_assignment_target_kind(self, target):
+        if isinstance(target, ArrayAccessNode):
+            array_expr = getattr(target, "array", getattr(target, "array_expr", None))
+            builtin_name = self.expression_name(array_expr)
+            if builtin_name in self.GLSL_TESSELLATION_FACTOR_BUILTINS:
+                index_expr = getattr(
+                    target, "index", getattr(target, "index_expr", None)
+                )
+                return (
+                    builtin_name,
+                    not isinstance(array_expr, ArrayAccessNode),
+                    index_expr,
+                )
+            return None
+
+        builtin_name = self.expression_name(target)
+        if builtin_name in self.GLSL_TESSELLATION_FACTOR_BUILTINS:
+            return builtin_name, False, None
+        return None
+
+    def validate_glsl_tessellation_factor_assignment_index(
+        self, builtin_name, index_expr
+    ):
+        index_type = self.expression_result_type(index_expr)
+        if index_type is not None:
+            mapped_type = self.map_type(index_type)
+            if not self.is_scalar_integer_type(mapped_type):
+                raise ValueError(
+                    f"GLSL tessellation factor {builtin_name} component index "
+                    "requires a scalar integer value, "
+                    f"got {mapped_type}"
+                )
+
+        literal_index = self.literal_int_value(index_expr, self.literal_int_constants)
+        if literal_index is None:
+            return
+
+        component_count = self.GLSL_TESSELLATION_FACTOR_COMPONENT_COUNTS[builtin_name]
+        if literal_index < 0 or literal_index >= component_count:
+            raise ValueError(
+                f"GLSL tessellation factor {builtin_name} component index "
+                f"{literal_index} out of range; valid range is "
+                f"0..{component_count - 1}"
+            )
+
+    def validate_glsl_tessellation_factor_assignment_value(self, target, value):
+        builtin_name = self.expression_name(target)
+        value_type = self.expression_result_type(value)
+        if value_type is None:
+            return
+        mapped_type = self.map_type(value_type)
+        if not self.is_scalar_numeric_type(mapped_type):
+            raise ValueError(
+                f"GLSL tessellation factor {builtin_name} component assignment "
+                f"requires a scalar numeric value, got {mapped_type}"
+            )
+
     def generate_assignment(self, node, is_main=False):
         left_node = getattr(node, "target", getattr(node, "left", None))
         right_node = getattr(node, "value", getattr(node, "right", None))
-        left = self.generate_expression(left_node)
-        right = self.generate_expression_with_expected(
-            right_node, self.expression_result_type(left_node)
+        expected_type = self.glsl_tessellation_factor_assignment_expected_type(
+            left_node
         )
+        if expected_type is not None:
+            self.validate_glsl_tessellation_factor_assignment_value(
+                left_node, right_node
+            )
+        else:
+            expected_type = self.expression_result_type(left_node)
+        left = self.generate_expression(left_node)
+        right = self.generate_expression_with_expected(right_node, expected_type)
         op = self.map_operator(getattr(node, "operator", getattr(node, "op", "=")))
         return f"{left} {op} {right}"
 
@@ -5473,9 +6382,21 @@ class GLSLCodeGen:
             args = [self.generate_expression(arg) for arg in expr.arguments]
             return self.map_ray_tracing_intrinsic(expr.operation, args)
         elif isinstance(expr, MeshOpNode):
+            mesh_output_counts_call = self.generate_mesh_output_counts_call(
+                expr.operation, expr.arguments
+            )
+            if mesh_output_counts_call is not None:
+                return mesh_output_counts_call
             arguments = expr.arguments
-            if expr.operation == "DispatchMesh" and len(arguments) == 4:
-                arguments = arguments[:3]
+            if expr.operation == "DispatchMesh":
+                if self.current_stage_entry_type in {
+                    "task",
+                    "amplification",
+                    "object",
+                }:
+                    self.validate_dispatch_mesh_arguments(arguments)
+                if len(arguments) == 4:
+                    arguments = arguments[:3]
             args = ", ".join(self.generate_expression(arg) for arg in arguments)
             operation = self.map_mesh_intrinsic(expr.operation)
             return f"{operation}({args})"
@@ -5521,6 +6442,15 @@ class GLSLCodeGen:
                 callee = self.generate_expression(func_expr)
             original_func_name = func_name
 
+            mesh_output_counts_call = self.generate_mesh_output_counts_call(
+                original_func_name, expr.args
+            )
+            if mesh_output_counts_call is not None:
+                return mesh_output_counts_call
+            self.reject_mesh_output_helper_expression_context(
+                original_func_name, expr.args
+            )
+
             ray_query_member_call = self.ray_query_member_function_call(
                 func_expr, expr.args
             )
@@ -5534,6 +6464,7 @@ class GLSLCodeGen:
                 return synchronization_call
 
             func_name = self.function_map.get(func_name, func_name)
+            self.validate_fragment_only_helper_call(original_func_name)
 
             static_generic_call = generate_static_generic_numeric_call(
                 self,
@@ -5551,6 +6482,14 @@ class GLSLCodeGen:
             texture_call = self.generate_texture_call(func_name, expr.args)
             if texture_call is not None:
                 return texture_call
+
+            interpolation_call = self.generate_interpolation_call(func_name, expr.args)
+            if interpolation_call is not None:
+                return interpolation_call
+
+            derivative_call = self.generate_derivative_call(func_name, expr.args)
+            if derivative_call is not None:
+                return derivative_call
 
             buffer_call = self.generate_buffer_call(func_name, expr.args)
             if buffer_call is not None:
@@ -5614,6 +6553,91 @@ class GLSLCodeGen:
         if func_name == "workgroupBarrier":
             return "barrier()"
         return None
+
+    def generate_interpolation_call(self, func_name, args):
+        expected_args = self.GLSL_INTERPOLATION_FUNCTIONS.get(func_name)
+        if expected_args is None:
+            return None
+        if len(args) != expected_args:
+            noun = "argument" if expected_args == 1 else "arguments"
+            raise ValueError(
+                f"OpenGL interpolation operation '{func_name}' requires "
+                f"{expected_args} {noun}"
+            )
+        if self.current_stage_entry_type not in (None, "fragment"):
+            raise ValueError(
+                f"OpenGL interpolation operation '{func_name}' is only valid "
+                "in fragment stages"
+            )
+
+        if func_name == "interpolateAtSample":
+            sample_type = self.expression_result_type(args[1])
+            if sample_type is not None and not self.is_scalar_integer_type(sample_type):
+                raise ValueError(
+                    operation_argument_type_error(
+                        "OpenGL",
+                        "interpolation",
+                        func_name,
+                        "a scalar integer",
+                        "sample",
+                        expression_debug_name(args[1]),
+                        self.type_name_string(sample_type),
+                    )
+                )
+
+        if func_name == "interpolateAtOffset":
+            offset_type = self.expression_result_type(args[1])
+            if offset_type is not None and self.map_type(offset_type) != "vec2":
+                raise ValueError(
+                    operation_argument_type_error(
+                        "OpenGL",
+                        "interpolation",
+                        func_name,
+                        "a vec2 floating",
+                        "offset",
+                        expression_debug_name(args[1]),
+                        self.type_name_string(offset_type),
+                    )
+                )
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{func_name}({generated_args})"
+
+    def generate_derivative_call(self, func_name, args):
+        expected_args = self.GLSL_DERIVATIVE_FUNCTIONS.get(func_name)
+        if expected_args is None:
+            return None
+        if len(args) != expected_args:
+            raise ValueError(
+                f"OpenGL derivative operation '{func_name}' requires "
+                f"{expected_args} argument"
+            )
+        if self.current_stage_entry_type not in (None, "fragment"):
+            raise ValueError(
+                f"OpenGL derivative operation '{func_name}' is only valid "
+                "in fragment stages"
+            )
+
+        value_type = self.expression_result_type(args[0])
+        component_type = self.vector_component_type(value_type)
+        if value_type is not None and not (
+            self.is_scalar_floating_type(value_type)
+            or component_type in {"float", "double"}
+        ):
+            raise ValueError(
+                operation_argument_type_error(
+                    "OpenGL",
+                    "derivative",
+                    func_name,
+                    "a floating scalar or vector",
+                    "value",
+                    expression_debug_name(args[0]),
+                    self.type_name_string(value_type),
+                )
+            )
+
+        generated_arg = self.generate_expression(args[0])
+        return f"{func_name}({generated_arg})"
 
     def ray_query_member_function_call(self, func_expr, args):
         if not isinstance(func_expr, MemberAccessNode):
@@ -6158,7 +7182,9 @@ class GLSLCodeGen:
         is_storage_image = self.is_storage_image_type(texture_type)
 
         coordinate_dimension = None
-        if texture_type and "Cube" not in texture_type:
+        if texture_type and "Cube" in texture_type and is_storage_image:
+            coordinate_dimension = 3
+        elif texture_type and "Cube" not in texture_type:
             for prefix in ("iimage", "uimage", "image"):
                 if texture_type.startswith(f"{prefix}2DMSArray"):
                     coordinate_dimension = 3
@@ -6685,6 +7711,38 @@ class GLSLCodeGen:
             self.texture_call_uses_explicit_sampler,
         )
 
+    def texture_size_expected_argument_count(self, texture_type):
+        texture_type = self.resource_base_type(texture_type)
+        if not texture_type:
+            return None
+        if self.is_storage_image_type(texture_type):
+            return None
+        if self.is_multisample_texture_resource_type(texture_type):
+            return 1
+        if texture_type.endswith(self.TEXTURE_SIZE_NO_LOD_SUFFIXES):
+            return 1
+        if texture_type.startswith(("sampler", "isampler", "usampler")):
+            return 2
+        return None
+
+    def validate_texture_size_argument_count(self, func_name, args):
+        if func_name != "textureSize" or not args:
+            return
+        texture_type = self.texture_argument_resource_type(args[0])
+        expected_count = self.texture_size_expected_argument_count(texture_type)
+        if expected_count is None or len(args) == expected_count:
+            return
+        texture_type = self.resource_base_type(texture_type)
+        if len(args) < expected_count:
+            raise ValueError(
+                f"OpenGL texture operation 'textureSize' requires "
+                f"{expected_count} argument(s) for {texture_type}, got {len(args)}"
+            )
+        raise ValueError(
+            f"OpenGL texture operation 'textureSize' accepts "
+            f"{expected_count} argument(s) for {texture_type}, got {len(args)}"
+        )
+
     def texture_resource_operation_names(self):
         return texture_image_resource_operation_names(IMAGE_RESOURCE_INTRINSIC_NAMES)
 
@@ -6789,14 +7847,39 @@ class GLSLCodeGen:
             "sampler2DArray",
             "samplerCube",
             "samplerCubeArray",
+            "isampler2D",
+            "isampler2DArray",
+            "isamplerCube",
+            "isamplerCubeArray",
+            "usampler2D",
+            "usampler2DArray",
+            "usamplerCube",
+            "usamplerCubeArray",
         }
-        gather_offset_types = {"sampler2D", "sampler2DArray"}
+        gather_offset_types = {
+            "sampler2D",
+            "sampler2DArray",
+            "isampler2D",
+            "isampler2DArray",
+            "usampler2D",
+            "usampler2DArray",
+        }
         sample_offset_types = {
             "sampler1D",
             "sampler1DArray",
             "sampler2D",
             "sampler3D",
             "sampler2DArray",
+            "isampler1D",
+            "isampler1DArray",
+            "isampler2D",
+            "isampler3D",
+            "isampler2DArray",
+            "usampler1D",
+            "usampler1DArray",
+            "usampler2D",
+            "usampler3D",
+            "usampler2DArray",
             "sampler2DShadow",
             "sampler2DArrayShadow",
         }
@@ -6826,12 +7909,28 @@ class GLSLCodeGen:
     def texture_gather_offset_supported(self, texture_type):
         return self.texture_sampling_capabilities(texture_type)["gather_offset"]
 
-    def unsupported_texture_projected_call(self, func_name, reason):
-        return unsupported_projected_texture_call_expression("GLSL", func_name, reason)
+    def texture_sample_vector_zero_value(self, texture_type=None):
+        expected_type = self.map_type(self.current_expression_expected_type)
+        if expected_type in {"ivec4", "uvec4", "vec4"}:
+            return self.zero_value_expression(expected_type)
+
+        texture_type = self.resource_base_type(texture_type)
+        if texture_type.startswith("isampler"):
+            return "ivec4(0)"
+        if texture_type.startswith("usampler"):
+            return "uvec4(0u)"
+        return "vec4(0.0)"
+
+    def unsupported_texture_projected_call(self, func_name, reason, texture_type=None):
+        zero_value = self.texture_sample_vector_zero_value(texture_type)
+        return (
+            f"/* unsupported GLSL projected texture: {func_name} {reason} */ "
+            f"{zero_value}"
+        )
 
     def projected_cube_texture_coordinate(self, texture_type, coord_arg, coord):
         texture_type = self.resource_base_type(texture_type)
-        if texture_type != "samplerCube":
+        if texture_type not in {"samplerCube", "isamplerCube", "usamplerCube"}:
             return None
 
         coord_type = self.resource_base_type(self.expression_result_type(coord_arg))
@@ -6859,6 +7958,7 @@ class GLSLCodeGen:
             return self.unsupported_texture_projected_call(
                 func_name,
                 "requires 1D, 2D, 2D-array, 3D, or cube projection coordinates",
+                texture_type,
             )
 
         if is_projected_texture_basic_operation(func_name):
@@ -6866,7 +7966,9 @@ class GLSLCodeGen:
                 func_name, len(extra_args)
             )
             if count_error:
-                return self.unsupported_texture_projected_call(func_name, count_error)
+                return self.unsupported_texture_projected_call(
+                    func_name, count_error, texture_type
+                )
             mapped_args = [texture_name, projected_coord]
             if extra_args:
                 mapped_args.append(self.generate_expression(extra_args[0]))
@@ -6877,7 +7979,9 @@ class GLSLCodeGen:
                 func_name, len(extra_args)
             )
             if count_error:
-                return self.unsupported_texture_projected_call(func_name, count_error)
+                return self.unsupported_texture_projected_call(
+                    func_name, count_error, texture_type
+                )
             lod = self.generate_expression(extra_args[0])
             return f"textureLod({texture_name}, {projected_coord}, {lod})"
 
@@ -6886,7 +7990,9 @@ class GLSLCodeGen:
                 func_name, len(extra_args)
             )
             if count_error:
-                return self.unsupported_texture_projected_call(func_name, count_error)
+                return self.unsupported_texture_projected_call(
+                    func_name, count_error, texture_type
+                )
             ddx = self.generate_expression(extra_args[0])
             ddy = self.generate_expression(extra_args[1])
             return f"textureGrad({texture_name}, {projected_coord}, {ddx}, {ddy})"
@@ -6897,11 +8003,11 @@ class GLSLCodeGen:
             or is_projected_texture_grad_offset_operation(func_name)
         ):
             return self.unsupported_texture_projected_call(
-                func_name, texture_sample_offset_capability_error("GLSL")
+                func_name, texture_sample_offset_capability_error("GLSL"), texture_type
             )
 
         return self.unsupported_texture_projected_call(
-            func_name, unsupported_projected_texture_operation_error()
+            func_name, unsupported_projected_texture_operation_error(), texture_type
         )
 
     def texture_sample_offset_supported(self, texture_type):
@@ -6914,6 +8020,10 @@ class GLSLCodeGen:
         return self.resource_base_type(texture_type) in {
             "sampler2DMS",
             "sampler2DMSArray",
+            "isampler2DMS",
+            "isampler2DMSArray",
+            "usampler2DMS",
+            "usampler2DMSArray",
             "image2DMS",
             "image2DMSArray",
             "iimage2DMS",
@@ -6934,8 +8044,10 @@ class GLSLCodeGen:
 
     def unsupported_multisample_texture_call(self, func_name, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return unsupported_multisample_texture_call_vector_expression(
-            "GLSL", func_name, texture_type
+        zero_value = self.texture_sample_vector_zero_value(texture_type)
+        return (
+            f"/* unsupported GLSL multisample texture call: "
+            f"{func_name} on {texture_type} */ {zero_value}"
         )
 
     def unsupported_multisample_texture_compare_call(self, func_name, texture_type):
@@ -7041,8 +8153,10 @@ class GLSLCodeGen:
 
     def unsupported_multisample_texel_fetch_offset_call(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return unsupported_multisample_texel_fetch_offset_expression(
-            "GLSL", texture_type
+        zero_value = self.texture_sample_vector_zero_value(texture_type)
+        return (
+            f"/* unsupported GLSL texel fetch offset: multisample texture "
+            f"{texture_type} does not support offsets */ {zero_value}"
         )
 
     def is_cube_texture_resource_type(self, texture_type):
@@ -7051,11 +8165,19 @@ class GLSLCodeGen:
             "samplerCubeArray",
             "samplerCubeShadow",
             "samplerCubeArrayShadow",
+            "isamplerCube",
+            "isamplerCubeArray",
+            "usamplerCube",
+            "usamplerCubeArray",
         }
 
     def unsupported_cube_texel_fetch_call(self, func_name, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return unsupported_cube_texel_fetch_expression("GLSL", func_name, texture_type)
+        zero_value = self.texture_sample_vector_zero_value(texture_type)
+        return (
+            f"/* unsupported GLSL texel fetch: {func_name} on {texture_type} */ "
+            f"{zero_value}"
+        )
 
     def generate_texture_gather_call(self, func_name, args):
         parts = self.texture_call_parts(args)
@@ -7691,7 +8813,13 @@ class GLSLCodeGen:
         )
 
     def is_integer_image_type(self, texture_type):
-        return is_glsl_integer_image_type(texture_type)
+        texture_type = self.resource_base_type(texture_type)
+        return is_glsl_integer_image_type(texture_type) or texture_type in {
+            "iimageCube",
+            "iimageCubeArray",
+            "uimageCube",
+            "uimageCubeArray",
+        }
 
     def is_scalar_image_format(self, image_format):
         return is_scalar_image_format(image_format)
@@ -7705,7 +8833,11 @@ class GLSLCodeGen:
         return self.is_integer_image_type(texture_type)
 
     def is_float_image_resource(self, texture_type):
-        return is_glsl_float_image_resource(texture_type)
+        texture_type = self.resource_base_type(texture_type)
+        return is_glsl_float_image_resource(texture_type) or texture_type in {
+            "imageCube",
+            "imageCubeArray",
+        }
 
     def image_store_constructors_by_kind(self):
         return storage_image_store_constructors("vec4", "ivec4", "uvec4")
@@ -7736,6 +8868,8 @@ class GLSLCodeGen:
             "iimage1DArray",
             "iimage2D",
             "iimage3D",
+            "iimageCube",
+            "iimageCubeArray",
             "iimage2DArray",
             "iimage2DMS",
             "iimage2DMSArray",
@@ -7746,6 +8880,8 @@ class GLSLCodeGen:
             "uimage1DArray",
             "uimage2D",
             "uimage3D",
+            "uimageCube",
+            "uimageCubeArray",
             "uimage2DArray",
             "uimage2DMS",
             "uimage2DMSArray",
@@ -7956,6 +9092,7 @@ class GLSLCodeGen:
         self.validate_image_resource_argument(func_name, args)
         self.validate_image_access_argument(func_name, args)
         self.validate_texture_resource_argument(func_name, args)
+        self.validate_texture_size_argument_count(func_name, args)
         self.validate_image_multisample_arguments(func_name, args)
         self.validate_image_atomic_format_argument(func_name, args)
         self.validate_integer_coordinate_argument(func_name, args)
@@ -8076,12 +9213,17 @@ class GLSLCodeGen:
 
         if is_projected_texture_operation(func_name) and args:
             texture_type = self.resource_base_type(self.texture_resource_type(args[0]))
-            if texture_type == "samplerCube":
+            if texture_type in {"samplerCube", "isamplerCube", "usamplerCube"}:
                 return self.generate_projected_cube_texture_call(func_name, args)
-            if texture_type == "samplerCubeArray":
+            if texture_type in {
+                "samplerCubeArray",
+                "isamplerCubeArray",
+                "usamplerCubeArray",
+            }:
                 return self.unsupported_texture_projected_call(
                     func_name,
                     "requires 1D, 2D, 2D-array, or 3D projection coordinates",
+                    texture_type,
                 )
 
         if is_texture_sampling_operation(func_name):
@@ -9360,7 +10502,36 @@ class GLSLCodeGen:
                     "r32i": "iimage2DMSArray",
                     "r32ui": "uimage2DMSArray",
                 },
-                "imageCube": {"r32f": "imageCube"},
+                "imageCube": {
+                    "r32f": "imageCube",
+                    "r32i": "iimageCube",
+                    "r32ui": "uimageCube",
+                },
+                "iimageCube": {
+                    "r32f": "imageCube",
+                    "r32i": "iimageCube",
+                    "r32ui": "uimageCube",
+                },
+                "uimageCube": {
+                    "r32f": "imageCube",
+                    "r32i": "iimageCube",
+                    "r32ui": "uimageCube",
+                },
+                "imageCubeArray": {
+                    "r32f": "imageCubeArray",
+                    "r32i": "iimageCubeArray",
+                    "r32ui": "uimageCubeArray",
+                },
+                "iimageCubeArray": {
+                    "r32f": "imageCubeArray",
+                    "r32i": "iimageCubeArray",
+                    "r32ui": "uimageCubeArray",
+                },
+                "uimageCubeArray": {
+                    "r32f": "imageCubeArray",
+                    "r32i": "iimageCubeArray",
+                    "r32ui": "uimageCubeArray",
+                },
             }
             mapped_type = format_type_map.get(base_type, {}).get(format_class)
             if mapped_type:
@@ -9385,13 +10556,34 @@ class GLSLCodeGen:
             "samplerBuffer",
             "sampler2DMS",
             "sampler2DMSArray",
+            "isampler1D",
+            "isampler1DArray",
             "isampler2D",
+            "isampler2DArray",
+            "isampler3D",
+            "isamplerCube",
+            "isamplerCubeArray",
+            "isampler2DRect",
+            "isamplerBuffer",
+            "isampler2DMS",
+            "isampler2DMSArray",
+            "usampler1D",
+            "usampler1DArray",
             "usampler2D",
+            "usampler2DArray",
+            "usampler3D",
+            "usamplerCube",
+            "usamplerCubeArray",
+            "usampler2DRect",
+            "usamplerBuffer",
+            "usampler2DMS",
+            "usampler2DMSArray",
             "image1D",
             "image1DArray",
             "image2D",
             "image3D",
             "imageCube",
+            "imageCubeArray",
             "image2DArray",
             "image2DMS",
             "image2DMSArray",
@@ -9400,6 +10592,8 @@ class GLSLCodeGen:
             "iimage1DArray",
             "iimage2D",
             "iimage3D",
+            "iimageCube",
+            "iimageCubeArray",
             "iimage2DArray",
             "iimage2DMS",
             "iimage2DMSArray",
@@ -9407,6 +10601,8 @@ class GLSLCodeGen:
             "uimage1DArray",
             "uimage2D",
             "uimage3D",
+            "uimageCube",
+            "uimageCubeArray",
             "uimage2DArray",
             "uimage2DMS",
             "uimage2DMSArray",
@@ -9494,8 +10690,9 @@ class GLSLCodeGen:
         return None
 
     def semantic_from_node(self, node):
-        if hasattr(node, "semantic"):
-            return node.semantic
+        semantic = getattr(node, "semantic", None)
+        if semantic is not None:
+            return semantic
         if not hasattr(node, "attributes"):
             return None
         for attr in node.attributes:
@@ -9535,6 +10732,7 @@ class GLSLCodeGen:
             "fractional_even_spacing",
             "fractional_odd_spacing",
             "invocations",
+            "inputtopology",
             "isolines",
             "layout",
             "local_size",
@@ -9601,6 +10799,7 @@ class GLSLCodeGen:
             "image2D",
             "image3D",
             "imageCube",
+            "imageCubeArray",
             "image2DArray",
         }:
             return "rgba32f"
@@ -9609,6 +10808,8 @@ class GLSLCodeGen:
             "iimage1DArray",
             "iimage2D",
             "iimage3D",
+            "iimageCube",
+            "iimageCubeArray",
             "iimage2DArray",
         }:
             return "r32i"
@@ -9617,6 +10818,8 @@ class GLSLCodeGen:
             "uimage1DArray",
             "uimage2D",
             "uimage3D",
+            "uimageCube",
+            "uimageCubeArray",
             "uimage2DArray",
         }:
             return "r32ui"
@@ -9699,6 +10902,29 @@ class GLSLCodeGen:
             return f"{self.semantic_map.get(semantic, semantic)}"
         else:
             return ""
+
+    def map_stage_input_semantic(self, semantic, stage_name=None):
+        mapped = self.map_semantic(semantic)
+        if normalize_stage_name(stage_name) == "fragment":
+            semantic_text = str(semantic).lower() if semantic is not None else ""
+            if semantic_text in {
+                "sv_coverage",
+                "sample_mask",
+                "gl_samplemask",
+                "gl_samplemaskin",
+                "sample_mask_in",
+            }:
+                return "gl_SampleMaskIn"
+        return mapped
+
+    def stage_input_builtin_alias(self, semantic, stage_name=None):
+        mapped = self.map_stage_input_semantic(semantic, stage_name)
+        if (
+            normalize_stage_name(stage_name) == "fragment"
+            and mapped == "gl_SampleMaskIn"
+        ):
+            return "gl_SampleMaskIn[0]"
+        return mapped
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""

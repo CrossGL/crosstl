@@ -4,6 +4,7 @@ from hashlib import sha1
 
 from ..ast import (
     AssignmentNode,
+    ArrayLiteralNode,
     ArrayNode,
     ArrayAccessNode,
     BinaryOpNode,
@@ -16,6 +17,7 @@ from ..ast import (
     ForNode,
     FunctionCallNode,
     IfNode,
+    IdentifierNode,
     LoopNode,
     MatchNode,
     MemberAccessNode,
@@ -367,10 +369,12 @@ class MetalCodeGen:
         self.current_function_return_type = None
         self.current_function_return_wrapper = None
         self.current_expression_expected_type = None
+        self.suppress_image_load_component_suffix = False
         self.current_generic_function_substitutions = {}
         self.local_variable_types = {}
         self.current_address_space_variables = {}
         self.struct_member_types = {}
+        self.struct_member_address_spaces = {}
         self.structs_by_name = {}
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
@@ -404,6 +408,7 @@ class MetalCodeGen:
         self.current_readonly_raw_buffer_parameters = set()
         self.current_readonly_metal_parameters = set()
         self.current_readonly_metal_parameter_reasons = {}
+        self.metal_ray_payload_parameter_types = set()
         self.metal_program_mesh_payload_type = None
         self.function_metal_mesh_dispatch_contexts = {}
         self.function_metal_mesh_dispatch_contexts_by_id = {}
@@ -812,6 +817,7 @@ class MetalCodeGen:
         self.current_metal_mesh_payload_type = None
         self.current_metal_mesh_output_accumulators = {}
         self.current_metal_non_thread_payload_parameters = set()
+        self.metal_ray_payload_parameter_types = set()
         self.function_metal_mesh_dispatch_contexts = {}
         self.function_metal_mesh_dispatch_contexts_by_id = {}
         self.metal_program_mesh_payload_type = self.metal_mesh_payload_type_for_program(
@@ -828,6 +834,9 @@ class MetalCodeGen:
         self.structs_by_name = {
             node.name: node for node in structs if isinstance(node, StructNode)
         }
+        self.metal_ray_payload_parameter_types = (
+            self.collect_metal_ray_payload_parameter_types(getattr(ast, "stages", {}))
+        )
         self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
             structs
         )
@@ -902,6 +911,7 @@ class MetalCodeGen:
         self.current_function_return_type = None
         self.current_function_return_wrapper = None
         self.current_expression_expected_type = None
+        self.suppress_image_load_component_suffix = False
         self.required_buffer_atomic_compare_helpers = set()
         self.local_variable_types = {}
         (
@@ -943,6 +953,9 @@ class MetalCodeGen:
         )
         self.struct_member_types = collect_struct_member_types(
             structs, self.type_name_string
+        )
+        self.struct_member_address_spaces = self.collect_struct_member_address_spaces(
+            structs
         )
         self.struct_member_types.update(
             collect_generic_enum_specialization_member_types(
@@ -1038,6 +1051,12 @@ class MetalCodeGen:
                 members = getattr(node, "members", [])
                 for member in members:
                     if isinstance(member, ArrayNode):
+                        resource_array_declaration = (
+                            self.format_struct_resource_array_member(member)
+                        )
+                        if resource_array_declaration is not None:
+                            code += f"    {resource_array_declaration};\n"
+                            continue
                         # Handle array types in structs
                         element_type = getattr(
                             member, "element_type", getattr(member, "vtype", "float")
@@ -1050,6 +1069,40 @@ class MetalCodeGen:
                     else:
                         semantic = self.semantic_from_node(member)
                         if hasattr(member, "member_type"):
+                            if self.is_array_type_node(member.member_type):
+                                resource_array_declaration = (
+                                    self.format_struct_resource_array_member(member)
+                                )
+                                if resource_array_declaration is not None:
+                                    semantic_attr = (
+                                        self.map_semantic(semantic) if semantic else ""
+                                    )
+                                    code += (
+                                        f"    {resource_array_declaration}"
+                                        f"{semantic_attr};\n"
+                                    )
+                                    continue
+                            address_space_declaration = (
+                                self.format_address_space_parameter_declaration(
+                                    member.member_type,
+                                    self.map_type(
+                                        self.convert_type_node_to_string(
+                                            member.member_type
+                                        )
+                                    ),
+                                    member.name,
+                                    member,
+                                )
+                            )
+                            if address_space_declaration is not None:
+                                semantic_attr = (
+                                    self.map_semantic(semantic) if semantic else ""
+                                )
+                                code += (
+                                    f"    {address_space_declaration}"
+                                    f"{semantic_attr};\n"
+                                )
+                                continue
                             if str(type(member.member_type)).find("ArrayType") != -1:
                                 member_type_str = self.convert_type_node_to_string(
                                     member.member_type
@@ -1074,9 +1127,13 @@ class MetalCodeGen:
                                 member_type_str = self.convert_type_node_to_string(
                                     member.member_type
                                 )
-                                member_type = self.map_type(member_type_str)
+                                member_type = self.map_resource_type_with_format(
+                                    member_type_str, member
+                                )
                         elif hasattr(member, "vtype"):
-                            member_type = self.map_type(member.vtype)
+                            member_type = self.map_resource_type_with_format(
+                                member.vtype, member
+                            )
                         else:
                             member_type = "float"
 
@@ -1547,6 +1604,44 @@ class MetalCodeGen:
 
         return f"{code}\n" if code else ""
 
+    def format_struct_resource_array_member(self, member):
+        name = getattr(member, "name", None)
+        if not name:
+            return None
+
+        if isinstance(member, ArrayNode):
+            element_type = getattr(
+                member, "element_type", getattr(member, "vtype", None)
+            )
+            if element_type is None:
+                return None
+            base_type = (
+                self.convert_type_node_to_string(element_type)
+                if hasattr(element_type, "name")
+                or hasattr(element_type, "element_type")
+                else str(element_type)
+            )
+            if not self.is_resource_parameter_type(base_type):
+                return None
+            resource_type = self.map_resource_type_with_format(base_type, member)
+            if member.size:
+                array_size = self.safe_expression_to_string(member.size)
+                return f"array<{resource_type}, {array_size}> {name}"
+            return f"array<{resource_type}> {name}"
+
+        raw_member_type = getattr(member, "member_type", None)
+        if raw_member_type is None or not self.is_array_type_node(raw_member_type):
+            return None
+
+        array_type = self.resource_array_parameter(raw_member_type, member)
+        if array_type is None:
+            return None
+        resource_type, array_size = array_type
+        if array_size is not None:
+            array_size = array_size or "1"
+            return f"array<{resource_type}, {array_size}> {name}"
+        return f"array<{resource_type}> {name}"
+
     def generate_constant_expression(self, expr):
         value_code = self.generate_expression(expr)
         if value_code == "True":
@@ -1833,13 +1928,18 @@ class MetalCodeGen:
                     self.current_readonly_metal_mesh_payload_reasons[p.name] = (
                         readonly_reason
                     )
-            if (
-                self.metal_ray_payload_parameter_declaration(
-                    param_type, p.name, p, shader_type
-                )
-                is not None
-            ):
+            ray_payload_declaration = self.metal_ray_payload_parameter_declaration(
+                param_type, p.name, p, shader_type
+            )
+            if ray_payload_declaration is not None:
                 self.current_metal_non_thread_payload_parameters.add(p.name)
+                ray_payload_address_space = self.metal_ray_payload_address_space(
+                    shader_type
+                )
+                if ray_payload_address_space is not None:
+                    self.current_address_space_variables[p.name] = (
+                        ray_payload_address_space
+                    )
 
             param_attr = self.parameter_attribute(
                 raw_param_type, semantic, shader_type, p
@@ -1916,6 +2016,7 @@ class MetalCodeGen:
                 func, raw_return_type, shader_type
             )
         self.current_function_return_type = raw_return_type
+        self.validate_metal_ray_stage_signature(func, shader_type, raw_return_type)
         parameter_diagnostics = self.glsl_buffer_block_parameter_diagnostics(
             "Metal", param_list, indent
         )
@@ -2849,6 +2950,7 @@ class MetalCodeGen:
                 self.local_variable_address_space(stmt)
             )
             self.record_readonly_metal_mesh_payload_local_alias(stmt)
+            self.record_readonly_metal_local_alias(stmt)
             is_atomic_local = self.is_metal_atomic_value_type(var_type)
             if self.is_unsupported_glsl_buffer_block_struct_type(var_type):
                 self.current_unsupported_glsl_buffer_block_local_variables.add(
@@ -3017,6 +3119,15 @@ class MetalCodeGen:
             self.local_variable_type_node(node), (PointerType, ReferenceType)
         )
 
+    def local_variable_is_array_alias(self, node):
+        raw_type = self.local_variable_type_node(node)
+        if self.is_array_type_node(raw_type):
+            return True
+        type_name = self.type_name_string(raw_type)
+        if type_name is None:
+            type_name = self.local_variable_declared_type(node)
+        return "[" in str(type_name) and str(type_name).rstrip().endswith("]")
+
     def local_pointer_initializer_needs_address(self, node, initial_value):
         if not isinstance(self.local_variable_type_node(node), PointerType):
             return False
@@ -3031,6 +3142,67 @@ class MetalCodeGen:
         if self.metal_type_is_pointer_like(self.expression_result_type(initial_value)):
             return False
         return self.assignment_target_root_name(initial_value) is not None
+
+    def pointer_assignment_needs_address(self, target, value):
+        target_type = self.expression_result_type(target)
+        if self.pointer_pointee_type_name(target_type) is None:
+            return False
+        if value is None:
+            return False
+        if (
+            isinstance(value, UnaryOpNode)
+            and getattr(value, "operator", getattr(value, "op", None)) == "&"
+        ):
+            return False
+        if self.metal_type_is_pointer_like(self.expression_result_type(value)):
+            return False
+        return self.assignment_target_root_name(value) is not None
+
+    def local_reference_assignment_target(self, target):
+        if not isinstance(target, BinaryOpNode):
+            return None
+        if getattr(target, "operator", getattr(target, "op", None)) != "&":
+            return None
+        type_name = self.expression_name(getattr(target, "left", None))
+        name = self.expression_name(getattr(target, "right", None))
+        if not type_name or not name:
+            return None
+        if type_name in self.local_variable_types:
+            return None
+        if (
+            type_name not in self.type_mapping
+            and type_name not in self.struct_member_types
+        ):
+            return None
+        return type_name, name
+
+    def generate_local_reference_assignment_declaration(self, target, value, rhs):
+        reference_target = self.local_reference_assignment_target(target)
+        if reference_target is None:
+            return None
+
+        type_name, name = reference_target
+        address_space = self.argument_address_space(value) or "thread"
+        self.local_variable_types[name] = f"{type_name}&"
+        self.current_address_space_variables[name] = address_space
+
+        readonly_key = self.readonly_metal_mesh_payload_key(value)
+        root_name = self.assignment_target_root_name(value)
+        qualifier = address_space
+        if readonly_key is not None:
+            reason = self.current_readonly_metal_mesh_payload_reasons[readonly_key]
+            self.current_readonly_metal_mesh_payload_parameters.add(name)
+            self.current_readonly_metal_mesh_payload_reasons[name] = reason
+            qualifier = "const object_data"
+        elif root_name in self.current_readonly_metal_parameters:
+            reason = self.current_readonly_metal_parameter_reasons[root_name]
+            self.current_readonly_metal_parameters.add(name)
+            self.current_readonly_metal_parameter_reasons[name] = reason
+            if address_space != "constant":
+                qualifier = f"const {address_space}"
+
+        mapped_type = self.map_type(type_name)
+        return f"{qualifier} {mapped_type}& {name} = {rhs}"
 
     def local_variable_qualifier(self, node):
         qualifiers = {
@@ -3047,6 +3219,7 @@ class MetalCodeGen:
                 const_prefix = ""
                 if address_space != "constant" and (
                     "const" in qualifiers
+                    or "readonly" in qualifiers
                     or self.local_variable_inherits_readonly_mesh_payload(node)
                     or self.local_variable_address_space_mismatch_diagnostic(node)
                     is not None
@@ -3057,9 +3230,30 @@ class MetalCodeGen:
             return "threadgroup "
         if self.is_metal_atomic_value_type(self.local_variable_declared_type(node)):
             return "threadgroup "
-        if "const" in qualifiers:
+        if self.local_variable_uses_constexpr_qualifier(node, qualifiers):
+            return "constexpr "
+        if qualifiers & {"const", "constant"}:
             return "const "
         return ""
+
+    def local_variable_uses_constexpr_qualifier(self, node, qualifiers):
+        if "constant" not in qualifiers:
+            return False
+        if self.local_variable_is_address_space_alias(node):
+            return False
+        if self.local_variable_is_array_alias(node):
+            return False
+
+        type_name = self.local_variable_declared_type(node)
+        mapped_type = self.map_type(type_name)
+        if mapped_type not in {"int", "uint"}:
+            return False
+        return (
+            self.literal_int_value(
+                getattr(node, "initial_value", None), self.literal_int_constants
+            )
+            is not None
+        )
 
     def local_variable_address_space(self, node):
         explicit_address_space = self.normalized_address_space(
@@ -3094,8 +3288,7 @@ class MetalCodeGen:
         if not self.local_variable_is_address_space_alias(node):
             return False
         initial_value = getattr(node, "initial_value", None)
-        root_name = self.assignment_target_root_name(initial_value)
-        return root_name in self.current_readonly_metal_mesh_payload_parameters
+        return self.readonly_metal_mesh_payload_key(initial_value) is not None
 
     def local_variable_address_space_mismatch_diagnostic(self, node):
         if not self.local_variable_is_address_space_alias(node):
@@ -3133,13 +3326,47 @@ class MetalCodeGen:
             reason = "const-qualified payload parameter"
         else:
             initial_value = getattr(node, "initial_value", None)
-            root_name = self.assignment_target_root_name(initial_value)
-            reason = self.current_readonly_metal_mesh_payload_reasons.get(root_name)
+            readonly_key = self.readonly_metal_mesh_payload_key(initial_value)
+            reason = self.current_readonly_metal_mesh_payload_reasons.get(readonly_key)
 
         if reason is None:
             return
         self.current_readonly_metal_mesh_payload_parameters.add(node.name)
         self.current_readonly_metal_mesh_payload_reasons[node.name] = reason
+
+    def readonly_metal_local_alias_reason(self, node):
+        is_address_space_alias = self.local_variable_is_address_space_alias(node)
+        is_array_alias = self.local_variable_is_array_alias(node)
+        qualifiers = self.parameter_qualifier_names(node)
+        if not (is_address_space_alias or is_array_alias):
+            if "const" in qualifiers:
+                return "const-qualified local"
+            if "constant" in qualifiers:
+                return "constant-qualified local"
+            return None
+        if (
+            is_address_space_alias
+            and self.local_variable_address_space(node) == "object_data"
+        ):
+            return None
+        if "const" in qualifiers and is_array_alias:
+            return "const-qualified local array"
+        if "const" in qualifiers:
+            return "const-qualified local alias"
+        if "constant" in qualifiers and is_array_alias:
+            return "constant-qualified local array"
+        if "constant" in qualifiers:
+            return "constant address-space local alias"
+        if "readonly" in qualifiers:
+            return "readonly local alias"
+        return None
+
+    def record_readonly_metal_local_alias(self, node):
+        reason = self.readonly_metal_local_alias_reason(node)
+        if reason is None:
+            return
+        self.current_readonly_metal_parameters.add(node.name)
+        self.current_readonly_metal_parameter_reasons[node.name] = reason
 
     def is_metal_atomic_value_type(self, vtype):
         type_name = self.type_name_string(vtype)
@@ -3243,7 +3470,10 @@ class MetalCodeGen:
                 return "float"
             return left_type or right_type
         if isinstance(expr, UnaryOpNode):
-            return self.expression_result_type(expr.operand)
+            operand_type = self.expression_result_type(expr.operand)
+            if getattr(expr, "operator", None) == "*":
+                return self.pointer_pointee_type_name(operand_type) or operand_type
+            return operand_type
         if isinstance(expr, TernaryOpNode):
             true_type = self.expression_result_type(getattr(expr, "true_expr", None))
             false_type = self.expression_result_type(getattr(expr, "false_expr", None))
@@ -3280,7 +3510,7 @@ class MetalCodeGen:
             object_type = self.expression_result_type(
                 expr.object
             ) or self.unsupported_glsl_buffer_block_expression_type(expr.object)
-            object_type = self.pointer_pointee_type_name(object_type) or object_type
+            object_type = self.member_lookup_type_name(object_type)
             member = str(expr.member)
             if object_type and all(ch in "xyzwrgba" for ch in member):
                 component_type = self.vector_component_type(object_type)
@@ -3306,7 +3536,7 @@ class MetalCodeGen:
             object_type = self.expression_result_type(
                 expr.pointer_expr
             ) or self.unsupported_glsl_buffer_block_expression_type(expr.pointer_expr)
-            object_type = self.pointer_pointee_type_name(object_type) or object_type
+            object_type = self.member_lookup_type_name(object_type)
             member = str(expr.member)
             if object_type:
                 member_type = self.struct_member_types.get(
@@ -3549,17 +3779,25 @@ class MetalCodeGen:
         if hasattr(node, "target") and hasattr(node, "value"):
             # New AST structure
             target = node.target
+            value = node.value
             rhs = self.generate_expression_with_expected(
-                node.value, self.expression_result_type(node.target)
+                value, self.expression_result_type(target)
             )
             op = getattr(node, "operator", "=")
         else:
             # Old AST structure
             target = node.left
+            value = node.right
             rhs = self.generate_expression_with_expected(
-                node.right, self.expression_result_type(node.left)
+                value, self.expression_result_type(target)
             )
             op = getattr(node, "operator", "=")
+
+        reference_declaration = self.generate_local_reference_assignment_declaration(
+            target, value, rhs
+        )
+        if reference_declaration is not None:
+            return reference_declaration
 
         mesh_output_store = self.generate_metal_mesh_output_assignment(
             target, rhs, op, getattr(node, "value", getattr(node, "right", None))
@@ -3590,8 +3828,15 @@ class MetalCodeGen:
         )
         if readonly_parameter_store is not None:
             return readonly_parameter_store
+        readonly_mesh_payload_alias = (
+            self.readonly_metal_mesh_payload_alias_assignment_diagnostic(target, value)
+        )
+        if readonly_mesh_payload_alias is not None:
+            return readonly_mesh_payload_alias
 
         lhs = self.generate_expression(target)
+        if self.pointer_assignment_needs_address(target, value):
+            rhs = f"&{rhs}"
         return f"{lhs} {op} {rhs}"
 
     def generate_if(self, node, indent):
@@ -3899,6 +4144,12 @@ class MetalCodeGen:
             return f"{left} {self.map_operator(expr.op)} {right}"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
+        elif isinstance(expr, ArrayLiteralNode):
+            elements = ", ".join(
+                self.generate_expression_with_expected(element, None)
+                for element in expr.elements
+            )
+            return f"{{{elements}}}"
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand)
             return f"{self.map_operator(expr.op)}{operand}"
@@ -4220,6 +4471,13 @@ class MetalCodeGen:
             )
             if address_space_call is not None:
                 return address_space_call
+            readonly_mesh_payload_call = (
+                self.readonly_metal_mesh_payload_call_diagnostic(
+                    argument_func_name, expr.args
+                )
+            )
+            if readonly_mesh_payload_call is not None:
+                return readonly_mesh_payload_call
             self.validate_function_image_access_arguments(func_name, expr.args)
             args = self.generate_function_call_arguments(argument_func_name, expr.args)
             if func_name in self.user_function_names:
@@ -4245,7 +4503,15 @@ class MetalCodeGen:
             block_load = self.generate_glsl_buffer_block_member_load(expr)
             if block_load is not None:
                 return block_load
-            obj = self.generate_expression_with_expected(expr.object, None)
+            suppress_suffix = self.member_access_is_image_load_component(expr)
+            previous_suppression = self.suppress_image_load_component_suffix
+            self.suppress_image_load_component_suffix = (
+                previous_suppression or suppress_suffix
+            )
+            try:
+                obj = self.generate_expression_with_expected(expr.object, None)
+            finally:
+                self.suppress_image_load_component_suffix = previous_suppression
             if self.member_access_uses_pointer_operator(expr):
                 return f"{obj}->{expr.member}"
             return f"{obj}.{expr.member}"
@@ -4324,9 +4590,10 @@ class MetalCodeGen:
         }.get(func_name)
 
     def generate_ray_tracing_op_expression(self, expr):
-        rendered_args = [self.generate_expression(arg) for arg in expr.arguments]
+        raw_args = self.normalized_metal_ray_tracing_args(expr.arguments)
+        rendered_args = [self.generate_expression(arg) for arg in raw_args]
         if expr.operation == "TraceRay":
-            trace_ray = self.generate_metal_trace_ray(expr.arguments, rendered_args)
+            trace_ray = self.generate_metal_trace_ray(raw_args, rendered_args)
             if trace_ray is not None:
                 return trace_ray
             return self.unsupported_metal_ray_tracing_intrinsic(
@@ -4336,7 +4603,7 @@ class MetalCodeGen:
             )
 
         if expr.operation == "CallShader":
-            call_shader = self.generate_metal_call_shader(expr.arguments, rendered_args)
+            call_shader = self.generate_metal_call_shader(raw_args, rendered_args)
             if call_shader is not None:
                 return call_shader
             return self.unsupported_metal_ray_tracing_intrinsic(
@@ -4360,19 +4627,44 @@ class MetalCodeGen:
 
         return f"{expr.operation}({', '.join(rendered_args)})"
 
+    def normalized_metal_ray_tracing_args(self, args):
+        normalized = []
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if self.is_unary_deref_marker(arg) and index + 1 < len(args):
+                normalized.append(UnaryOpNode("*", args[index + 1]))
+                index += 2
+                continue
+            normalized.append(arg)
+            index += 1
+        return normalized
+
+    def is_unary_deref_marker(self, arg):
+        return isinstance(arg, IdentifierNode) and getattr(arg, "name", None) == "*"
+
     def generate_metal_trace_ray(self, raw_args, rendered_args):
         if len(rendered_args) != 11:
             return None
 
-        acceleration_structure = rendered_args[0]
+        acceleration_structure_argument = (
+            self.metal_trace_ray_acceleration_structure_argument(
+                raw_args[0], rendered_args[0]
+            )
+        )
+        if acceleration_structure_argument["reason"] is not None:
+            return self.unsupported_metal_ray_tracing_intrinsic(
+                "TraceRay acceleration structure",
+                acceleration_structure_argument["reason"],
+            )
+
+        acceleration_structure = acceleration_structure_argument["argument"]
         instance_mask = rendered_args[2]
         origin = rendered_args[6]
         min_distance = rendered_args[7]
         direction = rendered_args[8]
         max_distance = rendered_args[9]
-        acceleration_structure_type = self.metal_acceleration_structure_argument_type(
-            raw_args[0]
-        )
+        acceleration_structure_type = acceleration_structure_argument["type"]
         intersection_function_table = self.default_intersection_function_table(
             acceleration_structure_type
         )
@@ -4432,13 +4724,18 @@ class MetalCodeGen:
                     "intersection_function_table"
                 ),
             }
-        payload_name = self.expression_name(raw_payload_arg)
-        if not payload_name or payload_name not in self.local_variable_types:
+        payload_display_name = (
+            self.assignment_target_display_name(raw_payload_arg)
+            or self.expression_name(raw_payload_arg)
+            or "<expr>"
+        )
+        payload_root_name = self.assignment_target_root_name(raw_payload_arg)
+        if not payload_root_name or payload_root_name not in self.local_variable_types:
             return {
                 "argument": None,
                 "reason": "payload forwarding requires a thread-local payload lvalue",
             }
-        if payload_name in self.current_metal_non_thread_payload_parameters:
+        if payload_root_name in self.current_metal_non_thread_payload_parameters:
             return {
                 "argument": None,
                 "reason": (
@@ -4446,13 +4743,58 @@ class MetalCodeGen:
                     "ray payload parameters use a non-thread address space"
                 ),
             }
+        payload_address_space = self.argument_address_space(raw_payload_arg)
+        if payload_address_space not in {None, "thread"}:
+            return {
+                "argument": None,
+                "reason": (
+                    "payload forwarding requires a thread-local payload lvalue; "
+                    f"payload '{payload_display_name}' uses {payload_address_space} "
+                    "address space"
+                ),
+            }
+        if payload_root_name in self.current_readonly_metal_parameters:
+            readonly_reason = self.current_readonly_metal_parameter_reasons.get(
+                payload_root_name, "readonly"
+            )
+            return {
+                "argument": None,
+                "reason": (
+                    "payload forwarding requires a mutable thread-local struct "
+                    f"payload lvalue; payload '{payload_display_name}' is "
+                    f"{readonly_reason}"
+                ),
+            }
         payload_type = self.expression_result_type(raw_payload_arg)
-        if not self.is_metal_trace_ray_payload_struct_type(payload_type):
+        if self.metal_type_is_pointer_like(payload_type):
+            return {
+                "argument": None,
+                "reason": (
+                    "payload forwarding requires a thread-local struct payload "
+                    f"lvalue; payload '{payload_display_name}' has pointer or "
+                    "array type"
+                ),
+            }
+        payload_struct_type = self.metal_payload_struct_type_name(payload_type)
+        if payload_struct_type is None:
             return {
                 "argument": None,
                 "reason": (
                     "payload forwarding requires a thread-local struct payload "
                     "lvalue"
+                ),
+            }
+        if (
+            self.metal_ray_payload_parameter_types
+            and payload_struct_type not in self.metal_ray_payload_parameter_types
+        ):
+            expected_label = " or ".join(sorted(self.metal_ray_payload_parameter_types))
+            return {
+                "argument": None,
+                "reason": (
+                    f"ray payload argument '{payload_display_name}' has type "
+                    f"'{payload_struct_type}' but declared ray payload interface "
+                    f"expects '{expected_label}'"
                 ),
             }
         return {"argument": rendered_payload_arg, "reason": None}
@@ -4461,13 +4803,200 @@ class MetalCodeGen:
         literal_value = self.literal_int_value(payload_arg, self.literal_int_constants)
         return literal_value == 0
 
-    def is_metal_trace_ray_payload_struct_type(self, payload_type):
-        if not payload_type:
-            return False
-        type_name = self.type_name_string(payload_type)
-        if "[" in type_name and "]" in type_name:
-            type_name, _ = split_array_type_suffix(type_name)
-        return type_name in self.structs_by_name
+    def collect_metal_ray_payload_parameter_types(self, stages):
+        payload_types = set()
+        if not isinstance(stages, dict):
+            return payload_types
+
+        for stage_type, stage in stages.items():
+            stage_name = normalize_stage_name(stage_type)
+            if stage_name not in {
+                "ray_generation",
+                "ray_intersection",
+                "ray_any_hit",
+                "ray_closest_hit",
+                "ray_miss",
+                "ray_callable",
+                "intersection",
+                "anyhit",
+                "closesthit",
+                "miss",
+                "callable",
+            }:
+                continue
+
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                parameters = getattr(
+                    entry_point, "parameters", getattr(entry_point, "params", [])
+                )
+                for parameter in parameters or []:
+                    if self.metal_ray_semantic_role(parameter, stage_name) != "payload":
+                        continue
+                    payload_type = self.metal_parameter_payload_struct_type(parameter)
+                    if payload_type is not None:
+                        payload_types.add(payload_type)
+
+            for local_var in getattr(stage, "local_variables", []) or []:
+                if self.metal_ray_semantic_role(local_var, stage_name) != "payload":
+                    continue
+                payload_type = self.metal_parameter_payload_struct_type(local_var)
+                if payload_type is not None:
+                    payload_types.add(payload_type)
+
+        return payload_types
+
+    def metal_ray_semantic_role(self, node, shader_type=None):
+        semantic = self.semantic_from_node(node)
+        if not semantic:
+            return None
+        compact = "".join(ch for ch in str(semantic).lower() if ch.isalnum())
+        if compact in {
+            "payload",
+            "raypayload",
+            "raypayloadext",
+            "raypayloadin",
+            "raypayloadinext",
+        }:
+            return "payload"
+        if compact in {"hitattribute", "hitattributeext"}:
+            return "hit_attribute"
+        if compact in {
+            "callabledata",
+            "callabledataext",
+            "callabledatain",
+            "callabledatainext",
+        }:
+            return "callable_data"
+        return None
+
+    def is_metal_ray_stage(self, shader_type):
+        return shader_type in {
+            "ray_generation",
+            "ray_intersection",
+            "ray_any_hit",
+            "ray_closest_hit",
+            "ray_miss",
+            "ray_callable",
+            "intersection",
+            "anyhit",
+            "closesthit",
+            "miss",
+            "callable",
+        }
+
+    def validate_metal_ray_stage_signature(self, func, shader_type, raw_return_type):
+        if not self.is_metal_ray_stage(shader_type):
+            return
+
+        self.validate_metal_ray_hit_attribute_parameters(func, shader_type)
+        if shader_type in {"ray_intersection", "intersection"}:
+            self.validate_metal_ray_intersection_return_type(func, raw_return_type)
+
+    def validate_metal_ray_hit_attribute_parameters(self, func, shader_type):
+        allowed_stages = {"ray_any_hit", "ray_closest_hit", "anyhit", "closesthit"}
+        parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
+        for parameter in parameters:
+            if not self.is_metal_hit_attribute_parameter(parameter):
+                continue
+            if shader_type in allowed_stages:
+                continue
+            parameter_name = getattr(parameter, "name", "<unnamed>")
+            raise ValueError(
+                "Metal @hit_attribute parameter "
+                f"'{parameter_name}' is only valid on any-hit or closest-hit stages"
+            )
+
+    def validate_metal_ray_intersection_return_type(self, func, raw_return_type):
+        primitive_type = self.metal_ray_intersection_primitive_type(
+            func, raw_return_type
+        )
+        mapped_return_type = self.map_type(raw_return_type)
+        if primitive_type == "triangle" and mapped_return_type == "bool":
+            return
+
+        members = self.metal_intersection_result_members(raw_return_type)
+        if members is None:
+            if primitive_type == "triangle":
+                raise ValueError(
+                    "Metal triangle intersection stage must return bool or a "
+                    "result struct"
+                )
+            raise ValueError(
+                "Metal "
+                f"{primitive_type} intersection stage must return a result struct"
+            )
+
+        self.require_metal_intersection_result_member(
+            members,
+            "accept_intersection",
+            "bool",
+            primitive_type,
+            raw_return_type,
+        )
+        if primitive_type == "bounding_box":
+            self.require_metal_intersection_result_member(
+                members,
+                "distance",
+                "float",
+                primitive_type,
+                raw_return_type,
+            )
+
+    def require_metal_intersection_result_member(
+        self, members, role, expected_type, primitive_type, raw_return_type
+    ):
+        for member in members:
+            if self.metal_intersection_result_member_role(member) != role:
+                continue
+            member_type = self.type_name_string(
+                getattr(
+                    member,
+                    "member_type",
+                    getattr(member, "vtype", getattr(member, "var_type", None)),
+                )
+            )
+            if self.map_type(member_type) == expected_type:
+                return
+
+        raise ValueError(
+            "Metal "
+            f"{primitive_type} intersection result '{raw_return_type}' requires "
+            f"a {expected_type} @{role} member"
+        )
+
+    def metal_intersection_result_members(self, raw_return_type):
+        struct_type = self.metal_payload_struct_type_name(raw_return_type)
+        if struct_type is None:
+            return None
+        struct_node = self.structs_by_name.get(struct_type)
+        if struct_node is None:
+            return None
+        return getattr(struct_node, "members", []) or []
+
+    def metal_intersection_result_member_role(self, member):
+        semantic = self.semantic_from_node(member)
+        if not semantic:
+            return None
+        compact = "".join(ch for ch in str(semantic).lower() if ch.isalnum())
+        if compact in {"acceptintersection", "acceptintersectionext"}:
+            return "accept_intersection"
+        if compact in {"distance", "hitdistance", "intersectiondistance"}:
+            return "distance"
+        return None
+
+    def is_metal_hit_attribute_parameter(self, parameter):
+        return self.metal_ray_semantic_role(parameter) == "hit_attribute"
+
+    def metal_parameter_payload_struct_type(self, parameter):
+        type_name = self.type_name_string(
+            getattr(
+                parameter,
+                "param_type",
+                getattr(parameter, "var_type", getattr(parameter, "vtype", None)),
+            )
+        )
+        return self.metal_payload_struct_type_name(type_name)
 
     def metal_acceleration_structure_argument_type(self, expr):
         name = self.expression_name(expr)
@@ -4483,6 +5012,89 @@ class MetalCodeGen:
             if getattr(acceleration_structure_variable, "name", None) == name:
                 return mapped_type
         return "instance_acceleration_structure"
+
+    def metal_trace_ray_acceleration_structure_argument(self, raw_arg, rendered_arg):
+        display_name = (
+            self.assignment_target_display_name(raw_arg)
+            or self.expression_name(raw_arg)
+            or rendered_arg
+            or "<expr>"
+        )
+
+        result_type = self.expression_result_type(raw_arg)
+        if result_type is not None:
+            return self.metal_trace_ray_acceleration_structure_argument_from_type(
+                raw_arg, rendered_arg, display_name, result_type
+            )
+
+        name = self.expression_name(raw_arg)
+        local_type = self.local_variable_types.get(name)
+        if local_type is not None:
+            return self.metal_trace_ray_acceleration_structure_argument_from_type(
+                raw_arg, rendered_arg, display_name, local_type
+            )
+
+        for (
+            acceleration_structure_variable,
+            _,
+            mapped_type,
+            array_size,
+        ) in self.acceleration_structure_variables:
+            if getattr(acceleration_structure_variable, "name", None) != name:
+                continue
+            if array_size is not None and not isinstance(raw_arg, ArrayAccessNode):
+                return {
+                    "argument": None,
+                    "type": None,
+                    "reason": (
+                        "acceleration structure argument "
+                        f"'{display_name}' has pointer or array type; "
+                        "TraceRay requires an acceleration_structure element"
+                    ),
+                }
+            return {"argument": rendered_arg, "type": mapped_type, "reason": None}
+
+        return {
+            "argument": None,
+            "type": None,
+            "reason": (
+                "acceleration structure argument "
+                f"'{display_name}' must resolve to an acceleration_structure "
+                "resource"
+            ),
+        }
+
+    def metal_trace_ray_acceleration_structure_argument_from_type(
+        self, raw_arg, rendered_arg, display_name, raw_type
+    ):
+        type_name = self.type_name_string(raw_type) or "<unknown>"
+        if not self.is_acceleration_structure_type(raw_type):
+            return {
+                "argument": None,
+                "type": None,
+                "reason": (
+                    "acceleration structure argument "
+                    f"'{display_name}' has type '{type_name}' but TraceRay "
+                    "requires an acceleration_structure resource"
+                ),
+            }
+
+        if self.metal_type_is_pointer_like(raw_type):
+            return {
+                "argument": None,
+                "type": None,
+                "reason": (
+                    "acceleration structure argument "
+                    f"'{display_name}' has pointer or array type; TraceRay "
+                    "requires an acceleration_structure element"
+                ),
+            }
+
+        return {
+            "argument": rendered_arg,
+            "type": self.map_resource_type_with_format(raw_type),
+            "reason": None,
+        }
 
     def default_metal_intersector_tags(self, acceleration_structure_type):
         if acceleration_structure_type == "primitive_acceleration_structure":
@@ -4532,10 +5144,13 @@ class MetalCodeGen:
 
     def generate_metal_call_shader(self, raw_args, rendered_args):
         if len(raw_args) == 2:
-            table_name = self.default_visible_function_table_name()
-            if table_name is None:
+            table = self.default_visible_function_table()
+            if table is None:
                 return None
+            table_name = table["name"]
+            table_type = table["type"]
             shader_index, callable_data = rendered_args
+            raw_callable_data = raw_args[1]
         elif len(raw_args) == 3:
             unsupported_array = self.unsupported_metal_ray_function_table_array_reason(
                 raw_args[0]
@@ -4545,24 +5160,182 @@ class MetalCodeGen:
                     "CallShader", unsupported_array
                 )
             table_name = rendered_args[0]
+            table_type = self.visible_function_table_argument_type(raw_args[0])
+            if not self.is_visible_function_table_type(table_type):
+                table_display_name = (
+                    self.assignment_target_display_name(raw_args[0])
+                    or self.expression_name(raw_args[0])
+                    or table_name
+                    or "<expr>"
+                )
+                return self.unsupported_metal_ray_tracing_intrinsic(
+                    "CallShader",
+                    "explicit table argument "
+                    f"'{table_display_name}' must be a "
+                    "visible_function_table resource",
+                )
             shader_index = rendered_args[1]
             callable_data = rendered_args[2]
+            raw_callable_data = raw_args[2]
         else:
             return None
 
+        callable_data_argument = self.metal_call_shader_callable_data_argument(
+            raw_callable_data, callable_data, table_type
+        )
+        if callable_data_argument["reason"] is not None:
+            return self.unsupported_metal_ray_tracing_intrinsic(
+                "CallShader callable data", callable_data_argument["reason"]
+            )
+
+        callable_data = callable_data_argument["argument"]
         return f"{table_name}[{shader_index}]({callable_data})"
 
-    def default_visible_function_table_name(self):
-        names = [
-            getattr(visible_function_table_variable, "name", None)
-            for visible_function_table_variable, _, _, _ in (
-                self.visible_function_table_variables
-            )
-            if getattr(visible_function_table_variable, "name", None)
+    def default_visible_function_table(self):
+        tables = [
+            {"name": getattr(variable, "name", None), "type": table_type}
+            for variable, _, table_type, _ in self.visible_function_table_variables
+            if getattr(variable, "name", None)
         ]
-        if len(names) == 1:
-            return names[0]
+        if len(tables) == 1:
+            return tables[0]
         return None
+
+    def default_visible_function_table_name(self):
+        table = self.default_visible_function_table()
+        if table is None:
+            return None
+        return table["name"]
+
+    def visible_function_table_argument_type(self, table_arg):
+        table_name = self.expression_name(table_arg)
+        for variable, _, table_type, _ in self.visible_function_table_variables:
+            if getattr(variable, "name", None) == table_name:
+                return table_type
+        if table_name in self.local_variable_types:
+            return self.local_variable_types[table_name]
+        return self.expression_result_type(table_arg)
+
+    def metal_call_shader_callable_data_argument(
+        self, raw_callable_data, rendered_callable_data, table_type
+    ):
+        callable_data_name = (
+            self.assignment_target_display_name(raw_callable_data) or "<expr>"
+        )
+        root_name = self.assignment_target_root_name(raw_callable_data)
+        if not root_name or root_name not in self.local_variable_types:
+            return {
+                "argument": None,
+                "reason": (
+                    "callable data forwarding requires a thread-local "
+                    "callable-data lvalue"
+                ),
+            }
+
+        callable_data_address_space = self.argument_address_space(raw_callable_data)
+        if callable_data_address_space not in {None, "thread"}:
+            return {
+                "argument": None,
+                "reason": (
+                    "callable data forwarding requires a thread-local "
+                    "callable-data lvalue; callable data "
+                    f"'{callable_data_name}' uses {callable_data_address_space} "
+                    "address space"
+                ),
+            }
+
+        if root_name in self.current_readonly_metal_parameters:
+            readonly_reason = self.current_readonly_metal_parameter_reasons.get(
+                root_name, "readonly"
+            )
+            return {
+                "argument": None,
+                "reason": (
+                    "callable data forwarding requires a mutable thread-local "
+                    "callable-data lvalue; callable data "
+                    f"'{callable_data_name}' is {readonly_reason}"
+                ),
+            }
+
+        callable_data_raw_type = self.expression_result_type(raw_callable_data)
+        if self.metal_type_is_pointer_like(callable_data_raw_type):
+            return {
+                "argument": None,
+                "reason": (
+                    "callable data forwarding requires a thread-local struct "
+                    f"callable-data lvalue; callable data '{callable_data_name}' "
+                    "has pointer or array type"
+                ),
+            }
+
+        callable_data_type = self.metal_payload_struct_type_name(callable_data_raw_type)
+        if callable_data_type is None:
+            return {
+                "argument": None,
+                "reason": (
+                    "callable data forwarding requires a thread-local struct "
+                    "callable-data lvalue"
+                ),
+            }
+
+        table_payload_type = self.visible_function_table_payload_type(table_type)
+        if table_payload_type is not None and table_payload_type != callable_data_type:
+            return {
+                "argument": None,
+                "reason": (
+                    f"visible_function_table expects callable data "
+                    f"'{table_payload_type}' but argument '{callable_data_name}' "
+                    f"has '{callable_data_type}'"
+                ),
+            }
+
+        return {"argument": rendered_callable_data, "reason": None}
+
+    def visible_function_table_payload_type(self, table_type):
+        type_name = self.type_name_string(table_type)
+        if not type_name or "<" not in type_name or not type_name.endswith(">"):
+            return None
+        table_kind, payload_type = type_name.split("<", 1)
+        if table_kind not in {"visible_function_table", "visibleFunctionTable"}:
+            return None
+        payload_type = payload_type[:-1].strip()
+        if payload_type.startswith("void(") and payload_type.endswith(")"):
+            payload_type = payload_type[5:-1].strip()
+            if not payload_type:
+                return None
+            payload_type = payload_type.split(",", 1)[0].strip()
+        return self.metal_payload_struct_type_name(payload_type)
+
+    def metal_payload_struct_type_name(self, payload_type):
+        type_name = self.type_name_string(payload_type)
+        if not type_name:
+            return None
+        type_name = self.strip_metal_type_qualifiers(type_name)
+        if "[" in type_name and "]" in type_name:
+            type_name, _ = split_array_type_suffix(type_name)
+        return type_name if type_name in self.structs_by_name else None
+
+    def strip_metal_type_qualifiers(self, type_name):
+        type_name = str(type_name).strip()
+        qualifiers = {
+            "const",
+            "constant",
+            "device",
+            "object_data",
+            "ray_data",
+            "thread",
+            "threadgroup",
+        }
+        changed = True
+        while changed:
+            changed = False
+            parts = type_name.split(None, 1)
+            if len(parts) == 2 and parts[0] in qualifiers:
+                type_name = parts[1].strip()
+                changed = True
+        while type_name.endswith("&") or type_name.endswith("*"):
+            type_name = type_name[:-1].strip()
+        return type_name
 
     def unsupported_metal_ray_tracing_intrinsic(self, operation, reason):
         return f"/* unsupported Metal ray tracing intrinsic: {operation} - {reason} */"
@@ -4656,17 +5429,22 @@ class MetalCodeGen:
         return self.expression_name(arg) is not None
 
     def metal_compare_exchange_expected_address_space_diagnostic(self, arg):
-        root_name = self.atomic_expected_storage_root_name(arg)
-        if root_name is None:
-            return None
-        address_space = self.current_address_space_variables.get(root_name)
-        if address_space is None and root_name in self.local_variable_types:
-            address_space = "thread"
+        member_address_space = self.address_space_qualified_member_address_space(arg)
+        if member_address_space is not None:
+            address_space = member_address_space
+            storage_name = self.assignment_target_display_name(arg)
+        else:
+            storage_name = self.atomic_expected_storage_root_name(arg)
+            if storage_name is None:
+                return None
+            address_space = self.current_address_space_variables.get(storage_name)
+            if address_space is None and storage_name in self.local_variable_types:
+                address_space = "thread"
         if address_space in {None, "thread"}:
             return None
         return (
             "false /* unsupported Metal atomic compare-exchange expected pointer: "
-            f"expected storage '{root_name}' uses {address_space} address space; "
+            f"expected storage '{storage_name}' uses {address_space} address space; "
             "Metal requires thread storage */"
         )
 
@@ -5111,6 +5889,17 @@ class MetalCodeGen:
             return (
                 "/* unsupported Metal mesh payload dispatch: "
                 "payload argument must be a threadgroup lvalue */"
+            )
+
+        payload_type = self.expression_result_type(payload_expr)
+        if self.metal_type_is_pointer_like(payload_type):
+            display_name = (
+                self.assignment_target_display_name(payload_expr) or payload_name
+            )
+            return (
+                "/* unsupported Metal mesh payload dispatch: payload argument "
+                f"'{display_name}' has pointer or array type; DispatchMesh "
+                "payload requires a threadgroup value lvalue */"
             )
 
         address_space = self.argument_address_space(payload_expr)
@@ -5570,26 +6359,20 @@ class MetalCodeGen:
         ]
 
     def parameter_attribute(self, raw_param_type, semantic, shader_type, node=None):
-        if shader_type == "ray_generation" and semantic == "payload":
+        ray_semantic_role = self.metal_ray_semantic_role(node, shader_type)
+        if shader_type == "ray_generation" and ray_semantic_role == "payload":
             return ""
+        if self.is_metal_ray_stage(shader_type) and ray_semantic_role == "payload":
+            return " [[payload]]"
         if (
-            shader_type
-            in {
-                "ray_intersection",
-                "ray_any_hit",
-                "ray_closest_hit",
-                "ray_miss",
-                "ray_callable",
-                "intersection",
-                "anyhit",
-                "closesthit",
-                "miss",
-                "callable",
-            }
-            and semantic == "hit_attribute"
+            self.is_metal_ray_stage(shader_type)
+            and ray_semantic_role == "hit_attribute"
         ):
             return ""
-        if shader_type in {"ray_callable", "callable"} and semantic == "callable_data":
+        if (
+            shader_type in {"ray_callable", "callable"}
+            and ray_semantic_role == "callable_data"
+        ):
             return ""
         if semantic:
             return self.map_semantic(semantic)
@@ -5979,13 +6762,14 @@ class MetalCodeGen:
         )
 
     def parameter_address_space(self, node=None, default=None):
-        qualifiers = {
-            str(qualifier).lower()
-            for qualifier in getattr(node, "qualifiers", []) or []
-        }
+        qualifiers = self.parameter_qualifier_names(node)
         address_spaces = []
         if "constant" in qualifiers:
             address_spaces.append("constant")
+        if qualifiers & {"object_data", "objectdata"}:
+            address_spaces.append("object_data")
+        if qualifiers & {"ray_data", "raydata"}:
+            address_spaces.append("ray_data")
         if qualifiers & {"device", "global", "storage"}:
             address_spaces.append("device")
         if qualifiers & {"threadgroup", "workgroup", "shared", "groupshared"}:
@@ -6005,10 +6789,16 @@ class MetalCodeGen:
         return default
 
     def parameter_qualifier_names(self, node=None):
-        return {
+        qualifiers = {
             str(qualifier).lower()
             for qualifier in getattr(node, "qualifiers", []) or []
         }
+        qualifiers.update(
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(node, "attributes", []) or []
+        )
+        qualifiers.discard("")
+        return qualifiers
 
     def normalized_address_space(self, address_space):
         if address_space is None:
@@ -6070,6 +6860,8 @@ class MetalCodeGen:
             isinstance(raw_param_type, (PointerType, ReferenceType))
             or self.is_array_type_node(raw_param_type)
         ):
+            return False
+        if self.parameter_qualifier_names(node) & {"const", "constant", "readonly"}:
             return False
         return self.readonly_metal_parameter_reason(raw_param_type, node) is None
 
@@ -6162,12 +6954,86 @@ class MetalCodeGen:
             )
         return None
 
+    def readonly_metal_mesh_payload_call_diagnostic(self, func_name, call_args):
+        if func_name not in self.user_function_names:
+            return None
+        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        for index, arg in enumerate(call_args):
+            if index >= len(parameter_nodes):
+                continue
+            arg_name = self.readonly_metal_mesh_payload_key(arg)
+            if arg_name is None:
+                continue
+            parameter = parameter_nodes[index]
+            raw_param_type = getattr(
+                parameter, "param_type", getattr(parameter, "vtype", None)
+            )
+            expected_address_space = self.parameter_variable_address_space(
+                raw_param_type, parameter
+            )
+            if expected_address_space != "object_data":
+                continue
+            if not self.is_mutable_metal_parameter(raw_param_type, parameter):
+                continue
+            parameter_name = getattr(parameter, "name", f"arg{index}")
+            reason = self.current_readonly_metal_mesh_payload_reasons.get(
+                arg_name, "const object_data"
+            )
+            reason_text = self.readonly_metal_mesh_payload_reason_text(reason)
+            diagnostic = (
+                "/* unsupported Metal mesh payload call: mesh payload "
+                f"'{arg_name}' is {reason_text} and cannot be passed to "
+                f"mutable parameter '{parameter_name}' of '{func_name}' */"
+            )
+            return_type = self.function_return_types.get(func_name)
+            if self.map_type(return_type) == "void":
+                return diagnostic
+            return f"{self.diagnostic_zero_value_for_type(return_type)} {diagnostic}"
+        return None
+
     def argument_address_space(self, arg):
+        member_address_space = self.address_space_qualified_member_address_space(arg)
+        if member_address_space is not None:
+            return member_address_space
         arg_name = self.assignment_target_root_name(arg)
         if arg_name in self.current_address_space_variables:
             return self.current_address_space_variables[arg_name]
         if arg_name in self.local_variable_types:
             return "thread"
+        return None
+
+    def address_space_qualified_member_address_space(self, expr):
+        if isinstance(expr, UnaryOpNode) and getattr(expr, "operator", None) == "&":
+            return self.address_space_qualified_member_address_space(
+                getattr(expr, "operand", None)
+            )
+        if isinstance(expr, BinaryOpNode) and getattr(expr, "operator", None) in {
+            "+",
+            "-",
+        }:
+            return self.address_space_qualified_member_address_space(
+                getattr(expr, "left", None)
+            ) or self.address_space_qualified_member_address_space(
+                getattr(expr, "right", None)
+            )
+        if isinstance(expr, ArrayAccessNode):
+            return self.address_space_qualified_member_address_space(
+                getattr(expr, "array", getattr(expr, "array_expr", None))
+            )
+        if isinstance(expr, MemberAccessNode):
+            object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
+            object_type = self.expression_result_type(object_expr)
+            object_type = self.member_lookup_type_name(object_type)
+            return self.struct_member_address_spaces.get(
+                self.type_name_string(object_type), {}
+            ).get(str(getattr(expr, "member", "")))
+        if isinstance(expr, PointerAccessNode):
+            object_expr = getattr(expr, "pointer_expr", None)
+            object_type = self.expression_result_type(object_expr)
+            object_type = self.member_lookup_type_name(object_type)
+            return self.struct_member_address_spaces.get(
+                self.type_name_string(object_type), {}
+            ).get(str(getattr(expr, "member", "")))
         return None
 
     def address_space_call_diagnostic(self, func_name, call_args):
@@ -6192,14 +7058,18 @@ class MetalCodeGen:
                 or actual_address_space == expected_address_space
             ):
                 continue
-            arg_name = self.assignment_target_root_name(arg)
+            arg_name = self.assignment_target_display_name(arg)
             parameter_name = getattr(parameter, "name", f"arg{index}")
-            return (
+            diagnostic = (
                 "/* unsupported Metal address-space call: argument "
                 f"'{arg_name}' uses {actual_address_space} address space but "
                 f"parameter '{parameter_name}' of '{func_name}' requires "
                 f"{expected_address_space} */"
             )
+            return_type = self.function_return_types.get(func_name)
+            if self.map_type(return_type) == "void":
+                return diagnostic
+            return f"{self.diagnostic_zero_value_for_type(return_type)} {diagnostic}"
         return None
 
     def pointer_pointee_type_name(self, vtype):
@@ -6211,6 +7081,22 @@ class MetalCodeGen:
         type_name = str(type_name).strip()
         return type_name[:-1].strip() if type_name.endswith("*") else None
 
+    def reference_referent_type_name(self, vtype):
+        if isinstance(vtype, ReferenceType):
+            return self.type_name_string(vtype.referenced_type)
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return None
+        type_name = str(type_name).strip()
+        return type_name[:-1].strip() if type_name.endswith("&") else None
+
+    def member_lookup_type_name(self, vtype):
+        return (
+            self.pointer_pointee_type_name(vtype)
+            or self.reference_referent_type_name(vtype)
+            or vtype
+        )
+
     def member_access_uses_pointer_operator(self, expr):
         if not isinstance(expr, MemberAccessNode):
             return False
@@ -6218,8 +7104,37 @@ class MetalCodeGen:
         object_type = self.expression_result_type(object_expr)
         return self.pointer_pointee_type_name(object_type) is not None
 
+    def collect_struct_member_address_spaces(self, structs):
+        member_address_spaces = {}
+        for struct in structs or []:
+            struct_name = getattr(struct, "name", None)
+            members = getattr(struct, "members", None)
+            if not struct_name or members is None:
+                continue
+            for member in members:
+                member_name = getattr(member, "name", None)
+                raw_member_type = getattr(member, "member_type", None)
+                if not member_name or raw_member_type is None:
+                    continue
+                if not (
+                    isinstance(raw_member_type, (PointerType, ReferenceType))
+                    or self.is_array_type_node(raw_member_type)
+                ):
+                    continue
+                address_space = self.parameter_variable_address_space(
+                    raw_member_type, member
+                )
+                if address_space is not None:
+                    member_address_spaces.setdefault(struct_name, {})[
+                        member_name
+                    ] = address_space
+        return member_address_spaces
+
     def assignment_target_root_name(self, target):
-        if isinstance(target, UnaryOpNode) and getattr(target, "operator", None) == "&":
+        if isinstance(target, UnaryOpNode) and getattr(target, "operator", None) in {
+            "&",
+            "*",
+        }:
             return self.assignment_target_root_name(getattr(target, "operand", None))
         if isinstance(target, MemberAccessNode):
             return self.assignment_target_root_name(
@@ -6233,7 +7148,100 @@ class MetalCodeGen:
             return self.assignment_target_root_name(
                 getattr(target, "array", getattr(target, "array_expr", None))
             )
+        if isinstance(target, BinaryOpNode) and getattr(target, "operator", None) in {
+            "+",
+            "-",
+        }:
+            return self.assignment_target_root_name(
+                getattr(target, "left", None)
+            ) or self.assignment_target_root_name(getattr(target, "right", None))
         return self.expression_name(target)
+
+    def assignment_target_display_name(self, target):
+        if isinstance(target, UnaryOpNode):
+            operand_name = self.assignment_target_display_name(
+                getattr(target, "operand", None)
+            )
+            if getattr(target, "operator", None) == "&":
+                return operand_name
+            if getattr(target, "operator", None) == "*":
+                return f"*{operand_name}" if operand_name else None
+        if isinstance(target, BinaryOpNode) and getattr(target, "operator", None) in {
+            "+",
+            "-",
+        }:
+            return self.assignment_target_display_name(
+                getattr(target, "left", None)
+            ) or self.assignment_target_display_name(getattr(target, "right", None))
+        if isinstance(target, ArrayAccessNode):
+            return self.assignment_target_display_name(
+                getattr(target, "array", getattr(target, "array_expr", None))
+            )
+        if isinstance(target, MemberAccessNode):
+            object_name = self.assignment_target_display_name(
+                getattr(target, "object", getattr(target, "object_expr", None))
+            )
+            member_name = str(getattr(target, "member", ""))
+            return f"{object_name}.{member_name}" if object_name else member_name
+        if isinstance(target, PointerAccessNode):
+            object_name = self.assignment_target_display_name(
+                getattr(target, "pointer_expr", None)
+            )
+            member_name = str(getattr(target, "member", ""))
+            return f"{object_name}->{member_name}" if object_name else member_name
+        return self.expression_name(target)
+
+    def readonly_metal_mesh_payload_key(self, target):
+        display_name = self.assignment_target_display_name(target)
+        if display_name:
+            candidates = [display_name]
+            for separator in (".", "->", "["):
+                if separator not in display_name:
+                    continue
+                parts = display_name.split(separator)
+                prefix = parts[0]
+                for part in parts[1:-1]:
+                    prefix = f"{prefix}{separator}{part}"
+                    candidates.append(prefix)
+            for candidate in sorted(candidates, key=len, reverse=True):
+                if candidate in self.current_readonly_metal_mesh_payload_parameters:
+                    return candidate
+            for candidate in self.current_readonly_metal_mesh_payload_parameters:
+                if display_name.startswith(
+                    (f"{candidate}.", f"{candidate}->", f"{candidate}[")
+                ):
+                    return candidate
+        root_name = self.assignment_target_root_name(target)
+        if root_name in self.current_readonly_metal_mesh_payload_parameters:
+            return root_name
+        return None
+
+    def record_readonly_metal_mesh_payload_assignment_alias(self, target, value):
+        if self.argument_address_space(target) != "object_data":
+            return None
+        readonly_key = self.readonly_metal_mesh_payload_key(value)
+        if readonly_key is None:
+            return None
+        target_name = self.assignment_target_display_name(target)
+        if not target_name:
+            return None
+        reason = self.current_readonly_metal_mesh_payload_reasons.get(
+            readonly_key, "const object_data"
+        )
+        self.current_readonly_metal_mesh_payload_parameters.add(target_name)
+        self.current_readonly_metal_mesh_payload_reasons[target_name] = reason
+        return target_name, reason
+
+    def readonly_metal_mesh_payload_alias_assignment_diagnostic(self, target, value):
+        alias = self.record_readonly_metal_mesh_payload_assignment_alias(target, value)
+        if alias is None:
+            return None
+        target_name, reason = alias
+        reason_text = self.readonly_metal_mesh_payload_reason_text(reason)
+        return (
+            "/* unsupported Metal mesh payload alias: mesh payload "
+            f"'{target_name}' cannot store {reason_text} */"
+        )
 
     def readonly_raw_buffer_assignment_diagnostic(self, target):
         root_name = self.assignment_target_root_name(target)
@@ -6257,24 +7265,26 @@ class MetalCodeGen:
         )
 
     def readonly_metal_mesh_payload_assignment_diagnostic(self, target):
-        root_name = self.assignment_target_root_name(target)
-        if root_name not in self.current_readonly_metal_mesh_payload_parameters:
+        root_name = self.readonly_metal_mesh_payload_key(target)
+        if root_name is None:
             return None
         reason = self.current_readonly_metal_mesh_payload_reasons.get(
             root_name, "const object_data"
         )
-        if reason == "mesh stage payload":
-            reason_text = "const object_data in mesh stages"
-        elif reason == "const-qualified payload parameter":
-            reason_text = "const-qualified object_data"
-        elif reason == "address-space mismatch alias":
-            reason_text = "read-only object_data after address-space mismatch"
-        else:
-            reason_text = reason
+        reason_text = self.readonly_metal_mesh_payload_reason_text(reason)
         return (
             "/* unsupported Metal mesh payload store: mesh payload "
             f"'{root_name}' is {reason_text} */"
         )
+
+    def readonly_metal_mesh_payload_reason_text(self, reason):
+        if reason == "mesh stage payload":
+            return "const object_data in mesh stages"
+        if reason == "const-qualified payload parameter":
+            return "const-qualified object_data"
+        if reason == "address-space mismatch alias":
+            return "read-only object_data after address-space mismatch"
+        return reason
 
     def metal_mesh_payload_parameter_declaration(
         self, mapped_type, name, node=None, shader_type=None
@@ -6321,9 +7331,22 @@ class MetalCodeGen:
     def metal_ray_payload_parameter_declaration(
         self, mapped_type, name, node=None, shader_type=None
     ):
+        address_space = self.metal_ray_payload_address_space(shader_type)
+        if address_space is None:
+            return None
+        ray_semantic_role = self.metal_ray_semantic_role(node, shader_type)
+        if ray_semantic_role != "payload" and not (
+            shader_type in {"ray_callable", "callable"}
+            and ray_semantic_role == "callable_data"
+        ):
+            return None
+
+        return f"{address_space} {mapped_type}& {name}"
+
+    def metal_ray_payload_address_space(self, shader_type):
         if shader_type == "ray_generation":
-            address_space = "device"
-        elif shader_type in {
+            return "device"
+        if shader_type in {
             "ray_intersection",
             "ray_any_hit",
             "ray_closest_hit",
@@ -6335,16 +7358,8 @@ class MetalCodeGen:
             "miss",
             "callable",
         }:
-            address_space = "ray_data"
-        else:
-            return None
-        semantic = self.semantic_from_node(node)
-        if semantic != "payload" and not (
-            shader_type in {"ray_callable", "callable"} and semantic == "callable_data"
-        ):
-            return None
-
-        return f"{address_space} {mapped_type}& {name}"
+            return "ray_data"
+        return None
 
     def structured_buffer_parameter_array_size(self, vtype, node=None):
         param_name = getattr(node, "name", None)
@@ -8500,6 +9515,14 @@ class MetalCodeGen:
             return func_expr.name
         return None
 
+    def member_access_is_image_load_component(self, expr):
+        if not isinstance(getattr(expr, "object", None), FunctionCallNode):
+            return False
+        if self.function_call_name(expr.object) != "imageLoad":
+            return False
+        member = str(getattr(expr, "member", ""))
+        return bool(member) and all(char in "xyzwrgba" for char in member)
+
     def supported_image_formats(self):
         return supported_image_formats()
 
@@ -8594,11 +9617,32 @@ class MetalCodeGen:
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
+                or self.is_metal_address_space_attribute(attr)
             ):
                 continue
             if hasattr(attr, "name"):
                 return attr.name
         return None
+
+    def is_metal_address_space_attribute(self, attr):
+        name = str(getattr(attr, "name", "")).lower()
+        return name in {
+            "constant",
+            "device",
+            "global",
+            "groupshared",
+            "local",
+            "object_data",
+            "objectdata",
+            "private",
+            "ray_data",
+            "raydata",
+            "shared",
+            "storage",
+            "thread",
+            "threadgroup",
+            "workgroup",
+        }
 
     def metal_stage_control_attribute_name(self, attr):
         attr_name = getattr(attr, "name", None)
@@ -9891,10 +10935,50 @@ class MetalCodeGen:
     def texture_resource_type(self, texture_arg):
         texture_name = self.expression_name(texture_arg)
         if not texture_name:
-            return None
-        return self.current_texture_parameters.get(
+            return self.struct_member_texture_resource_type(texture_arg)
+        texture_type = self.current_texture_parameters.get(
             texture_name, self.texture_variable_types.get(texture_name)
         )
+        return texture_type or self.struct_member_texture_resource_type(texture_arg)
+
+    def struct_member_texture_resource_type(self, texture_arg):
+        member = self.struct_resource_member_node(texture_arg)
+        if member is None:
+            return None
+        raw_type = getattr(member, "member_type", getattr(member, "vtype", None))
+        if raw_type is None and isinstance(member, ArrayNode):
+            raw_type = getattr(member, "element_type", None)
+        if self.is_array_type_node(raw_type):
+            raw_type = raw_type.element_type
+        elif isinstance(member, ArrayNode):
+            raw_type = getattr(member, "element_type", getattr(member, "vtype", None))
+        if raw_type is None:
+            return None
+        raw_type_name = self.type_name_string(raw_type)
+        if not self.is_texture_or_image_resource_type(raw_type_name):
+            return None
+        return self.map_resource_type_with_format(raw_type, member)
+
+    def struct_resource_member_node(self, texture_arg):
+        expr = texture_arg
+        while isinstance(expr, ArrayAccessNode):
+            expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+        if not isinstance(expr, MemberAccessNode):
+            return None
+
+        object_type = self.expression_result_type(expr.object)
+        if object_type is None:
+            return None
+        object_type = self.pointer_pointee_type_name(object_type) or object_type
+        struct_node = self.structs_by_name.get(self.type_name_string(object_type))
+        if struct_node is None:
+            return None
+
+        member_name = str(expr.member)
+        for member in getattr(struct_node, "members", []) or []:
+            if getattr(member, "name", None) == member_name:
+                return member
+        return None
 
     def texture_argument_resource_type(self, texture_arg):
         texture_type = self.texture_resource_type(texture_arg)
@@ -10461,12 +11545,18 @@ class MetalCodeGen:
         return texture_image_resource_operation_names(IMAGE_RESOURCE_INTRINSIC_NAMES)
 
     def image_resource_format(self, texture_arg):
-        return image_resource_metadata(
+        image_format = image_resource_metadata(
             texture_arg,
             self.expression_name,
             self.current_image_format_parameters,
             self.image_variable_formats,
         )
+        if image_format is not None:
+            return image_format
+        member = self.struct_resource_member_node(texture_arg)
+        if member is None:
+            return None
+        return explicit_image_format(member, self.attribute_value_to_string)
 
     def is_array_texture_resource(self, texture_type):
         return texture_type in {
@@ -11419,7 +12509,7 @@ class MetalCodeGen:
         return f"{texture_name}.gather_compare({', '.join(args)})"
 
     def texture_query_resource_descriptor(self, texture_arg):
-        texture_type = self.texture_resource_type(texture_arg)
+        texture_type = self.texture_argument_resource_type(texture_arg)
         return {
             "texture_type": texture_type,
             "storage_image": self.is_storage_image_resource(texture_type),
@@ -11432,8 +12522,8 @@ class MetalCodeGen:
 
     def texture_query_size_expression(self, texture_arg, lod_arg=None):
         texture_name = self.generate_expression(texture_arg)
-        texture_type = self.texture_resource_type(texture_arg)
         query_descriptor = self.texture_query_resource_descriptor(texture_arg)
+        texture_type = query_descriptor["texture_type"]
         size_descriptor = query_descriptor["size_descriptor"]
         if size_descriptor is None:
             return None
@@ -11691,6 +12781,8 @@ class MetalCodeGen:
         return storage_image_zero_values()
 
     def image_load_component_suffix(self, image_type, image_format):
+        if self.suppress_image_load_component_suffix:
+            return ""
         return storage_image_load_component_suffix(
             image_format,
             expected_scalar=self.is_scalar_value_type(
@@ -11745,13 +12837,16 @@ class MetalCodeGen:
     def image_store_value_expression(
         self, image_type, image_format, value, value_type=None
     ):
+        scalar_integer_resource = self.is_scalar_integer_image_resource(
+            image_type, image_format
+        )
+        if self.is_vector_value_type(value_type):
+            scalar_integer_resource = False
         return storage_image_store_value_expression(
             image_format,
             value,
             self.is_scalar_value_type(value_type),
-            scalar_integer_resource=self.is_scalar_integer_image_resource(
-                image_type, image_format
-            ),
+            scalar_integer_resource=scalar_integer_resource,
             float_resource=self.is_float_image_resource(image_type),
             integer_constructor=self.integer_image_store_constructor(image_type),
             float_constructor="float4",
@@ -12225,7 +13320,7 @@ class MetalCodeGen:
             return None
 
         texture_name, sampler_arg, coord, extra_args = parts
-        texture_type = self.texture_resource_type(args[0])
+        texture_type = self.texture_argument_resource_type(args[0])
         storage_image_operation = self.storage_image_texture_operation_expression(
             func_name, texture_type
         )

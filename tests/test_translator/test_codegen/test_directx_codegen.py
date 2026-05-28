@@ -77,6 +77,8 @@ def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
                 groupMemoryBarrier();
                 memoryBarrierShared();
                 deviceMemoryBarrier();
+                memoryBarrierBuffer();
+                memoryBarrierImage();
                 allMemoryBarrier();
             }
         }
@@ -87,7 +89,7 @@ def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
 
     assert generated_code.count("GroupMemoryBarrierWithGroupSync();") == 2
     assert generated_code.count("GroupMemoryBarrier();") == 2
-    assert "DeviceMemoryBarrier();" in generated_code
+    assert generated_code.count("DeviceMemoryBarrier();") == 3
     assert generated_code.count("AllMemoryBarrier();") == 2
     assert "barrier();" not in generated_code
     assert "memoryBarrier();" not in generated_code
@@ -95,6 +97,8 @@ def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
     assert "groupMemoryBarrier();" not in generated_code
     assert "memoryBarrierShared();" not in generated_code
     assert "deviceMemoryBarrier();" not in generated_code
+    assert "memoryBarrierBuffer();" not in generated_code
+    assert "memoryBarrierImage();" not in generated_code
     assert "allMemoryBarrier();" not in generated_code
 
 
@@ -118,11 +122,21 @@ def test_directx_user_defined_synchronization_names_are_not_lowered():
                 return;
             }
 
+            void memoryBarrierBuffer() {
+                return;
+            }
+
+            void memoryBarrierImage() {
+                return;
+            }
+
             void main() {
                 barrier();
                 memoryBarrier();
                 workgroupBarrier();
                 groupMemoryBarrier();
+                memoryBarrierBuffer();
+                memoryBarrierImage();
             }
         }
     }
@@ -134,12 +148,17 @@ def test_directx_user_defined_synchronization_names_are_not_lowered():
     assert "void memoryBarrier()" in generated_code
     assert "void workgroupBarrier()" in generated_code
     assert "void groupMemoryBarrier()" in generated_code
+    assert "void memoryBarrierBuffer()" in generated_code
+    assert "void memoryBarrierImage()" in generated_code
     assert "barrier();" in generated_code
     assert "memoryBarrier();" in generated_code
     assert "workgroupBarrier();" in generated_code
     assert "groupMemoryBarrier();" in generated_code
+    assert "memoryBarrierBuffer();" in generated_code
+    assert "memoryBarrierImage();" in generated_code
     assert "GroupMemoryBarrierWithGroupSync();" not in generated_code
     assert "GroupMemoryBarrier();" not in generated_code
+    assert "DeviceMemoryBarrier();" not in generated_code
     assert "AllMemoryBarrier();" not in generated_code
 
 
@@ -157,6 +176,81 @@ def test_directx_synchronization_builtins_reject_arguments():
     with pytest.raises(
         ValueError,
         match="synchronization builtin 'barrier' requires 0 argument",
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_directx_interpolation_builtins_lower_to_hlsl_intrinsics():
+    shader = """
+    shader InterpolationBuiltins {
+        struct FSInput {
+            vec4 color;
+        };
+
+        vec4 shade(vec4 color, uint sampleIndex, ivec2 offset) {
+            vec4 atSample = interpolateAtSample(color, sampleIndex);
+            vec4 atOffset = interpolateAtOffset(color, offset);
+            vec4 atCentroid = interpolateAtCentroid(color);
+            return atSample + atOffset + atCentroid;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return shade(input.color, 0u, ivec2(1, -1));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "EvaluateAttributeAtSample(color, sampleIndex)" in generated_code
+    assert "EvaluateAttributeSnapped(color, offset)" in generated_code
+    assert "EvaluateAttributeCentroid(color)" in generated_code
+    assert "interpolateAtSample(" not in generated_code
+    assert "interpolateAtOffset(" not in generated_code
+    assert "interpolateAtCentroid(" not in generated_code
+
+
+def test_directx_user_defined_interpolation_names_are_not_lowered():
+    shader = """
+    shader InterpolationShadowing {
+        vec4 interpolateAtSample(vec4 color, uint sampleIndex) {
+            return color + vec4(float(sampleIndex));
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return interpolateAtSample(vec4(1.0), 0u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "float4 interpolateAtSample(float4 color, uint sampleIndex)" in generated_code
+    )
+    assert "interpolateAtSample(float4(1.0, 1.0, 1.0, 1.0), 0u)" in generated_code
+    assert "EvaluateAttributeAtSample(" not in generated_code
+
+
+def test_directx_interpolation_builtins_reject_wrong_arity():
+    shader = """
+    shader BadInterpolationBuiltinArgs {
+        vec4 shade(vec4 color) {
+            return interpolateAtCentroid(color, 0);
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX interpolation builtin 'interpolateAtCentroid' requires "
+            "1 argument"
+        ),
     ):
         generate_code(parse_code(tokenize_code(shader)))
 
@@ -1109,6 +1203,204 @@ def test_directx_glsl_buffer_block_atomics_lower_to_byteaddress_helpers():
     assert "atomicCompareExchange(atomicBlock" not in generated_code
 
 
+def test_directx_glsl_buffer_block_atomics_are_expression_safe_in_value_contexts():
+    shader = """
+    shader GlslBufferBlockAtomicValueContextsHLSL {
+        struct AtomicBlock {
+            uint counter;
+            uint bins[4];
+            int signedCounter;
+        };
+
+        struct Pair {
+            uint oldCounter;
+            int oldSigned;
+        };
+
+        AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(17);
+
+        uint consume(uint value) {
+            return value + 1u;
+        }
+
+        int consumeSigned(int value) {
+            return value - 1;
+        }
+
+        Pair makePair(uint value) {
+            return Pair(
+                atomicAdd(atomicBlock.counter, value),
+                atomicMin(atomicBlock.signedCounter, -1)
+            );
+        }
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                uint value = tid.x;
+                uint direct = atomicAdd(atomicBlock.counter, value);
+                direct = consume(
+                    atomicCompareExchange(atomicBlock.bins[0], 1u, direct)
+                );
+                uint selected = direct != 0u
+                    ? atomicExchange(atomicBlock.bins[1], 9u)
+                    : atomicOr(atomicBlock.bins[2], 2u);
+                Pair pair = Pair(
+                    atomicXor(atomicBlock.bins[3], selected),
+                    consumeSigned(atomicMax(atomicBlock.signedCounter, -2))
+                );
+                uint values[2] = {
+                    atomicAnd(atomicBlock.bins[0], 3u),
+                    atomicOr(atomicBlock.bins[1], 4u)
+                };
+                pair = makePair(values[0] + values[1]);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    expected_direct = (
+        "uint direct = __crossgl_byteaddress_atomic_add_uint(" "atomicBlock, 0, value);"
+    )
+    assert expected_direct in generated_code
+    assert (
+        "direct = consume(__crossgl_byteaddress_atomic_compare_exchange_uint("
+        "atomicBlock, 4, 1u, direct));"
+    ) in generated_code
+    assert (
+        "__crossgl_byteaddress_atomic_exchange_uint(atomicBlock, 8, 9u)"
+        in generated_code
+    )
+    assert "__crossgl_byteaddress_atomic_or_uint(atomicBlock, 12, 2u)" in generated_code
+    assert (
+        "Pair pair = Pair(__crossgl_byteaddress_atomic_xor_uint("
+        "atomicBlock, 16, selected), consumeSigned("
+        "__crossgl_byteaddress_atomic_max_int(atomicBlock, 20, -2)));"
+    ) in generated_code
+    assert (
+        "uint values[2] = {__crossgl_byteaddress_atomic_and_uint("
+        "atomicBlock, 4, 3u), __crossgl_byteaddress_atomic_or_uint("
+        "atomicBlock, 8, 4u)};"
+    ) in generated_code
+    assert (
+        "return Pair(__crossgl_byteaddress_atomic_add_uint(atomicBlock, 0, value), "
+        "__crossgl_byteaddress_atomic_min_int(atomicBlock, 20, -1));"
+    ) in generated_code
+    assert "unsupported HLSL GLSL buffer block atomic" not in generated_code
+    assert "atomicAdd(atomicBlock" not in generated_code
+    assert "atomicCompareExchange(atomicBlock" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("function_body", "match"),
+    [
+        (
+            "float wrong = atomicAdd(atomicBlock.counter, 1u); return 0u;",
+            "atomic 'atomicAdd' requires uint result context.*expected float",
+        ),
+        (
+            "uint wrong = atomicMin(atomicBlock.signedCounter, -1); return wrong;",
+            "atomic 'atomicMin' requires int result context.*expected uint",
+        ),
+        (
+            "useFloat(atomicAdd(atomicBlock.counter, 1u)); return 0u;",
+            "atomic 'atomicAdd' requires uint result context.*expected float",
+        ),
+        (
+            "float wrong = atomicBlock.counter != 0u "
+            "? atomicAdd(atomicBlock.counter, 1u) : 0.0; return 0u;",
+            "atomic 'atomicAdd' requires uint result context.*expected float",
+        ),
+        (
+            "float wrong; wrong = atomicBlock.counter != 0u "
+            "? 0.0 : atomicAdd(atomicBlock.counter, 1u); return 0u;",
+            "atomic 'atomicAdd' requires uint result context.*expected float",
+        ),
+        (
+            "float wrong[1] = { atomicAdd(atomicBlock.counter, 1u) }; return 0u;",
+            "atomic 'atomicAdd' requires uint result context.*expected float",
+        ),
+        (
+            "FloatPair wrong = FloatPair(atomicAdd(atomicBlock.counter, 1u)); "
+            "return 0u;",
+            "atomic 'atomicAdd' requires uint result context.*expected float",
+        ),
+    ],
+)
+def test_directx_glsl_buffer_block_atomics_validate_result_contexts(
+    function_body, match
+):
+    shader = f"""
+    shader BadGlslBufferBlockAtomicResultHLSL {{
+        struct AtomicBlock {{
+            uint counter;
+            int signedCounter;
+        }};
+
+        struct FloatPair {{
+            float oldCounter;
+        }};
+
+        AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(17);
+
+        float useFloat(float value) {{
+            return value;
+        }}
+
+        uint update() {{
+            {function_body}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+@pytest.mark.parametrize(
+    ("return_type", "return_expr", "match"),
+    [
+        (
+            "float",
+            "atomicAdd(atomicBlock.counter, 1u)",
+            "atomic 'atomicAdd' requires uint result context.*expected float",
+        ),
+        (
+            "float",
+            "atomicBlock.counter != 0u ? atomicAdd(atomicBlock.counter, 1u) : 0.0",
+            "atomic 'atomicAdd' requires uint result context.*expected float",
+        ),
+        (
+            "uint",
+            "atomicMin(atomicBlock.signedCounter, -1)",
+            "atomic 'atomicMin' requires int result context.*expected uint",
+        ),
+    ],
+)
+def test_directx_glsl_buffer_block_atomics_validate_return_result_contexts(
+    return_type, return_expr, match
+):
+    shader = f"""
+    shader BadGlslBufferBlockAtomicReturnHLSL {{
+        struct AtomicBlock {{
+            uint counter;
+            int signedCounter;
+        }};
+
+        AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(17);
+
+        {return_type} update() {{
+            return {return_expr};
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 @pytest.mark.parametrize(
     ("call", "match"),
     [
@@ -1261,6 +1553,188 @@ def test_directx_typed_buffer_atomics_lower_to_interlocked_statements():
     assert "atomicCompareExchange(counters" not in generated_code
     assert "atomicXor(counters" not in generated_code
     assert "atomicMin(structuredCounters" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("declaration", "call", "match"),
+    [
+        (
+            "float wrongOriginal = 0.0;",
+            "atomicAdd(counters[tid.x], 1u, wrongOriginal);",
+            "atomic 'atomicAdd' original argument must be scalar uint, got float",
+        ),
+        (
+            "int wrongOriginal = 0;",
+            "atomicXor(counters[tid.x], 1u, wrongOriginal);",
+            "atomic 'atomicXor' original argument must be scalar uint, got int",
+        ),
+        (
+            "uint wrongOriginal = 0u;",
+            "atomicMin(signedCounters[tid.x], -1, wrongOriginal);",
+            "atomic 'atomicMin' original argument must be scalar int, got uint",
+        ),
+        (
+            "float wrongOriginal = 0.0;",
+            "atomicCompareExchange(counters[tid.x], 2u, 3u, wrongOriginal);",
+            (
+                "atomic 'atomicCompareExchange' original argument must be scalar "
+                "uint, got float"
+            ),
+        ),
+        (
+            "uvec2 wrongOriginal = uvec2(0u, 0u);",
+            "atomicAdd(counters[tid.x], 1u, wrongOriginal);",
+            "atomic 'atomicAdd' original argument must be scalar uint, got "
+            "(uvec2|uint2)",
+        ),
+    ],
+)
+def test_directx_typed_buffer_atomics_validate_explicit_original_targets(
+    declaration, call, match
+):
+    shader = f"""
+    shader BadTypedBufferAtomicOriginalHLSL {{
+        RWBuffer<uint> counters @register(u1);
+        RWStructuredBuffer<int> signedCounters @register(u2);
+
+        compute {{
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {{
+                {declaration}
+                {call}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+@pytest.mark.parametrize(
+    "function_body",
+    [
+        "uint oldValue = 0u; "
+        "atomicAdd(counters[index], 1u, oldValue + 1u); "
+        "return oldValue;",
+        "uint oldValue = 0u; "
+        "uint result = atomicAdd(counters[index], 1u, oldValue + 1u); "
+        "return result;",
+        "uint oldValue = 0u; "
+        "uint result = index != 0u "
+        "? atomicAdd(counters[index], 1u, oldValue + 1u) : 0u; "
+        "return result;",
+        "uint oldValue = 0u; "
+        "return useUint(atomicAdd(counters[index], 1u, oldValue + 1u));",
+        "uint oldValue = 0u; " "return atomicAdd(counters[index], 1u, oldValue + 1u);",
+    ],
+)
+def test_directx_typed_buffer_atomics_reject_non_lvalue_explicit_originals(
+    function_body,
+):
+    shader = f"""
+    shader BadTypedBufferAtomicOriginalLValueHLSL {{
+        RWBuffer<uint> counters @register(u1);
+
+        uint useUint(uint value) {{
+            return value;
+        }}
+
+        uint update(uint index) {{
+            {function_body}
+        }}
+
+        compute {{
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {{
+                uint result = update(tid.x);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "atomic 'atomicAdd' original argument must be an assignable "
+            "scalar uint target"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+@pytest.mark.parametrize(
+    ("function_body", "match"),
+    [
+        (
+            "float wrong = atomicAdd(counters[index], 1u); return 0u;",
+            "atomic 'atomicAdd' requires uint result context.*expected float",
+        ),
+        (
+            "uint wrong = atomicMin(signedCounters[index], -1); return wrong;",
+            "atomic 'atomicMin' requires int result context.*expected uint",
+        ),
+        (
+            "float wrong = index != 0u ? atomicAdd(counters[index], 1u) : 0.0; "
+            "return 0u;",
+            "atomic 'atomicAdd' requires uint result context.*expected float",
+        ),
+        (
+            "useFloat(atomicAdd(counters[index], 1u)); return 0u;",
+            "atomic 'atomicAdd' requires uint result context.*expected float",
+        ),
+    ],
+)
+def test_directx_typed_buffer_atomics_validate_result_contexts(function_body, match):
+    shader = f"""
+    shader BadTypedBufferAtomicResultHLSL {{
+        RWBuffer<uint> counters @register(u1);
+        RWStructuredBuffer<int> signedCounters @register(u2);
+
+        float useFloat(float value) {{
+            return value;
+        }}
+
+        uint update(uint index) {{
+            {function_body}
+        }}
+
+        compute {{
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {{
+                uint result = update(tid.x);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_directx_typed_buffer_atomics_validate_return_result_contexts():
+    shader = """
+    shader BadTypedBufferAtomicReturnResultHLSL {
+        RWBuffer<uint> counters @register(u1);
+
+        float readOld(uint index) {
+            return atomicAdd(counters[index], 1u);
+        }
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                float result = readOld(tid.x);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="atomic 'atomicAdd' requires uint result context.*expected float",
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
 
 
 def test_directx_typed_buffer_atomics_lift_inside_constructors():
@@ -1841,6 +2315,184 @@ def test_directx_append_consume_buffers_reject_wrong_helpers(declaration, call, 
     ("declaration", "call", "match"),
     [
         (
+            "AppendStructuredBuffer<uint> values @register(u1);",
+            "buffer_append(values);",
+            "DirectX buffer helper 'buffer_append' requires " "2 argument(s), got 1",
+        ),
+        (
+            "AppendStructuredBuffer<uint> values @register(u1);",
+            "buffer_append(values, 1u, 2u);",
+            "DirectX buffer helper 'buffer_append' requires " "2 argument(s), got 3",
+        ),
+        (
+            "ConsumeStructuredBuffer<uint> values @register(u2);",
+            "uint value = buffer_consume();",
+            "DirectX buffer helper 'buffer_consume' requires " "1 argument(s), got 0",
+        ),
+        (
+            "ConsumeStructuredBuffer<uint> values @register(u2);",
+            "uint value = buffer_consume(values, 1u);",
+            "DirectX buffer helper 'buffer_consume' requires " "1 argument(s), got 2",
+        ),
+    ],
+)
+def test_directx_append_consume_buffers_validate_helper_arity(declaration, call, match):
+    shader = f"""
+    shader BadAppendConsumeHelperArityHLSL {{
+        {declaration}
+
+        compute {{
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {{
+                {call}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "call", "match"),
+    [
+        (
+            "AppendStructuredBuffer<uint> values @register(u1);",
+            "buffer_append(values, uvec2(1u, 2u));",
+            "DirectX buffer helper 'buffer_append' requires value matching "
+            "AppendStructuredBuffer element type uint, got uint2",
+        ),
+        (
+            "AppendStructuredBuffer<uvec2> values @register(u1);",
+            "buffer_append(values, 1u);",
+            "DirectX buffer helper 'buffer_append' requires value matching "
+            "AppendStructuredBuffer element type uint2, got uint",
+        ),
+    ],
+)
+def test_directx_append_buffers_validate_element_shape(declaration, call, match):
+    shader = f"""
+    shader BadAppendElementShapeHLSL {{
+        {declaration}
+
+        compute {{
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {{
+                {call}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "body", "match"),
+    [
+        (
+            "ConsumeStructuredBuffer<uint> values @register(u2);",
+            """
+            void update() {
+                uvec2 value = buffer_consume(values);
+            }
+            """,
+            "DirectX buffer helper 'buffer_consume' result requires target matching "
+            "ConsumeStructuredBuffer element type uint, got uint2",
+        ),
+        (
+            "ConsumeStructuredBuffer<uint> values @register(u2);",
+            """
+            void update() {
+                uvec2 value;
+                value = buffer_consume(values);
+            }
+            """,
+            "DirectX buffer helper 'buffer_consume' result requires target matching "
+            "ConsumeStructuredBuffer element type uint, got uint2",
+        ),
+        (
+            "ConsumeStructuredBuffer<uvec2> values @register(u2);",
+            """
+            uint update() {
+                return buffer_consume(values);
+            }
+            """,
+            "DirectX buffer helper 'buffer_consume' result requires target matching "
+            "ConsumeStructuredBuffer element type uint2, got uint",
+        ),
+        (
+            "ConsumeStructuredBuffer<uvec2> values @register(u2);",
+            """
+            uint update() {
+                return buffer_consume(values) + 1u;
+            }
+            """,
+            "DirectX buffer helper 'buffer_consume' result requires target matching "
+            "ConsumeStructuredBuffer element type uint2, got uint",
+        ),
+    ],
+)
+def test_directx_consume_buffers_validate_result_shape(declaration, body, match):
+    shader = f"""
+    shader BadConsumeResultShapeHLSL {{
+        {declaration}
+
+        {body}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "callee", "call", "match"),
+    [
+        (
+            "ConsumeStructuredBuffer<uint> values @register(u2);",
+            "void acceptPair(uvec2 value) {}",
+            "acceptPair(buffer_consume(values));",
+            "DirectX buffer helper 'buffer_consume' result requires target matching "
+            "ConsumeStructuredBuffer element type uint, got uint2",
+        ),
+        (
+            "ConsumeStructuredBuffer<uvec2> values @register(u2);",
+            "void acceptScalar(uint value) {}",
+            "acceptScalar(buffer_consume(values));",
+            "DirectX buffer helper 'buffer_consume' result requires target matching "
+            "ConsumeStructuredBuffer element type uint2, got uint",
+        ),
+    ],
+)
+def test_directx_consume_buffers_validate_user_function_argument_shape(
+    declaration, callee, call, match
+):
+    shader = f"""
+    shader BadConsumeUserCallShapeHLSL {{
+        {declaration}
+
+        {callee}
+
+        compute {{
+            @numthreads(1, 1, 1)
+            void main() {{
+                {call}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "call", "match"),
+    [
+        (
             "RWBuffer<uint> values @register(u1);",
             "uvec2 value = buffer_load2(values, tid.x);",
             "DirectX buffer helper 'buffer_load2' requires "
@@ -1883,6 +2535,199 @@ def test_directx_byte_address_vector_helpers_validate_resource_and_value_shape(
     }}
     """
 
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_directx_byte_address_interlocked_member_calls_are_preserved():
+    shader = """
+    shader ByteAddressInterlockedMemberCallsHLSL {
+        RWByteAddressBuffer rawBytes @register(u3);
+        RasterizerOrderedByteAddressBuffer orderedBytes @register(u4);
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                uint offset = tid.x * 4u;
+                uint oldValue = 0u;
+                rawBytes.InterlockedAdd(offset, 1u);
+                rawBytes.InterlockedOr(offset + 4u, 3u, oldValue);
+                rawBytes.InterlockedCompareExchange(offset + 8u, oldValue, 7u, oldValue);
+                orderedBytes.InterlockedExchange(offset + 12u, 11u, oldValue);
+                rawBytes.InterlockedCompareStore(offset + 16u, oldValue, 13u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "rawBytes.InterlockedAdd(offset, 1u);" in generated_code
+    assert "rawBytes.InterlockedOr((offset + 4u), 3u, oldValue);" in generated_code
+    assert (
+        "rawBytes.InterlockedCompareExchange((offset + 8u), oldValue, 7u, oldValue);"
+        in generated_code
+    )
+    assert (
+        "orderedBytes.InterlockedExchange((offset + 12u), 11u, oldValue);"
+        in generated_code
+    )
+    assert (
+        "rawBytes.InterlockedCompareStore((offset + 16u), oldValue, 13u);"
+        in generated_code
+    )
+
+
+@pytest.mark.parametrize(
+    ("declaration", "call", "match"),
+    [
+        (
+            "ByteAddressBuffer rawBytes @register(t3);",
+            "uint oldValue = 0u; rawBytes.InterlockedAdd(0u, 1u, oldValue);",
+            "DirectX ByteAddressBuffer interlocked member 'InterlockedAdd' "
+            "cannot write readonly ByteAddressBuffer",
+        ),
+        (
+            "RWBuffer<uint> rawBytes @register(u3);",
+            "uint oldValue = 0u; rawBytes.InterlockedAdd(0u, 1u, oldValue);",
+            "DirectX ByteAddressBuffer interlocked member 'InterlockedAdd' requires "
+            "ByteAddressBuffer, RWByteAddressBuffer, or "
+            "RasterizerOrderedByteAddressBuffer resource, got RWBuffer<uint>",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "rawBytes.InterlockedAdd(0u);",
+            "DirectX ByteAddressBuffer interlocked member 'InterlockedAdd' requires "
+            "2 or 3 argument(s), got 1",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "uint oldValue = 0u; rawBytes.InterlockedCompareExchange(0u, 1u, oldValue);",
+            "DirectX ByteAddressBuffer interlocked member "
+            "'InterlockedCompareExchange' requires 4 argument(s), got 3",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "rawBytes.InterlockedCompareStore(0u, 1u);",
+            "DirectX ByteAddressBuffer interlocked member "
+            "'InterlockedCompareStore' requires 3 argument(s), got 2",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "uint oldValue = 0u; rawBytes.InterlockedAdd(0.0, 1u, oldValue);",
+            "DirectX ByteAddressBuffer interlocked member 'InterlockedAdd' "
+            "address argument must be scalar uint, got float",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "uint oldValue = 0u; rawBytes.InterlockedAdd(0u, 1.0, oldValue);",
+            "DirectX ByteAddressBuffer interlocked member 'InterlockedAdd' "
+            "value argument must be scalar uint, got float",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "uint oldValue = 0u; rawBytes.InterlockedAdd(0u, 1u, oldValue + 1u);",
+            "DirectX ByteAddressBuffer interlocked member 'InterlockedAdd' "
+            "original argument must be an assignable scalar uint target",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "uvec2 oldValue = uvec2(0u, 0u); rawBytes.InterlockedAdd(0u, 1u, oldValue);",
+            "DirectX ByteAddressBuffer interlocked member 'InterlockedAdd' "
+            "original argument must be scalar uint, got uint2",
+        ),
+    ],
+)
+def test_directx_byte_address_interlocked_member_calls_validate_arguments(
+    declaration, call, match
+):
+    shader = f"""
+    shader BadByteAddressInterlockedMemberCallHLSL {{
+        {declaration}
+
+        compute {{
+            @numthreads(1, 1, 1)
+            void main() {{
+                {call}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+@pytest.mark.parametrize(
+    ("function_body", "method_name"),
+    [
+        (
+            "uint direct = rawBytes.InterlockedAdd(0u, 1u, oldValue); "
+            "return direct;",
+            "InterlockedAdd",
+        ),
+        (
+            "direct = rawBytes.InterlockedOr(4u, 3u, oldValue); return direct;",
+            "InterlockedOr",
+        ),
+        (
+            "consume(rawBytes.InterlockedXor(8u, 2u, oldValue)); return direct;",
+            "InterlockedXor",
+        ),
+        (
+            "uint selected = direct != 0u "
+            "? rawBytes.InterlockedAnd(12u, 1u, oldValue) : 0u; "
+            "return selected;",
+            "InterlockedAnd",
+        ),
+        (
+            "Pair pair = Pair(rawBytes.InterlockedExchange(16u, 5u, oldValue)); "
+            "return pair.value;",
+            "InterlockedExchange",
+        ),
+        (
+            "uint values[1] = { "
+            "rawBytes.InterlockedCompareExchange(20u, 1u, 2u, oldValue) "
+            "}; return values[0];",
+            "InterlockedCompareExchange",
+        ),
+        (
+            "return rawBytes.InterlockedMin(24u, 1u, oldValue);",
+            "InterlockedMin",
+        ),
+        (
+            "uint direct = rawBytes.InterlockedCompareStore(28u, 1u, 2u); "
+            "return direct;",
+            "InterlockedCompareStore",
+        ),
+    ],
+)
+def test_directx_byte_address_interlocked_member_calls_reject_value_contexts(
+    function_body, method_name
+):
+    shader = f"""
+    shader BadByteAddressInterlockedMemberValueContextHLSL {{
+        RWByteAddressBuffer rawBytes @register(u3);
+
+        struct Pair {{
+            uint value;
+        }};
+
+        uint consume(uint value) {{
+            return value + 1u;
+        }}
+
+        uint update(uint direct) {{
+            uint oldValue = 0u;
+            {function_body}
+        }}
+    }}
+    """
+
+    match = (
+        f"DirectX ByteAddressBuffer interlocked member '{method_name}' "
+        "requires standalone statement context"
+    )
     with pytest.raises(ValueError, match=re.escape(match)):
         generate_code(parse_code(tokenize_code(shader)))
 
@@ -1935,6 +2780,86 @@ def test_structured_buffer_append_consume_lower_to_native_methods():
     assert "appendValues.Append(int(value));" in generated
     assert "int consumed = consumeValues.Consume();" in generated
     assert "buffer_append" not in generated
+    assert "buffer_consume" not in generated
+
+
+def test_structured_buffer_append_accepts_matching_vector_element_shape():
+    code = """
+    shader StructuredBufferAppendVectorShapeHLSL {
+        AppendStructuredBuffer<uvec2> appendValues @ binding(1);
+
+        compute {
+            void main() {
+                buffer_append(appendValues, uvec2(1u, 2u));
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "AppendStructuredBuffer<uint2> appendValues : register(u1);" in generated
+    assert "appendValues.Append(uint2(1u, 2u));" in generated
+    assert "buffer_append" not in generated
+
+
+def test_structured_buffer_consume_accepts_matching_vector_result_shape():
+    code = """
+    shader StructuredBufferConsumeVectorShapeHLSL {
+        ConsumeStructuredBuffer<uvec2> consumeValues @ binding(2);
+
+        uvec2 consumePair(bool fallback) {
+            return fallback
+                ? uvec2(0u, 0u)
+                : buffer_consume(consumeValues);
+        }
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                uvec2 consumed = buffer_consume(consumeValues);
+                consumed += consumePair(tid.x == 0u);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "ConsumeStructuredBuffer<uint2> consumeValues : register(u2);" in generated
+    assert "return (fallback ? uint2(0u, 0u) : consumeValues.Consume());" in generated
+    assert "uint2 consumed = consumeValues.Consume();" in generated
+    assert "buffer_consume" not in generated
+
+
+def test_structured_buffer_consume_accepts_matching_user_function_argument_shape():
+    code = """
+    shader StructuredBufferConsumeUserCallShapeHLSL {
+        ConsumeStructuredBuffer<uint> scalarValues @ binding(1);
+        ConsumeStructuredBuffer<uvec2> pairValues @ binding(2);
+
+        void acceptScalar(uint value) {}
+        void acceptPair(uvec2 value) {}
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main() {
+                acceptScalar(buffer_consume(scalarValues));
+                acceptPair(buffer_consume(pairValues));
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "ConsumeStructuredBuffer<uint> scalarValues : register(u1);" in generated
+    assert "ConsumeStructuredBuffer<uint2> pairValues : register(u2);" in generated
+    assert "acceptScalar(scalarValues.Consume());" in generated
+    assert "acceptPair(pairValues.Consume());" in generated
     assert "buffer_consume" not in generated
 
 
@@ -8405,13 +9330,97 @@ def test_directx_thread_system_crossgl_semantics_lower_and_validate():
     assert "gl_LocalInvocationIndex" not in generated
 
 
+def test_directx_mesh_dispatch_mesh_id_semantic_lowers_and_validates():
+    invalid_code = """
+    shader BadMeshDispatchMeshID {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                vec3 dispatchMeshId @ mesh_DispatchMeshID,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_DispatchMeshID.*uint3"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(invalid_code), "mesh")
+
+    valid_code = """
+    shader MeshDispatchMeshID {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uvec3 dispatchMeshId @ mesh_DispatchMeshID,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(float(dispatchMeshId.x), 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "mesh"
+    )
+
+    assert "uint3 dispatchMeshId : SV_DispatchMeshID" in generated
+    assert "mesh_DispatchMeshID" not in generated
+
+
 def test_wave_and_rayquery_intrinsics_codegen():
     code = """
-    shader main {
+    shader WaveIntrinsicCoverage {
         compute {
+            uint combine(uint value, bool predicate, uint lane, uvec4 mask) {
+                uint laneCount = WaveGetLaneCount();
+                uint laneIndex = WaveGetLaneIndex();
+                bool firstLane = WaveIsFirstLane();
+                uint sum = WaveActiveSum(value);
+                uint product = WaveActiveProduct(value);
+                uint andValue = WaveActiveBitAnd(value);
+                uint orValue = WaveActiveBitOr(value);
+                uint xorValue = WaveActiveBitXor(value);
+                uint minValue = WaveActiveMin(value);
+                uint maxValue = WaveActiveMax(value);
+                bool allTrue = WaveActiveAllTrue(predicate);
+                bool anyTrue = WaveActiveAnyTrue(predicate);
+                uvec4 ballot = WaveActiveBallot(predicate);
+                uint laneValue = WaveReadLaneAt(value, lane);
+                uint firstValue = WaveReadLaneFirst(value);
+                uint prefixSum = WavePrefixSum(value);
+                uint prefixProduct = WavePrefixProduct(value);
+                uvec4 matchMask = WaveMatch(value);
+                uint multiSum = WaveMultiPrefixSum(value, mask);
+                uint multiProduct = WaveMultiPrefixProduct(value, mask);
+                uint multiAnd = WaveMultiPrefixBitAnd(value, mask);
+                uint multiOr = WaveMultiPrefixBitOr(value, mask);
+                uint multiXor = WaveMultiPrefixBitXor(value, mask);
+                uint quadX = QuadReadAcrossX(value);
+                uint quadY = QuadReadAcrossY(value);
+                uint quadDiagonal = QuadReadAcrossDiagonal(value);
+                uint quadLane = QuadReadLaneAt(value, lane);
+                return laneCount + laneIndex + sum + product + andValue + orValue
+                    + xorValue + minValue + maxValue + laneValue + firstValue
+                    + prefixSum + prefixProduct + matchMask.x + multiSum
+                    + multiProduct + multiAnd + multiOr + multiXor + quadX
+                    + quadY + quadDiagonal + quadLane + ballot.x
+                    + (firstLane ? 1u : 0u) + (allTrue ? 1u : 0u)
+                    + (anyTrue ? 1u : 0u);
+            }
+
             void main() {
-                uint v;
-                uint sum = WaveActiveSum(v);
+                uint result = combine(3u, true, 1u, uvec4(1u, 0u, 1u, 0u));
                 RayQuery rq;
                 rq.Proceed();
             }
@@ -8421,8 +9430,63 @@ def test_wave_and_rayquery_intrinsics_codegen():
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
     generated = generate_code(ast)
-    assert "WaveActiveSum" in generated
+
+    for intrinsic in [
+        "WaveGetLaneCount()",
+        "WaveGetLaneIndex()",
+        "WaveIsFirstLane()",
+        "WaveActiveSum(value)",
+        "WaveActiveProduct(value)",
+        "WaveActiveBitAnd(value)",
+        "WaveActiveBitOr(value)",
+        "WaveActiveBitXor(value)",
+        "WaveActiveMin(value)",
+        "WaveActiveMax(value)",
+        "WaveActiveAllTrue(predicate)",
+        "WaveActiveAnyTrue(predicate)",
+        "WaveActiveBallot(predicate)",
+        "WaveReadLaneAt(value, lane)",
+        "WaveReadLaneFirst(value)",
+        "WavePrefixSum(value)",
+        "WavePrefixProduct(value)",
+        "WaveMatch(value)",
+        "WaveMultiPrefixSum(value, mask)",
+        "WaveMultiPrefixProduct(value, mask)",
+        "WaveMultiPrefixBitAnd(value, mask)",
+        "WaveMultiPrefixBitOr(value, mask)",
+        "WaveMultiPrefixBitXor(value, mask)",
+        "QuadReadAcrossX(value)",
+        "QuadReadAcrossY(value)",
+        "QuadReadAcrossDiagonal(value)",
+        "QuadReadLaneAt(value, lane)",
+    ]:
+        assert intrinsic in generated
     assert "rq.Proceed" in generated
+
+
+def test_directx_wave_intrinsics_reject_wrong_arity():
+    code = """
+    shader BadWaveIntrinsicArity {
+        compute {
+            uint main(uint value) {
+                return WaveReadLaneAt(value);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="DirectX wave intrinsic 'WaveReadLaneAt' requires 2 argument",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+    no_arg_code = code.replace("WaveReadLaneAt(value)", "WaveGetLaneIndex(value)")
+    with pytest.raises(
+        ValueError,
+        match="DirectX wave intrinsic 'WaveGetLaneIndex' requires 0 argument",
+    ):
+        generate_code(parse_code(tokenize_code(no_arg_code)))
 
 
 def test_directx_ray_query_methods_validate_trace_and_infer_results():
@@ -10426,6 +11490,46 @@ def test_directx_rejects_non_scalar_integer_multisample_sample_index(
         match=(
             "DirectX multisample texel fetch operation 'texelFetch' requires a "
             f"scalar integer sample index argument: .* has type {type_name}"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("return_expr", "type_name"),
+    [
+        ("textureSamplePosition(msTex, input.floatSample)", "float"),
+        ("textureSamplePosition(msArray, input.sampleVec)", "int2"),
+        ("textureSamplePosition(msTex, msTex)", "Texture2DMS<float4>"),
+    ],
+)
+def test_directx_rejects_non_scalar_integer_texture_sample_position_index(
+    return_expr, type_name
+):
+    shader = f"""
+    shader InvalidTextureSamplePositionIndex {{
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+
+        struct FSInput {{
+            ivec2 sampleVec;
+            float floatSample;
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return vec4({return_expr}, 0.0, 1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX texture sample-position query operation "
+            "'textureSamplePosition' requires a scalar integer sample index "
+            f"argument: .* has type {type_name}"
         ),
     ):
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
@@ -19250,6 +20354,16 @@ def test_directx_texture_query_resource_descriptors():
     )
     assert codegen.texture_samples_expression("msArray") == "textureSamples(msArray)"
     assert (
+        codegen.texture_sample_position_expression("colorMap", "sampleIndex")
+        == "/* unsupported DirectX texture sample-position query: "
+        "textureSamplePosition on Texture2D requires sampled multisample texture */ "
+        "float2(0.0, 0.0)"
+    )
+    assert (
+        codegen.texture_sample_position_expression("msTex", "sampleIndex")
+        == "msTex.GetSamplePosition(sampleIndex)"
+    )
+    assert (
         "imageSize",
         "RWTexture2D<float4>",
     ) in codegen.required_texture_query_helpers
@@ -19557,6 +20671,509 @@ def test_directx_multisample_texture_samples_queries_use_helpers():
     )
     assert "SamplerState msTexSampler" not in generated_code
     assert "SamplerState msArraySampler" not in generated_code
+
+
+def test_directx_multisample_texture_sample_position_queries_use_hlsl_member():
+    shader = """
+    shader MultisampleSamplePositionQuery {
+        sampler2DMS msTex;
+        sampler2DMSArray msArray;
+        sampler2DMS msTextures[4];
+        sampler2DMSArray msArrays[4];
+        sampler2D colorMap;
+
+        struct FSInput {
+            int sampleIndex @ SV_SampleIndex;
+            int layer @ TEXCOORD0;
+        };
+
+        vec2 queryPosition(sampler2DMS tex, int sampleIndex) {
+            return textureSamplePosition(tex, sampleIndex);
+        }
+
+        vec2 queryArrayPosition(sampler2DMSArray arrays[], int layer, int sampleIndex) {
+            return textureSamplePosition(arrays[layer], sampleIndex);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec2 direct = textureSamplePosition(msTex, input.sampleIndex);
+                vec2 arrayDirect = textureSamplePosition(msArray, input.sampleIndex);
+                vec2 indexed = textureSamplePosition(msTextures[2], input.sampleIndex)
+                    + queryArrayPosition(msArrays, input.layer, input.sampleIndex);
+                vec2 invalid = textureSamplePosition(colorMap, input.sampleIndex);
+                return vec4(direct + arrayDirect + indexed + invalid, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2DMS<float4> msTex : register(t0);" in generated_code
+    assert "Texture2DMSArray<float4> msArray : register(t1);" in generated_code
+    assert (
+        "float2 queryPosition(Texture2DMS<float4> tex, int sampleIndex)"
+        in generated_code
+    )
+    assert "return tex.GetSamplePosition(sampleIndex);" in generated_code
+    assert (
+        "float2 queryArrayPosition(Texture2DMSArray<float4> arrays[4], int layer, int sampleIndex)"
+        in generated_code
+    )
+    assert "return arrays[layer].GetSamplePosition(sampleIndex);" in generated_code
+    assert (
+        "float2 direct = msTex.GetSamplePosition(input.sampleIndex);" in generated_code
+    )
+    assert (
+        "float2 arrayDirect = msArray.GetSamplePosition(input.sampleIndex);"
+        in generated_code
+    )
+    assert "msTextures[2].GetSamplePosition(input.sampleIndex)" in generated_code
+    assert "textureSamplePosition(" not in generated_code
+    assert (
+        "/* unsupported DirectX texture sample-position query: "
+        "textureSamplePosition on Texture2D requires sampled multisample texture */ "
+        "float2(0.0, 0.0)"
+    ) in generated_code
+    assert "SamplerState msTexSampler" not in generated_code
+    assert "SamplerState msArraySampler" not in generated_code
+
+
+def test_directx_struct_member_resource_queries_use_hlsl_members():
+    shader = """
+    shader StructMemberResourceQueries {
+        struct ResourceBundle {
+            sampler2D color;
+            sampler2DMS ms;
+            image2D image;
+        };
+
+        ResourceBundle resources;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0, ivec2 pixel @ TEXCOORD1, int sampleIndex @ SV_SampleIndex) @ gl_FragColor {
+                ivec2 dims = textureSize(resources.color, 0);
+                int levels = textureQueryLevels(resources.color);
+                vec2 lod = textureQueryLod(resources.color, linearSampler, uv);
+                vec2 pos = textureSamplePosition(resources.ms, sampleIndex);
+                vec4 stored = imageLoad(resources.image, pixel);
+                return texture(resources.color, linearSampler, uv)
+                    + stored
+                    + vec4(float(dims.x + dims.y + levels) + lod.y + pos.x);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2D color;" in generated_code
+    assert "Texture2DMS<float4> ms;" in generated_code
+    assert "RWTexture2D<float4> image;" in generated_code
+    assert "int2 textureSize(Texture2D tex, int lod)" in generated_code
+    assert "int textureQueryLevels(Texture2D tex)" in generated_code
+    assert "int2 dims = textureSize(resources.color, 0);" in generated_code
+    assert "int levels = textureQueryLevels(resources.color);" in generated_code
+    assert (
+        "float2 lod = float2(resources.color.CalculateLevelOfDetailUnclamped("
+        "linearSampler, uv), resources.color.CalculateLevelOfDetail(linearSampler, uv));"
+    ) in generated_code
+    assert "float2 pos = resources.ms.GetSamplePosition(sampleIndex);" in generated_code
+    assert "float4 stored = resources.image[pixel];" in generated_code
+    assert "resources.color.Sample(linearSampler, uv)" in generated_code
+    assert "unsupported DirectX texture sample-position query" not in generated_code
+
+
+def test_directx_indexed_struct_member_resource_queries_use_hlsl_members():
+    shader = """
+    shader IndexedStructMemberResourceQueries {
+        struct ResourceBundle {
+            sampler2D color;
+            sampler2DMS ms;
+            image2D image;
+        };
+
+        ResourceBundle resources[2];
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0, ivec2 pixel @ TEXCOORD1, int layer @ TEXCOORD2, int sampleIndex @ SV_SampleIndex) @ gl_FragColor {
+                ivec2 dims = textureSize(resources[layer].color, 0);
+                int levels = textureQueryLevels(resources[layer].color);
+                vec2 lod = textureQueryLod(resources[layer].color, linearSampler, uv);
+                vec2 pos = textureSamplePosition(resources[layer].ms, sampleIndex);
+                vec4 stored = imageLoad(resources[layer].image, pixel);
+                return texture(resources[layer].color, linearSampler, uv)
+                    + stored
+                    + vec4(float(dims.x + dims.y + levels) + lod.y + pos.x);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "ResourceBundle resources[2];" in generated_code
+    assert "int2 textureSize(Texture2D tex, int lod)" in generated_code
+    assert "int textureQueryLevels(Texture2D tex)" in generated_code
+    assert "int2 dims = textureSize(resources[layer].color, 0);" in generated_code
+    assert "int levels = textureQueryLevels(resources[layer].color);" in generated_code
+    assert (
+        "float2 lod = float2(resources[layer].color.CalculateLevelOfDetailUnclamped("
+        "linearSampler, uv), resources[layer].color.CalculateLevelOfDetail(linearSampler, uv));"
+    ) in generated_code
+    assert (
+        "float2 pos = resources[layer].ms.GetSamplePosition(sampleIndex);"
+        in generated_code
+    )
+    assert "float4 stored = resources[layer].image[pixel];" in generated_code
+    assert "resources[layer].color.Sample(linearSampler, uv)" in generated_code
+    assert "unsupported DirectX texture sample-position query" not in generated_code
+
+
+def test_directx_typed_multisample_texture_queries_and_fetches_use_hlsl_ms_methods():
+    shader = """
+    shader DirectXTypedMultisampleTextures {
+        Texture2DMS<uint> msUint @register(t0);
+        Texture2DMSArray<int> msIntArray @register(t1);
+
+        struct FSInput {
+            ivec2 pixel @ TEXCOORD0;
+            ivec3 pixelLayer @ TEXCOORD1;
+            int sampleIndex @ SV_SampleIndex;
+        };
+
+        int queryArray(Texture2DMSArray<int> arrayTex, ivec3 pixelLayer, int sampleIndex) {
+            ivec3 size = textureSize(arrayTex);
+            int samples = textureSamples(arrayTex);
+            int levels = textureQueryLevels(arrayTex);
+            vec2 pos = textureSamplePosition(arrayTex, sampleIndex);
+            int fetched = texelFetch(arrayTex, pixelLayer, sampleIndex);
+            return fetched + size.z + samples + levels + int(pos.x);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                ivec2 size = textureSize(msUint);
+                int samples = textureSamples(msUint);
+                int levels = textureQueryLevels(msUint);
+                vec2 pos = textureSamplePosition(msUint, input.sampleIndex);
+                uint fetched = texelFetch(msUint, input.pixel, input.sampleIndex);
+                return vec4(float(fetched + uint(size.x + samples + levels + int(pos.x)
+                    + queryArray(msIntArray, input.pixelLayer, input.sampleIndex))));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2DMS<uint> msUint : register(t0);" in generated_code
+    assert "Texture2DMSArray<int> msIntArray : register(t1);" in generated_code
+    assert "int2 textureSize(Texture2DMS<uint> tex)" in generated_code
+    assert "int3 textureSize(Texture2DMSArray<int> tex)" in generated_code
+    assert "int textureSamples(Texture2DMS<uint> tex)" in generated_code
+    assert "int textureSamples(Texture2DMSArray<int> tex)" in generated_code
+    assert "int textureQueryLevels(Texture2DMS<uint> tex)" in generated_code
+    assert "int textureQueryLevels(Texture2DMSArray<int> tex)" in generated_code
+    assert (
+        "uint fetched = msUint.Load(input.pixel, input.sampleIndex);" in generated_code
+    )
+    assert "int fetched = arrayTex.Load(pixelLayer, sampleIndex);" in generated_code
+    assert "msUint.GetSamplePosition(input.sampleIndex)" in generated_code
+    assert "arrayTex.GetSamplePosition(sampleIndex)" in generated_code
+    assert "unsupported DirectX texture sample-position query" not in generated_code
+    assert "unsupported DirectX texture samples query" not in generated_code
+    assert "unsupported DirectX texel fetch" not in generated_code
+    assert ".Load(int3(" not in generated_code
+    assert ".Load(int4(" not in generated_code
+
+
+def test_directx_typed_sampled_texture_queries_gather_and_fetches_use_resource_shape():
+    shader = """
+    shader DirectXTypedSampledTextures {
+        Texture2D<float4> color : register(t0);
+        Texture2DArray<uint4> layers : register(t1);
+        Texture3D<int4> volume : register(t2);
+        TextureCube<float4> cube : register(t3);
+        sampler linearSampler : register(s0);
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            vec3 uvw @ TEXCOORD2;
+            vec3 direction @ TEXCOORD3;
+            ivec2 pixel @ TEXCOORD4;
+            ivec3 pixelLayer @ TEXCOORD5;
+            ivec3 voxel @ TEXCOORD6;
+            ivec3 voxelOffset @ TEXCOORD7;
+            int lod @ TEXCOORD8;
+            int component @ TEXCOORD9;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                ivec2 colorSize = textureSize(color, input.lod);
+                int colorLevels = textureQueryLevels(color);
+                ivec3 layerSize = textureSize(layers, input.lod);
+                uvec4 gathered = textureGather(
+                    layers, linearSampler, input.uvLayer, input.component
+                );
+                uvec4 fetchedLayer = texelFetch(layers, input.pixelLayer, input.lod);
+                ivec4 fetchedVolume = texelFetch(volume, input.voxel, input.lod);
+                ivec4 offsetVolume = texelFetchOffset(
+                    volume, input.voxel, input.lod, input.voxelOffset
+                );
+                vec4 cubeColor = texture(cube, linearSampler, input.direction);
+                return cubeColor
+                    + vec4(colorSize, colorLevels, 1.0)
+                    + vec4(layerSize, 1.0)
+                    + vec4(gathered)
+                    + vec4(fetchedLayer)
+                    + vec4(fetchedVolume + offsetVolume);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2D<float4> color : register(t0);" in generated_code
+    assert "Texture2DArray<uint4> layers : register(t1);" in generated_code
+    assert "Texture3D<int4> volume : register(t2);" in generated_code
+    assert "TextureCube<float4> cube : register(t3);" in generated_code
+    assert "int2 textureSize(Texture2D<float4> tex, int lod)" in generated_code
+    assert "int3 textureSize(Texture2DArray<uint4> tex, int lod)" in generated_code
+    assert "int textureQueryLevels(Texture2D<float4> tex)" in generated_code
+    assert "int2 colorSize = textureSize(color, input.lod);" in generated_code
+    assert "int colorLevels = textureQueryLevels(color);" in generated_code
+    assert "int3 layerSize = textureSize(layers, input.lod);" in generated_code
+    assert (
+        "input.component == 0 ? layers.GatherRed(linearSampler, input.uvLayer) : "
+        "input.component == 1 ? layers.GatherGreen(linearSampler, input.uvLayer) : "
+        "input.component == 2 ? layers.GatherBlue(linearSampler, input.uvLayer) : "
+        "layers.GatherAlpha(linearSampler, input.uvLayer)"
+    ) in generated_code
+    assert (
+        "uint4 fetchedLayer = layers.Load(int4(input.pixelLayer, input.lod));"
+        in generated_code
+    )
+    assert (
+        "int4 fetchedVolume = volume.Load(int4(input.voxel, input.lod));"
+        in generated_code
+    )
+    assert (
+        "int4 offsetVolume = volume.Load(int4((input.voxel + input.voxelOffset), input.lod));"
+        in generated_code
+    )
+    assert (
+        "float4 cubeColor = cube.Sample(linearSampler, input.direction);"
+        in generated_code
+    )
+    assert "unsupported DirectX texture gather" not in generated_code
+    assert "textureGather(" not in generated_code
+    assert "texelFetch(" not in generated_code
+    assert ".Load(int3(input.pixelLayer" not in generated_code
+    assert ".Load(int3(input.voxel" not in generated_code
+
+
+def test_directx_typed_comparison_texture_operations_use_resource_shape():
+    shader = """
+    shader DirectXTypedComparisonTextures {
+        Texture2D<float> shadow2D : register(t0);
+        Texture2DArray<float> shadowArray : register(t1);
+        TextureCube<float> cubeShadow : register(t2);
+        TextureCubeArray<float> cubeArray : register(t3);
+        sampler compareSampler : register(s0);
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            vec3 direction @ TEXCOORD2;
+            vec4 cubeLayer @ TEXCOORD3;
+            float depth;
+            float lod;
+            vec2 ddx @ TEXCOORD4;
+            vec2 ddy @ TEXCOORD5;
+            vec3 cubeDdx @ TEXCOORD6;
+            vec3 cubeDdy @ TEXCOORD7;
+            ivec2 offset @ TEXCOORD8;
+        };
+
+        float inspectImplicit(
+            Texture2D<float> tex,
+            vec2 uv,
+            float depth,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 offset
+        ) {
+            vec2 lodInfo = textureQueryLod(tex, uv);
+            float cmp = textureCompare(tex, uv, depth);
+            float grad = textureCompareGradOffset(tex, uv, depth, ddx, ddy, offset);
+            return lodInfo.x + lodInfo.y + cmp + grad;
+        }
+
+        float explicitArray(
+            Texture2DArray<float> tex,
+            sampler s,
+            vec3 uvLayer,
+            float depth,
+            float lod,
+            ivec2 offset
+        ) {
+            float cmp = textureCompareLod(tex, s, uvLayer, depth, lod);
+            vec4 gathered = textureGatherCompareOffset(
+                tex, s, uvLayer, depth, offset
+            );
+            return cmp + gathered.x;
+        }
+
+        float explicitCube(
+            TextureCube<float> tex,
+            sampler s,
+            vec3 direction,
+            float depth,
+            float lod,
+            vec3 ddx,
+            vec3 ddy
+        ) {
+            float cmp = textureCompareLod(tex, s, direction, depth, lod);
+            float grad = textureCompareGrad(tex, s, direction, depth, ddx, ddy);
+            return cmp + grad;
+        }
+
+        float unsupportedCubeArrayOffset(
+            TextureCubeArray<float> tex,
+            sampler s,
+            vec4 cubeLayer,
+            float depth,
+            ivec2 offset
+        ) {
+            return textureCompareOffset(tex, s, cubeLayer, depth, offset);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float implicitValue = inspectImplicit(
+                    shadow2D,
+                    input.uv,
+                    input.depth,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+                float arrayValue = explicitArray(
+                    shadowArray,
+                    compareSampler,
+                    input.uvLayer,
+                    input.depth,
+                    input.lod,
+                    input.offset
+                );
+                float cubeValue = explicitCube(
+                    cubeShadow,
+                    compareSampler,
+                    input.direction,
+                    input.depth,
+                    input.lod,
+                    input.cubeDdx,
+                    input.cubeDdy
+                );
+                float diagnosticValue = unsupportedCubeArrayOffset(
+                    cubeArray,
+                    compareSampler,
+                    input.cubeLayer,
+                    input.depth,
+                    input.offset
+                );
+                return vec4(implicitValue + arrayValue + cubeValue + diagnosticValue);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2D<float> shadow2D : register(t0);" in generated_code
+    assert "Texture2DArray<float> shadowArray : register(t1);" in generated_code
+    assert "TextureCube<float> cubeShadow : register(t2);" in generated_code
+    assert "TextureCubeArray<float> cubeArray : register(t3);" in generated_code
+    assert "SamplerComparisonState compareSampler : register(s0);" in generated_code
+    assert "SamplerComparisonState shadow2DSampler : register(s1);" in generated_code
+    assert "SamplerState shadow2DQuerySampler : register(s2);" in generated_code
+    assert (
+        "float inspectImplicit(Texture2D<float> tex, SamplerComparisonState texSampler, "
+        "SamplerState texQuerySampler, float2 uv, float depth, float2 ddx, float2 ddy, "
+        "int2 offset)"
+    ) in generated_code
+    assert (
+        "float2 lodInfo = float2(tex.CalculateLevelOfDetailUnclamped(texQuerySampler, uv), "
+        "tex.CalculateLevelOfDetail(texQuerySampler, uv));"
+    ) in generated_code
+    assert "float cmp = tex.SampleCmp(texSampler, uv, depth);" in generated_code
+    assert (
+        "float grad = tex.SampleCmpGrad(texSampler, uv, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "float explicitArray(Texture2DArray<float> tex, SamplerComparisonState s, "
+        "float3 uvLayer, float depth, float lod, int2 offset)"
+    ) in generated_code
+    assert "float cmp = tex.SampleCmpLevel(s, uvLayer, depth, lod);" in generated_code
+    assert "tex.GatherCmp(s, uvLayer, depth, offset)" in generated_code
+    assert (
+        "float explicitCube(TextureCube<float> tex, SamplerComparisonState s, "
+        "float3 direction, float depth, float lod, float3 ddx, float3 ddy)"
+    ) in generated_code
+    assert "tex.SampleCmpLevel(s, direction, depth, lod)" in generated_code
+    assert "tex.SampleCmpGrad(s, direction, depth, ddx, ddy)" in generated_code
+    assert (
+        "float unsupportedCubeArrayOffset(TextureCubeArray<float> tex, "
+        "SamplerComparisonState s, float4 cubeLayer, float depth, int2 offset)"
+    ) in generated_code
+    assert (
+        "/* unsupported DirectX texture compare: textureCompareOffset offsets require "
+        "2D or 2D-array textures */ 0.0"
+    ) in generated_code
+    assert (
+        "inspectImplicit(shadow2D, shadow2DSampler, shadow2DQuerySampler, input.uv, "
+        "input.depth, input.ddx, input.ddy, input.offset)"
+    ) in generated_code
+    assert (
+        "explicitArray(shadowArray, compareSampler, input.uvLayer, input.depth, "
+        "input.lod, input.offset)"
+    ) in generated_code
+    assert (
+        "explicitCube(cubeShadow, compareSampler, input.direction, input.depth, "
+        "input.lod, input.cubeDdx, input.cubeDdy)"
+    ) in generated_code
+    assert (
+        "unsupportedCubeArrayOffset(cubeArray, compareSampler, input.cubeLayer, "
+        "input.depth, input.offset)"
+    ) in generated_code
+    assert "SamplerState s, float4 cubeLayer" not in generated_code
+    assert "Texture2D<float4> shadow2D" not in generated_code
+    assert "Texture2D shadowArray : register" not in generated_code
+    assert "textureCompare(" not in generated_code
+    assert "textureCompareLod(" not in generated_code
+    assert "textureCompareGrad(" not in generated_code
+    assert "textureGatherCompareOffset(" not in generated_code
+    assert "textureQueryLod(" not in generated_code
 
 
 def test_directx_multisample_image_samples_queries_use_helpers():

@@ -2650,7 +2650,9 @@ class TestHipCodeGen:
         )
         assert (
             "float4 volumeGrad = tex3DGrad<float4>"
-            "(paramVolume, uvw.x, uvw.y, uvw.z, ddx3, ddy3);" in hip_code
+            "(paramVolume, uvw.x, uvw.y, uvw.z, "
+            "make_float4(ddx3.x, ddx3.y, ddx3.z, 0.0f), "
+            "make_float4(ddy3.x, ddy3.y, ddy3.z, 0.0f));" in hip_code
         )
         assert " = texture(" not in hip_code
         assert " = textureLod(" not in hip_code
@@ -2992,6 +2994,141 @@ class TestHipCodeGen:
         assert "textureGatherOffset(" not in hip_code
         assert "textureGatherOffsets(" not in hip_code
 
+    def test_offset_and_projected_texture_calls_emit_hip_diagnostics(self):
+        """Test HIP makes unsupported offset/projected sampled calls explicit."""
+        source_code = """
+        shader Resources {
+            sampler2d colorMap;
+            sampler2dms msTex;
+            sampler2dshadow shadowMap;
+            sampler querySampler;
+
+            void sampleResources(vec2 uv, ivec2 offset) {
+                vec4 offsetSample = textureOffset(colorMap, uv, offset);
+                vec4 lodOffsetSample = textureLodOffset(
+                    colorMap,
+                    uv,
+                    1.0,
+                    offset
+                );
+                vec4 gradOffsetSample = textureGradOffset(
+                    colorMap,
+                    uv,
+                    uv,
+                    uv,
+                    offset
+                );
+                vec4 projected = textureProj(colorMap, vec3(uv, 1.0));
+                vec4 projectedOffset = textureProjOffset(
+                    colorMap,
+                    vec3(uv, 1.0),
+                    offset
+                );
+                vec4 projectedLod = textureProjLod(colorMap, vec3(uv, 1.0), 1.0);
+                vec4 projectedLodOffset = textureProjLodOffset(
+                    colorMap,
+                    vec3(uv, 1.0),
+                    1.0,
+                    offset
+                );
+                vec4 projectedGrad = textureProjGrad(
+                    colorMap,
+                    vec3(uv, 1.0),
+                    uv,
+                    uv
+                );
+                vec4 projectedGradOffset = textureProjGradOffset(
+                    colorMap,
+                    vec3(uv, 1.0),
+                    uv,
+                    uv,
+                    offset
+                );
+                vec4 fetchedOffset = texelFetchOffset(colorMap, offset, 0, offset);
+                vec4 msOffset = texelFetchOffset(msTex, offset, 0, offset);
+                float shadowProjected = textureCompareProj(
+                    shadowMap,
+                    vec4(uv, 0.5, 1.0)
+                );
+                float shadowProjectedLodOffset = textureCompareProjLodOffset(
+                    shadowMap,
+                    vec4(uv, 0.5, 1.0),
+                    1.0,
+                    offset
+                );
+                float shadowLodOffset = textureCompareLodOffset(
+                    shadowMap,
+                    uv,
+                    0.5,
+                    1.0,
+                    offset
+                );
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        sampled_diagnostics = [
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+            "texelFetchOffset",
+        ]
+        for func_name in sampled_diagnostics:
+            assert (
+                f"/* unsupported HIP sampled resource call: "
+                f"{func_name} on sampler2D */ "
+                "make_float4(0.0f, 0.0f, 0.0f, 0.0f)" in hip_code
+            )
+
+        assert (
+            "float4 msOffset = /* unsupported HIP multisample resource call: "
+            "texelFetchOffset on sampler2DMS */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
+        )
+        assert (
+            "float shadowProjected = /* unsupported HIP shadow resource call: "
+            "textureCompareProj on sampler2DShadow */ 0.0f;" in hip_code
+        )
+        assert (
+            "float shadowProjectedLodOffset = "
+            "/* unsupported HIP shadow resource call: "
+            "textureCompareProjLodOffset on sampler2DShadow */ 0.0f;" in hip_code
+        )
+        assert (
+            "float shadowLodOffset = /* unsupported HIP shadow resource call: "
+            "textureCompareLodOffset on sampler2DShadow */ 0.0f;" in hip_code
+        )
+        assert "textureOffset(" not in hip_code
+        assert "textureLodOffset(" not in hip_code
+        assert "textureGradOffset(" not in hip_code
+        assert "textureProj(" not in hip_code
+        assert "textureProjOffset(" not in hip_code
+        assert "textureProjLod(" not in hip_code
+        assert "textureProjLodOffset(" not in hip_code
+        assert "textureProjGrad(" not in hip_code
+        assert "textureProjGradOffset(" not in hip_code
+        assert "texelFetchOffset(" not in hip_code
+        assert "textureCompareProj(" not in hip_code
+        assert "textureCompareProjLodOffset(" not in hip_code
+        assert "textureCompareLodOffset(" not in hip_code
+
     def test_resource_type_keywords_emit_hip_resource_types(self):
         """Test HIP maps all parser resource keywords instead of leaking CrossGL types."""
         source_code = """
@@ -3211,6 +3348,531 @@ class TestHipCodeGen:
         assert "imageLoad(" not in hip_code
         assert "imageStore(" not in hip_code
         assert "CglResourceQueryInfo" not in hip_code
+
+    def test_texture_coordinate_shapes_emit_hip_helpers_or_diagnostics(self):
+        """Test HIP texture sampling rejects known invalid coordinate ranks."""
+        source_code = """
+        shader TextureCoordinateShapes {
+            sampler1d lineTex;
+            sampler1darray lineLayers;
+            sampler2d tex;
+            sampler2darray layers;
+            sampler3d volume;
+            samplercube cubeTex;
+            samplercubearray cubeLayers;
+
+            void sampleShapes(
+                float u,
+                vec2 uv,
+                vec3 uvw,
+                vec4 uvqw,
+                float du,
+                vec2 ddx2,
+                vec2 ddy2,
+                vec3 ddx3,
+                vec3 ddy3,
+                vec4 ddx4,
+                vec4 ddy4
+            ) {
+                vec4 line = texture(lineTex, u);
+                vec4 lineLayer = texture(lineLayers, uv);
+                vec4 color = texture(tex, uv);
+                vec4 colorLod = textureLod(tex, uv, 1.0);
+                vec4 colorGrad = textureGrad(tex, uv, ddx2, ddy2);
+                vec4 layer = texture(layers, uvw);
+                vec4 volumeColor = texture(volume, uvw);
+                vec4 volumeGrad = textureGrad(volume, uvw, ddx3, ddy3);
+                vec4 cube = texture(cubeTex, uvw);
+                vec4 cubeLayer = texture(cubeLayers, uvqw);
+                vec4 badLine = texture(lineTex, uv);
+                vec4 badLineLayer = texture(lineLayers, u);
+                vec4 badTex = texture(tex, u);
+                vec4 badLayer = texture(layers, uv);
+                vec4 badVolume = texture(volume, uv);
+                vec4 badCube = texture(cubeTex, uv);
+                vec4 badCubeArray = texture(cubeLayers, uvw);
+                vec4 badTexLod = textureLod(tex, u, 1.0);
+                vec4 badTexGradCoord = textureGrad(tex, u, ddx2, ddy2);
+                vec4 badTexGradDerivative = textureGrad(tex, uv, du, du);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "float4 line = tex1D<float4>(lineTex, u);" in hip_code
+        assert (
+            "float4 lineLayer = tex1DLayered<float4>(lineLayers, uv.x, uv.y);"
+            in hip_code
+        )
+        assert "float4 color = tex2D<float4>(tex, uv.x, uv.y);" in hip_code
+        assert "float4 colorLod = tex2DLod<float4>(tex, uv.x, uv.y, 1.0);" in hip_code
+        assert (
+            "float4 colorGrad = tex2DGrad<float4>(tex, uv.x, uv.y, ddx2, ddy2);"
+            in hip_code
+        )
+        assert (
+            "float4 layer = tex2DLayered<float4>(layers, uvw.x, uvw.y, uvw.z);"
+            in hip_code
+        )
+        assert (
+            "float4 volumeColor = tex3D<float4>(volume, uvw.x, uvw.y, uvw.z);"
+            in hip_code
+        )
+        assert (
+            "float4 volumeGrad = tex3DGrad<float4>"
+            "(volume, uvw.x, uvw.y, uvw.z, "
+            "make_float4(ddx3.x, ddx3.y, ddx3.z, 0.0f), "
+            "make_float4(ddy3.x, ddy3.y, ddy3.z, 0.0f));" in hip_code
+        )
+        assert (
+            "float4 cube = texCubemap<float4>(cubeTex, uvw.x, uvw.y, uvw.z);"
+            in hip_code
+        )
+        assert (
+            "float4 cubeLayer = texCubemapLayered<float4>"
+            "(cubeLayers, uvqw.x, uvqw.y, uvqw.z, uvqw.w);" in hip_code
+        )
+        for name, func_name, texture_type in (
+            ("badLine", "texture", "sampler1D"),
+            ("badLineLayer", "texture", "sampler1DArray"),
+            ("badTex", "texture", "sampler2D"),
+            ("badLayer", "texture", "sampler2DArray"),
+            ("badVolume", "texture", "sampler3D"),
+            ("badCube", "texture", "samplerCube"),
+            ("badCubeArray", "texture", "samplerCubeArray"),
+            ("badTexLod", "textureLod", "sampler2D"),
+            ("badTexGradCoord", "textureGrad", "sampler2D"),
+        ):
+            assert (
+                f"float4 {name} = /* unsupported HIP sampled resource call: "
+                f"{func_name} coordinate rank on {texture_type} */ "
+                "make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
+            ) in hip_code
+        assert (
+            "float4 badTexGradDerivative = "
+            "/* unsupported HIP sampled resource call: "
+            "textureGrad derivative rank on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
+        )
+        assert "tex1D<float4>(lineTex, uv)" not in hip_code
+        assert "tex1DLayered<float4>(lineLayers, u." not in hip_code
+        assert "tex2D<float4>(tex, u." not in hip_code
+        assert "tex2DLayered<float4>(layers, uv.x, uv.y, uv.z)" not in hip_code
+        assert "tex3D<float4>(volume, uv.x, uv.y, uv.z)" not in hip_code
+        assert "texCubemap<float4>(cubeTex, uv.x, uv.y, uv.z)" not in hip_code
+        assert "texture(" not in hip_code
+        assert "textureLod(" not in hip_code
+        assert "textureGrad(" not in hip_code
+
+    def test_texel_fetch_coordinate_shapes_emit_hip_helpers_or_diagnostics(self):
+        """Test HIP texelFetch lowers only representable coordinate ranks."""
+        source_code = """
+        shader TexelFetchShapes {
+            sampler1d lineTex;
+            sampler1darray lineLayers;
+            sampler2d tex;
+            sampler2darray layers;
+            sampler3d volume;
+
+            void fetchShapes(int x, ivec2 pixel, ivec3 voxel) {
+                vec4 fetchedLine = texelFetch(lineTex, x, 0);
+                vec4 fetchedLineLayer = texelFetch(lineLayers, pixel, 0);
+                vec4 fetched = texelFetch(tex, pixel, 0);
+                vec4 fetchedLayer = texelFetch(layers, voxel, 0);
+                vec4 fetchedVolume = texelFetch(volume, voxel, 0);
+                vec4 badLine = texelFetch(lineTex, pixel, 0);
+                vec4 badLineLayer = texelFetch(lineLayers, x, 0);
+                vec4 badTex = texelFetch(tex, x, 0);
+                vec4 badVolume = texelFetch(volume, pixel, 0);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "float4 fetchedLine = tex1Dfetch<float4>(lineTex, x);" in hip_code
+        assert (
+            "float4 fetchedLineLayer = tex1DLayered<float4>"
+            "(lineLayers, pixel.x, pixel.y);" in hip_code
+        )
+        assert "float4 fetched = tex2D<float4>(tex, pixel.x, pixel.y);" in hip_code
+        assert (
+            "float4 fetchedLayer = tex2DLayered<float4>"
+            "(layers, voxel.x, voxel.y, voxel.z);" in hip_code
+        )
+        assert (
+            "float4 fetchedVolume = tex3D<float4>(volume, voxel.x, voxel.y, voxel.z);"
+            in hip_code
+        )
+        for name, texture_type in (
+            ("badLine", "sampler1D"),
+            ("badLineLayer", "sampler1DArray"),
+            ("badTex", "sampler2D"),
+            ("badVolume", "sampler3D"),
+        ):
+            assert (
+                f"float4 {name} = /* unsupported HIP sampled resource call: "
+                f"texelFetch coordinate rank on {texture_type} */ "
+                "make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
+            ) in hip_code
+        assert "tex1Dfetch<float4>(lineTex, pixel)" not in hip_code
+        assert "tex1DLayered<float4>(lineLayers, x." not in hip_code
+        assert "tex2D<float4>(tex, x." not in hip_code
+        assert "tex3D<float4>(volume, pixel.x, pixel.y, pixel.z)" not in hip_code
+        assert "texelFetch(" not in hip_code
+
+    def test_image_coordinate_shapes_emit_hip_surface_helpers_or_diagnostics(self):
+        """Test HIP imageLoad/imageStore lowers only representable coordinate ranks."""
+        source_code = """
+        shader ImageCoordinateShapes {
+            image2D colorImage;
+            image2DArray layerImage;
+            image3D volumeImage;
+            uimage2D counters;
+            iimage2D signedImage;
+
+            void imageShapes(int x, ivec2 pixel, ivec3 voxel) {
+                vec4 regular = imageLoad(colorImage, pixel);
+                imageStore(colorImage, pixel, regular);
+                vec4 layered = imageLoad(layerImage, voxel);
+                imageStore(layerImage, voxel, layered);
+                vec4 volume = imageLoad(volumeImage, voxel);
+                imageStore(volumeImage, voxel, volume);
+                uint count = imageLoad(counters, pixel);
+                imageStore(counters, pixel, count);
+                int signedValue = imageLoad(signedImage, pixel);
+                imageStore(signedImage, pixel, signedValue);
+                vec4 badRegular = imageLoad(colorImage, x);
+                imageStore(colorImage, x, regular);
+                vec4 badLayer = imageLoad(layerImage, pixel);
+                imageStore(layerImage, pixel, layered);
+                vec4 badVolume = imageLoad(volumeImage, pixel);
+                imageStore(volumeImage, pixel, volume);
+                uint badCounter = imageLoad(counters, x);
+                imageStore(counters, x, count);
+                int badSigned = imageLoad(signedImage, x);
+                imageStore(signedImage, x, signedValue);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert (
+            "float4 regular = cgl_surf2Dread<float4>"
+            "(colorImage, pixel.x * sizeof(float4), pixel.y);" in hip_code
+        )
+        assert (
+            "surf2Dwrite(regular, colorImage, pixel.x * sizeof(float4), pixel.y);"
+            in hip_code
+        )
+        assert (
+            "float4 layered = cgl_surf2DLayeredread<float4>"
+            "(layerImage, voxel.x * sizeof(float4), voxel.y, voxel.z);" in hip_code
+        )
+        assert (
+            "surf2DLayeredwrite(layered, layerImage, "
+            "voxel.x * sizeof(float4), voxel.y, voxel.z);" in hip_code
+        )
+        assert (
+            "float4 volume = cgl_surf3Dread<float4>"
+            "(volumeImage, voxel.x * sizeof(float4), voxel.y, voxel.z);" in hip_code
+        )
+        assert (
+            "unsigned int count = cgl_surf2Dread<uint>"
+            "(counters, pixel.x * sizeof(uint), pixel.y);" in hip_code
+        )
+        assert (
+            "int signedValue = cgl_surf2Dread<int>"
+            "(signedImage, pixel.x * sizeof(int), pixel.y);" in hip_code
+        )
+        assert (
+            "float4 badRegular = /* unsupported HIP image resource call: "
+            "imageLoad coordinate rank on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
+        )
+        assert "imageStore coordinate rank on image2D */ ((void)0);" in hip_code
+        assert (
+            "float4 badLayer = /* unsupported HIP image resource call: "
+            "imageLoad coordinate rank on image2DArray */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
+        )
+        assert "imageStore coordinate rank on image2DArray */ ((void)0);" in hip_code
+        assert (
+            "float4 badVolume = /* unsupported HIP image resource call: "
+            "imageLoad coordinate rank on image3D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
+        )
+        assert "imageStore coordinate rank on image3D */ ((void)0);" in hip_code
+        assert (
+            "unsigned int badCounter = /* unsupported HIP image resource call: "
+            "imageLoad coordinate rank on uimage2D */ 0u;" in hip_code
+        )
+        assert "imageStore coordinate rank on uimage2D */ ((void)0);" in hip_code
+        assert (
+            "int badSigned = /* unsupported HIP image resource call: "
+            "imageLoad coordinate rank on iimage2D */ 0;" in hip_code
+        )
+        assert "imageStore coordinate rank on iimage2D */ ((void)0);" in hip_code
+        assert "cgl_surf2Dread<float4>(colorImage, x." not in hip_code
+        assert (
+            "cgl_surf2DLayeredread<float4>(layerImage, pixel.x, pixel.y, pixel.z)"
+            not in hip_code
+        )
+        assert (
+            "cgl_surf3Dread<float4>(volumeImage, pixel.x, pixel.y, pixel.z)"
+            not in hip_code
+        )
+        assert "imageLoad(" not in hip_code
+        assert "imageStore(" not in hip_code
+
+    def test_1d_and_cube_image_calls_emit_hip_surface_helpers_or_diagnostics(self):
+        """Test HIP lowers 1D, 1D-array, and cube storage image calls."""
+        source_code = """
+        shader ImageSurfaceShapes {
+            image1D lineImage;
+            image1DArray lineLayers;
+            imageCube cubeImage;
+            uimage1D counters;
+            uimage1DArray counterLayers;
+
+            void imageShapes(int x, ivec2 xLayer, ivec3 cubeCoord, ivec2 pixel) {
+                vec4 line = imageLoad(lineImage, x);
+                imageStore(lineImage, x, line);
+                vec4 lineLayer = imageLoad(lineLayers, xLayer);
+                imageStore(lineLayers, xLayer, lineLayer);
+                vec4 cube = imageLoad(cubeImage, cubeCoord);
+                imageStore(cubeImage, cubeCoord, cube);
+                uint count = imageLoad(counters, x);
+                imageStore(counters, x, count);
+                uint layerCount = imageLoad(counterLayers, xLayer);
+                imageStore(counterLayers, xLayer, layerCount);
+                vec4 badLine = imageLoad(lineImage, pixel);
+                imageStore(lineLayers, x, lineLayer);
+                vec4 badCube = imageLoad(cubeImage, pixel);
+                imageStore(cubeImage, pixel, cube);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "hipSurfaceObject_t lineImage;" in hip_code
+        assert "hipSurfaceObject_t lineLayers;" in hip_code
+        assert "hipSurfaceObject_t cubeImage;" in hip_code
+        assert "hipSurfaceObject_t counters;" in hip_code
+        assert "hipSurfaceObject_t counterLayers;" in hip_code
+        assert (
+            "__device__ T cgl_surf1Dread(hipSurfaceObject_t surfObj, int x)" in hip_code
+        )
+        assert (
+            "__device__ T cgl_surf1DLayeredread"
+            "(hipSurfaceObject_t surfObj, int x, int layer)" in hip_code
+        )
+        assert (
+            "__device__ T cgl_surfCubemapread"
+            "(hipSurfaceObject_t surfObj, int x, int y, int face)" in hip_code
+        )
+        assert (
+            "float4 line = cgl_surf1Dread<float4>"
+            "(lineImage, x * sizeof(float4));" in hip_code
+        )
+        assert "surf1Dwrite(line, lineImage, x * sizeof(float4));" in hip_code
+        assert (
+            "float4 lineLayer = cgl_surf1DLayeredread<float4>"
+            "(lineLayers, xLayer.x * sizeof(float4), xLayer.y);" in hip_code
+        )
+        assert (
+            "surf1DLayeredwrite(lineLayer, lineLayers, "
+            "xLayer.x * sizeof(float4), xLayer.y);" in hip_code
+        )
+        assert (
+            "float4 cube = cgl_surfCubemapread<float4>"
+            "(cubeImage, cubeCoord.x * sizeof(float4), cubeCoord.y, "
+            "cubeCoord.z);" in hip_code
+        )
+        assert (
+            "surfCubemapwrite(cube, cubeImage, cubeCoord.x * sizeof(float4), "
+            "cubeCoord.y, cubeCoord.z);" in hip_code
+        )
+        assert (
+            "unsigned int count = cgl_surf1Dread<uint>"
+            "(counters, x * sizeof(uint));" in hip_code
+        )
+        assert "surf1Dwrite(count, counters, x * sizeof(uint));" in hip_code
+        assert (
+            "unsigned int layerCount = cgl_surf1DLayeredread<uint>"
+            "(counterLayers, xLayer.x * sizeof(uint), xLayer.y);" in hip_code
+        )
+        assert (
+            "surf1DLayeredwrite(layerCount, counterLayers, "
+            "xLayer.x * sizeof(uint), xLayer.y);" in hip_code
+        )
+        assert (
+            "float4 badLine = /* unsupported HIP image resource call: "
+            "imageLoad coordinate rank on image1D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
+        )
+        assert "imageStore coordinate rank on image1DArray */ ((void)0);" in hip_code
+        assert (
+            "float4 badCube = /* unsupported HIP image resource call: "
+            "imageLoad coordinate rank on imageCube */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
+        )
+        assert "imageStore coordinate rank on imageCube */ ((void)0);" in hip_code
+        assert "image1D lineImage" not in hip_code
+        assert "image1DArray lineLayers" not in hip_code
+        assert "uimage1D counters" not in hip_code
+        assert "imageLoad(" not in hip_code
+        assert "imageStore(" not in hip_code
+
+    def test_cube_array_image_ir_calls_emit_hip_surface_helpers_or_diagnostics(self):
+        """Test HIP lowers cube-array storage image IR shapes."""
+        cube_array_ast = ShaderNode(
+            "CubeArrayImages",
+            ExecutionModel.COMPUTE_KERNEL,
+            global_variables=[
+                VariableNode("cubeLayers", PrimitiveType("imageCubeArray")),
+                VariableNode("cubeCounters", PrimitiveType("uimageCubeArray")),
+            ],
+            functions=[
+                FunctionNode(
+                    "useCubeArrays",
+                    PrimitiveType("void"),
+                    [],
+                    [
+                        VariableNode("coord", PrimitiveType("ivec4")),
+                        VariableNode("badCoord", PrimitiveType("ivec3")),
+                        VariableNode(
+                            "cubeLayer",
+                            PrimitiveType("vec4"),
+                            FunctionCallNode(
+                                IdentifierNode("imageLoad"),
+                                [IdentifierNode("cubeLayers"), IdentifierNode("coord")],
+                            ),
+                        ),
+                        FunctionCallNode(
+                            IdentifierNode("imageStore"),
+                            [
+                                IdentifierNode("cubeLayers"),
+                                IdentifierNode("coord"),
+                                IdentifierNode("cubeLayer"),
+                            ],
+                        ),
+                        VariableNode(
+                            "counter",
+                            PrimitiveType("uint"),
+                            FunctionCallNode(
+                                IdentifierNode("imageLoad"),
+                                [
+                                    IdentifierNode("cubeCounters"),
+                                    IdentifierNode("coord"),
+                                ],
+                            ),
+                        ),
+                        FunctionCallNode(
+                            IdentifierNode("imageStore"),
+                            [
+                                IdentifierNode("cubeCounters"),
+                                IdentifierNode("coord"),
+                                IdentifierNode("counter"),
+                            ],
+                        ),
+                        VariableNode(
+                            "badLayer",
+                            PrimitiveType("vec4"),
+                            FunctionCallNode(
+                                IdentifierNode("imageLoad"),
+                                [
+                                    IdentifierNode("cubeLayers"),
+                                    IdentifierNode("badCoord"),
+                                ],
+                            ),
+                        ),
+                        FunctionCallNode(
+                            IdentifierNode("imageStore"),
+                            [
+                                IdentifierNode("cubeLayers"),
+                                IdentifierNode("badCoord"),
+                                IdentifierNode("cubeLayer"),
+                            ],
+                        ),
+                    ],
+                    qualifiers=["compute"],
+                )
+            ],
+        )
+
+        hip_code = HipCodeGen().generate(cube_array_ast)
+
+        assert "hipSurfaceObject_t cubeLayers;" in hip_code
+        assert "hipSurfaceObject_t cubeCounters;" in hip_code
+        assert (
+            "__device__ T cgl_surfCubemapLayeredread"
+            "(hipSurfaceObject_t surfObj, int x, int y, int face, int layer)"
+            in hip_code
+        )
+        assert (
+            "float4 cubeLayer = cgl_surfCubemapLayeredread<float4>"
+            "(cubeLayers, coord.x * sizeof(float4), coord.y, coord.z, "
+            "coord.w);" in hip_code
+        )
+        assert (
+            "surfCubemapLayeredwrite(cubeLayer, cubeLayers, "
+            "coord.x * sizeof(float4), coord.y, coord.z, coord.w);" in hip_code
+        )
+        assert (
+            "unsigned int counter = cgl_surfCubemapLayeredread<uint>"
+            "(cubeCounters, coord.x * sizeof(uint), coord.y, coord.z, "
+            "coord.w);" in hip_code
+        )
+        assert (
+            "surfCubemapLayeredwrite(counter, cubeCounters, "
+            "coord.x * sizeof(uint), coord.y, coord.z, coord.w);" in hip_code
+        )
+        assert (
+            "float4 badLayer = /* unsupported HIP image resource call: "
+            "imageLoad coordinate rank on imageCubeArray */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
+        )
+        assert "imageStore coordinate rank on imageCubeArray */ ((void)0);" in hip_code
+        assert "imageCubeArray cubeLayers" not in hip_code
+        assert "uimageCubeArray cubeCounters" not in hip_code
+        assert "imageLoad(" not in hip_code
+        assert "imageStore(" not in hip_code
 
     def test_nested_resource_arrays_emit_hip_texture_and_surface_calls(self):
         """Test HIP preserves nested resource-array indices in resource calls."""
@@ -5765,6 +6427,909 @@ class TestHipCodeGen:
         assert "return (outer.inner.values[slot] + outer.scale);" in hip_code
         assert "float value = mutateReturnedLocalControl(1);" in hip_code
 
+    def test_structured_and_byte_address_buffers_emit_hip_pointer_helpers(self):
+        """Test HIP lowers buffer resource aliases to pointer access/helpers."""
+        source_code = """
+        shader HIPBufferResources {
+            struct Particle {
+                float weight;
+            };
+
+            StructuredBuffer<int> input;
+            RWStructuredBuffer<int> values;
+            RWStructuredBuffer<Particle> particles;
+            StructuredBuffer<uint> readonlyCounts[2];
+            ByteAddressBuffer readBytes;
+            RWByteAddressBuffer writeBytes;
+            RWByteAddressBuffer byteBuffers[2];
+
+            void process(
+                StructuredBuffer<float> inputValues,
+                RWStructuredBuffer<float> outputValues,
+                ByteAddressBuffer paramRead,
+                RWByteAddressBuffer paramWrite,
+                uint index,
+                uint which,
+                float value,
+                Particle p,
+                uint rawValue,
+                uint2 pair,
+                uint3 triple,
+                uint4 quad
+            ) {
+                int g = input.Load(index);
+                values.Store(index, g);
+                values[index] = g + 1;
+                int loadedWrite = values[index];
+                float localValue = buffer_load(inputValues, index);
+                buffer_store(outputValues, index, localValue + value);
+                Particle particleValue = particles.Load(index);
+                particles.Store(index, p);
+                uint count = readonlyCounts[which].Load(index);
+                uint raw = readBytes.Load(index);
+                uint2 rawPair = paramRead.Load2(index + 4u);
+                uint3 rawTriple = byteBuffers[which].Load3(index);
+                uint4 rawQuad = writeBytes.Load4(index);
+                uint rawGeneric = buffer_load(paramRead, index);
+                writeBytes.Store(index, rawValue);
+                paramWrite.Store2(index, pair);
+                byteBuffers[which].Store3(index, triple);
+                writeBytes.Store4(index, quad);
+                buffer_store(paramWrite, index, rawGeneric);
+            }
+
+            void rejectReadOnlyStores(
+                StructuredBuffer<int> readOnly,
+                ByteAddressBuffer readOnlyBytes,
+                uint index,
+                int value,
+                uint rawValue
+            ) {
+                readOnly.Store(index, value);
+                buffer_store(readOnly, index, value);
+                readOnlyBytes.Store(index, rawValue);
+                buffer_store(readOnlyBytes, index, rawValue);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "const int* input;" in hip_code
+        assert "int* values;" in hip_code
+        assert "Particle* particles;" in hip_code
+        assert "const unsigned int* readonlyCounts[2];" in hip_code
+        assert "const unsigned char* readBytes;" in hip_code
+        assert "unsigned char* writeBytes;" in hip_code
+        assert "unsigned char* byteBuffers[2];" in hip_code
+        assert (
+            "__device__ void process(const float* inputValues, float* outputValues, "
+            "const unsigned char* paramRead, unsigned char* paramWrite, "
+            "unsigned int index, unsigned int which, float value, Particle p, "
+            "unsigned int rawValue, uint2 pair, uint3 triple, uint4 quad)"
+        ) in hip_code
+        assert "int g = input[index];" in hip_code
+        assert "values[index] = g;" in hip_code
+        assert "values[index] = (g + 1);" in hip_code
+        assert "int loadedWrite = values[index];" in hip_code
+        assert "float localValue = inputValues[index];" in hip_code
+        assert "outputValues[index] = (localValue + value);" in hip_code
+        assert "Particle particleValue = particles[index];" in hip_code
+        assert "particles[index] = p;" in hip_code
+        assert "unsigned int count = readonlyCounts[which][index];" in hip_code
+        assert (
+            "__device__ inline uint cgl_byte_address_load_uint"
+            "(const unsigned char* buffer, uint offset)"
+        ) in hip_code
+        assert "return *reinterpret_cast<const uint*>(buffer + offset);" in hip_code
+        assert (
+            "__device__ inline uint4 cgl_byte_address_load_uint4"
+            "(const unsigned char* buffer, uint offset)"
+        ) in hip_code
+        assert (
+            "__device__ inline void cgl_byte_address_store_uint4"
+            "(unsigned char* buffer, uint offset, uint4 value)"
+        ) in hip_code
+        assert "unsigned int raw = cgl_byte_address_load_uint(readBytes, index);" in (
+            hip_code
+        )
+        assert (
+            "uint2 rawPair = cgl_byte_address_load_uint2(paramRead, (index + 4u));"
+            in hip_code
+        )
+        assert (
+            "uint3 rawTriple = cgl_byte_address_load_uint3(byteBuffers[which], index);"
+            in hip_code
+        )
+        assert (
+            "uint4 rawQuad = cgl_byte_address_load_uint4(writeBytes, index);"
+            in hip_code
+        )
+        assert (
+            "unsigned int rawGeneric = cgl_byte_address_load_uint(paramRead, index);"
+            in hip_code
+        )
+        assert "cgl_byte_address_store_uint(writeBytes, index, rawValue);" in hip_code
+        assert "cgl_byte_address_store_uint2(paramWrite, index, pair);" in hip_code
+        assert (
+            "cgl_byte_address_store_uint3(byteBuffers[which], index, triple);"
+            in hip_code
+        )
+        assert "cgl_byte_address_store_uint4(writeBytes, index, quad);" in hip_code
+        assert "cgl_byte_address_store_uint(paramWrite, index, rawGeneric);" in hip_code
+        assert (
+            "/* unsupported HIP structured buffer call: "
+            "Store on StructuredBuffer<int> */ ((void)0);" in hip_code
+        )
+        assert (
+            "/* unsupported HIP structured buffer call: "
+            "buffer_store on StructuredBuffer<int> */ ((void)0);" in hip_code
+        )
+        assert (
+            "/* unsupported HIP byte-address buffer call: "
+            "Store on ByteAddressBuffer */ ((void)0);" in hip_code
+        )
+        assert (
+            "/* unsupported HIP byte-address buffer call: "
+            "buffer_store on ByteAddressBuffer */ ((void)0);" in hip_code
+        )
+        for raw_type in [
+            "StructuredBuffer<int> input;",
+            "StructuredBuffer<float> inputValues",
+            "RWStructuredBuffer<int> values;",
+            "RWStructuredBuffer<float> outputValues",
+            "ByteAddressBuffer readBytes",
+            "RWByteAddressBuffer writeBytes",
+        ]:
+            assert raw_type not in hip_code
+        assert ".Load(" not in hip_code
+        assert ".Store(" not in hip_code
+        assert "buffer_load(" not in hip_code
+        assert "buffer_store(" not in hip_code
+
+    def test_structured_buffer_dimensions_emit_hip_length_sidecars(self):
+        """Test HIP lowers structured-buffer dimensions through length sidecars."""
+        source_code = """
+        shader StructuredBufferDimensionsHIP {
+            RWStructuredBuffer<int> values;
+            StructuredBuffer<uint> readonlyCounts[2];
+
+            uint countOne(StructuredBuffer<uint> input) {
+                return buffer_dimensions(input);
+            }
+
+            uint countInner(RWStructuredBuffer<int> localValues, uint index) {
+                uint len = buffer_dimensions(localValues);
+                return len + index;
+            }
+
+            uint countValues(RWStructuredBuffer<int> localValues) {
+                uint len;
+                buffer_dimensions(localValues, len);
+                return countInner(localValues, 0);
+            }
+
+            void process(uint which) {
+                uint globalLen = buffer_dimensions(values);
+                uint arrayLen;
+                buffer_dimensions(readonlyCounts[which], arrayLen);
+                values.GetDimensions(globalLen);
+                uint helperLen = countValues(values);
+                uint oneLen = countOne(readonlyCounts[which]);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "int* values;" in hip_code
+        assert "const uint* values_length;" in hip_code
+        assert "const unsigned int* readonlyCounts[2];" in hip_code
+        assert "const uint* readonlyCounts_length[2];" in hip_code
+        assert (
+            "__device__ unsigned int countOne(const unsigned int* input, "
+            "const uint* input_length)"
+        ) in hip_code
+        assert (
+            "__device__ unsigned int countInner(int* localValues, "
+            "const uint* localValues_length, unsigned int index)"
+        ) in hip_code
+        assert (
+            "__device__ unsigned int countValues(int* localValues, "
+            "const uint* localValues_length)"
+        ) in hip_code
+        assert "return input_length[0];" in hip_code
+        assert "unsigned int len = localValues_length[0];" in hip_code
+        assert "len = localValues_length[0];" in hip_code
+        assert "return countInner(localValues, localValues_length, 0);" in hip_code
+        assert "unsigned int globalLen = values_length[0];" in hip_code
+        assert "arrayLen = readonlyCounts_length[which][0];" in hip_code
+        assert "globalLen = values_length[0];" in hip_code
+        assert "unsigned int helperLen = countValues(values, values_length);" in (
+            hip_code
+        )
+        assert (
+            "unsigned int oneLen = countOne("
+            "readonlyCounts[which], readonlyCounts_length[which]);"
+        ) in hip_code
+        assert "buffer_dimensions(" not in hip_code
+        assert ".GetDimensions(" not in hip_code
+
+    def test_byte_address_buffer_dimensions_emit_hip_length_sidecars(self, tmp_path):
+        """Test HIP lowers byte-address dimensions through byte-length sidecars."""
+        source_code = """
+        shader ByteAddressBufferDimensionsHIP {
+            ByteAddressBuffer rawBytes;
+            RWByteAddressBuffer rawOutput;
+            RWByteAddressBuffer rawArray[2];
+
+            uint countRaw(ByteAddressBuffer input) {
+                return buffer_dimensions(input);
+            }
+
+            uint countOutput(RWByteAddressBuffer output) {
+                uint count;
+                output.GetDimensions(count);
+                return count;
+            }
+
+            void process(uint which) {
+                uint globalBytes = buffer_dimensions(rawBytes);
+                uint writtenBytes;
+                buffer_dimensions(rawOutput, writtenBytes);
+                uint arrayBytes;
+                rawArray[which].GetDimensions(arrayBytes);
+                uint directBytes = rawOutput.GetDimensions();
+                uint helperBytes = countRaw(rawBytes);
+                uint helperArrayBytes = countOutput(rawArray[which]);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "const unsigned char* rawBytes;" in hip_code
+        assert "const uint* rawBytes_length;" in hip_code
+        assert "unsigned char* rawOutput;" in hip_code
+        assert "const uint* rawOutput_length;" in hip_code
+        assert "unsigned char* rawArray[2];" in hip_code
+        assert "const uint* rawArray_length[2];" in hip_code
+        assert (
+            "__device__ unsigned int countRaw(const unsigned char* input, "
+            "const uint* input_length)"
+        ) in hip_code
+        assert (
+            "__device__ unsigned int countOutput(unsigned char* output, "
+            "const uint* output_length)"
+        ) in hip_code
+        assert "return input_length[0];" in hip_code
+        assert "count = output_length[0];" in hip_code
+        assert "unsigned int globalBytes = rawBytes_length[0];" in hip_code
+        assert "writtenBytes = rawOutput_length[0];" in hip_code
+        assert "arrayBytes = rawArray_length[which][0];" in hip_code
+        assert "unsigned int directBytes = rawOutput_length[0];" in hip_code
+        assert "unsigned int helperBytes = countRaw(rawBytes, rawBytes_length);" in (
+            hip_code
+        )
+        assert (
+            "unsigned int helperArrayBytes = countOutput("
+            "rawArray[which], rawArray_length[which]);"
+        ) in hip_code
+        assert "buffer_dimensions(" not in hip_code
+        assert ".GetDimensions(" not in hip_code
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    def test_append_consume_structured_buffers_emit_hip_counter_helpers(self, tmp_path):
+        """Test HIP lowers append/consume buffers through explicit counters."""
+        source_code = """
+        shader AppendConsumeHIP {
+            struct Particle {
+                float weight;
+            };
+
+            AppendStructuredBuffer<Particle> appendParticles;
+            ConsumeStructuredBuffer<Particle> consumeParticles;
+            AppendStructuredBuffer<Particle> appendQueues[2];
+
+            void helper(
+                AppendStructuredBuffer<Particle> outParticles,
+                ConsumeStructuredBuffer<Particle> inParticles,
+                Particle p
+            ) {
+                outParticles.Append(p);
+                Particle q = inParticles.Consume();
+                buffer_append(outParticles, q);
+                Particle r = buffer_consume(inParticles);
+            }
+
+            void process(uint which, Particle p) {
+                appendParticles.Append(p);
+                buffer_append(appendQueues[which], p);
+                Particle a = consumeParticles.Consume();
+                Particle b = buffer_consume(consumeParticles);
+                uint appendLen = buffer_dimensions(appendParticles);
+                helper(appendParticles, consumeParticles, b);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "Particle* appendParticles;" in hip_code
+        assert "const uint* appendParticles_length;" in hip_code
+        assert "uint* appendParticles_counter;" in hip_code
+        assert "const Particle* consumeParticles;" in hip_code
+        assert "uint* consumeParticles_counter;" in hip_code
+        assert "Particle* appendQueues[2];" in hip_code
+        assert "uint* appendQueues_counter[2];" in hip_code
+        assert (
+            "__device__ void helper(Particle* outParticles, "
+            "uint* outParticles_counter, const Particle* inParticles, "
+            "uint* inParticles_counter, Particle p)"
+        ) in hip_code
+        assert (
+            "template <typename T>\n"
+            "__device__ inline void cgl_append_structured_buffer"
+            "(T* buffer, uint* counter, const T& value)"
+        ) in hip_code
+        assert (
+            "template <typename T>\n"
+            "__device__ inline T cgl_consume_structured_buffer"
+            "(const T* buffer, uint* counter)"
+        ) in hip_code
+        assert "uint index = atomicAdd(counter, 1u);" in hip_code
+        assert "uint index = atomicSub(counter, 1u) - 1u;" in hip_code
+        assert (
+            "cgl_append_structured_buffer("
+            "appendParticles, appendParticles_counter, p);"
+        ) in hip_code
+        assert (
+            "cgl_append_structured_buffer("
+            "appendQueues[which], appendQueues_counter[which], p);"
+        ) in hip_code
+        assert (
+            "Particle a = cgl_consume_structured_buffer("
+            "consumeParticles, consumeParticles_counter);"
+        ) in hip_code
+        assert (
+            "Particle b = cgl_consume_structured_buffer("
+            "consumeParticles, consumeParticles_counter);"
+        ) in hip_code
+        assert "unsigned int appendLen = appendParticles_length[0];" in hip_code
+        assert (
+            "helper(appendParticles, appendParticles_counter, consumeParticles, "
+            "consumeParticles_counter, b);"
+        ) in hip_code
+        assert "AppendStructuredBuffer<" not in hip_code
+        assert "ConsumeStructuredBuffer<" not in hip_code
+        assert ".Append(" not in hip_code
+        assert ".Consume(" not in hip_code
+        assert "buffer_append(" not in hip_code
+        assert "buffer_consume(" not in hip_code
+        assert "buffer_dimensions(" not in hip_code
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    def test_structured_buffer_element_atomics_emit_hip_pointer_atomics(self, tmp_path):
+        """Test HIP atomics on RWStructuredBuffer scalar element lvalues."""
+        source_code = """
+        shader StructuredBufferAtomicsHIP {
+            struct Particle {
+                uint counter;
+                float weight;
+            };
+
+            StructuredBuffer<uint> readonlyCounts;
+            RWStructuredBuffer<uint> counters;
+            RWStructuredBuffer<int> signedCounters;
+            RWStructuredBuffer<uint2> vectorCounters;
+            RWStructuredBuffer<Particle> particles;
+            RWStructuredBuffer<uint> counterArrays[2];
+
+            void process(uint index, uint which, uint value, int signedValue) {
+                uint oldAdd = atomicAdd(counters[index], value);
+                uint oldSub = atomicSub(counters[index], value);
+                uint oldMin = atomicMin(counters[index], value);
+                uint oldMax = atomicMax(counters[index], value);
+                uint oldAnd = atomicAnd(counters[index], value);
+                uint oldOr = atomicOr(counters[index], value);
+                uint oldXor = atomicXor(counters[index], value);
+                uint oldExchange = atomicExchange(counters[index], value);
+                uint oldCas = atomicCompareExchange(counters[index], oldAdd, value);
+                uint oldComp = atomicCompSwap(
+                    counterArrays[which][index],
+                    oldMin,
+                    value
+                );
+                uint oldMember = atomicAdd(particles[index].counter, value);
+                int oldSigned = atomicAdd(signedCounters[index], signedValue);
+                int oldSignedSub = atomicSub(signedCounters[index], signedValue);
+                int oldSignedAnd = atomicAnd(signedCounters[index], signedValue);
+                int oldSignedOr = atomicOr(signedCounters[index], signedValue);
+                int oldSignedXor = atomicXor(signedCounters[index], signedValue);
+                int oldSignedCas = atomicCompareExchange(
+                    signedCounters[index],
+                    oldSigned,
+                    signedValue
+                );
+                uint readOnlyOld = atomicAdd(readonlyCounts[index], value);
+                uint2 vectorOld = atomicAdd(vectorCounters[index], uint2(1u, 2u));
+                uint badAdd = atomicAdd(counters[index]);
+                uint badCas = atomicCompareExchange(counters[index], oldAdd);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "const unsigned int* readonlyCounts;" in hip_code
+        assert "unsigned int* counters;" in hip_code
+        assert "int* signedCounters;" in hip_code
+        assert "uint2* vectorCounters;" in hip_code
+        assert "Particle* particles;" in hip_code
+        assert "unsigned int* counterArrays[2];" in hip_code
+        assert "unsigned int oldAdd = atomicAdd(&counters[index], value);" in hip_code
+        assert "unsigned int oldSub = atomicSub(&counters[index], value);" in hip_code
+        assert "unsigned int oldMin = atomicMin(&counters[index], value);" in hip_code
+        assert "unsigned int oldMax = atomicMax(&counters[index], value);" in hip_code
+        assert "unsigned int oldAnd = atomicAnd(&counters[index], value);" in hip_code
+        assert "unsigned int oldOr = atomicOr(&counters[index], value);" in hip_code
+        assert "unsigned int oldXor = atomicXor(&counters[index], value);" in hip_code
+        assert (
+            "unsigned int oldExchange = atomicExch(&counters[index], value);"
+            in hip_code
+        )
+        assert (
+            "unsigned int oldCas = atomicCAS(&counters[index], oldAdd, value);"
+            in hip_code
+        )
+        assert (
+            "unsigned int oldComp = atomicCAS("
+            "&counterArrays[which][index], oldMin, value);"
+        ) in hip_code
+        assert (
+            "unsigned int oldMember = atomicAdd(&particles[index].counter, value);"
+            in hip_code
+        )
+        assert (
+            "int oldSigned = atomicAdd(&signedCounters[index], signedValue);"
+            in hip_code
+        )
+        assert (
+            "int oldSignedSub = atomicSub(&signedCounters[index], signedValue);"
+            in hip_code
+        )
+        assert (
+            "int oldSignedAnd = atomicAnd(&signedCounters[index], signedValue);"
+            in hip_code
+        )
+        assert (
+            "int oldSignedOr = atomicOr(&signedCounters[index], signedValue);"
+            in hip_code
+        )
+        assert (
+            "int oldSignedXor = atomicXor(&signedCounters[index], signedValue);"
+            in hip_code
+        )
+        assert (
+            "int oldSignedCas = atomicCAS(&signedCounters[index], oldSigned, "
+            "signedValue);" in hip_code
+        )
+        assert (
+            "unsigned int readOnlyOld = /* unsupported HIP structured buffer "
+            "atomic: atomicAdd on StructuredBuffer<uint> requires "
+            "RWStructuredBuffer target */ 0u;" in hip_code
+        )
+        assert (
+            "uint2 vectorOld = /* unsupported HIP structured buffer atomic: "
+            "atomicAdd on RWStructuredBuffer<uint2> requires supported scalar "
+            "int/uint/float target */ make_uint2(0u, 0u);" in hip_code
+        )
+        assert (
+            "unsigned int badAdd = /* unsupported HIP structured buffer atomic: "
+            "atomicAdd on RWStructuredBuffer<uint> requires 2 argument(s) */ 0u;"
+            in hip_code
+        )
+        assert (
+            "unsigned int badCas = /* unsupported HIP structured buffer atomic: "
+            "atomicCompareExchange on RWStructuredBuffer<uint> requires "
+            "3 argument(s) */ 0u;" in hip_code
+        )
+        assert "atomicExchange(" not in hip_code
+        assert "atomicCompareExchange(" not in hip_code
+        assert "atomicCompSwap(" not in hip_code
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    def test_float_structured_buffer_add_and_exchange_atomics_emit_hip_atomics(
+        self, tmp_path
+    ):
+        """Test HIP supports float add/exchange atomics on RWStructuredBuffer."""
+        source_code = """
+        shader FloatStructuredBufferAtomicsHIP {
+            RWStructuredBuffer<float> values;
+
+            void process(uint index, float value) {
+                float oldAdd = atomicAdd(values[index], value);
+                float oldExchange = atomicExchange(values[index], value);
+                float oldMin = atomicMin(values[index], value);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "float* values;" in hip_code
+        assert "float oldAdd = atomicAdd(&values[index], value);" in hip_code
+        assert "float oldExchange = atomicExch(&values[index], value);" in hip_code
+        assert (
+            "float oldMin = /* unsupported HIP structured buffer atomic: "
+            "atomicMin on RWStructuredBuffer<float> requires supported scalar "
+            "int/uint target */ 0.0f;" in hip_code
+        )
+        assert "float oldAdd = /* unsupported HIP structured buffer atomic" not in (
+            hip_code
+        )
+        assert (
+            "float oldExchange = /* unsupported HIP structured buffer atomic"
+            not in hip_code
+        )
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    def test_uint_structured_buffer_inc_dec_emit_hip_bounded_atomics(self, tmp_path):
+        """Test HIP emits native bounded inc/dec atomics only for uint buffers."""
+        source_code = """
+        shader BoundedStructuredBufferAtomicsHIP {
+            RWStructuredBuffer<uint> counters;
+            RWStructuredBuffer<int> signedCounters;
+            RWStructuredBuffer<float> floatCounters;
+
+            void process(uint index, uint limit, int signedLimit, float floatLimit) {
+                uint oldInc = atomicInc(counters[index], limit);
+                uint oldDec = atomicDec(counters[index], limit);
+                int signedInc = atomicInc(signedCounters[index], signedLimit);
+                float floatDec = atomicDec(floatCounters[index], floatLimit);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "unsigned int* counters;" in hip_code
+        assert "int* signedCounters;" in hip_code
+        assert "float* floatCounters;" in hip_code
+        assert "unsigned int oldInc = atomicInc(&counters[index], limit);" in hip_code
+        assert "unsigned int oldDec = atomicDec(&counters[index], limit);" in hip_code
+        assert (
+            "int signedInc = /* unsupported HIP structured buffer atomic: "
+            "atomicInc on RWStructuredBuffer<int> requires supported scalar "
+            "uint target */ 0;" in hip_code
+        )
+        assert (
+            "float floatDec = /* unsupported HIP structured buffer atomic: "
+            "atomicDec on RWStructuredBuffer<float> requires supported scalar "
+            "uint target */ 0.0f;" in hip_code
+        )
+        assert "atomicAdd(&counters[index], limit)" not in hip_code
+        assert "atomicSub(&counters[index], limit)" not in hip_code
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    def test_byte_address_buffer_atomics_emit_hip_atomic_helpers(self, tmp_path):
+        """Test HIP lowers RWByteAddressBuffer interlocked operations."""
+        source_code = """
+        shader HIPByteAddressBufferAtomics {
+            ByteAddressBuffer readBytes;
+            RWByteAddressBuffer writeBytes;
+            RWByteAddressBuffer byteBuffers[2];
+
+            uint helper(RWByteAddressBuffer output, uint offset, uint value) {
+                uint oldValue = output.InterlockedAdd(offset, value);
+                uint original;
+                output.InterlockedExchange(offset, oldValue, original);
+                return original;
+            }
+
+            void process(uint offset, uint which, uint value, uint compare) {
+                uint oldAdd;
+                writeBytes.InterlockedAdd(offset, value, oldAdd);
+                uint oldMin = writeBytes.InterlockedMin(offset, value);
+                uint oldMax = writeBytes.InterlockedMax(offset, value);
+                uint oldAnd = writeBytes.InterlockedAnd(offset, value);
+                uint oldOr = writeBytes.InterlockedOr(offset, value);
+                uint oldXor = writeBytes.InterlockedXor(offset, value);
+                uint oldExchange = writeBytes.InterlockedExchange(offset, value);
+                uint oldCas;
+                writeBytes.InterlockedCompareExchange(
+                    offset,
+                    compare,
+                    value,
+                    oldCas
+                );
+                uint oldCasExpr = byteBuffers[which].InterlockedCompareExchange(
+                    offset,
+                    oldCas,
+                    value
+                );
+                uint helperOld = helper(byteBuffers[which], offset, value);
+                readBytes.InterlockedAdd(offset, value, oldAdd);
+            }
+
+            void rejectMalformed(uint offset, uint value) {
+                writeBytes.InterlockedAdd(offset);
+                uint badCas = writeBytes.InterlockedCompareExchange(offset, value);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "const unsigned char* readBytes;" in hip_code
+        assert "unsigned char* writeBytes;" in hip_code
+        assert "unsigned char* byteBuffers[2];" in hip_code
+        assert (
+            "__device__ unsigned int helper(unsigned char* output, "
+            "unsigned int offset, unsigned int value)"
+        ) in hip_code
+        assert (
+            "__device__ inline uint cgl_byte_address_atomic_add_uint"
+            "(unsigned char* buffer, uint offset, uint value)"
+        ) in hip_code
+        assert (
+            "return atomicAdd(reinterpret_cast<unsigned int*>(buffer + offset), "
+            "value);" in hip_code
+        )
+        assert "return atomicMin(reinterpret_cast<unsigned int*>(" in hip_code
+        assert "return atomicMax(reinterpret_cast<unsigned int*>(" in hip_code
+        assert "return atomicAnd(reinterpret_cast<unsigned int*>(" in hip_code
+        assert "return atomicOr(reinterpret_cast<unsigned int*>(" in hip_code
+        assert "return atomicXor(reinterpret_cast<unsigned int*>(" in hip_code
+        assert "return atomicExch(reinterpret_cast<unsigned int*>(" in hip_code
+        assert (
+            "__device__ inline uint cgl_byte_address_atomic_compare_exchange_uint"
+            "(unsigned char* buffer, uint offset, uint compare_value, uint value)"
+            in hip_code
+        )
+        assert (
+            "return atomicCAS(reinterpret_cast<unsigned int*>(buffer + offset), "
+            "compare_value, value);" in hip_code
+        )
+        assert (
+            "unsigned int oldValue = cgl_byte_address_atomic_add_uint("
+            "output, offset, value);"
+        ) in hip_code
+        assert (
+            "original = cgl_byte_address_atomic_exchange_uint("
+            "output, offset, oldValue);"
+        ) in hip_code
+        assert (
+            "oldAdd = cgl_byte_address_atomic_add_uint(writeBytes, offset, value);"
+            in hip_code
+        )
+        assert (
+            "unsigned int oldMin = cgl_byte_address_atomic_min_uint("
+            "writeBytes, offset, value);"
+        ) in hip_code
+        assert (
+            "unsigned int oldMax = cgl_byte_address_atomic_max_uint("
+            "writeBytes, offset, value);"
+        ) in hip_code
+        assert (
+            "unsigned int oldAnd = cgl_byte_address_atomic_and_uint("
+            "writeBytes, offset, value);"
+        ) in hip_code
+        assert (
+            "unsigned int oldOr = cgl_byte_address_atomic_or_uint("
+            "writeBytes, offset, value);"
+        ) in hip_code
+        assert (
+            "unsigned int oldXor = cgl_byte_address_atomic_xor_uint("
+            "writeBytes, offset, value);"
+        ) in hip_code
+        assert (
+            "unsigned int oldExchange = cgl_byte_address_atomic_exchange_uint("
+            "writeBytes, offset, value);"
+        ) in hip_code
+        assert (
+            "oldCas = cgl_byte_address_atomic_compare_exchange_uint("
+            "writeBytes, offset, compare, value);"
+        ) in hip_code
+        assert (
+            "unsigned int oldCasExpr = cgl_byte_address_atomic_compare_exchange_uint("
+            "byteBuffers[which], offset, oldCas, value);"
+        ) in hip_code
+        assert (
+            "unsigned int helperOld = helper(byteBuffers[which], offset, value);"
+            in hip_code
+        )
+        assert (
+            "/* unsupported HIP byte-address buffer call: "
+            "InterlockedAdd on ByteAddressBuffer */ ((void)0);" in hip_code
+        )
+        assert (
+            "/* unsupported HIP byte-address buffer call: "
+            "InterlockedAdd on RWByteAddressBuffer */ 0u;" in hip_code
+        )
+        assert (
+            "unsigned int badCas = /* unsupported HIP byte-address buffer call: "
+            "InterlockedCompareExchange on RWByteAddressBuffer */ 0u;" in hip_code
+        )
+        assert "InterlockedAdd(" not in hip_code
+        assert "InterlockedCompareExchange(" not in hip_code
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    def test_hlsl_texture_aliases_emit_hip_resources_and_metadata(self):
+        """Test HIP canonicalizes HLSL texture aliases before resource lowering."""
+        source_code = """
+        shader Resources {
+            Texture2D<float4> colorMap;
+            Texture2DArray<float4> layers;
+            Texture2DMS<float4> msTex;
+            RWTexture2D<uint> counters;
+            RWTexture3D<int> signedVolume;
+
+            void queryParam(
+                Texture2D<float4> paramTex,
+                RWTexture2D<uint> paramCounters,
+                vec2 uv,
+                ivec2 pixel
+            ) {
+                ivec2 paramSize = textureSize(paramTex, 0);
+                ivec2 counterSize = imageSize(paramCounters);
+                vec4 sampled = texture(paramTex, uv);
+                uint loaded = imageLoad(paramCounters, pixel);
+            }
+
+            compute {
+                void main() {
+                    vec2 uv;
+                    vec3 uvLayer;
+                    ivec2 pixel;
+                    ivec3 voxel;
+                    vec4 sampled = texture(colorMap, uv);
+                    vec4 layered = texture(layers, uvLayer);
+                    ivec2 texSize = textureSize(colorMap, 0);
+                    int samples = textureSamples(msTex);
+                    uint loaded = imageLoad(counters, pixel);
+                    int signedValue = imageLoad(signedVolume, voxel);
+                    imageStore(counters, pixel, loaded);
+                    queryParam(colorMap, counters, uv, pixel);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "hipTextureObject_t colorMap;" in hip_code
+        assert "CglResourceQueryInfo colorMap_metadata = {};" in hip_code
+        assert "hipTextureObject_t layers;" in hip_code
+        assert "hipTextureObject_t msTex;" in hip_code
+        assert "CglResourceQueryInfo msTex_metadata = {};" in hip_code
+        assert "hipSurfaceObject_t counters;" in hip_code
+        assert "CglResourceQueryInfo counters_metadata = {};" in hip_code
+        assert "hipSurfaceObject_t signedVolume;" in hip_code
+        assert (
+            "__device__ void queryParam(hipTextureObject_t paramTex, "
+            "CglResourceQueryInfo paramTex_metadata, hipSurfaceObject_t "
+            "paramCounters, CglResourceQueryInfo paramCounters_metadata, "
+            "float2 uv, int2 pixel)"
+        ) in hip_code
+        assert (
+            "int2 paramSize = cgl_textureSize_sampler2D(paramTex_metadata, 0);"
+            in hip_code
+        )
+        assert (
+            "int2 counterSize = cgl_imageSize_uimage2D(paramCounters_metadata);"
+            in hip_code
+        )
+        assert "float4 sampled = tex2D<float4>(colorMap, uv.x, uv.y);" in hip_code
+        assert (
+            "float4 layered = tex2DLayered<float4>"
+            "(layers, uvLayer.x, uvLayer.y, uvLayer.z);" in hip_code
+        )
+        assert (
+            "int2 texSize = cgl_textureSize_sampler2D(colorMap_metadata, 0);"
+            in hip_code
+        )
+        assert (
+            "int samples = cgl_textureSamples_sampler2DMS(msTex_metadata);" in hip_code
+        )
+        assert (
+            "unsigned int loaded = cgl_surf2Dread<uint>"
+            "(counters, pixel.x * sizeof(uint), pixel.y);" in hip_code
+        )
+        assert (
+            "int signedValue = cgl_surf3Dread<int>"
+            "(signedVolume, voxel.x * sizeof(int), voxel.y, voxel.z);" in hip_code
+        )
+        assert (
+            "surf2Dwrite(loaded, counters, pixel.x * sizeof(uint), pixel.y);"
+            in hip_code
+        )
+        assert (
+            "queryParam(colorMap, colorMap_metadata, counters, counters_metadata, "
+            "uv, pixel);"
+        ) in hip_code
+        assert "Texture2D<" not in hip_code
+        assert "RWTexture2D<" not in hip_code
+        assert "RWTexture3D<" not in hip_code
+        assert "textureSize(" not in hip_code
+        assert "textureSamples(" not in hip_code
+        assert "imageSize(" not in hip_code
+
     def test_image_atomic_builtins_emit_hip_diagnostics(self):
         """Test HIP makes unsupported storage image atomics explicit."""
         source_code = """
@@ -5830,6 +7395,70 @@ class TestHipCodeGen:
         assert "imageAtomicExchange(" not in hip_code
         assert "imageAtomicCompSwap(" not in hip_code
         assert "imageAtomicMin(" not in hip_code
+        assert "imageAtomicMax(" not in hip_code
+
+    def test_image_atomic_coordinate_shapes_emit_hip_diagnostics(self):
+        """Test HIP image atomic diagnostics distinguish coordinate-rank errors."""
+        source_code = """
+        shader ImageAtomicCoordinateShapes {
+            uimage2D counters;
+            iimage2D signedImage;
+            uimage2DArray layerCounters;
+            iimage3D signedVolume;
+
+            void atomicCoordinateShapes(int x, ivec2 pixel, ivec3 voxel) {
+                uint validCounter = imageAtomicAdd(counters, pixel, 1);
+                uint badCounter = imageAtomicAdd(counters, x, 1);
+                int badSigned = imageAtomicMin(signedImage, x, 2);
+                uint badLayer = imageAtomicExchange(layerCounters, pixel, 3);
+                int badVolume = imageAtomicCompSwap(signedVolume, pixel, 4, 5);
+                uint validLayer = imageAtomicMax(layerCounters, voxel, 6);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert (
+            "unsigned int validCounter = "
+            "/* unsupported HIP image atomic resource call: "
+            "imageAtomicAdd on uimage2D */ 0u;" in hip_code
+        )
+        assert (
+            "unsigned int badCounter = "
+            "/* unsupported HIP image atomic resource call: "
+            "imageAtomicAdd coordinate rank on uimage2D */ 0u;" in hip_code
+        )
+        assert (
+            "int badSigned = /* unsupported HIP image atomic resource call: "
+            "imageAtomicMin coordinate rank on iimage2D */ 0;" in hip_code
+        )
+        assert (
+            "unsigned int badLayer = "
+            "/* unsupported HIP image atomic resource call: "
+            "imageAtomicExchange coordinate rank on uimage2DArray */ 0u;" in hip_code
+        )
+        assert (
+            "int badVolume = /* unsupported HIP image atomic resource call: "
+            "imageAtomicCompSwap coordinate rank on iimage3D */ 0;" in hip_code
+        )
+        assert (
+            "unsigned int validLayer = "
+            "/* unsupported HIP image atomic resource call: "
+            "imageAtomicMax on uimage2DArray */ 0u;" in hip_code
+        )
+        assert "imageAtomicAdd(" not in hip_code
+        assert "imageAtomicMin(" not in hip_code
+        assert "imageAtomicExchange(" not in hip_code
+        assert "imageAtomicCompSwap(" not in hip_code
         assert "imageAtomicMax(" not in hip_code
 
     def test_resource_query_builtins_emit_hip_metadata_helpers(self):
@@ -6003,6 +7632,120 @@ class TestHipCodeGen:
         assert "textureSamples(" not in hip_code
         assert "imageSamples(" not in hip_code
         assert "textureQueryLevels(" not in hip_code
+
+    def test_storage_image_query_shapes_emit_hip_metadata_helpers(self):
+        """Test HIP lowers 1D/cubemap storage image size queries via metadata."""
+        source_code = """
+        shader Resources {
+            image1D lineImage;
+            image1DArray lineLayers;
+            imageCube cubeImage;
+            imageCubeArray cubeLayers;
+            iimageCube signedCube;
+            iimageCubeArray signedCubeLayers;
+            uimageCube counterCube;
+            uimageCubeArray counterCubeLayers;
+            RWTexture1D<uint> aliasLine;
+            RWTextureCube<uint> aliasCube;
+
+            void queryParam(
+                imageCube paramCube,
+                uimageCubeArray paramCubeCounters
+            ) {
+                ivec2 paramCubeSize = imageSize(paramCube);
+                ivec3 paramCounterSize = imageSize(paramCubeCounters);
+            }
+
+            compute {
+                void main() {
+                    int lineSize = imageSize(lineImage);
+                    ivec2 lineLayerSize = imageSize(lineLayers);
+                    ivec2 cubeSize = imageSize(cubeImage);
+                    ivec3 cubeLayerSize = imageSize(cubeLayers);
+                    ivec2 signedCubeSize = imageSize(signedCube);
+                    ivec3 signedLayerSize = imageSize(signedCubeLayers);
+                    ivec2 counterCubeSize = imageSize(counterCube);
+                    ivec3 counterLayerSize = imageSize(counterCubeLayers);
+                    int aliasLineSize = imageSize(aliasLine);
+                    ivec2 aliasCubeSize = imageSize(aliasCube);
+                    queryParam(cubeImage, counterCubeLayers);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__device__ inline int cgl_imageSize_image1D" in hip_code
+        assert "__device__ inline int2 cgl_imageSize_image1DArray" in hip_code
+        assert "__device__ inline int2 cgl_imageSize_imageCube" in hip_code
+        assert "__device__ inline int3 cgl_imageSize_imageCubeArray" in hip_code
+        assert "__device__ inline int2 cgl_imageSize_iimageCube" in hip_code
+        assert "__device__ inline int3 cgl_imageSize_iimageCubeArray" in hip_code
+        assert "__device__ inline int2 cgl_imageSize_uimageCube" in hip_code
+        assert "__device__ inline int3 cgl_imageSize_uimageCubeArray" in hip_code
+        assert "CglResourceQueryInfo lineImage_metadata = {};" in hip_code
+        assert "CglResourceQueryInfo lineLayers_metadata = {};" in hip_code
+        assert "CglResourceQueryInfo cubeImage_metadata = {};" in hip_code
+        assert "CglResourceQueryInfo cubeLayers_metadata = {};" in hip_code
+        assert "CglResourceQueryInfo signedCube_metadata = {};" in hip_code
+        assert "CglResourceQueryInfo signedCubeLayers_metadata = {};" in hip_code
+        assert "CglResourceQueryInfo counterCube_metadata = {};" in hip_code
+        assert "CglResourceQueryInfo counterCubeLayers_metadata = {};" in hip_code
+        assert "CglResourceQueryInfo aliasLine_metadata = {};" in hip_code
+        assert "CglResourceQueryInfo aliasCube_metadata = {};" in hip_code
+        assert (
+            "__device__ void queryParam(hipSurfaceObject_t paramCube, "
+            "CglResourceQueryInfo paramCube_metadata, hipSurfaceObject_t "
+            "paramCubeCounters, CglResourceQueryInfo paramCubeCounters_metadata)"
+        ) in hip_code
+        assert "int lineSize = cgl_imageSize_image1D(lineImage_metadata);" in hip_code
+        assert (
+            "int2 lineLayerSize = cgl_imageSize_image1DArray"
+            "(lineLayers_metadata);" in hip_code
+        )
+        assert (
+            "int2 cubeSize = cgl_imageSize_imageCube(cubeImage_metadata);" in hip_code
+        )
+        assert (
+            "int3 cubeLayerSize = cgl_imageSize_imageCubeArray"
+            "(cubeLayers_metadata);" in hip_code
+        )
+        assert (
+            "int2 signedCubeSize = cgl_imageSize_iimageCube"
+            "(signedCube_metadata);" in hip_code
+        )
+        assert (
+            "int3 signedLayerSize = cgl_imageSize_iimageCubeArray"
+            "(signedCubeLayers_metadata);" in hip_code
+        )
+        assert (
+            "int2 counterCubeSize = cgl_imageSize_uimageCube"
+            "(counterCube_metadata);" in hip_code
+        )
+        assert (
+            "int3 counterLayerSize = cgl_imageSize_uimageCubeArray"
+            "(counterCubeLayers_metadata);" in hip_code
+        )
+        assert (
+            "int aliasLineSize = cgl_imageSize_uimage1D(aliasLine_metadata);"
+            in hip_code
+        )
+        assert (
+            "int2 aliasCubeSize = cgl_imageSize_uimageCube(aliasCube_metadata);"
+            in hip_code
+        )
+        assert (
+            "queryParam(cubeImage, cubeImage_metadata, counterCubeLayers, "
+            "counterCubeLayers_metadata);"
+        ) in hip_code
+        assert "imageSize(" not in hip_code
+        assert "RWTexture1D<" not in hip_code
+        assert "RWTextureCube<" not in hip_code
 
     def test_texture_query_lod_emits_hip_diagnostics(self):
         """Test HIP makes unsupported textureQueryLod explicit."""

@@ -1796,6 +1796,200 @@ shader MetalAtomicPointerTargetValidation {
 """
 
 
+METAL_THREADGROUP_ATOMIC_POINTER_ALIAS_SHADER = """
+shader MetalThreadgroupAtomicAliasValidation {
+    int bumpThreadgroup(threadgroup atomic_int* counters, int delta) {
+        return atomic_fetch_add_explicit(
+            counters,
+            delta,
+            memory_order_relaxed
+        );
+    }
+
+    int bumpDevice(device atomic_int* counters, int delta) {
+        return atomic_fetch_add_explicit(
+            counters,
+            delta,
+            memory_order_relaxed
+        );
+    }
+
+    compute {
+        void main(uint index @gl_LocalInvocationIndex) {
+            shared atomic_int scratch[64];
+            atomic_int* alias = scratch + index;
+            int oldValue = bumpThreadgroup(alias, 1);
+            int nextValue = atomic_fetch_add_explicit(
+                alias + 1,
+                oldValue,
+                memory_order_relaxed
+            );
+            int rejected = bumpDevice(alias + 2, nextValue);
+            atomic_store_explicit(alias, rejected, memory_order_relaxed);
+        }
+    }
+}
+"""
+
+
+METAL_POINTER_MEMBER_ATOMIC_ADDRESS_SPACE_SHADER = """
+shader MetalPointerMemberAddressSpaceValidation {
+    struct PointerBank {
+        device atomic_int* deviceCounters;
+        threadgroup atomic_int* sharedCounters;
+    };
+
+    int bumpDevice(device atomic_int* counters, int delta) {
+        return atomic_fetch_add_explicit(
+            counters,
+            delta,
+            memory_order_relaxed
+        );
+    }
+
+    int bumpThreadgroup(threadgroup atomic_int* counters, int delta) {
+        return atomic_fetch_add_explicit(
+            counters,
+            delta,
+            memory_order_relaxed
+        );
+    }
+
+    compute {
+        void main(
+            device atomic_int* counters @buffer(0),
+            uint index @gl_LocalInvocationIndex
+        ) {
+            shared atomic_int scratch[64];
+            PointerBank bank;
+            bank.deviceCounters = counters;
+            bank.sharedCounters = scratch;
+            int deviceOld = bumpDevice(bank.deviceCounters + index, 1);
+            int rejectedThread = bumpThreadgroup(
+                bank.deviceCounters + index,
+                deviceOld
+            );
+            int sharedOld = bumpThreadgroup(
+                bank.sharedCounters + index,
+                rejectedThread
+            );
+            atomic_store_explicit(
+                bank.deviceCounters[index],
+                sharedOld,
+                memory_order_relaxed
+            );
+            atomic_store_explicit(
+                bank.sharedCounters[index],
+                deviceOld,
+                memory_order_relaxed
+            );
+        }
+    }
+}
+"""
+
+
+METAL_NESTED_POINTER_MEMBER_ATOMIC_ALIAS_SHADER = """
+shader MetalNestedPointerMemberAtomicValidation {
+    struct InnerBank {
+        threadgroup atomic_int* sharedCounters;
+        device atomic_int* deviceCounters;
+    };
+
+    struct OuterBank {
+        InnerBank inner;
+    };
+
+    int bumpThreadgroup(threadgroup atomic_int* counters, int delta) {
+        return atomic_fetch_add_explicit(
+            counters,
+            delta,
+            memory_order_relaxed
+        );
+    }
+
+    int bumpDevice(device atomic_int* counters, int delta) {
+        return atomic_fetch_add_explicit(
+            counters,
+            delta,
+            memory_order_relaxed
+        );
+    }
+
+    compute {
+        void main(
+            device atomic_int* counters @buffer(0),
+            uint index @gl_LocalInvocationIndex
+        ) {
+            shared atomic_int scratch[64];
+            OuterBank bank;
+            bank.inner.sharedCounters = scratch;
+            bank.inner.deviceCounters = counters;
+            OuterBank* bankPtr = &bank;
+            atomic_int* sharedAlias = bankPtr->inner.sharedCounters + index;
+            atomic_int* deviceAlias = bankPtr->inner.deviceCounters + index;
+            int sharedOld = bumpThreadgroup(sharedAlias, 1);
+            int rejectedShared = bumpDevice(sharedAlias + 1, sharedOld);
+            int deviceOld = bumpDevice(deviceAlias, rejectedShared);
+            int rejectedDevice = bumpThreadgroup(deviceAlias + 1, deviceOld);
+            atomic_store_explicit(
+                sharedAlias,
+                rejectedDevice,
+                memory_order_relaxed
+            );
+            atomic_store_explicit(
+                deviceAlias,
+                sharedOld + deviceOld,
+                memory_order_relaxed
+            );
+        }
+    }
+}
+"""
+
+
+METAL_REFERENCE_MEMBER_ATOMIC_ADDRESS_SPACE_SHADER = """
+shader MetalReferenceMemberAddressSpaceValidation {
+    struct Bank {
+        threadgroup atomic_int* sharedCounters;
+        device atomic_int* deviceCounters;
+    };
+
+    int bumpThreadgroup(threadgroup atomic_int* counters, int delta) {
+        return atomic_fetch_add_explicit(
+            counters,
+            delta,
+            memory_order_relaxed
+        );
+    }
+
+    int bumpDevice(device atomic_int* counters, int delta) {
+        return atomic_fetch_add_explicit(
+            counters,
+            delta,
+            memory_order_relaxed
+        );
+    }
+
+    compute {
+        void main(
+            device atomic_int* counters @buffer(0),
+            uint index @gl_LocalInvocationIndex
+        ) {
+            shared atomic_int scratch[64];
+            Bank bank;
+            bank.sharedCounters = scratch;
+            bank.deviceCounters = counters;
+            Bank& ref = bank;
+            int sharedOld = bumpThreadgroup(ref.sharedCounters + index, 1);
+            int deviceOld = bumpDevice(ref.deviceCounters + index, sharedOld);
+            int rejected = bumpDevice(ref.sharedCounters + index, deviceOld);
+        }
+    }
+}
+"""
+
+
 METAL_ATOMIC_COMPARE_EXCHANGE_SHADER = """
 shader MetalAtomicCompareExchangeValidation {
     bool claim(
@@ -1924,6 +2118,93 @@ shader MetalDeviceAtomicCompareExchangeValidation {
                 3u,
                 memory_order_relaxed,
                 memory_order_relaxed
+            );
+        }
+    }
+}
+"""
+
+
+METAL_STRUCT_MEMBER_ATOMIC_COMPARE_EXCHANGE_SHADER = """
+shader MetalCompareExchangeMemberExpectedValidation {
+    struct ExpectedBank {
+        thread uint* threadExpected;
+        device uint* deviceExpected;
+    };
+
+    bool claimDevice(
+        device atomic_uint* counters,
+        thread uint* expectedValues,
+        uint index,
+        uint desired
+    ) {
+        return atomic_compare_exchange_strong_explicit(
+            counters + index,
+            expectedValues + index,
+            desired,
+            memory_order_relaxed,
+            memory_order_relaxed
+        );
+    }
+
+    bool rejectDeviceExpected(
+        device atomic_uint* counters,
+        device uint* expectedValues,
+        uint index,
+        uint desired
+    ) {
+        return atomic_compare_exchange_weak_explicit(
+            counters + index,
+            expectedValues + index,
+            desired,
+            memory_order_relaxed,
+            memory_order_relaxed
+        );
+    }
+
+    compute {
+        void main(
+            device atomic_uint* counters @buffer(0),
+            device uint* deviceExpected @buffer(1),
+            uint index @gl_LocalInvocationIndex
+        ) {
+            uint expectedValues[64];
+            ExpectedBank bank;
+            bank.threadExpected = expectedValues;
+            bank.deviceExpected = deviceExpected;
+            bank.threadExpected[index] = 0u;
+            bool direct = atomic_compare_exchange_strong_explicit(
+                counters[index],
+                bank.threadExpected[index],
+                1u,
+                memory_order_relaxed,
+                memory_order_relaxed
+            );
+            bool pointerDirect = atomic_compare_exchange_weak_explicit(
+                counters + index,
+                bank.threadExpected + index,
+                2u,
+                memory_order_relaxed,
+                memory_order_relaxed
+            );
+            bool helper = claimDevice(
+                counters,
+                bank.threadExpected,
+                index,
+                3u
+            );
+            bool rejectedDirect = atomic_compare_exchange_weak_explicit(
+                counters + index,
+                bank.deviceExpected + index,
+                4u,
+                memory_order_relaxed,
+                memory_order_relaxed
+            );
+            bool rejectedHelper = rejectDeviceExpected(
+                counters,
+                bank.deviceExpected,
+                index,
+                5u
             );
         }
     }
@@ -2210,6 +2491,250 @@ shader MetalConstPointerArrayHelperValidation {
             rejectPointerWrite(&payload);
             float b = readArray(values, 1);
             rejectArrayWrite(values);
+        }
+    }
+}
+"""
+
+
+METAL_CONST_THREADGROUP_POINTER_ALIAS_SHADER = """
+shader MetalConstThreadgroupPointerAliasValidation {
+    struct Payload {
+        float value;
+    };
+
+    void mutate(threadgroup Payload* payload) {
+        payload.value = 2.0;
+    }
+
+    float readValue(const threadgroup Payload* payload) {
+        return payload.value;
+    }
+
+    compute {
+        void main() {
+            threadgroup Payload scratch;
+            const Payload* alias = scratch;
+            float value = readValue(alias);
+            alias.value = value;
+            mutate(alias);
+        }
+    }
+}
+"""
+
+
+METAL_READONLY_DEVICE_POINTER_ALIAS_SHADER = """
+shader MetalReadonlyDevicePointerAliasValidation {
+    struct Payload {
+        float value;
+    };
+
+    void mutate(device Payload* payload) {
+        payload.value = 2.0;
+    }
+
+    float readValue(readonly device Payload* payload) {
+        return payload.value;
+    }
+
+    compute {
+        void main(device Payload* payload @buffer(0)) {
+            readonly device Payload* alias = payload;
+            float value = readValue(alias);
+            alias.value = value;
+            mutate(alias);
+        }
+    }
+}
+"""
+
+
+METAL_CONST_LOCAL_ARRAY_ALIAS_SHADER = """
+shader MetalConstLocalArrayAliasValidation {
+    float readValue(const float values[2], int index) {
+        return values[index];
+    }
+
+    void mutate(float values[2]) {
+        values[0] = 2.0;
+    }
+
+    compute {
+        void main() {
+            const float values[2] = {1.0, 2.0};
+            float value = readValue(values, 1);
+            values[0] = value;
+            mutate(values);
+        }
+    }
+}
+"""
+
+
+METAL_CONSTANT_POINTER_REFERENCE_ALIAS_SHADER = """
+shader MetalConstantPointerReferenceAliasValidation {
+    struct Payload {
+        float value;
+    };
+
+    void mutatePointer(device Payload* payload) {
+        payload.value = 2.0;
+    }
+
+    void mutateReference(device Payload& payload) {
+        payload.value = 3.0;
+    }
+
+    float readPointer(constant Payload* payload) {
+        return payload.value;
+    }
+
+    float readReference(constant Payload& payload) {
+        return payload.value;
+    }
+
+    compute {
+        void main(
+            constant Payload* pointerPayload @buffer(0),
+            constant Payload& referencePayload @buffer(1)
+        ) {
+            constant Payload* pointerAlias = pointerPayload;
+            constant Payload& referenceAlias = referencePayload;
+            float pointerValue = readPointer(pointerAlias);
+            float referenceValue = readReference(referenceAlias);
+            pointerAlias.value = pointerValue;
+            referenceAlias.value = referenceValue;
+            mutatePointer(pointerAlias);
+            mutateReference(referenceAlias);
+        }
+    }
+}
+"""
+
+
+METAL_NESTED_CONSTANT_LOCAL_ARRAY_SHADER = """
+shader MetalNestedConstantLocalArrayValidation {
+    float readValue(const float values[2][2], int row, int col) {
+        return values[row][col];
+    }
+
+    void mutate(float values[2][2]) {
+        values[0][0] = 2.0;
+    }
+
+    compute {
+        void main() {
+            constant float values[2][2] = {{1.0, 2.0}, {3.0, 4.0}};
+            float value = readValue(values, 1, 0);
+            values[0][1] = value;
+            mutate(values);
+        }
+    }
+}
+"""
+
+
+METAL_CONSTANT_SCALAR_VECTOR_RESOURCE_INDEX_SHADER = """
+shader MetalConstantScalarVectorResourceIndexValidation {
+    sampler2D textures[];
+    sampler samplers[];
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+    };
+
+    float helper(float input) {
+        constant float scale = 2.0;
+        constant vec2 bias = vec2(0.25, 0.5);
+        float value = input * scale + bias.x;
+        scale = value;
+        bias.x = value;
+        return value;
+    }
+
+    vec4 sampleLayer(vec2 uv, sampler2D textures[], sampler samplers[]) {
+        constant int LAYER = 3;
+        return texture(textures[LAYER], samplers[LAYER], uv);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            float value = helper(1.0);
+            return sampleLayer(input.uv, textures, samplers) + vec4(value);
+        }
+    }
+}
+"""
+
+
+METAL_STRUCT_RESOURCE_ARRAY_QUERY_SHADER = """
+shader MetalStructResourceArrayQueryValidation {
+    struct TexturePack {
+        sampler2D textures[4];
+        sampler2DArray layers[4];
+        sampler2DMS msTextures[4];
+        sampler2DMSArray msArrays[4];
+    };
+
+    int query(TexturePack pack, vec3 uvLayer) {
+        constant int LAYER = 2;
+        ivec2 dims = textureSize(pack.textures[LAYER], LAYER);
+        ivec3 layerDims = textureSize(pack.layers[LAYER], 1);
+        int levels = textureQueryLevels(pack.textures[LAYER]);
+        vec2 lod = textureQueryLod(pack.layers[LAYER], uvLayer);
+        int samples = textureSamples(pack.msTextures[LAYER])
+            + imageSamples(pack.msArrays[LAYER]);
+        return dims.x + layerDims.z + levels + int(lod.x) + samples;
+    }
+
+    fragment {
+        vec4 main() @ gl_FragColor {
+            TexturePack pack;
+            int value = query(pack, vec3(0.5, 0.25, 1.0));
+            return vec4(float(value));
+        }
+    }
+}
+"""
+
+
+METAL_NESTED_RESOURCE_CONTAINER_FORWARDING_SHADER = """
+shader MetalNestedResourceContainerForwardingValidation {
+    struct TexturePack {
+        sampler2D textures[4];
+        sampler2DArray layers[4];
+    };
+
+    struct ResourceBank {
+        TexturePack pack;
+        sampler samplers[4];
+    };
+
+    vec4 samplePack(
+        TexturePack pack,
+        sampler samplers[4],
+        vec2 uv,
+        vec3 uvLayer
+    ) {
+        constant int LAYER = 2;
+        vec4 planar = texture(pack.textures[LAYER], samplers[LAYER], uv);
+        vec4 layered = texture(pack.layers[LAYER], samplers[LAYER], uvLayer);
+        return planar + layered;
+    }
+
+    vec4 sampleBank(ResourceBank bank, vec2 uv, vec3 uvLayer) {
+        return samplePack(bank.pack, bank.samplers, uv, uvLayer);
+    }
+
+    fragment {
+        vec4 main() @ gl_FragColor {
+            ResourceBank bank;
+            return sampleBank(
+                bank,
+                vec2(0.5, 0.25),
+                vec3(0.25, 0.75, 1.0)
+            );
         }
     }
 }
@@ -2597,6 +3122,92 @@ shader MetalMeshPayloadPointerAliasValidation {
 """
 
 
+METAL_MESH_PAYLOAD_POINTER_HELPER_SHADER = """
+shader MetalMeshPayloadPointerHelperValidation {
+    struct Payload {
+        vec4 color;
+    };
+
+    void tint(Payload* payload @object_data) {
+        payload.color = vec4(0.25, 0.5, 0.75, 1.0);
+    }
+
+    float read(const Payload* payload @object_data) {
+        return payload.color.x;
+    }
+
+    object {
+        void main(Payload payload @payload)
+            @max_total_threads_per_threadgroup(32)
+        {
+            Payload* alias = payload;
+            tint(alias);
+            float value = read(alias);
+            payload.color.x = value;
+            DispatchMesh(1, 1, 1);
+        }
+    }
+
+    mesh {
+        void main(Payload payload @payload)
+            @max_total_threads_per_threadgroup(32)
+        {
+            Payload* alias = payload;
+            float value = read(alias);
+            tint(alias);
+            vec4 color = alias.color + vec4(value);
+        }
+    }
+}
+"""
+
+
+METAL_MESH_PAYLOAD_MEMBER_POINTER_HELPER_SHADER = """
+shader MetalMeshPayloadMemberPointerHelperValidation {
+    struct Payload {
+        vec4 color;
+    };
+
+    struct Wrapper {
+        Payload* ptr @object_data;
+    };
+
+    void tint(Payload* payload @object_data) {
+        payload.color = vec4(0.25, 0.5, 0.75, 1.0);
+    }
+
+    float read(const Payload* payload @object_data) {
+        return payload.color.x;
+    }
+
+    object {
+        void main(Payload payload @payload)
+            @max_total_threads_per_threadgroup(32)
+        {
+            Wrapper wrapper;
+            wrapper.ptr = payload;
+            tint(wrapper.ptr);
+            float value = read(wrapper.ptr);
+            payload.color.x = value;
+            DispatchMesh(1, 1, 1);
+        }
+    }
+
+    mesh {
+        void main(Payload payload @payload)
+            @max_total_threads_per_threadgroup(32)
+        {
+            Wrapper wrapper;
+            wrapper.ptr = payload;
+            float value = read(wrapper.ptr);
+            tint(wrapper.ptr);
+            vec4 color = wrapper.ptr.color + vec4(value);
+        }
+    }
+}
+"""
+
+
 METAL_CONST_OBJECT_PAYLOAD_SHADER = """
 shader MetalConstObjectPayloadValidation {
     struct Payload {
@@ -2638,8 +3249,15 @@ shader MetalMeshPayloadInvalidSourceValidation {
     task {
         void main() @numthreads(1, 1, 1) {
             MeshPayload threadPayload;
+            groupshared MeshPayload payloads[2];
+            payloads[0].meshlet = 2u;
+            threadgroup MeshPayload* alias = &payloads[0];
             DispatchMesh(1, 1, 1, makePayload());
             DispatchMesh(1, 1, 1, threadPayload);
+            DispatchMesh(1, 1, 1, alias);
+            DispatchMesh(1, 1, 1, payloads);
+            DispatchMesh(1, 1, 1, alias[0]);
+            DispatchMesh(1, 1, 1, payloads[0]);
         }
     }
 
@@ -2830,6 +3448,37 @@ shader MetalRayTracingPayloadTraceValidation {
 """
 
 
+METAL_RAY_TRACING_INVALID_ACCELERATION_STRUCTURE_SHADER = """
+shader MetalRayTracingInvalidAccelerationStructureValidation {
+    struct Payload {
+        vec3 color;
+    };
+
+    accelerationStructureEXT topLevelAS @binding(0);
+    intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+    ray_generation {
+        void main() {
+            Payload payload;
+            TraceRay(
+                payload,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                payload
+            );
+        }
+    }
+}
+"""
+
+
 METAL_RAY_TRACING_PAYLOAD_DIAGNOSTIC_SHADER = """
 shader MetalRayTracingPayloadDiagnosticValidation {
     struct Payload {
@@ -2860,6 +3509,308 @@ shader MetalRayTracingPayloadDiagnosticValidation {
 """
 
 
+METAL_RAY_PAYLOAD_HELPER_ADDRESS_SPACE_SHADER = """
+shader MetalRayPayloadHelperAddressSpaceValidation {
+    struct Payload {
+        vec3 color;
+    };
+
+    void tint(Payload& payload @ray_data) {
+        payload.color = vec3(1.0, 0.0, 0.0);
+    }
+
+    void rejectThreadPayload(Payload& payload) {
+        payload.color = vec3(0.0, 0.0, 0.0);
+    }
+
+    ray_any_hit {
+        void main(Payload payload @ payload) {
+            tint(payload);
+            rejectThreadPayload(payload);
+        }
+    }
+}
+"""
+
+
+METAL_RAY_PAYLOAD_ALIAS_ADDRESS_SPACE_SHADER = """
+shader MetalRayPayloadAliasAddressSpaceValidation {
+    struct Payload {
+        vec3 color;
+    };
+
+    accelerationStructureEXT topLevelAS @binding(0);
+    intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+    ray_generation {
+        void main(Payload* external @device @buffer(2)) {
+            Payload payload;
+            Payload& threadAlias = payload;
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                threadAlias
+            );
+
+            Payload& deviceAlias = external[0];
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                deviceAlias
+            );
+        }
+    }
+}
+"""
+
+
+METAL_RAY_PAYLOAD_MEMBER_LVALUE_SHADER = """
+shader MetalRayPayloadMemberLvalueValidation {
+    struct Payload {
+        vec3 color;
+    };
+
+    struct Wrapper {
+        Payload payload;
+        Payload payloads[2];
+    };
+
+    accelerationStructureEXT topLevelAS @binding(0);
+    intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+    void rejectConst(const Wrapper& constWrapper) {
+        TraceRay(
+            topLevelAS,
+            0,
+            0xff,
+            0,
+            1,
+            0,
+            vec3(0.0),
+            0.001,
+            vec3(0.0, 0.0, 1.0),
+            1000.0,
+            constWrapper.payload
+        );
+    }
+
+    ray_generation {
+        void main() {
+            Wrapper wrapper;
+            Payload payloads[2];
+            Payload* pointer = &payloads[0];
+            rejectConst(wrapper);
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                wrapper.payload
+            );
+
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                payloads
+            );
+
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                payloads[0]
+            );
+
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                wrapper.payloads
+            );
+
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                pointer
+            );
+
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                pointer[0]
+            );
+        }
+    }
+}
+"""
+
+
+METAL_RAY_PAYLOAD_TYPE_VALIDATION_SHADER = """
+shader MetalRayPayloadTypeValidation {
+    struct Payload {
+        vec3 color;
+    };
+
+    struct OtherPayload {
+        vec3 color;
+    };
+
+    struct Wrapper {
+        Payload payload;
+        OtherPayload other;
+        OtherPayload others[2];
+    };
+
+    accelerationStructureEXT topLevelAS @binding(0);
+    intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+    ray_miss {
+        void main(Payload payload @payload) {
+            payload.color = vec3(0.0, 0.0, 1.0);
+        }
+    }
+
+    ray_generation {
+        void main() {
+            Payload payload;
+            Wrapper wrapper;
+            OtherPayload other;
+            OtherPayload others[2];
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                payload
+            );
+
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                wrapper.payload
+            );
+
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                other
+            );
+
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                wrapper.other
+            );
+
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                others[0]
+            );
+        }
+    }
+}
+"""
+
+
 METAL_RAY_CALLABLE_DISPATCH_SHADER = """
 shader MetalRayCallableDispatchValidation {
     struct CallableData {
@@ -2873,6 +3824,102 @@ shader MetalRayCallableDispatchValidation {
             CallableData data;
             data.color = vec4(1.0);
             CallShader(0, data);
+        }
+    }
+}
+"""
+
+
+METAL_RAY_CALLABLE_INVALID_EXPLICIT_TABLE_SHADER = """
+shader MetalRayCallableInvalidExplicitTableValidation {
+    struct CallableData {
+        vec4 color;
+    };
+
+    visible_function_table<CallableData> callables @binding(1);
+
+    ray_generation {
+        void main() {
+            CallableData data;
+            data.color = vec4(1.0);
+            CallShader(data, 0, data);
+        }
+    }
+}
+"""
+
+
+METAL_RAY_CALLABLE_ALIAS_ADDRESS_SPACE_SHADER = """
+shader MetalRayCallableAliasAddressSpaceValidation {
+    struct CallableData {
+        vec4 color;
+    };
+
+    visible_function_table<CallableData> callables @binding(1);
+
+    ray_generation {
+        void main(CallableData* external @device @buffer(2)) {
+            CallableData data;
+            data.color = vec4(1.0);
+            CallableData& threadAlias = data;
+            CallShader(0, threadAlias);
+
+            CallableData& deviceAlias = external[0];
+            CallShader(1, deviceAlias);
+        }
+    }
+}
+"""
+
+
+METAL_RAY_CALLABLE_POINTER_DEREF_SHADER = """
+shader MetalRayCallablePointerDerefValidation {
+    struct CallableData {
+        vec4 color;
+    };
+
+    visible_function_table<CallableData> callables @binding(1);
+
+    ray_generation {
+        void main(CallableData* external @device @buffer(2)) {
+            CallableData data;
+            data.color = vec4(1.0);
+            CallableData* alias = &data;
+            CallShader(0, *alias);
+            CallShader(1, *external);
+        }
+    }
+}
+"""
+
+
+METAL_RAY_CALLABLE_HELPER_MEMBER_LVALUE_SHADER = """
+shader MetalRayCallableHelperMemberLvalueValidation {
+    struct CallableData {
+        vec4 color;
+    };
+
+    struct Wrapper {
+        CallableData data;
+    };
+
+    visible_function_table<CallableData> callables @binding(1);
+
+    void invoke(uint shaderIndex, CallableData& data) {
+        CallShader(shaderIndex, data);
+    }
+
+    void rejectConst(const Wrapper& wrapper) {
+        CallShader(1, wrapper.data);
+    }
+
+    ray_generation {
+        void main() {
+            Wrapper wrapper;
+            wrapper.data.color = vec4(1.0);
+            invoke(2u, wrapper.data);
+            CallShader(3u, wrapper.data);
+            rejectConst(wrapper);
         }
     }
 }
@@ -3492,6 +4539,39 @@ shader MetalStorageImageAccessQualifiersValidation {
             vec4 color = readSource(source, pixel);
             uint oldValue = addCounter(counters, pixel, 2u);
             writeTarget(target, pixel, color + vec4(float(oldValue)));
+        }
+    }
+}
+"""
+
+
+METAL_STRUCT_HELD_STORAGE_IMAGE_ARRAYS_COMPUTE_SHADER = """
+shader MetalStructHeldStorageImageArraysValidation {
+    struct ImagePack {
+        image2D pairs[2] @rg16f @readonly;
+        image2D targets[2] @rg16f @writeonly;
+        uimage2D counters[2] @r32ui @readwrite;
+    };
+
+    vec2 readPair(ImagePack pack, int index, ivec2 pixel) {
+        return imageLoad(pack.pairs[index], pixel);
+    }
+
+    void writePair(ImagePack pack, int index, ivec2 pixel, vec2 value) {
+        imageStore(pack.targets[index], pixel, value);
+    }
+
+    uint addCounter(ImagePack pack, int index, ivec2 pixel, uint value) {
+        return imageAtomicAdd(pack.counters[index], pixel, value);
+    }
+
+    compute {
+        void main() {
+            ImagePack pack;
+            ivec2 pixel = ivec2(0, 1);
+            vec2 pair = readPair(pack, 0, pixel);
+            writePair(pack, 1, pixel, pair);
+            uint oldValue = addCounter(pack, 0, pixel, 1u);
         }
     }
 }
@@ -5267,6 +6347,99 @@ def test_generated_metal_mesh_payload_pointer_aliases_compile_with_metal3(tmp_pa
     )
 
 
+def test_generated_metal_mesh_payload_pointer_helper_aliases_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "mesh_payload_pointer_helper.metal"
+    output = tmp_path / "mesh_payload_pointer_helper.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_MESH_PAYLOAD_POINTER_HELPER_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "void tint(object_data Payload* payload)" in code
+    assert "float read(const object_data Payload* payload)" in code
+    assert "[[object_data]]" not in code
+    assert "object_data Payload* alias = &payload;" in code
+    assert "const object_data Payload* alias = &payload;" in code
+    assert "unsupported Metal mesh payload call" in code
+    assert "unsupported Metal address-space call" not in code
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_mesh_payload_member_pointer_helpers_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "mesh_payload_member_pointer_helper.metal"
+    output = tmp_path / "mesh_payload_member_pointer_helper.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_MESH_PAYLOAD_MEMBER_POINTER_HELPER_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "object_data Payload* ptr;" in code
+    assert "wrapper.ptr = &payload;" in code
+    assert "tint(wrapper.ptr);" in code
+    assert "float value = read(wrapper.ptr);" in code
+    assert "unsupported Metal mesh payload alias" in code
+    assert "unsupported Metal mesh payload call" in code
+    assert "float4 color = wrapper.ptr->color + float4(value);" in code
+    assert "unsupported Metal address-space call" not in code
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
 def test_generated_metal_const_object_payload_diagnostic_compiles_with_metal3(
     tmp_path,
 ):
@@ -5333,7 +6506,11 @@ def test_generated_metal_mesh_payload_invalid_sources_compile_with_metal3(tmp_pa
     assert "unsupported Metal mesh payload dispatch" in code
     assert "_crossglMeshPayload = makePayload();" not in code
     assert "_crossglMeshPayload = threadPayload;" not in code
-    assert code.count("_crossglMeshGrid.set_threadgroups_per_grid(") == 2
+    assert "_crossglMeshPayload = alias;" not in code
+    assert "_crossglMeshPayload = payloads;" not in code
+    assert "_crossglMeshPayload = alias[0];" in code
+    assert "_crossglMeshPayload = payloads[0];" in code
+    assert code.count("_crossglMeshGrid.set_threadgroups_per_grid(") == 6
 
     run_validator(
         [
@@ -5591,6 +6768,214 @@ def test_generated_metal_payload_diagnostic_compiles_with_metal3(
     )
 
 
+def test_generated_metal_ray_payload_helper_address_spaces_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_payload_helper_address_spaces.metal"
+    output = tmp_path / "ray_payload_helper_address_spaces.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_PAYLOAD_HELPER_ADDRESS_SPACE_SHADER)
+    )
+    assert "void tint(ray_data Payload& payload)" in code
+    assert "tint(payload);" in code
+    assert (
+        "unsupported Metal address-space call: argument 'payload' uses ray_data "
+        "address space but parameter 'payload' of 'rejectThreadPayload' "
+        "requires thread"
+    ) in code
+    assert "rejectThreadPayload(payload);" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_payload_alias_address_spaces_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_payload_alias_address_spaces.metal"
+    output = tmp_path / "ray_payload_alias_address_spaces.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_PAYLOAD_ALIAS_ADDRESS_SPACE_SHADER)
+    )
+    assert "thread Payload& threadAlias = payload;" in code
+    assert "intersectionFunctions, threadAlias)" in code
+    assert "device Payload& deviceAlias = external[0];" in code
+    assert (
+        "payload forwarding requires a thread-local payload lvalue; payload "
+        "'deviceAlias' uses device address space"
+    ) in code
+    assert "intersectionFunctions, deviceAlias)" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_payload_member_lvalues_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_payload_member_lvalues.metal"
+    output = tmp_path / "ray_payload_member_lvalues.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_PAYLOAD_MEMBER_LVALUE_SHADER)
+    )
+    assert "intersectionFunctions, wrapper.payload)" in code
+    assert "intersectionFunctions, payloads[0])" in code
+    assert "intersectionFunctions, pointer[0])" in code
+    assert (
+        "payload forwarding requires a thread-local struct payload lvalue; "
+        "payload 'payloads' has pointer or array type"
+    ) in code
+    assert (
+        "payload forwarding requires a thread-local struct payload lvalue; "
+        "payload 'wrapper.payloads' has pointer or array type"
+    ) in code
+    assert (
+        "payload forwarding requires a thread-local struct payload lvalue; "
+        "payload 'pointer' has pointer or array type"
+    ) in code
+    assert (
+        "payload forwarding requires a mutable thread-local struct payload "
+        "lvalue; payload 'constWrapper.payload' is const-qualified"
+    ) in code
+    assert "intersectionFunctions, constWrapper.payload)" not in code
+    assert "intersectionFunctions, payloads)" not in code
+    assert "intersectionFunctions, wrapper.payloads)" not in code
+    assert "intersectionFunctions, pointer)" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_payload_type_diagnostics_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_payload_type_diagnostics.metal"
+    output = tmp_path / "ray_payload_type_diagnostics.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_PAYLOAD_TYPE_VALIDATION_SHADER)
+    )
+    assert "intersectionFunctions, payload)" in code
+    assert "intersectionFunctions, wrapper.payload)" in code
+    assert (
+        "ray payload argument 'other' has type 'OtherPayload' but declared "
+        "ray payload interface expects 'Payload'"
+    ) in code
+    assert (
+        "ray payload argument 'wrapper.other' has type 'OtherPayload' but "
+        "declared ray payload interface expects 'Payload'"
+    ) in code
+    assert (
+        "ray payload argument 'others' has type 'OtherPayload' but declared "
+        "ray payload interface expects 'Payload'"
+    ) in code
+    assert "intersectionFunctions, other)" not in code
+    assert "intersectionFunctions, wrapper.other)" not in code
+    assert "intersectionFunctions, others[0])" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_invalid_acceleration_structure_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_invalid_acceleration_structure.metal"
+    output = tmp_path / "ray_invalid_acceleration_structure.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(
+            METAL_RAY_TRACING_INVALID_ACCELERATION_STRUCTURE_SHADER
+        )
+    )
+    assert (
+        "acceleration structure argument 'payload' has type 'Payload' but "
+        "TraceRay requires an acceleration_structure resource"
+    ) in code
+    assert "intersect(__crossgl_ray_0, payload" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
 def test_generated_metal_ray_callable_dispatch_compiles_with_metal3(
     tmp_path,
 ):
@@ -5603,6 +6988,150 @@ def test_generated_metal_ray_callable_dispatch_compiles_with_metal3(
     code = MetalCodeGen().generate(
         crosstl.translator.parse(METAL_RAY_CALLABLE_DISPATCH_SHADER)
     )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_callable_invalid_explicit_table_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_callable_invalid_explicit_table.metal"
+    output = tmp_path / "ray_callable_invalid_explicit_table.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_CALLABLE_INVALID_EXPLICIT_TABLE_SHADER)
+    )
+    assert (
+        "explicit table argument 'data' must be a visible_function_table resource"
+        in code
+    )
+    assert "data[0](data);" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_callable_alias_address_spaces_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_callable_alias_address_spaces.metal"
+    output = tmp_path / "ray_callable_alias_address_spaces.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_CALLABLE_ALIAS_ADDRESS_SPACE_SHADER)
+    )
+    assert "thread CallableData& threadAlias = data;" in code
+    assert "callables[0](threadAlias);" in code
+    assert "device CallableData& deviceAlias = external[0];" in code
+    assert (
+        "callable data forwarding requires a thread-local callable-data "
+        "lvalue; callable data 'deviceAlias' uses device address space"
+    ) in code
+    assert "callables[1](deviceAlias);" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_callable_pointer_deref_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_callable_pointer_deref.metal"
+    output = tmp_path / "ray_callable_pointer_deref.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_CALLABLE_POINTER_DEREF_SHADER)
+    )
+    assert "thread CallableData* alias = &data;" in code
+    assert "callables[0](*alias);" in code
+    assert (
+        "callable data forwarding requires a thread-local callable-data "
+        "lvalue; callable data '*external' uses device address space"
+    ) in code
+    assert "callables[1](*external);" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_callable_helper_member_lvalues_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_callable_helper_member_lvalues.metal"
+    output = tmp_path / "ray_callable_helper_member_lvalues.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_CALLABLE_HELPER_MEMBER_LVALUE_SHADER)
+    )
+    assert "callables[shaderIndex](data);" in code
+    assert "invoke(2u, wrapper.data, callables);" in code
+    assert "callables[3u](wrapper.data);" in code
+    assert (
+        "callable data forwarding requires a mutable thread-local callable-data "
+        "lvalue; callable data 'wrapper.data' is const-qualified"
+    ) in code
+    assert "callables[1](wrapper.data);" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
@@ -5861,6 +7390,142 @@ def test_generated_metal_atomic_pointer_targets_compile_with_metal(tmp_path):
     )
 
 
+def test_generated_metal_threadgroup_atomic_pointer_alias_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "threadgroup_atomic_pointer_alias.metal"
+    output = tmp_path / "threadgroup_atomic_pointer_alias.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_THREADGROUP_ATOMIC_POINTER_ALIAS_SHADER),
+        "compute",
+    )
+    assert "threadgroup atomic_int* alias = scratch + index;" in code
+    assert "thread atomic_int* alias = scratch + index;" not in code
+    assert "int oldValue = bumpThreadgroup(alias, 1);" in code
+    assert (
+        "int nextValue = atomic_fetch_add_explicit(alias + 1, oldValue, memory_order_relaxed);"
+        in code
+    )
+    assert (
+        "int rejected = 0 /* unsupported Metal address-space call: argument "
+        "'alias' uses threadgroup address space but parameter 'counters' of "
+        "'bumpDevice' requires device */;"
+    ) in code
+    assert "bumpDevice(alias + 2" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_pointer_member_atomic_address_spaces_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "pointer_member_atomic_address_spaces.metal"
+    output = tmp_path / "pointer_member_atomic_address_spaces.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_POINTER_MEMBER_ATOMIC_ADDRESS_SPACE_SHADER),
+        "compute",
+    )
+    assert "device atomic_int* deviceCounters;" in code
+    assert "threadgroup atomic_int* sharedCounters;" in code
+    assert "deviceCounters [[device]]" not in code
+    assert "sharedCounters [[threadgroup]]" not in code
+    assert "int deviceOld = bumpDevice(bank.deviceCounters + index, 1);" in code
+    assert (
+        "int rejectedThread = 0 /* unsupported Metal address-space call: "
+        "argument 'bank.deviceCounters' uses device address space but parameter "
+        "'counters' of 'bumpThreadgroup' requires threadgroup */;"
+    ) in code
+    assert (
+        "int sharedOld = bumpThreadgroup(bank.sharedCounters + index, rejectedThread);"
+        in code
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_nested_pointer_member_atomic_alias_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "nested_pointer_member_atomic_alias.metal"
+    output = tmp_path / "nested_pointer_member_atomic_alias.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_NESTED_POINTER_MEMBER_ATOMIC_ALIAS_SHADER),
+        "compute",
+    )
+    assert "thread OuterBank* bankPtr = &bank;" in code
+    assert (
+        "threadgroup atomic_int* sharedAlias = bankPtr->inner.sharedCounters + index;"
+        in code
+    )
+    assert (
+        "device atomic_int* deviceAlias = bankPtr->inner.deviceCounters + index;"
+        in code
+    )
+    assert (
+        "int rejectedShared = 0 /* unsupported Metal address-space call: "
+        "argument 'sharedAlias' uses threadgroup address space but parameter "
+        "'counters' of 'bumpDevice' requires device */;"
+    ) in code
+    assert (
+        "int rejectedDevice = 0 /* unsupported Metal address-space call: "
+        "argument 'deviceAlias' uses device address space but parameter "
+        "'counters' of 'bumpThreadgroup' requires threadgroup */;"
+    ) in code
+    assert "bumpDevice(sharedAlias + 1" not in code
+    assert "bumpThreadgroup(deviceAlias + 1" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_reference_member_atomic_address_spaces_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "reference_member_atomic_address_spaces.metal"
+    output = tmp_path / "reference_member_atomic_address_spaces.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_REFERENCE_MEMBER_ATOMIC_ADDRESS_SPACE_SHADER),
+        "compute",
+    )
+    assert "thread Bank& ref = bank;" in code
+    assert "Bank & ref = bank;" not in code
+    assert "int sharedOld = bumpThreadgroup(ref.sharedCounters + index, 1);" in code
+    assert "int deviceOld = bumpDevice(ref.deviceCounters + index, sharedOld);" in code
+    assert (
+        "int rejected = 0 /* unsupported Metal address-space call: argument "
+        "'ref.sharedCounters' uses threadgroup address space but parameter "
+        "'counters' of 'bumpDevice' requires device */;"
+    ) in code
+    assert "bumpDevice(ref.sharedCounters + index" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
 def test_generated_metal_atomic_compare_exchange_compile_with_metal(tmp_path):
     xcrun = shutil.which("xcrun")
     if xcrun is None:
@@ -5916,6 +7581,48 @@ def test_generated_metal_device_atomic_compare_exchange_compile_with_metal(tmp_p
         "bool directClaimed = atomic_compare_exchange_weak_explicit(&counters[index], "
         "&expected, 3u, memory_order_relaxed, memory_order_relaxed);"
     ) in code
+    assert "atomic_compare_exchange_strong_explicit" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_struct_member_atomic_compare_exchange_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "struct_member_atomic_compare_exchange.metal"
+    output = tmp_path / "struct_member_atomic_compare_exchange.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_STRUCT_MEMBER_ATOMIC_COMPARE_EXCHANGE_SHADER),
+        "compute",
+    )
+    assert "thread uint* threadExpected;" in code
+    assert "device uint* deviceExpected;" in code
+    assert (
+        "bool direct = atomic_compare_exchange_weak_explicit(&counters[index], "
+        "&bank.threadExpected[index], 1u, memory_order_relaxed, "
+        "memory_order_relaxed);"
+    ) in code
+    assert (
+        "bool pointerDirect = atomic_compare_exchange_weak_explicit(counters + index, "
+        "bank.threadExpected + index, 2u, memory_order_relaxed, "
+        "memory_order_relaxed);"
+    ) in code
+    assert (
+        "bool rejectedDirect = false /* unsupported Metal atomic compare-exchange "
+        "expected pointer: expected storage 'bank.deviceExpected' uses device "
+        "address space; Metal requires thread storage */;"
+    ) in code
+    assert (
+        "atomic_compare_exchange_weak_explicit(counters + index, bank.deviceExpected + index"
+        not in code
+    )
     assert "atomic_compare_exchange_strong_explicit" not in code
     source.write_text(code, encoding="utf-8")
 
@@ -6129,6 +7836,219 @@ def test_generated_metal_const_pointer_array_helpers_compile_with_metal(tmp_path
     )
 
 
+def test_generated_metal_const_threadgroup_pointer_alias_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "const_threadgroup_pointer_alias.metal"
+    output = tmp_path / "const_threadgroup_pointer_alias.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_CONST_THREADGROUP_POINTER_ALIAS_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "const threadgroup Payload* alias = &scratch;" in code
+    assert "unsupported Metal parameter store" in code
+    assert "unsupported Metal parameter call" in code
+    assert "alias->value = value;" not in code
+    assert "mutate(alias);" not in code
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_readonly_device_pointer_alias_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "readonly_device_pointer_alias.metal"
+    output = tmp_path / "readonly_device_pointer_alias.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_READONLY_DEVICE_POINTER_ALIAS_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "const device Payload* alias = payload;" in code
+    assert "unsupported Metal parameter store" in code
+    assert "unsupported Metal parameter call" in code
+    assert "alias->value = value;" not in code
+    assert "mutate(alias);" not in code
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_const_local_array_alias_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "const_local_array_alias.metal"
+    output = tmp_path / "const_local_array_alias.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_CONST_LOCAL_ARRAY_ALIAS_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "const float values[2] = {1.0, 2.0};" in code
+    assert "unsupported Metal parameter store" in code
+    assert "unsupported Metal parameter call" in code
+    assert "values[0] = value;" not in code
+    assert "mutate(values);" not in code
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_constant_pointer_reference_alias_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "constant_pointer_reference_alias.metal"
+    output = tmp_path / "constant_pointer_reference_alias.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_CONSTANT_POINTER_REFERENCE_ALIAS_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "constant Payload* pointerAlias = pointerPayload;" in code
+    assert "constant Payload& referenceAlias = referencePayload;" in code
+    assert "unsupported Metal parameter store" in code
+    assert "unsupported Metal parameter call" in code
+    assert "pointerAlias->value = pointerValue;" not in code
+    assert "referenceAlias.value = referenceValue;" not in code
+    assert "mutatePointer(pointerAlias);" not in code
+    assert "mutateReference(referenceAlias);" not in code
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_nested_constant_local_array_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "nested_constant_local_array.metal"
+    output = tmp_path / "nested_constant_local_array.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_NESTED_CONSTANT_LOCAL_ARRAY_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "const float values[2][2] = {{1.0, 2.0}, {3.0, 4.0}};" in code
+    assert "unsupported Metal parameter store" in code
+    assert "unsupported Metal parameter call" in code
+    assert "values[0][1] = value;" not in code
+    assert "mutate(values);" not in code
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_constant_scalar_vector_resource_index_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "constant_scalar_vector_resource_index.metal"
+    output = tmp_path / "constant_scalar_vector_resource_index.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_CONSTANT_SCALAR_VECTOR_RESOURCE_INDEX_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "const float scale = 2.0;" in code
+    assert "const float2 bias = float2(0.25, 0.5);" in code
+    assert "constexpr int LAYER = 3;" in code
+    assert "array<texture2d<float>, 4> textures [[texture(0)]]" in code
+    assert "array<sampler, 4> samplers [[sampler(0)]]" in code
+    assert "textures[LAYER].sample(samplers[LAYER], uv)" in code
+    assert "sampleLayer(input.uv, textures, samplers)" in code
+    assert "unsupported Metal parameter store" in code
+    assert "scale = value;" not in code
+    assert "bias.x = value;" not in code
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_struct_resource_array_queries_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "struct_resource_array_queries.metal"
+    output = tmp_path / "struct_resource_array_queries.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_STRUCT_RESOURCE_ARRAY_QUERY_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "array<texture2d<float>, 4> textures;" in code
+    assert "array<texture2d_array<float>, 4> layers;" in code
+    assert "array<texture2d_ms<float>, 4> msTextures;" in code
+    assert "array<texture2d_ms_array<float>, 4> msArrays;" in code
+    assert "constexpr int LAYER = 2;" in code
+    assert "pack.textures[LAYER].get_width(uint(LAYER))" in code
+    assert "pack.layers[LAYER].get_array_size()" in code
+    assert "pack.textures[LAYER].get_num_mip_levels()" in code
+    assert "pack.layers[LAYER].calculate_unclamped_lod" in code
+    assert "uvLayer.xy" in code
+    assert "pack.msTextures[LAYER].get_num_samples()" in code
+    assert "pack.msArrays[LAYER].get_num_samples()" in code
+    assert "textureSize(" not in code
+    assert "textureQueryLod(" not in code
+    assert "textureSamples(" not in code
+    assert "imageSamples(" not in code
+    assert "unsupported Metal texture samples query" not in code
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_nested_resource_container_forwarding_compiles_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "nested_resource_container_forwarding.metal"
+    output = tmp_path / "nested_resource_container_forwarding.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_NESTED_RESOURCE_CONTAINER_FORWARDING_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "array<texture2d<float>, 4> textures;" in code
+    assert "array<texture2d_array<float>, 4> layers;" in code
+    assert "array<sampler, 4> samplers;" in code
+    assert "samplePack(bank.pack, bank.samplers, uv, uvLayer)" in code
+    assert "texture2d<float> textures[4];" not in code
+    assert "sampler samplers[4];" not in code
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
 def test_generated_metal_address_space_mismatch_calls_compile_with_metal(tmp_path):
     xcrun = shutil.which("xcrun")
     if xcrun is None:
@@ -6255,6 +8175,33 @@ def test_generated_metal_compute_storage_image_access_qualifiers_compile_with_me
     assert "texture2d<float, access::read> source [[texture(0)]]" in code
     assert "texture2d<float, access::write> target [[texture(1)]]" in code
     assert "texture2d<uint, access::read_write> counters [[texture(2)]]" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_struct_held_storage_image_arrays_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_struct_held_storage_image_arrays.metal"
+    output = tmp_path / "compute_struct_held_storage_image_arrays.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_STRUCT_HELD_STORAGE_IMAGE_ARRAYS_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "array<texture2d<float, access::read>, 2> pairs;" in code
+    assert "array<texture2d<float, access::write>, 2> targets;" in code
+    assert "array<texture2d<uint, access::read_write>, 2> counters;" in code
+    assert "pack.pairs[index].read(uint2(pixel)).xy" in code
+    assert "pack.targets[index].write(float4(value, 0.0, 0.0), uint2(pixel))" in code
+    assert "pack.counters[index].atomic_fetch_add(uint2(pixel), value).x" in code
+    assert "thread texture2d" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

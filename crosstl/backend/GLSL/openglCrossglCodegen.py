@@ -225,6 +225,18 @@ class GLSLToCrossGLConverter:
             "ignoreIntersectionEXT": "IgnoreHit",
             "SetMeshOutputsEXT": "SetMeshOutputCounts",
             "EmitMeshTasksEXT": "DispatchMesh",
+            "interpolateAtCentroid": "interpolate_at_centroid",
+            "interpolateAtSample": "interpolate_at_sample",
+            "interpolateAtOffset": "interpolate_at_offset",
+            "dFdx": "ddx",
+            "dFdy": "ddy",
+            "fwidth": "fwidth",
+            "dFdxFine": "ddx_fine",
+            "dFdxCoarse": "ddx_coarse",
+            "dFdyFine": "ddy_fine",
+            "dFdyCoarse": "ddy_coarse",
+            "fwidthFine": "fwidth_fine",
+            "fwidthCoarse": "fwidth_coarse",
         }
         self.texture_function_operations = {
             "texture": "sample",
@@ -798,9 +810,13 @@ class GLSLToCrossGLConverter:
             + self.variable_qualifier_attribute_suffix(var)
         )
 
-    def fragment_uses_direct_output_declarations(self, fragment_writes_depth=False):
+    def fragment_uses_direct_output_declarations(
+        self, fragment_writes_depth=False, fragment_writes_sample_mask=False
+    ):
         return self.shader_type == "fragment" and (
-            len(self.outputs) > 1 or fragment_writes_depth
+            len(self.outputs) > 1
+            or fragment_writes_depth
+            or fragment_writes_sample_mask
         )
 
     def fragment_main_writes_name(self, node, name):
@@ -975,6 +991,9 @@ class GLSLToCrossGLConverter:
                     self.outputs.append(var)
 
         fragment_writes_depth = self.fragment_main_writes_name(node, "gl_FragDepth")
+        fragment_writes_sample_mask = self.fragment_main_writes_name(
+            node, "gl_SampleMask"
+        )
 
         # Ensure vertex stages include gl_Position
         if self.shader_type == "vertex":
@@ -993,13 +1012,14 @@ class GLSLToCrossGLConverter:
             self.shader_type == "fragment"
             and not self.outputs
             and not fragment_writes_depth
+            and not fragment_writes_sample_mask
         ):
             builtin = VariableNode(
                 "vec4", "gl_FragColor", qualifiers=["out"], semantic="gl_FragColor"
             )
             self.outputs.append(builtin)
         fragment_uses_direct_outputs = self.fragment_uses_direct_output_declarations(
-            fragment_writes_depth
+            fragment_writes_depth, fragment_writes_sample_mask
         )
 
         for uniform in node.uniforms:
@@ -1153,19 +1173,19 @@ class GLSLToCrossGLConverter:
         # Generate the main function if it exists
         if main_function:
             self.increase_indent()
+            input_parameter = (
+                f"{self.stage_struct_name()}Input input" if self.inputs else ""
+            )
 
             # Determine function signature based on shader type
             if self.shader_type == "vertex":
                 result += (
                     self.indent()
-                    + f"{self.stage_struct_name()}Output main({self.stage_struct_name()}Input input)"
+                    + f"{self.stage_struct_name()}Output main({input_parameter})"
                 )
             elif self.shader_type == "fragment":
                 if fragment_uses_direct_outputs:
-                    result += (
-                        self.indent()
-                        + f"void main({self.stage_struct_name()}Input input)"
-                    )
+                    result += self.indent() + f"void main({input_parameter})"
                 else:
                     output_type = "vec4"
                     output_name = "gl_FragColor"
@@ -1179,7 +1199,7 @@ class GLSLToCrossGLConverter:
                         )
                     result += (
                         self.indent()
-                        + f"{output_type} main({self.stage_struct_name()}Input input)"
+                        + f"{output_type} main({input_parameter})"
                         + f"{output_attributes} @ {output_name}"
                     )
             elif self.shader_type in self.NON_STRUCT_STAGE_TYPES:
@@ -1187,7 +1207,7 @@ class GLSLToCrossGLConverter:
             else:
                 result += (
                     self.indent()
-                    + f"{self.stage_struct_name()}Output main({self.stage_struct_name()}Input input)"
+                    + f"{self.stage_struct_name()}Output main({input_parameter})"
                 )
 
             result += " {\n"

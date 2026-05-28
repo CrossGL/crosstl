@@ -27,9 +27,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e .
           python -m pip install -r requirements.txt
+          python -m pip install pytest-xdist
 
       - name: Run complete test suite
-        run: python -m pytest tests --durations=25
+        run: python -m pytest tests --durations=25 -n auto
 
   shader-validators:
     name: Shader Validators (${{ matrix.os }})
@@ -52,7 +53,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y glslang-tools
+          sudo apt-get install -y glslang-tools spirv-tools
 
       - name: Install GLSL validator (macOS)
         if: runner.os == 'macOS'
@@ -104,4 +105,188 @@ jobs:
         run: >
           python -m pytest
           tests/test_translator/test_codegen/test_external_shader_validators.py
+          -rs
+
+  compiler-smoke-linux:
+    name: Compiler Smoke (Linux CUDA/DXC/SPIR-V/Slang)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CUDA_VERSION: "13.2.0"
+      SLANG_VERSION: v2026.9.1
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install GLSL and SPIR-V tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools spirv-tools
+
+      - name: Install DirectX Shader Compiler
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/dxc.tar.gz" \
+            https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/linux_dxc_2026_02_20.x86_64.tar.gz
+          mkdir -p "$RUNNER_TEMP/dxc"
+          tar -xzf "$RUNNER_TEMP/dxc.tar.gz" -C "$RUNNER_TEMP/dxc"
+          echo "$RUNNER_TEMP/dxc/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/dxc/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Install Slang compiler
+        run: |
+          set -euo pipefail
+          version="${SLANG_VERSION#v}"
+          archive="slang-${version}-linux-x86_64-glibc-2.27.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/slang.tar.gz" \
+            "https://github.com/shader-slang/slang/releases/download/${SLANG_VERSION}/${archive}"
+          mkdir -p "$RUNNER_TEMP/slang"
+          tar -xzf "$RUNNER_TEMP/slang.tar.gz" -C "$RUNNER_TEMP/slang"
+          slangc_path="$(find "$RUNNER_TEMP/slang" -type f -name slangc -perm -111 -print -quit)"
+          if [ -z "$slangc_path" ]; then
+            echo "slangc was not found in the extracted Slang archive" >&2
+            find "$RUNNER_TEMP/slang" -maxdepth 3 -type f | sort >&2
+            exit 1
+          fi
+          slang_bin="$(dirname "$slangc_path")"
+          slang_lib="$(find "$RUNNER_TEMP/slang" -type d -name lib -print -quit)"
+          echo "$slang_bin" >> "$GITHUB_PATH"
+          if [ -n "$slang_lib" ]; then
+            echo "LD_LIBRARY_PATH=$slang_lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install CUDA compiler
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: ${{ env.CUDA_VERSION }}
+          method: network
+          sub-packages: '["nvcc", "cudart-dev"]'
+          log-file-suffix: compiler-smoke-linux.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install -r requirements.txt
+          python -m pip install pytest-xdist
+
+      - name: Verify compiler toolchain is active
+        run: |
+          set -euo pipefail
+          for tool in glslangValidator spirv-as spirv-val dxc slangc nvcc; do
+            command -v "$tool"
+          done
+          glslangValidator --version
+          spirv-as --version
+          spirv-val --version
+          dxc --version
+          slangc -version || slangc --version
+          nvcc --version
+
+      - name: Run compiler toolchain smoke tests
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+
+          cat > "$tmp/smoke.hlsl" <<'HLSL'
+          struct PSInput {
+            float4 position : SV_Position;
+          };
+
+          float4 PSMain(PSInput input) : SV_Target {
+            return input.position;
+          }
+          HLSL
+          dxc -T ps_6_0 -E PSMain "$tmp/smoke.hlsl" -Fo "$tmp/smoke.dxil"
+
+          cat > "$tmp/smoke.slang" <<'SLANG'
+          [shader("compute")]
+          [numthreads(1, 1, 1)]
+          void main(uint3 tid : SV_DispatchThreadID) {
+          }
+          SLANG
+          slangc -target hlsl -entry main -stage compute "$tmp/smoke.slang" -o "$tmp/smoke.slang.hlsl"
+
+          cat > "$tmp/smoke.comp" <<'GLSL'
+          #version 450
+          layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+          void main() {
+          }
+          GLSL
+          glslangValidator -V "$tmp/smoke.comp" -o "$tmp/smoke.spv"
+          spirv-val "$tmp/smoke.spv"
+
+          cat > "$tmp/smoke.spvasm" <<'SPV'
+          OpCapability Shader
+          OpMemoryModel Logical GLSL450
+          OpEntryPoint GLCompute %main "main"
+          OpExecutionMode %main LocalSize 1 1 1
+          %void = OpTypeVoid
+          %fn = OpTypeFunction %void
+          %main = OpFunction %void None %fn
+          %entry = OpLabel
+          OpReturn
+          OpFunctionEnd
+          SPV
+          spirv-as "$tmp/smoke.spvasm" -o "$tmp/smoke-as.spv"
+          spirv-val "$tmp/smoke-as.spv"
+
+          cat > "$tmp/smoke.cu" <<'CUDA'
+          #include <cuda_runtime.h>
+
+          __global__ void cgl_smoke_kernel() {
+          }
+          CUDA
+          nvcc -std=c++17 -c "$tmp/smoke.cu" -o "$tmp/smoke_cuda.o"
+
+      - name: Run external shader validator tests
+        run: >
+          python -m pytest -q -n auto
+          tests/test_translator/test_codegen/test_external_shader_validators.py
+          -rs
+
+  compiler-smoke-macos:
+    name: Compiler Smoke (macOS Metal)
+    runs-on: macOS-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install GLSL validator
+        run: brew install glslang
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install -r requirements.txt
+          python -m pip install pytest-xdist
+
+      - name: Verify Metal toolchain is active
+        run: |
+          xcrun -sdk macosx -f metal
+          xcrun -sdk macosx metal -v
+          command -v glslangValidator
+          glslangValidator --version
+
+      - name: Run Metal compiler smoke tests
+        run: >
+          python -m pytest -q -n auto
+          tests/test_translator/test_codegen/test_external_shader_validators.py
+          tests/test_translator/test_codegen/test_shader_validation.py
+          tests/test_translator/test_codegen/test_metal_codegen.py
+          -k "metal"
           -rs

@@ -1504,6 +1504,68 @@ def test_inferred_struct_local_impl_method_named_like_scalar_builtin_does_not_lo
     assert "return sin(w);" not in result
 
 
+def test_struct_member_impl_method_named_like_resource_helper_stays_user_defined():
+    code = """
+    struct ResourceLike {
+        value: f32,
+    }
+
+    struct Holder {
+        resource: ResourceLike,
+    }
+
+    impl ResourceLike {
+        fn sample_sampler(&self, sampler_state: f32, uv: f32) -> f32 {
+            return self.value + sampler_state + uv;
+        }
+    }
+
+    fn sample(holder: Holder, sampler_state: f32, uv: f32) -> f32 {
+        return holder.resource.sample_sampler(sampler_state, uv);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "float ResourceLike_sample_sampler(" in result
+    assert (
+        "return ResourceLike_sample_sampler(holder.resource, sampler_state, uv);"
+        in result
+    )
+    assert "texture(holder.resource" not in result
+
+
+def test_generic_struct_member_impl_method_named_like_resource_helper_stays_user_defined():
+    code = """
+    struct ResourceLike {
+        value: f32,
+    }
+
+    struct Holder<T> {
+        resource: T,
+    }
+
+    impl ResourceLike {
+        fn sample_sampler(&self, sampler_state: f32, uv: f32) -> f32 {
+            return self.value + sampler_state + uv;
+        }
+    }
+
+    fn sample(holder: Holder<ResourceLike>, sampler_state: f32, uv: f32) -> f32 {
+        return holder.resource.sample_sampler(sampler_state, uv);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "float ResourceLike_sample_sampler(" in result
+    assert (
+        "return ResourceLike_sample_sampler(holder.resource, sampler_state, uv);"
+        in result
+    )
+    assert "texture(holder.resource" not in result
+
+
 def test_modulo_function_converts_to_crossgl_mod():
     code = """
     fn wrap(x: f32) -> f32 {
@@ -3306,6 +3368,663 @@ def test_gpu_image_and_buffer_helper_calls_convert_to_crossgl_intrinsics():
     assert "image_atomic_xor" not in result
     assert "image_atomic_exchange" not in result
     assert "image_atomic_comp_swap" not in result
+
+
+def test_aliased_reference_resource_helpers_convert_to_crossgl_intrinsics():
+    code = """
+    use crate::gpu::{
+        Texture2D as ColorTexture,
+        DepthTexture2D as ShadowTexture,
+        Image2D as StorageImage,
+        RwBuffer as WritableBuffer,
+        Buffer as ReadBuffer,
+        Sampler as ShaderSampler,
+    };
+
+    fn aliased_resources(
+        tex: &ColorTexture<f32>,
+        shadow: &ShadowTexture<f32>,
+        image: &mut StorageImage<Vec4<u32>>,
+        values: &mut WritableBuffer<i32>,
+        weights: &ReadBuffer<f32>,
+        sampler_state: &ShaderSampler,
+        uv: Vec2<f32>,
+        pixel: Vec2<i32>,
+        index: u32,
+        amount: u32,
+    ) -> Vec4<f32> {
+        let base = sample_sampler(tex, sampler_state, uv);
+        let lit = texture_compare(shadow, uv, 0.5);
+        let previous = image_atomic_add(image, pixel, amount);
+        let value = buffer_load(values, index);
+        let weight = buffer_load(weights, index);
+        buffer_store(values, index, value + previous as i32);
+        return base + Vec4::<f32>::new(weight + lit, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "vec4 aliased_resources(sampler2D tex, sampler2DShadow shadow, "
+        "uimage2D image, RWStructuredBuffer<int> values, "
+        "StructuredBuffer<float> weights, sampler sampler_state, vec2 uv, "
+        "ivec2 pixel, uint index, uint amount)"
+    ) in result
+    assert "base = texture(tex, sampler_state, uv);" in result
+    assert "lit = textureCompare(shadow, uv, 0.5);" in result
+    assert "previous = imageAtomicAdd(image, pixel, amount);" in result
+    assert "value = buffer_load(values, index);" in result
+    assert "weight = buffer_load(weights, index);" in result
+    assert "buffer_store(values, index, (value + (int)previous));" in result
+    assert "&ColorTexture" not in result
+    assert "&mut StorageImage" not in result
+    assert "&ReadBuffer" not in result
+    assert "sample_sampler" not in result
+    assert "texture_compare" not in result
+    assert "image_atomic_add" not in result
+    assert "ColorTexture tex" not in result
+    assert "WritableBuffer<int> values" not in result
+
+
+def test_gpu_resource_method_calls_convert_to_crossgl_intrinsics():
+    code = """
+    fn method_resources(
+        tex: Texture2D<f32>,
+        shadow: DepthTexture2D<f32>,
+        color_image: Image2D<Vec4<f32>>,
+        counter_image: Image2D<Vec4<u32>>,
+        values: RwBuffer<i32>,
+        weights: Buffer<f32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        pixel: Vec2<i32>,
+        index: u32,
+        amount: u32,
+    ) -> Vec4<f32> {
+        let base = tex.sample_sampler(sampler_state, uv);
+        let biased = tex.sample_bias(uv, 0.25);
+        let size = tex.texture_size_lod(0);
+        let lit = shadow.texture_compare(uv, 0.5);
+        let color = color_image.image_load(pixel);
+        color_image.image_store(pixel, color);
+        let previous = counter_image.image_atomic_add(pixel, amount);
+        let value = values.buffer_load(index);
+        let weight = weights.buffer_load(index);
+        values.buffer_store(index, value + previous as i32);
+        return base;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "vec4 method_resources(sampler2D tex, sampler2DShadow shadow, "
+        "image2D color_image, uimage2D counter_image, "
+        "RWStructuredBuffer<int> values, StructuredBuffer<float> weights, "
+        "sampler sampler_state, vec2 uv, ivec2 pixel, uint index, uint amount)"
+    ) in result
+    assert "base = texture(tex, sampler_state, uv);" in result
+    assert "biased = texture(tex, uv, 0.25);" in result
+    assert "size = textureSize(tex, 0);" in result
+    assert "lit = textureCompare(shadow, uv, 0.5);" in result
+    assert "color = imageLoad(color_image, pixel);" in result
+    assert "imageStore(color_image, pixel, color);" in result
+    assert "previous = imageAtomicAdd(counter_image, pixel, amount);" in result
+    assert "value = buffer_load(values, index);" in result
+    assert "weight = buffer_load(weights, index);" in result
+    assert "buffer_store(values, index, (value + (int)previous));" in result
+    assert ".sample_sampler" not in result
+    assert ".sample_bias" not in result
+    assert ".texture_size_lod" not in result
+    assert ".texture_compare" not in result
+    assert ".image_load" not in result
+    assert ".image_store" not in result
+    assert ".image_atomic_add" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_struct_member_receivers():
+    code = """
+    type ResourceBundle = Resources;
+
+    struct Resources {
+        tex: Texture2D<f32>,
+        shadow: DepthTexture2D<f32>,
+        color_image: Image2D<Vec4<f32>>,
+        values: RwBuffer<i32>,
+    }
+
+    struct ResourceGroup {
+        primary: Resources,
+        alternatives: Resources[2],
+        aliased: ResourceBundle,
+    }
+
+    fn member_method_resources(
+        group: ResourceGroup,
+        resources: ResourceBundle,
+        resource_array: Resources[2],
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        pixel: Vec2<i32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let primary_tex = group.primary.tex;
+        let base = primary_tex.sample_sampler(sampler_state, uv);
+        let lit = group.alternatives[index].shadow.texture_compare(uv, 0.5);
+        let color = resources.color_image.image_load(pixel);
+        resources.color_image.image_store(pixel, color);
+        let value = group.aliased.values.buffer_load(index);
+        resource_array[index].values.buffer_store(index, value);
+        return base;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "vec4 member_method_resources(ResourceGroup group, "
+        "ResourceBundle resources, Resources resource_array[2], "
+        "sampler sampler_state, vec2 uv, ivec2 pixel, uint index)"
+    ) in result
+    assert "base = texture(primary_tex, sampler_state, uv);" in result
+    assert "lit = textureCompare(group.alternatives[index].shadow, uv, 0.5);" in result
+    assert "color = imageLoad(resources.color_image, pixel);" in result
+    assert "imageStore(resources.color_image, pixel, color);" in result
+    assert "value = buffer_load(group.aliased.values, index);" in result
+    assert "buffer_store(resource_array[index].values, index, value);" in result
+    assert ".sample_sampler" not in result
+    assert ".texture_compare" not in result
+    assert ".image_load" not in result
+    assert ".image_store" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_generic_struct_member_receivers():
+    code = """
+    type ResourceHolder<T> = Holder<T>;
+
+    struct Holder<T> {
+        resource: T,
+        resources: T[2],
+    }
+
+    struct Nested<T> {
+        holder: Holder<T>,
+    }
+
+    fn generic_member_resources(
+        holder: Holder<Texture2D<f32>>,
+        shadow_holder: ResourceHolder<DepthTexture2D<f32>>,
+        buffer_holder: Nested<RwBuffer<i32>>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let local_tex = holder.resource;
+        let base = local_tex.sample_sampler(sampler_state, uv);
+        let lit = shadow_holder.resources[index].texture_compare(uv, 0.5);
+        let value = buffer_holder.holder.resource.buffer_load(index);
+        buffer_holder.holder.resources[index].buffer_store(index, value);
+        return base;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "base = texture(local_tex, sampler_state, uv);" in result
+    assert "lit = textureCompare(shadow_holder.resources[index], uv, 0.5);" in result
+    assert "value = buffer_load(buffer_holder.holder.resource, index);" in result
+    assert (
+        "buffer_store(buffer_holder.holder.resources[index], index, value);" in result
+    )
+    assert ".sample_sampler" not in result
+    assert ".texture_compare" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_multi_generic_struct_member_receivers():
+    code = """
+    struct TaggedHolder<T, Tag> {
+        resource: T,
+        tag: Tag,
+    }
+
+    fn tagged_resource(
+        holder: TaggedHolder<Texture2D<f32>, u32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+    ) -> Vec4<f32> {
+        return holder.resource.sample_sampler(sampler_state, uv);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "return texture(holder.resource, sampler_state, uv);" in result
+    assert ".sample_sampler" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_tuple_struct_field_receivers():
+    code = """
+    struct TupleHolder(Texture2D<f32>, DepthTexture2D<f32>, RwBuffer<i32>);
+
+    fn tuple_resources(
+        holder: TupleHolder,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let base = holder.0.sample_sampler(sampler_state, uv);
+        let lit = holder.1.texture_compare(uv, 0.5);
+        let value = holder.2.buffer_load(index);
+        holder.2.buffer_store(index, value);
+        return base + Vec4::<f32>::new(lit, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "sampler2D field0;" in result
+    assert "sampler2DShadow field1;" in result
+    assert "RWStructuredBuffer<int> field2;" in result
+    assert "base = texture(holder.field0, sampler_state, uv);" in result
+    assert "lit = textureCompare(holder.field1, uv, 0.5);" in result
+    assert "value = buffer_load(holder.field2, index);" in result
+    assert "buffer_store(holder.field2, index, value);" in result
+    assert "holder.0" not in result
+    assert "holder.1" not in result
+    assert "holder.2" not in result
+    assert ".sample_sampler" not in result
+    assert ".texture_compare" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_resource_type_alias_receivers():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+    type GenericColorTexture<T> = Texture2D<T>;
+    type ShadowTexture<T> = DepthTexture2D<T>;
+    type WritableBuffer<T> = RwBuffer<T>;
+
+    fn alias_resources<T>(
+        tex: ColorTexture,
+        generic_tex: GenericColorTexture<T>,
+        shadow: ShadowTexture<T>,
+        values: WritableBuffer<i32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let base = tex.sample_sampler(sampler_state, uv);
+        let generic_base = generic_tex.sample_sampler(sampler_state, uv);
+        let lit = shadow.texture_compare(uv, 0.5);
+        let value = values.buffer_load(index);
+        values.buffer_store(index, value);
+        return base + generic_base + Vec4::<f32>::new(lit, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "typedef sampler2D ColorTexture;" in result
+    assert (
+        "vec4 alias_resources(ColorTexture tex, sampler2D generic_tex, "
+        "sampler2DShadow shadow, RWStructuredBuffer<int> values"
+    ) in result
+    assert "base = texture(tex, sampler_state, uv);" in result
+    assert "generic_base = texture(generic_tex, sampler_state, uv);" in result
+    assert "lit = textureCompare(shadow, uv, 0.5);" in result
+    assert "value = buffer_load(values, index);" in result
+    assert "buffer_store(values, index, value);" in result
+    assert ".sample_sampler" not in result
+    assert ".texture_compare" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+    assert "GenericColorTexture" not in result
+    assert "ShadowTexture" not in result
+    assert "WritableBuffer" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_function_returned_receivers():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+    type WritableBuffer<T> = RwBuffer<T>;
+
+    fn choose_tex(tex: ColorTexture) -> ColorTexture {
+        return tex;
+    }
+
+    fn choose_values(values: WritableBuffer<i32>) -> WritableBuffer<i32> {
+        return values;
+    }
+
+    fn returned_resource_methods(
+        tex: ColorTexture,
+        values: WritableBuffer<i32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let local_tex = self::choose_tex(tex);
+        let local_values = crate::choose_values(values);
+        let base = local_tex.sample_sampler(sampler_state, uv);
+        let value = local_values.buffer_load(index);
+        local_values.buffer_store(index, value);
+        return base;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "ColorTexture choose_tex(ColorTexture tex)" in result
+    assert (
+        "RWStructuredBuffer<int> choose_values(RWStructuredBuffer<int> values)"
+        in result
+    )
+    assert "let local_tex = choose_tex(tex);" in result
+    assert "let local_values = choose_values(values);" in result
+    assert "base = texture(local_tex, sampler_state, uv);" in result
+    assert "value = buffer_load(local_values, index);" in result
+    assert "buffer_store(local_values, index, value);" in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_generic_function_returned_receivers():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+    type WritableBuffer<T> = RwBuffer<T>;
+
+    struct Holder<T> {
+        resource: T,
+    }
+
+    fn pick<T>(value: T) -> T {
+        return value;
+    }
+
+    fn choose<T>(left: T, right: T) -> T {
+        return left;
+    }
+
+    fn unwrap_holder<T>(holder: Holder<T>) -> T {
+        return holder.resource;
+    }
+
+    fn generic_returned_resource_methods(
+        tex: ColorTexture,
+        shadow: DepthTexture2D<f32>,
+        values: WritableBuffer<i32>,
+        holder: Holder<Texture2D<f32>>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let local_tex = pick(tex);
+        let explicit_tex = pick::<Texture2D<f32>>(tex);
+        let local_shadow = pick(shadow);
+        let local_values = choose(values, values);
+        let holder_tex = unwrap_holder(holder);
+        let base = local_tex.sample_sampler(sampler_state, uv);
+        let explicit_base = explicit_tex.sample_sampler(sampler_state, uv);
+        let lit = local_shadow.texture_compare(uv, 0.5);
+        let value = local_values.buffer_load(index);
+        local_values.buffer_store(index, value);
+        return base + explicit_base + holder_tex.sample_sampler(sampler_state, uv)
+            + Vec4::<f32>::new(lit, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "T pick(T value)" in result
+    assert "T choose(T left, T right)" in result
+    assert "T unwrap_holder(Holder<T> holder)" in result
+    assert "let local_tex = pick(tex);" in result
+    assert "let explicit_tex = pick(tex);" in result
+    assert "let local_shadow = pick(shadow);" in result
+    assert "let local_values = choose(values, values);" in result
+    assert "let holder_tex = unwrap_holder(holder);" in result
+    assert "base = texture(local_tex, sampler_state, uv);" in result
+    assert "explicit_base = texture(explicit_tex, sampler_state, uv);" in result
+    assert "lit = textureCompare(local_shadow, uv, 0.5);" in result
+    assert "value = buffer_load(local_values, index);" in result
+    assert "buffer_store(local_values, index, value);" in result
+    assert "texture(holder_tex, sampler_state, uv)" in result
+    assert "pick<Texture2D<f32>>" not in result
+    assert ".sample_sampler" not in result
+    assert ".texture_compare" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_unresolved_generic_function_returned_receivers_stay_unlowered():
+    code = """
+    fn default_value<T>() -> T {
+        return make_default();
+    }
+
+    fn conflict<T>(left: T, right: T) -> T {
+        return left;
+    }
+
+    fn unresolved_generic_returned_resource_methods(
+        tex: Texture2D<f32>,
+        values: RwBuffer<i32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+    ) -> Vec4<f32> {
+        let unknown = default_value();
+        let conflicted = conflict(tex, values);
+        let base = unknown.sample_sampler(sampler_state, uv);
+        return base + conflicted.sample_sampler(sampler_state, uv);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "let unknown = default_value();" in result
+    assert "let conflicted = conflict(tex, values);" in result
+    assert "base = unknown.sample_sampler(sampler_state, uv);" in result
+    assert "return (base + conflicted.sample_sampler(sampler_state, uv));" in result
+    assert "texture(unknown" not in result
+    assert "texture(conflicted" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_impl_method_returned_receivers():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Provider {
+        tex: ColorTexture,
+        values: RwBuffer<i32>,
+    }
+
+    impl Provider {
+        fn clone_provider(&self) -> Self {
+            return self;
+        }
+
+        fn color(&self) -> ColorTexture {
+            return self.tex;
+        }
+
+        fn writable(&self) -> RwBuffer<i32> {
+            return self.values;
+        }
+    }
+
+    fn impl_returned_resource_methods(
+        provider: Provider,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let local_tex = provider.color();
+        let local_values = provider.writable();
+        let base = local_tex.sample_sampler(sampler_state, uv);
+        let value = local_values.buffer_load(index);
+        local_values.buffer_store(index, value);
+        return base;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Provider Provider_clone_provider(Provider self)" in result
+    assert "ColorTexture Provider_color(Provider self)" in result
+    assert "RWStructuredBuffer<int> Provider_writable(Provider self)" in result
+    assert "let local_tex = Provider_color(provider);" in result
+    assert "let local_values = Provider_writable(provider);" in result
+    assert "base = texture(local_tex, sampler_state, uv);" in result
+    assert "value = buffer_load(local_values, index);" in result
+    assert "buffer_store(local_values, index, value);" in result
+    assert "Self self" not in result
+    assert "Self Provider_clone_provider" not in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_generic_impl_method_returned_receivers():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Holder<T> {
+        resource: T,
+        resources: T[2],
+    }
+
+    impl<T> Holder<T> {
+        fn get(&self) -> T {
+            return self.resource;
+        }
+
+        fn get_index(&self, index: u32) -> T {
+            return self.resources[index];
+        }
+    }
+
+    fn generic_impl_returned_resource_methods(
+        holder: Holder<ColorTexture>,
+        shadow_holder: Holder<DepthTexture2D<f32>>,
+        values_holder: Holder<RwBuffer<i32>>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let local_tex = holder.get();
+        let local_shadow = shadow_holder.get_index(index);
+        let local_values = values_holder.get();
+        let base = local_tex.sample_sampler(sampler_state, uv);
+        let lit = local_shadow.texture_compare(uv, 0.5);
+        let value = local_values.buffer_load(index);
+        local_values.buffer_store(index, value);
+        return base + Vec4::<f32>::new(lit, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "T Holder_get(Holder<T> self)" in result
+    assert "T Holder_get_index(Holder<T> self, uint index)" in result
+    assert "let local_tex = Holder_get(holder);" in result
+    assert "let local_shadow = Holder_get_index(shadow_holder, index);" in result
+    assert "let local_values = Holder_get(values_holder);" in result
+    assert "base = texture(local_tex, sampler_state, uv);" in result
+    assert "lit = textureCompare(local_shadow, uv, 0.5);" in result
+    assert "value = buffer_load(local_values, index);" in result
+    assert "buffer_store(local_values, index, value);" in result
+    assert "Holder<T>_get" not in result
+    assert ".get()" not in result
+    assert ".get_index" not in result
+    assert ".sample_sampler" not in result
+    assert ".texture_compare" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_unresolved_generic_impl_method_returned_receivers_stay_unlowered():
+    code = """
+    struct Holder<T> {
+        resource: T,
+    }
+
+    impl<T> Holder<T> {
+        fn get(&self) -> T {
+            return self.resource;
+        }
+    }
+
+    fn unresolved_generic_impl_returned_resource<T>(
+        holder: Holder<T>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+    ) -> Vec4<f32>
+    where
+        T: SampledTexture,
+    {
+        let local_tex = holder.get();
+        return local_tex.sample_sampler(sampler_state, uv);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "let local_tex = Holder_get(holder);" in result
+    assert "return local_tex.sample_sampler(sampler_state, uv);" in result
+    assert "texture(local_tex" not in result
+
+
+def test_unknown_generic_resource_bound_receiver_stays_unlowered():
+    code = """
+    fn generic_bound_resource<T>(
+        tex: T,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+    ) -> Vec4<f32>
+    where
+        T: SampledTexture,
+    {
+        return tex.sample_sampler(sampler_state, uv);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "vec4 generic_bound_resource(T tex, sampler sampler_state, vec2 uv)" in result
+    )
+    assert "return tex.sample_sampler(sampler_state, uv);" in result
+    assert "texture(tex" not in result
+
+
+def test_malformed_generic_struct_arity_does_not_infer_resource_member_type():
+    code = """
+    struct Holder<T> {
+        resource: T,
+    }
+
+    fn malformed_holder(
+        holder: Holder<Texture2D<f32>, f32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+    ) -> Vec4<f32> {
+        return holder.resource.sample_sampler(sampler_state, uv);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "return holder.resource.sample_sampler(sampler_state, uv);" in result
+    assert "texture(holder.resource" not in result
 
 
 def test_char_literal_conversion():

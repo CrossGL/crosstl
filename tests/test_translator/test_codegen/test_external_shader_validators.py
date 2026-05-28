@@ -287,6 +287,34 @@ shader GLSLMultisampleStorageValidator {
 """
 
 
+GLSL_CUBE_STORAGE_COMPUTE_SHADER = """
+shader GLSLCubeStorageValidator {
+    imageCube cube;
+    imageCubeArray cubeArray @rgba16f;
+    iimageCube signedCube @r32i;
+    uimageCubeArray unsignedCubeArray @r32ui;
+
+    compute {
+        void main() {
+            ivec3 cubeCoord = ivec3(0, 1, 2);
+            ivec3 layerCoord = ivec3(3, 4, 5);
+            vec4 oldCube = imageLoad(cube, cubeCoord);
+            imageStore(cube, cubeCoord, oldCube + vec4(0.25));
+
+            vec4 oldLayer = imageLoad(cubeArray, layerCoord);
+            imageStore(cubeArray, layerCoord, oldLayer + oldCube);
+
+            int signedOld = imageAtomicExchange(signedCube, cubeCoord, -1);
+            imageStore(signedCube, cubeCoord, signedOld + 1);
+
+            uint unsignedOld = imageAtomicAdd(unsignedCubeArray, layerCoord, 2u);
+            imageStore(unsignedCubeArray, layerCoord, unsignedOld + 1u);
+        }
+    }
+}
+"""
+
+
 GLSL_PARAMETER_IMAGE_ATOMIC_COMPUTE_SHADER = """
 shader GLSLParameterImageAtomicValidator {
     uimage2D counters @r32ui;
@@ -1430,6 +1458,183 @@ def test_generated_glsl_fragment_validates_with_glslangvalidator(tmp_path):
     _run_validator([glslang, "-S", "frag", str(shader_path)])
 
 
+def test_generated_glsl_fragment_sample_builtins_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "sample_builtins.frag"
+    shader = """
+    shader GLSLFragmentSampleBuiltinsValidator {
+        fragment {
+            vec4 main(
+                int sampleIndex @SV_SampleIndex,
+                vec2 samplePosition @sample_position,
+                int coverage @SV_Coverage
+            ) @gl_FragColor {
+                return vec4(samplePosition, float(sampleIndex), float(coverage));
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+    assert "gl_SampleID" in code
+    assert "gl_SamplePosition" in code
+    assert "gl_SampleMaskIn[0]" in code
+    assert "gl_SampleMask)" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "frag", str(shader_path)])
+
+
+def test_generated_glsl_fragment_interpolation_helpers_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "interpolation_helpers.frag"
+    shader = """
+    shader GLSLFragmentInterpolationHelpersValidator {
+        fragment {
+            vec4 main(
+                vec4 sampleColor @location(0) @sample,
+                vec2 offset @location(1)
+            ) @gl_FragColor {
+                return interpolate_at_sample(sampleColor, 0)
+                    + interpolate_at_offset(sampleColor, offset)
+                    + interpolate_at_centroid(sampleColor);
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+    assert "layout(location = 0) sample in vec4 sampleColor;" in code
+    assert "interpolateAtSample(sampleColor, 0)" in code
+    assert "interpolateAtOffset(sampleColor, offset)" in code
+    assert "interpolateAtCentroid(sampleColor)" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "frag", str(shader_path)])
+
+
+def test_generated_glsl_fragment_derivative_helpers_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "derivative_helpers.frag"
+    shader = """
+    shader GLSLFragmentDerivativeHelpersValidator {
+        sampler2D colorMap @binding(0);
+
+        vec2 wrappedGradientX(vec2 uv) {
+            return gradientX(uv);
+        }
+
+        fragment {
+            vec2 gradientX(vec2 uv) {
+                return ddx(uv);
+            }
+
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                float dx = wrappedGradientX(uv).x;
+                float fineY = ddy_fine(uv.y);
+                float coarseWidth = fwidth_coarse(uv.x);
+                vec4 sampled = textureGrad(colorMap, uv, wrappedGradientX(uv), ddy(uv));
+                return sampled + vec4(dx + fineY + coarseWidth);
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+    assert "return dFdx(uv);" in code
+    assert "return gradientX(uv);" in code
+    assert "dFdyFine(uv.y)" in code
+    assert "fwidthCoarse(uv.x)" in code
+    assert "textureGrad(colorMap, uv, wrappedGradientX(uv), dFdy(uv))" in code
+    assert "ddx(" not in code
+    assert "ddy_fine" not in code
+    assert "fwidth_coarse" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "frag", str(shader_path)])
+
+
+def test_generated_glsl_projected_gradient_offsets_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "projected_gradient_offsets.frag"
+    shader = """
+    shader GLSLProjectedGradientOffsetValidator {
+        sampler2D colorMap @binding(0);
+        sampler3D volumeMap @binding(1);
+
+        fragment {
+            vec4 main(
+                vec2 uv @location(0),
+                vec4 uvq @location(1),
+                vec4 xyzq @location(2),
+                vec2 ddx2 @location(3),
+                vec2 ddy2 @location(4),
+                vec3 ddx3 @location(5),
+                vec3 ddy3 @location(6)
+            ) @gl_FragColor {
+                const ivec2 offset2 = ivec2(1, 0);
+                const ivec3 offset3 = ivec3(1, 0, -1);
+                vec4 gradOffset = textureGradOffset(
+                    colorMap,
+                    uv,
+                    ddx2,
+                    ddy2,
+                    offset2
+                );
+                vec4 projectedGrad = textureProjGrad(colorMap, uvq, ddx2, ddy2);
+                vec4 projectedGradOffset = textureProjGradOffset(
+                    colorMap,
+                    uvq,
+                    ddx2,
+                    ddy2,
+                    offset2
+                );
+                vec4 volumeProjectedGrad = textureProjGrad(
+                    volumeMap,
+                    xyzq,
+                    ddx3,
+                    ddy3
+                );
+                vec4 volumeProjectedGradOffset = textureProjGradOffset(
+                    volumeMap,
+                    xyzq,
+                    ddx3,
+                    ddy3,
+                    offset3
+                );
+                return gradOffset
+                    + projectedGrad
+                    + projectedGradOffset
+                    + volumeProjectedGrad
+                    + volumeProjectedGradOffset;
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+    assert "layout(binding = 0) uniform sampler2D colorMap;" in code
+    assert "layout(binding = 1) uniform sampler3D volumeMap;" in code
+    assert "const ivec2 offset2 = ivec2(1, 0);" in code
+    assert "const ivec3 offset3 = ivec3(1, 0, (-1));" in code
+    assert "textureGradOffset(colorMap, uv, ddx2, ddy2, offset2)" in code
+    assert "textureProjGrad(colorMap, uvq, ddx2, ddy2)" in code
+    assert "textureProjGradOffset(colorMap, uvq, ddx2, ddy2, offset2)" in code
+    assert "textureProjGrad(volumeMap, xyzq, ddx3, ddy3)" in code
+    assert "textureProjGradOffset(volumeMap, xyzq, ddx3, ddy3, offset3)" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "frag", str(shader_path)])
+
+
 def test_mixed_glsl_fragment_multiple_outputs_validate_with_glslangvalidator(
     tmp_path,
 ):
@@ -1544,6 +1749,66 @@ def test_generated_glsl_geometry_tessellation_layouts_validate_with_glslangvalid
         shader_path.write_text(code, encoding="utf-8")
 
         _run_validator([glslang, "-S", validator_stage, str(shader_path)])
+
+
+def test_generated_glsl_geometry_inputtopology_metadata_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "geometry_inputtopology.geom"
+    ast = crosstl.translator.parse("""
+        shader GLSLGeometryInputTopologyValidator {
+            geometry {
+                void main()
+                    @inputtopology(triangle)
+                    @invocations(2)
+                    @outputtopology(line)
+                    @maxvertexcount(2)
+                {
+                    gl_Position = gl_in[0].gl_Position;
+                    EmitVertex();
+                    gl_Position = gl_in[1].gl_Position;
+                    EmitVertex();
+                    EndPrimitive();
+                }
+            }
+        }
+        """)
+
+    code = GLSLCodeGen().generate_stage(ast, "geometry")
+    assert "layout(triangles, invocations = 2) in;" in code
+    assert "layout(line_strip, max_vertices = 2) out;" in code
+    assert "inputtopology" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "geom", str(shader_path)])
+
+
+def test_generated_glsl_tessellation_outputtopology_metadata_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "tessellation_outputtopology.tese"
+    ast = crosstl.translator.parse("""
+        shader GLSLTessellationOutputTopologyValidator {
+            tessellation_evaluation {
+                void main()
+                    @domain(triangle)
+                    @partitioning(fractional_even)
+                    @outputtopology(triangle_ccw)
+                {
+                    gl_Position = vec4(gl_TessCoord, 1.0);
+                }
+            }
+        }
+        """)
+
+    code = GLSLCodeGen().generate_stage(ast, "tessellation_evaluation")
+    assert "layout(triangles, fractional_even_spacing, ccw) in;" in code
+    assert "outputtopology" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "tese", str(shader_path)])
 
 
 @pytest.mark.parametrize(
@@ -1992,6 +2257,21 @@ def test_generated_glsl_multisample_storage_validates_with_glslangvalidator(
     shader_path.write_text(
         GLSLCodeGen().generate_stage(
             crosstl.translator.parse(GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER),
+            "compute",
+        ),
+        encoding="utf-8",
+    )
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
+def test_generated_glsl_cube_storage_validates_with_glslangvalidator(tmp_path):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "cube_storage.comp"
+
+    shader_path.write_text(
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(GLSL_CUBE_STORAGE_COMPUTE_SHADER),
             "compute",
         ),
         encoding="utf-8",

@@ -17,13 +17,16 @@ from ..ast import (
     CbufferNode,
     ContinueNode,
     ConstructorNode,
+    ConstructorPatternNode,
     DoWhileNode,
     EnumNode,
+    ExpressionStatementNode,
     ForInNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
     IfNode,
+    IdentifierPatternNode,
     LiteralPatternNode,
     LoopNode,
     MatchNode,
@@ -35,6 +38,7 @@ from ..ast import (
     RayTracingOpNode,
     ShaderNode,
     StructNode,
+    StructPatternNode,
     SwizzleNode,
     SwitchNode,
     SyncNode,
@@ -703,6 +707,35 @@ MOJO_BUFFER_OP_ALIASES = {
     **{name: name for name in MOJO_BYTE_ADDRESS_STORE_METHODS},
 }
 
+MOJO_RESOURCE_QUERY_MEMBER_REQUIREMENTS = {
+    "GetDimensions": ("GetDimensions", "texture, image, or buffer resource receiver"),
+    "textureSize": ("texture_size", "texture resource receiver"),
+    "textureQueryLevels": ("texture_query_levels", "texture resource receiver"),
+    "textureSamples": ("texture_samples", "texture resource receiver"),
+    "imageSamples": ("image_samples", "image resource receiver"),
+}
+
+MOJO_RESOURCE_OPERATION_MEMBER_REQUIREMENTS = {
+    "Load": ("Load", "texture, image, or buffer resource receiver"),
+    "Store": ("Store", "image or buffer resource receiver"),
+    **{
+        member: (
+            helper_name,
+            (
+                "image or byte-address buffer resource receiver"
+                if member in MOJO_BYTE_ADDRESS_ATOMIC_METHODS
+                else "image resource receiver"
+            ),
+        )
+        for member, helper_name in MOJO_ATOMIC_OP_ALIASES.items()
+    },
+    **{
+        member: (member, "byte-address buffer resource receiver")
+        for member in MOJO_BYTE_ADDRESS_ATOMIC_METHODS
+        if member not in MOJO_ATOMIC_OP_ALIASES
+    },
+}
+
 MOJO_INTEGER_DTYPES = {
     "DType.int16",
     "DType.int32",
@@ -833,6 +866,7 @@ class MojoCodeGen:
         self.vector_constructor_info = MOJO_VECTOR_TYPES
         self.struct_types = {}
         self.function_return_types = {}
+        self.function_parameter_types = {}
         self.variable_types = {}
         self.enum_types = {}
         self.enum_variant_aliases = {}
@@ -848,6 +882,7 @@ class MojoCodeGen:
         self.required_resource_lod_types = set()
         self.required_resource_grad_types = set()
         self.required_resource_size_types = set()
+        self.required_resource_size_helpers = set()
         self.required_resource_query_level_types = set()
         self.required_resource_sample_count_helpers = set()
         self.required_resource_texel_fetch_types = set()
@@ -871,6 +906,7 @@ class MojoCodeGen:
         self.required_select_helpers = set()
         self.required_matrix_types = set()
         self.required_matrix_constructor_helpers = {}
+        self.required_matrix_diagonal_helpers = set()
         self.required_fract_helpers = set()
         self.required_saturate_helpers = set()
         self.current_return_type = None
@@ -880,6 +916,8 @@ class MojoCodeGen:
         self.loop_depth = 0
         self.do_while_counter = 0
         self.lambda_counter = 0
+        self.match_expression_counter = 0
+        self.dimension_query_counter = 0
         self.expression_prelude_stack = []
         self.type_mapping = {
             # Scalar Types
@@ -1017,6 +1055,7 @@ class MojoCodeGen:
         """Generate complete Mojo-like shader source for a CrossGL AST."""
         self.struct_types = {}
         self.function_return_types = {}
+        self.function_parameter_types = {}
         self.variable_types = {}
         self.enum_types = {}
         self.enum_variant_aliases = {}
@@ -1032,6 +1071,7 @@ class MojoCodeGen:
         self.required_resource_lod_types = set()
         self.required_resource_grad_types = set()
         self.required_resource_size_types = set()
+        self.required_resource_size_helpers = set()
         self.required_resource_query_level_types = set()
         self.required_resource_sample_count_helpers = set()
         self.required_resource_texel_fetch_types = set()
@@ -1055,6 +1095,7 @@ class MojoCodeGen:
         self.required_select_helpers = set()
         self.required_matrix_types = set()
         self.required_matrix_constructor_helpers = {}
+        self.required_matrix_diagonal_helpers = set()
         self.required_fract_helpers = set()
         self.required_saturate_helpers = set()
         self.current_return_type = None
@@ -1063,6 +1104,8 @@ class MojoCodeGen:
         self.loop_depth = 0
         self.do_while_counter = 0
         self.lambda_counter = 0
+        self.match_expression_counter = 0
+        self.dimension_query_counter = 0
         self.expression_prelude_stack = []
         self.collect_function_return_types(ast)
 
@@ -1100,6 +1143,9 @@ class MojoCodeGen:
                             node.initial_value, vtype
                         )
                     else:
+                        self.validate_expression_target_shape(
+                            node.initial_value, vtype, f"global declaration {node.name}"
+                        )
                         init_expr = self.generate_expression(node.initial_value)
                     if vtype is None:
                         code += f"var {node.name} = {init_expr}\n"
@@ -1210,9 +1256,20 @@ class MojoCodeGen:
         else:
             return_type = "void"
         self.function_return_types[func.name] = return_type
+        self.function_parameter_types[func.name] = [
+            self.function_parameter_type_name(param)
+            for param in getattr(func, "parameters", getattr(func, "params", []))
+        ]
 
     def is_user_defined_function(self, func_name):
         return isinstance(func_name, str) and func_name in self.function_return_types
+
+    def function_parameter_type_name(self, param):
+        if hasattr(param, "param_type"):
+            return self.convert_type_node_to_string(param.param_type)
+        if hasattr(param, "vtype"):
+            return param.vtype
+        return "float"
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
@@ -1571,7 +1628,7 @@ class MojoCodeGen:
     def resource_base_type_and_count(self, type_name):
         type_name = self.type_name(type_name)
         if self.is_array_type_name(type_name):
-            base_type, size = parse_array_type(type_name)
+            base_type, size = self.parse_array_type_name(type_name)
             return base_type, size or 1
         return type_name, 1
 
@@ -2332,12 +2389,7 @@ class MojoCodeGen:
         previous_return_type = self.current_return_type
 
         param_list = getattr(func, "parameters", getattr(func, "params", []))
-        param_names = {p.name for p in param_list if hasattr(p, "name")}
-        mutated_params = self.collect_mutated_parameters(
-            getattr(func, "body", []), param_names
-        )
-        params = []
-        used_parameter_semantics = {}
+        param_infos = []
         for p in param_list:
             if hasattr(p, "param_type"):
                 param_type = self.convert_type_node_to_string(p.param_type)
@@ -2345,7 +2397,16 @@ class MojoCodeGen:
                 param_type = p.vtype
             else:
                 param_type = "float"
+            param_infos.append((p, param_type))
+            self.register_variable_type(getattr(p, "name", None), param_type)
 
+        param_names = {p.name for p, _ in param_infos if hasattr(p, "name")}
+        mutated_params = self.collect_mutated_parameters(
+            getattr(func, "body", []), param_names
+        )
+        params = []
+        used_parameter_semantics = {}
+        for p, param_type in param_infos:
             semantic = self.node_semantic(p)
             self.validate_parameter_semantic(
                 shader_type,
@@ -2441,6 +2502,21 @@ class MojoCodeGen:
                 mutated.add(root_name)
             return
 
+        dimensions_call = self.get_expression_statement_call(node)
+        if dimensions_call is not None:
+            func_expr = getattr(dimensions_call, "function", None)
+            if func_expr is None:
+                func_expr = getattr(dimensions_call, "name", None)
+            if (
+                isinstance(func_expr, MemberAccessNode)
+                and getattr(func_expr, "member", None) == "GetDimensions"
+            ):
+                for arg in self.get_get_dimensions_out_arguments(dimensions_call):
+                    root_name = self.assignment_target_root(arg)
+                    if root_name in param_names:
+                        mutated.add(root_name)
+                return
+
         for child in self.node_children(node):
             self.collect_mutated_parameters_from_node(child, param_names, mutated)
 
@@ -2494,10 +2570,12 @@ class MojoCodeGen:
             return self.assignment_target_root(getattr(target, "vector_expr", None))
         return None
 
-    def generate_expression_with_prelude(self, expr, indent):
+    def generate_expression_with_prelude(
+        self, expr, indent, target_type=None, target_context=None
+    ):
         self.expression_prelude_stack.append({"indent": indent, "lines": []})
         try:
-            expression = self.generate_expression(expr)
+            expression = self.generate_expression(expr, target_type, target_context)
             prelude = "".join(self.expression_prelude_stack[-1]["lines"])
             return prelude, expression
         finally:
@@ -2508,19 +2586,362 @@ class MojoCodeGen:
         self.validate_resource_write_access(node.left, "assignment")
         left = self.generate_expression(node.left)
         left_type = self.expression_result_type(node.left)
-        if isinstance(node.right, ArrayLiteralNode) and self.is_array_type_name(
-            left_type
-        ):
-            prelude = ""
-            right = self.generate_array_literal_expression(node.right, left_type)
-        else:
-            prelude, right = self.generate_expression_with_prelude(node.right, indent)
+        self.validate_expression_target_shape(
+            node.right, left_type, "assignment target"
+        )
+        prelude, right = self.generate_expression_with_prelude(
+            node.right, indent, left_type, "assignment target"
+        )
         op = self.map_operator(node.operator)
         return f"{prelude}{indent_str}{left} {op} {right}\n"
+
+    def generate_get_dimensions_statement(self, stmt, indent):
+        call = self.get_expression_statement_call(stmt)
+        if call is None:
+            return None
+
+        func_expr = getattr(call, "function", None)
+        if func_expr is None:
+            func_expr = getattr(call, "name", None)
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+        if getattr(func_expr, "member", None) != "GetDimensions":
+            return None
+
+        args = list(getattr(call, "args", []) or [])
+        if not args:
+            return None
+
+        resource_expr = getattr(
+            func_expr, "object", getattr(func_expr, "object_expr", None)
+        )
+        raw_resource_type = self.expression_result_type(resource_expr)
+        resource_type = self.map_type(raw_resource_type)
+        buffer_info = self.buffer_resource_info(raw_resource_type)
+
+        if buffer_info is not None:
+            return self.generate_buffer_get_dimensions_statement(
+                resource_expr, args, buffer_info, indent
+            )
+        if self.is_texture_resource_type(resource_type):
+            return self.generate_texture_get_dimensions_statement(
+                resource_expr, args, resource_type, indent
+            )
+        if self.is_image_resource_type(resource_type):
+            return self.generate_image_get_dimensions_statement(
+                resource_expr, args, resource_type, indent
+            )
+        return None
+
+    def get_get_dimensions_out_arguments(self, call):
+        args = list(getattr(call, "args", []) or [])
+        func_expr = getattr(call, "function", None)
+        if func_expr is None:
+            func_expr = getattr(call, "name", None)
+        if not isinstance(func_expr, MemberAccessNode):
+            return args
+        if getattr(func_expr, "member", None) != "GetDimensions":
+            return args
+
+        resource_expr = getattr(
+            func_expr, "object", getattr(func_expr, "object_expr", None)
+        )
+        raw_resource_type = self.expression_result_type(resource_expr)
+        resource_type = self.map_type(raw_resource_type)
+
+        if self.buffer_resource_info(raw_resource_type) is not None:
+            return args
+        if self.is_image_resource_type(resource_type):
+            return args
+        if not self.is_texture_resource_type(resource_type):
+            return args
+
+        dimension_count = self.resource_dimension_component_count(resource_type)
+        if dimension_count is None:
+            return args
+        if self.is_multisample_resource_type(resource_type):
+            return args
+        if len(args) == dimension_count + 2:
+            return args[1:]
+        return args
+
+    def get_expression_statement_call(self, stmt):
+        if isinstance(stmt, FunctionCallNode):
+            return stmt
+        if (
+            hasattr(stmt, "__class__")
+            and "ExpressionStatement" in str(stmt.__class__)
+            and isinstance(getattr(stmt, "expression", None), FunctionCallNode)
+        ):
+            return stmt.expression
+        return None
+
+    def generate_buffer_get_dimensions_statement(
+        self, resource_expr, args, buffer_info, indent
+    ):
+        if len(args) not in {1, 2}:
+            buffer_type, _ = buffer_info
+            raise ValueError(
+                "Unsupported GetDimensions overload for Mojo codegen; "
+                f"{buffer_type} expected 1 or 2 out parameter(s), got {len(args)}"
+            )
+
+        buffer_type, _ = buffer_info
+        self.register_buffer_resource_type(buffer_type)
+        self.required_buffer_dimensions_helpers.add(buffer_info)
+
+        obj = self.generate_expression(resource_expr)
+        indent_str = "    " * indent
+        size_temp = self.next_dimension_query_temp_name()
+        code = f"{indent_str}var {size_temp} = buffer_dimensions({obj})\n"
+        for index, target in enumerate(args):
+            value = f"{size_temp}[{index}]"
+            code += self.generate_dimension_target_assignment(target, value, indent)
+        return code
+
+    def generate_texture_get_dimensions_statement(
+        self, resource_expr, args, resource_type, indent
+    ):
+        dimension_count = self.resource_dimension_component_count(resource_type)
+        if dimension_count is None:
+            raise ValueError(
+                "Unsupported GetDimensions overload for Mojo codegen; "
+                f"sizable texture resource required: {resource_type}"
+            )
+
+        if self.is_multisample_resource_type(resource_type):
+            if len(args) not in {dimension_count, dimension_count + 1}:
+                raise ValueError(
+                    "Unsupported GetDimensions overload for Mojo codegen; "
+                    f"{resource_type} expected {dimension_count} dimension "
+                    f"out parameter(s) plus optional sample count, got {len(args)}"
+                )
+            dimension_targets = args[:dimension_count]
+            sample_target = (
+                args[dimension_count] if len(args) > dimension_count else None
+            )
+            return self.generate_resource_dimension_assignments(
+                resource_expr,
+                resource_type,
+                "texture_size",
+                dimension_targets,
+                indent,
+                sample_target=sample_target,
+                sample_helper="texture_samples",
+            )
+
+        if len(args) == dimension_count:
+            lod_arg = None
+            dimension_targets = args
+            levels_target = None
+        elif len(args) == dimension_count + 1:
+            lod_arg = None
+            dimension_targets = args[:dimension_count]
+            levels_target = args[dimension_count]
+        elif len(args) == dimension_count + 2:
+            lod_arg = args[0]
+            dimension_targets = args[1 : 1 + dimension_count]
+            levels_target = args[-1]
+        else:
+            raise ValueError(
+                "Unsupported GetDimensions overload for Mojo codegen; "
+                f"{resource_type} expected {dimension_count}, "
+                f"{dimension_count + 1}, or {dimension_count + 2} argument(s), "
+                f"got {len(args)}"
+            )
+
+        return self.generate_resource_dimension_assignments(
+            resource_expr,
+            resource_type,
+            "texture_size",
+            dimension_targets,
+            indent,
+            lod_arg=lod_arg,
+            levels_target=levels_target,
+        )
+
+    def generate_image_get_dimensions_statement(
+        self, resource_expr, args, resource_type, indent
+    ):
+        dimension_count = self.resource_dimension_component_count(resource_type)
+        if dimension_count is None:
+            raise ValueError(
+                "Unsupported GetDimensions overload for Mojo codegen; "
+                f"sizable image resource required: {resource_type}"
+            )
+
+        if self.is_multisample_resource_type(resource_type):
+            if len(args) not in {dimension_count, dimension_count + 1}:
+                raise ValueError(
+                    "Unsupported GetDimensions overload for Mojo codegen; "
+                    f"{resource_type} expected {dimension_count} dimension "
+                    f"out parameter(s) plus optional sample count, got {len(args)}"
+                )
+            dimension_targets = args[:dimension_count]
+            sample_target = (
+                args[dimension_count] if len(args) > dimension_count else None
+            )
+        else:
+            if len(args) != dimension_count:
+                raise ValueError(
+                    "Unsupported GetDimensions overload for Mojo codegen; "
+                    f"{resource_type} expected {dimension_count} dimension "
+                    f"out parameter(s), got {len(args)}"
+                )
+            dimension_targets = args
+            sample_target = None
+
+        return self.generate_resource_dimension_assignments(
+            resource_expr,
+            resource_type,
+            "image_size",
+            dimension_targets,
+            indent,
+            sample_target=sample_target,
+            sample_helper="image_samples",
+        )
+
+    def resource_dimension_component_count(self, resource_type):
+        base_type = self.image_resource_base_type(resource_type)
+        if not isinstance(base_type, str):
+            return None
+        if "1DArray" in base_type:
+            return 2
+        if "1D" in base_type:
+            return 1
+        if "2DMSArray" in base_type:
+            return 3
+        if "2DArray" in base_type:
+            return 3
+        if "2D" in base_type:
+            return 2
+        if "3D" in base_type:
+            return 3
+        if "CubeArray" in base_type:
+            return 3
+        if "Cube" in base_type:
+            return 2
+        return None
+
+    def generate_resource_dimension_assignments(
+        self,
+        resource_expr,
+        resource_type,
+        size_helper,
+        dimension_targets,
+        indent,
+        lod_arg=None,
+        levels_target=None,
+        sample_target=None,
+        sample_helper=None,
+    ):
+        size_type = self.resource_size_return_type(resource_type)
+        if size_type is None:
+            raise ValueError(
+                "Unsupported GetDimensions overload for Mojo codegen; "
+                f"sizable resource required: {resource_type}"
+            )
+
+        size_expr = self.resource_dimension_size_expression(
+            resource_expr, resource_type, size_helper, lod_arg
+        )
+        indent_str = "    " * indent
+        code = ""
+
+        if len(dimension_targets) == 1 and not levels_target and not sample_target:
+            component_values = [size_expr]
+        else:
+            size_temp = self.next_dimension_query_temp_name()
+            code += f"{indent_str}var {size_temp} = {size_expr}\n"
+            component_values = [
+                self.dimension_component_expression(size_temp, size_type, index)
+                for index, _ in enumerate(dimension_targets)
+            ]
+
+        for target, value in zip(dimension_targets, component_values):
+            code += self.generate_dimension_target_assignment(target, value, indent)
+
+        if levels_target is not None:
+            levels_expr = self.generate_resource_query_levels_call([resource_expr])
+            code += self.generate_dimension_target_assignment(
+                levels_target, levels_expr, indent
+            )
+
+        if sample_target is not None:
+            samples_expr = self.generate_resource_sample_count_call(
+                [resource_expr], sample_helper
+            )
+            code += self.generate_dimension_target_assignment(
+                sample_target, samples_expr, indent
+            )
+
+        return code
+
+    def resource_dimension_size_expression(
+        self, resource_expr, resource_type, helper_name, lod_arg=None
+    ):
+        self.required_resource_size_types.add(resource_type)
+        self.required_resource_size_helpers.add((helper_name, resource_type))
+        resource = self.generate_expression(resource_expr)
+        if lod_arg is None:
+            return f"{helper_name}({resource})"
+        lod = self.dimension_lod_expression(lod_arg, resource_type)
+        return f"{helper_name}({resource}, {lod})"
+
+    def dimension_lod_expression(self, lod_arg, resource_type):
+        lod_type = self.expression_result_type(lod_arg)
+        if not self.is_scalar_integer_type(lod_type):
+            raise ValueError(
+                "Unsupported GetDimensions overload for Mojo codegen; "
+                f"lod argument for {resource_type} must be an integer scalar"
+            )
+        lod = self.generate_expression(lod_arg)
+        if self.map_type(lod_type) == "Int32":
+            return lod
+        return f"Int32({lod})"
+
+    def dimension_component_expression(self, size_expr, size_type, index):
+        if size_type == "Int32":
+            if index == 0:
+                return size_expr
+            raise ValueError(
+                "Unsupported GetDimensions overload for Mojo codegen; "
+                "dimension component index exceeds scalar size result"
+            )
+        return f"{size_expr}[{index}]"
+
+    def generate_dimension_target_assignment(self, target, value, indent):
+        self.validate_resource_write_access(target, "GetDimensions")
+        target_expr = self.generate_expression(target)
+        assignment_value = self.cast_dimension_assignment_value(target, value)
+        return f"{'    ' * indent}{target_expr} = {assignment_value}\n"
+
+    def cast_dimension_assignment_value(self, target, value):
+        target_type = self.expression_result_type(target)
+        if target_type is None:
+            return value
+        if not self.is_scalar_integer_type(target_type):
+            raise ValueError(
+                "Unsupported GetDimensions out parameter for Mojo codegen; "
+                f"integer scalar target required: {target_type}"
+            )
+        mapped_type = self.map_type(target_type)
+        if mapped_type == "Int32":
+            return value
+        return f"{mapped_type}({value})"
+
+    def next_dimension_query_temp_name(self):
+        name = f"__cgl_dimensions_{self.dimension_query_counter}"
+        self.dimension_query_counter += 1
+        return name
 
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL statement as Mojo code."""
         indent_str = "    " * indent
+
+        lowered_get_dimensions = self.generate_get_dimensions_statement(stmt, indent)
+        if lowered_get_dimensions is not None:
+            return lowered_get_dimensions
 
         if isinstance(stmt, VariableNode):
             var_type = self.variable_declared_type(stmt)
@@ -2550,28 +2971,23 @@ class MojoCodeGen:
                     var_type or self.expression_result_type(stmt.initial_value),
                 )
                 self.register_resource_access_metadata(stmt, var_type)
-                if (
-                    isinstance(stmt.initial_value, ArrayLiteralNode)
-                    and var_type is not None
-                    and self.is_array_type_name(var_type)
-                ):
-                    prelude = ""
-                    init_expr = self.generate_array_literal_expression(
-                        stmt.initial_value, var_type
-                    )
-                else:
-                    increment_init = self.generate_increment_initializer_declaration(
-                        stmt,
-                        stmt.initial_value,
-                        var_type,
-                        indent,
-                    )
-                    if increment_init is not None:
-                        return increment_init
-                    prelude, init_expr = self.generate_expression_with_prelude(
-                        stmt.initial_value,
-                        indent,
-                    )
+                increment_init = self.generate_increment_initializer_declaration(
+                    stmt,
+                    stmt.initial_value,
+                    var_type,
+                    indent,
+                )
+                if increment_init is not None:
+                    return increment_init
+                self.validate_expression_target_shape(
+                    stmt.initial_value, var_type, f"declaration {stmt.name}"
+                )
+                prelude, init_expr = self.generate_expression_with_prelude(
+                    stmt.initial_value,
+                    indent,
+                    var_type,
+                    f"declaration {stmt.name}",
+                )
                 if var_type is None:
                     return f"{prelude}{indent_str}var {stmt.name} = {init_expr}\n"
                 return (
@@ -2619,17 +3035,15 @@ class MojoCodeGen:
                 # Multiple return values
                 values = ", ".join(self.generate_expression(val) for val in stmt.value)
                 return f"{indent_str}return {values}\n"
-            elif isinstance(stmt.value, ArrayLiteralNode) and self.is_array_type_name(
-                self.current_return_type
-            ):
-                return_value = self.generate_array_literal_expression(
-                    stmt.value, self.current_return_type
-                )
-                return f"{indent_str}return " f"{return_value}\n"
             else:
+                self.validate_expression_target_shape(
+                    stmt.value, self.current_return_type, "return value"
+                )
                 prelude, return_value = self.generate_expression_with_prelude(
                     stmt.value,
                     indent,
+                    self.current_return_type,
+                    "return value",
                 )
                 return f"{prelude}{indent_str}return {return_value}\n"
         elif isinstance(stmt, BreakNode):
@@ -2745,17 +3159,13 @@ class MojoCodeGen:
     def generate_match(self, node, indent):
         indent_str = "    " * indent
         expression = self.generate_expression(getattr(node, "expression", ""))
+        arms = getattr(node, "arms", []) or []
+        self.validate_match_arms(arms)
         code = ""
         emitted_condition = False
         wildcard_body = None
 
-        for arm in getattr(node, "arms", []) or []:
-            if not self.is_supported_match_arm(arm):
-                raise ValueError(
-                    "Unsupported match arm for Mojo codegen; only unguarded "
-                    "literal and wildcard patterns are supported"
-                )
-
+        for arm in arms:
             pattern = getattr(arm, "pattern", None)
             body = getattr(arm, "body", [])
             if isinstance(pattern, WildcardPatternNode):
@@ -2776,11 +3186,197 @@ class MojoCodeGen:
 
         return code
 
-    def is_supported_match_arm(self, arm):
-        if getattr(arm, "guard", None) is not None:
-            return False
-        pattern = getattr(arm, "pattern", None)
-        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
+    def next_match_expression_temp_name(self):
+        name = f"__cgl_match_value_{self.match_expression_counter}"
+        self.match_expression_counter += 1
+        return name
+
+    def match_arm_error(self, reason=None):
+        detail = reason or "only unguarded literal and wildcard patterns are supported"
+        return ValueError(f"Unsupported match arm for Mojo codegen; {detail}")
+
+    def match_expression_error(self, reason):
+        return ValueError(f"Unsupported match expression for Mojo codegen; {reason}")
+
+    def match_arm_value_expression(self, arm):
+        body = getattr(arm, "body", [])
+        if isinstance(body, ExpressionStatementNode):
+            if getattr(body, "is_tail_expression", False):
+                return body.expression, []
+            raise self.match_expression_error(
+                "every arm must end with a value expression"
+            )
+        if self.is_match_expression_value_node(body):
+            return body, []
+
+        statements = self.statement_list(body)
+        if (
+            statements
+            and isinstance(statements[-1], ExpressionStatementNode)
+            and getattr(statements[-1], "is_tail_expression", False)
+        ):
+            return statements[-1].expression, statements[:-1]
+        if statements and self.is_match_expression_value_node(statements[-1]):
+            return statements[-1], statements[:-1]
+
+        raise self.match_expression_error("every arm must end with a value expression")
+
+    def is_match_expression_value_node(self, node):
+        return isinstance(
+            node,
+            (
+                ArrayAccessNode,
+                ArrayLiteralNode,
+                AtomicOpNode,
+                BinaryOpNode,
+                BufferOpNode,
+                BuiltinVariableNode,
+                CastNode,
+                ConstructorNode,
+                FunctionCallNode,
+                MatchNode,
+                MemberAccessNode,
+                MeshOpNode,
+                RayQueryOpNode,
+                RayTracingOpNode,
+                SwizzleNode,
+                TernaryOpNode,
+                TextureNode,
+                TextureOpNode,
+                UnaryOpNode,
+                VariableNode,
+                WaveOpNode,
+            ),
+        ) or (
+            isinstance(node, (str, int, float, bool))
+            or (hasattr(node, "__class__") and "Identifier" in str(node.__class__))
+            or (hasattr(node, "__class__") and "Literal" in str(node.__class__))
+        )
+
+    def generate_match_value_expression(self, node, target_type, context):
+        arms = getattr(node, "arms", []) or []
+        self.validate_match_expression_arms(arms)
+        match_type = self.type_name(target_type or self.expression_result_type(node))
+        if match_type is None:
+            raise self.match_expression_error("target type is required")
+        if not self.expression_prelude_stack:
+            raise self.match_expression_error("expression prelude context is required")
+
+        prelude_context = self.expression_prelude_stack[-1]
+        indent = prelude_context["indent"]
+        indent_str = "    " * indent
+        branch_indent = indent + 1
+        temp_name = self.next_match_expression_temp_name()
+        expression = self.generate_expression(getattr(node, "expression", ""))
+        lines = [
+            f"{indent_str}var {temp_name}: {self.map_type(match_type)} = "
+            f"{self.zero_value_for_type(match_type)}\n"
+        ]
+
+        emitted_condition = False
+        wildcard_arm = None
+        for arm_index, arm in enumerate(arms, start=1):
+            pattern = getattr(arm, "pattern", None)
+            if isinstance(pattern, WildcardPatternNode):
+                wildcard_arm = (arm_index, arm)
+                continue
+
+            keyword = "if" if not emitted_condition else "elif"
+            condition = f"{expression} == {self.generate_expression(pattern.literal)}"
+            lines.append(f"{indent_str}{keyword} {condition}:\n")
+            lines.append(
+                self.generate_match_value_arm_assignment(
+                    arm,
+                    match_type,
+                    f"{context} match arm {arm_index}",
+                    temp_name,
+                    branch_indent,
+                )
+            )
+            emitted_condition = True
+
+        if wildcard_arm is not None:
+            arm_index, arm = wildcard_arm
+            lines.append(f"{indent_str}else:\n")
+            lines.append(
+                self.generate_match_value_arm_assignment(
+                    arm,
+                    match_type,
+                    f"{context} match arm {arm_index}",
+                    temp_name,
+                    branch_indent,
+                )
+            )
+
+        prelude_context["lines"].extend(lines)
+        return temp_name
+
+    def generate_match_value_arm_assignment(
+        self, arm, target_type, context, temp_name, indent
+    ):
+        value_expr, prelude_statements = self.match_arm_value_expression(arm)
+        code = ""
+        for stmt in prelude_statements:
+            code += self.generate_statement(stmt, indent)
+
+        self.validate_expression_target_shape(value_expr, target_type, context)
+        value = self.generate_expression(value_expr, target_type, context)
+        return f"{code}{'    ' * indent}{temp_name} = {value}\n"
+
+    def validate_match_arms(self, arms):
+        rejection_reason = self.match_arm_rejection_reason(arms)
+        if rejection_reason is not None:
+            raise self.match_arm_error(rejection_reason)
+
+    def validate_match_expression_arms(self, arms):
+        self.validate_match_arms(arms)
+        if not arms:
+            raise self.match_expression_error("at least one arm is required")
+        if not isinstance(getattr(arms[-1], "pattern", None), WildcardPatternNode):
+            raise self.match_expression_error(
+                "match expressions must include a final wildcard arm"
+            )
+        for arm in arms:
+            self.match_arm_value_expression(arm)
+
+    def match_arm_rejection_reason(self, arms):
+        wildcard_index = None
+        for index, arm in enumerate(arms):
+            if getattr(arm, "guard", None) is not None:
+                return "guarded arms cannot be lowered"
+
+            pattern = getattr(arm, "pattern", None)
+            if self.is_range_style_match_pattern(pattern):
+                return "range-style patterns cannot be lowered"
+
+            if isinstance(pattern, WildcardPatternNode):
+                if wildcard_index is not None:
+                    return "multiple wildcard arms cannot be lowered"
+                wildcard_index = index
+                continue
+
+            if isinstance(pattern, LiteralPatternNode):
+                continue
+
+            if isinstance(pattern, IdentifierPatternNode):
+                return "identifier binding patterns cannot be lowered"
+
+            if isinstance(pattern, ConstructorPatternNode):
+                return "constructor patterns cannot be lowered"
+
+            if isinstance(pattern, StructPatternNode):
+                return "struct destructuring patterns cannot be lowered"
+
+            return "only unguarded literal patterns and a final wildcard can be lowered"
+
+        if wildcard_index is not None and wildcard_index != len(arms) - 1:
+            return "wildcard arm must be final"
+        return None
+
+    def is_range_style_match_pattern(self, pattern):
+        if isinstance(pattern, RangeNode):
+            return True
+        return isinstance(pattern, IdentifierPatternNode) and pattern.name == ".."
 
     def statement_list(self, body):
         if hasattr(body, "statements"):
@@ -2828,6 +3424,9 @@ class MojoCodeGen:
         self.validate_resource_write_access(node.left, "assignment")
         left = self.generate_expression(node.left)
         left_type = self.expression_result_type(node.left)
+        self.validate_expression_target_shape(
+            node.right, left_type, "assignment target"
+        )
         if isinstance(node.right, ArrayLiteralNode) and self.is_array_type_name(
             left_type
         ):
@@ -3228,7 +3827,7 @@ class MojoCodeGen:
             if helper_name not in self.function_return_types:
                 return helper_name
 
-    def generate_expression(self, expr):
+    def generate_expression(self, expr, target_type=None, target_context=None):
         """Render a CrossGL expression as Mojo expression syntax."""
         if isinstance(expr, str):
             return self.map_enum_variant_reference(expr)
@@ -3252,7 +3851,13 @@ class MojoCodeGen:
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         elif isinstance(expr, ArrayLiteralNode):
+            if target_type is not None and self.is_array_type_name(target_type):
+                return self.generate_array_literal_expression(expr, target_type)
             return self.generate_array_literal_expression(expr)
+        elif isinstance(expr, MatchNode):
+            return self.generate_match_value_expression(
+                expr, target_type, target_context or "match expression"
+            )
         elif isinstance(expr, ConstructorNode):
             return self.generate_constructor_node(expr)
         elif isinstance(expr, CastNode):
@@ -3320,7 +3925,7 @@ class MojoCodeGen:
                     return lambda_expr
 
             if self.is_user_defined_function(func_name):
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                args = self.generate_user_function_call_arguments(func_name, expr.args)
                 return f"{callee}({args})"
 
             if func_name in {"fract", "frac"}:
@@ -3394,7 +3999,19 @@ class MojoCodeGen:
             # Map function names to Mojo equivalents
             func_name = self.function_map.get(func_name, func_name)
             if func_name in self.scalar_constructor_map:
-                func_name = self.scalar_constructor_map[func_name]
+                scalar_constructor_name = func_name
+                mapped_constructor_name = self.scalar_constructor_map[func_name]
+                target_dtype = MOJO_SCALAR_DTYPES.get(
+                    self.type_name(scalar_constructor_name)
+                )
+                if target_dtype is not None and len(expr.args) == 1:
+                    arg = self.generate_scalar_constructor_argument(
+                        expr.args[0],
+                        target_dtype,
+                        f"scalar constructor {scalar_constructor_name} argument 1",
+                    )
+                    return f"{mapped_constructor_name}({arg})"
+                func_name = mapped_constructor_name
 
             # Handle vector constructors
             vector_constructor_name = self.normalize_generic_vector_type_name(func_name)
@@ -3405,6 +4022,11 @@ class MojoCodeGen:
 
             if func_name in MOJO_MATRIX_TYPES:
                 return self.generate_matrix_constructor(func_name, expr.args)
+
+            if func_name in self.struct_types:
+                return self.generate_struct_function_constructor_call(
+                    expr, func_name, target_context
+                )
 
             # Handle standard function calls
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
@@ -3433,9 +4055,14 @@ class MojoCodeGen:
             )
             if bool_vector_select is not None:
                 return bool_vector_select
+            branch_context = target_context or "ternary expression"
             condition = self.generate_expression(expr.condition)
-            true_expr = self.generate_expression(expr.true_expr)
-            false_expr = self.generate_expression(expr.false_expr)
+            true_expr = self.generate_expression(
+                expr.true_expr, target_type, f"{branch_context} true branch"
+            )
+            false_expr = self.generate_expression(
+                expr.false_expr, target_type, f"{branch_context} false branch"
+            )
             return f"({true_expr} if {condition} else {false_expr})"
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             # Handle LiteralNode
@@ -3478,19 +4105,52 @@ class MojoCodeGen:
     def generate_constructor_node(self, expr):
         type_name = self.convert_type_node_to_string(expr.constructor_type)
         mapped_type = self.map_type(type_name)
-        positional_args = [
-            self.generate_expression(argument) for argument in expr.arguments
-        ]
+        self.validate_constructor_resource_size_target_shapes(
+            expr, type_name, f"constructor {type_name}"
+        )
+        field_items = list(self.struct_types.get(type_name, {}).items())
+        positional_args = []
+        for index, argument in enumerate(expr.arguments):
+            field_type = field_items[index][1] if index < len(field_items) else None
+            positional_args.append(
+                self.generate_expression(
+                    argument,
+                    field_type,
+                    f"constructor {type_name} field {index + 1}",
+                )
+            )
         named_args = [
-            f"{name}={self.generate_expression(value)}"
+            f"{name}="
+            f"{self.generate_expression(value, self.struct_types.get(type_name, {}).get(name), f'constructor {type_name} field {name}')}"
             for name, value in expr.named_arguments.items()
         ]
         return f"{mapped_type}({', '.join([*positional_args, *named_args])})"
 
+    def generate_struct_function_constructor_call(self, expr, type_name, context):
+        mapped_type = self.map_type(type_name)
+        field_items = list(self.struct_types.get(type_name, {}).items())
+        base_context = context or f"constructor {type_name}"
+        positional_args = []
+        for index, argument in enumerate(expr.args):
+            field_type = None
+            if index < len(field_items):
+                field_name, field_type = field_items[index]
+                field_context = f"{base_context} field {type_name}.{field_name}"
+            else:
+                field_context = f"{base_context} field {index + 1}"
+            self.validate_expression_target_shape(
+                argument,
+                field_type,
+                field_context,
+            )
+            positional_args.append(
+                self.generate_expression(argument, field_type, field_context)
+            )
+        return f"{mapped_type}({', '.join(positional_args)})"
+
     def generate_cast_node(self, expr):
         target_type = self.convert_type_node_to_string(expr.target_type)
         target_vector = self.vector_type_info(target_type)
-        value = self.generate_expression(expr.expression)
         if target_vector is not None:
             source_vector = self.vector_type_info(
                 self.expression_result_type(expr.expression)
@@ -3502,11 +4162,20 @@ class MojoCodeGen:
                     source_width == target_width
                     and source_storage_width == target_storage_width
                 ):
+                    value = self.generate_expression(expr.expression)
                     return f"{value}.cast[{target_dtype}]()"
             target_name = self.normalize_generic_vector_type_name(target_type)
             if target_name in self.vector_constructor_info:
                 return self.generate_vector_constructor(target_name, [expr.expression])
 
+        target_dtype = MOJO_SCALAR_DTYPES.get(self.type_name(target_type))
+        if target_dtype is not None:
+            value = self.generate_scalar_constructor_argument(
+                expr.expression, target_dtype, f"cast to {self.type_name(target_type)}"
+            )
+            return f"{self.map_type(target_type)}({value})"
+
+        value = self.generate_expression(expr.expression)
         return f"{self.map_type(target_type)}({value})"
 
     def generate_swizzle_node(self, expr):
@@ -3823,11 +4492,16 @@ class MojoCodeGen:
 
         if len(args) == 1:
             arg = args[0]
+            self.validate_image_result_target_shape(
+                arg, func_name, f"vector constructor {func_name} argument 1"
+            )
             arg_components = self.vector_components_for_expression(arg, dtype)
             if arg_components is not None:
                 emitted_args.extend(arg_components[:source_width])
             elif source_width == 3:
-                arg_expr = self.generate_constructor_scalar_expression(arg, dtype)
+                arg_expr = self.generate_constructor_scalar_expression(
+                    arg, dtype, f"vector constructor {func_name} argument 1"
+                )
                 if self.is_duplicate_sensitive_expression(arg):
                     helper_name = self.vec3_splat_helper_name(dtype)
                     self.required_splat_helpers.add(dtype)
@@ -3835,16 +4509,22 @@ class MojoCodeGen:
                 emitted_args.extend([arg_expr] * source_width)
             else:
                 emitted_args.append(
-                    self.generate_constructor_scalar_expression(arg, dtype)
+                    self.generate_constructor_scalar_expression(
+                        arg, dtype, f"vector constructor {func_name} argument 1"
+                    )
                 )
         else:
-            for arg in args:
+            for index, arg in enumerate(args, start=1):
                 arg_components = self.vector_components_for_expression(arg, dtype)
                 if arg_components is not None:
                     emitted_args.extend(arg_components)
                 else:
                     emitted_args.append(
-                        self.generate_constructor_scalar_expression(arg, dtype)
+                        self.generate_constructor_scalar_expression(
+                            arg,
+                            dtype,
+                            f"vector constructor {func_name} argument {index}",
+                        )
                     )
 
         if len(emitted_args) > source_width:
@@ -3865,15 +4545,27 @@ class MojoCodeGen:
         if helper_call is not None:
             return helper_call
 
+        if len(args) == 1 and self.is_duplicate_sensitive_expression(args[0]):
+            arg_type = self.constructor_scalar_expression_target_type(args[0], dtype)
+            if self.vector_type_info(arg_type) is None:
+                scalar = self.generate_constructor_scalar_expression(
+                    args[0], dtype, f"matrix constructor {func_name} argument 1"
+                )
+                key = (dtype, columns, rows)
+                self.required_matrix_diagonal_helpers.add(key)
+                return f"{self.matrix_diagonal_helper_name(*key)}({scalar})"
+
         component_count = columns * rows
         components = []
-        for arg in args:
+        for index, arg in enumerate(args, start=1):
             arg_components = self.vector_components_for_expression(arg, dtype)
             if arg_components is not None:
                 components.extend(arg_components)
             else:
                 components.append(
-                    self.generate_constructor_scalar_expression(arg, dtype)
+                    self.generate_constructor_scalar_expression(
+                        arg, dtype, f"matrix constructor {func_name} argument {index}"
+                    )
                 )
 
         if len(args) == 1 and len(components) == 1:
@@ -4071,13 +4763,699 @@ class MojoCodeGen:
             return [args[0], *args[2:]]
         return args
 
+    def generate_user_function_call_arguments(self, func_name, args):
+        parameter_types = self.function_parameter_types.get(func_name, [])
+        generated_args = []
+        for index, arg in enumerate(args):
+            target_type = (
+                parameter_types[index] if index < len(parameter_types) else None
+            )
+            self.validate_expression_target_shape(
+                arg,
+                target_type,
+                f"argument {index + 1} for {func_name}",
+            )
+            generated_args.append(
+                self.generate_expression(
+                    arg,
+                    target_type,
+                    f"argument {index + 1} for {func_name}",
+                )
+            )
+        return ", ".join(generated_args)
+
+    def validate_expression_target_shape(self, expr, target_type, context):
+        self.validate_resource_size_target_shape(expr, target_type, context)
+        self.validate_image_result_target_shape(expr, target_type, context)
+        self.validate_buffer_result_target_shape(expr, target_type, context)
+        self.validate_reinterpret_result_target_shape(expr, target_type, context)
+
+    def validate_resource_size_target_shape(self, expr, target_type, context):
+        if expr is None:
+            return
+
+        if target_type is None:
+            if isinstance(expr, ConstructorNode):
+                self.validate_constructor_resource_size_target_shapes(
+                    expr, None, context
+                )
+            return
+
+        if isinstance(expr, TernaryOpNode):
+            self.validate_resource_size_target_shape(
+                expr.true_expr, target_type, f"{context} true branch"
+            )
+            self.validate_resource_size_target_shape(
+                expr.false_expr, target_type, f"{context} false branch"
+            )
+            return
+
+        if isinstance(expr, MatchNode):
+            arms = getattr(expr, "arms", []) or []
+            self.validate_match_expression_arms(arms)
+            for arm_index, arm in enumerate(arms, start=1):
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                self.validate_resource_size_target_shape(
+                    arm_expr, target_type, f"{context} match arm {arm_index}"
+                )
+            return
+
+        if isinstance(expr, ArrayLiteralNode) and self.is_array_type_name(target_type):
+            element_type, _ = self.parse_array_type_name(target_type)
+            for index, element in enumerate(expr.elements, start=1):
+                self.validate_resource_size_target_shape(
+                    element, element_type, f"{context} array literal element {index}"
+                )
+            return
+
+        if isinstance(expr, ConstructorNode):
+            self.validate_constructor_resource_size_target_shapes(
+                expr, target_type, context
+            )
+            return
+
+        size_info = self.resource_size_expression_info(expr)
+        if size_info is None:
+            return
+
+        helper_name, resource_type, expected_type = size_info
+        if expected_type is None:
+            return
+        if self.resource_size_target_matches(expected_type, target_type):
+            return
+
+        raise ValueError(
+            f"Unsupported {helper_name} target for Mojo codegen; {context} "
+            f"expects {expected_type} from {resource_type}, got "
+            f"{self.type_name(target_type)}"
+        )
+
+    def validate_image_result_target_shape(self, expr, target_type, context):
+        if expr is None or target_type is None:
+            return
+
+        if isinstance(expr, TernaryOpNode):
+            self.validate_image_result_target_shape(
+                expr.true_expr, target_type, f"{context} true branch"
+            )
+            self.validate_image_result_target_shape(
+                expr.false_expr, target_type, f"{context} false branch"
+            )
+            return
+
+        if isinstance(expr, MatchNode):
+            arms = getattr(expr, "arms", []) or []
+            self.validate_match_expression_arms(arms)
+            for arm_index, arm in enumerate(arms, start=1):
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                self.validate_image_result_target_shape(
+                    arm_expr, target_type, f"{context} match arm {arm_index}"
+                )
+            return
+
+        if isinstance(expr, ArrayLiteralNode) and self.is_array_type_name(target_type):
+            element_type, _ = self.parse_array_type_name(target_type)
+            for index, element in enumerate(expr.elements, start=1):
+                self.validate_image_result_target_shape(
+                    element, element_type, f"{context} array literal element {index}"
+                )
+            return
+
+        if isinstance(expr, ConstructorNode):
+            self.validate_constructor_image_result_target_shapes(
+                expr, target_type, context
+            )
+            return
+
+        image_info = self.image_result_expression_info(expr)
+        if image_info is None:
+            return
+
+        helper_name, resource_type, expected_type = image_info
+        if expected_type is None:
+            return
+        if self.image_result_target_matches(expected_type, target_type):
+            return
+        if self.explicit_scalar_conversion_context(context) and (
+            self.is_scalar_type_name(expected_type)
+            and self.is_scalar_type_name(target_type)
+        ):
+            return
+
+        raise ValueError(
+            f"Unsupported {helper_name} target for Mojo codegen; {context} "
+            f"expects {expected_type} from {resource_type}, got "
+            f"{self.type_name(target_type)}"
+        )
+
+    def validate_buffer_result_target_shape(self, expr, target_type, context):
+        if expr is None or target_type is None:
+            return
+
+        if isinstance(expr, TernaryOpNode):
+            self.validate_buffer_result_target_shape(
+                expr.true_expr, target_type, f"{context} true branch"
+            )
+            self.validate_buffer_result_target_shape(
+                expr.false_expr, target_type, f"{context} false branch"
+            )
+            return
+
+        if isinstance(expr, MatchNode):
+            arms = getattr(expr, "arms", []) or []
+            self.validate_match_expression_arms(arms)
+            for arm_index, arm in enumerate(arms, start=1):
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                self.validate_buffer_result_target_shape(
+                    arm_expr, target_type, f"{context} match arm {arm_index}"
+                )
+            return
+
+        if isinstance(expr, ArrayLiteralNode) and self.is_array_type_name(target_type):
+            element_type, _ = self.parse_array_type_name(target_type)
+            for index, element in enumerate(expr.elements, start=1):
+                self.validate_buffer_result_target_shape(
+                    element, element_type, f"{context} array literal element {index}"
+                )
+            return
+
+        if isinstance(expr, ConstructorNode):
+            self.validate_constructor_buffer_result_target_shapes(
+                expr, target_type, context
+            )
+            return
+
+        buffer_info = self.buffer_result_expression_info(expr)
+        if buffer_info is None:
+            return
+
+        helper_name, resource_type, expected_type = buffer_info
+        if expected_type is None or self.result_shape_target_matches(
+            expected_type, target_type
+        ):
+            return
+
+        raise ValueError(
+            f"Unsupported {helper_name} target for Mojo codegen; {context} "
+            f"expects {self.type_name(expected_type)} from {resource_type}, got "
+            f"{self.type_name(target_type)}"
+        )
+
+    def validate_reinterpret_result_target_shape(self, expr, target_type, context):
+        if expr is None or target_type is None:
+            return
+
+        if isinstance(expr, TernaryOpNode):
+            self.validate_reinterpret_result_target_shape(
+                expr.true_expr, target_type, f"{context} true branch"
+            )
+            self.validate_reinterpret_result_target_shape(
+                expr.false_expr, target_type, f"{context} false branch"
+            )
+            return
+
+        if isinstance(expr, MatchNode):
+            arms = getattr(expr, "arms", []) or []
+            self.validate_match_expression_arms(arms)
+            for arm_index, arm in enumerate(arms, start=1):
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                self.validate_reinterpret_result_target_shape(
+                    arm_expr, target_type, f"{context} match arm {arm_index}"
+                )
+            return
+
+        if isinstance(expr, ArrayLiteralNode) and self.is_array_type_name(target_type):
+            element_type, _ = self.parse_array_type_name(target_type)
+            for index, element in enumerate(expr.elements, start=1):
+                self.validate_reinterpret_result_target_shape(
+                    element, element_type, f"{context} array literal element {index}"
+                )
+            return
+
+        if isinstance(expr, ConstructorNode):
+            self.validate_constructor_reinterpret_result_target_shapes(
+                expr, target_type, context
+            )
+            return
+
+        reinterpret_info = self.reinterpret_result_expression_info(expr)
+        if reinterpret_info is None:
+            return
+
+        helper_name, expected_type = reinterpret_info
+        if self.result_shape_target_matches(expected_type, target_type):
+            return
+
+        raise ValueError(
+            f"Unsupported {helper_name} target for Mojo codegen; {context} "
+            f"expects {self.type_name(expected_type)}, got "
+            f"{self.type_name(target_type)}"
+        )
+
+    def validate_constructor_image_result_target_shapes(
+        self, expr, target_type, context
+    ):
+        constructor_type = self.convert_type_node_to_string(expr.constructor_type)
+        target_name = self.type_name(target_type)
+        if target_name in self.struct_types:
+            struct_type = target_name
+        elif constructor_type in self.struct_types:
+            struct_type = constructor_type
+        else:
+            return
+
+        fields = self.struct_types.get(struct_type, {})
+        field_items = list(fields.items())
+        for index, argument in enumerate(expr.arguments):
+            if index >= len(field_items):
+                continue
+            field_name, field_type = field_items[index]
+            self.validate_image_result_target_shape(
+                argument,
+                field_type,
+                f"{context} field {struct_type}.{field_name}",
+            )
+
+        for field_name, value in expr.named_arguments.items():
+            field_type = fields.get(field_name)
+            if field_type is None:
+                continue
+            self.validate_image_result_target_shape(
+                value,
+                field_type,
+                f"{context} field {struct_type}.{field_name}",
+            )
+
+    def validate_constructor_buffer_result_target_shapes(
+        self, expr, target_type, context
+    ):
+        constructor_type = self.convert_type_node_to_string(expr.constructor_type)
+        target_name = self.type_name(target_type)
+        if target_name in self.struct_types:
+            struct_type = target_name
+        elif constructor_type in self.struct_types:
+            struct_type = constructor_type
+        else:
+            return
+
+        fields = self.struct_types.get(struct_type, {})
+        field_items = list(fields.items())
+        for index, argument in enumerate(expr.arguments):
+            if index >= len(field_items):
+                continue
+            field_name, field_type = field_items[index]
+            self.validate_buffer_result_target_shape(
+                argument,
+                field_type,
+                f"{context} field {struct_type}.{field_name}",
+            )
+
+        for field_name, value in expr.named_arguments.items():
+            field_type = fields.get(field_name)
+            if field_type is None:
+                continue
+            self.validate_buffer_result_target_shape(
+                value,
+                field_type,
+                f"{context} field {struct_type}.{field_name}",
+            )
+
+    def validate_constructor_reinterpret_result_target_shapes(
+        self, expr, target_type, context
+    ):
+        constructor_type = self.convert_type_node_to_string(expr.constructor_type)
+        target_name = self.type_name(target_type)
+        if target_name in self.struct_types:
+            struct_type = target_name
+        elif constructor_type in self.struct_types:
+            struct_type = constructor_type
+        else:
+            return
+
+        fields = self.struct_types.get(struct_type, {})
+        field_items = list(fields.items())
+        for index, argument in enumerate(expr.arguments):
+            if index >= len(field_items):
+                continue
+            field_name, field_type = field_items[index]
+            self.validate_reinterpret_result_target_shape(
+                argument,
+                field_type,
+                f"{context} field {struct_type}.{field_name}",
+            )
+
+        for field_name, value in expr.named_arguments.items():
+            field_type = fields.get(field_name)
+            if field_type is None:
+                continue
+            self.validate_reinterpret_result_target_shape(
+                value,
+                field_type,
+                f"{context} field {struct_type}.{field_name}",
+            )
+
+    def validate_constructor_resource_size_target_shapes(
+        self, expr, target_type, context
+    ):
+        constructor_type = self.convert_type_node_to_string(expr.constructor_type)
+        target_name = self.type_name(target_type)
+        if target_name in self.struct_types:
+            struct_type = target_name
+        elif constructor_type in self.struct_types:
+            struct_type = constructor_type
+        else:
+            return
+
+        fields = self.struct_types.get(struct_type, {})
+        field_items = list(fields.items())
+        for index, argument in enumerate(expr.arguments):
+            if index >= len(field_items):
+                continue
+            field_name, field_type = field_items[index]
+            self.validate_resource_size_target_shape(
+                argument,
+                field_type,
+                f"{context} field {struct_type}.{field_name}",
+            )
+
+        for field_name, value in expr.named_arguments.items():
+            field_type = fields.get(field_name)
+            if field_type is None:
+                continue
+            self.validate_resource_size_target_shape(
+                value,
+                field_type,
+                f"{context} field {struct_type}.{field_name}",
+            )
+
+    def resource_size_expression_info(self, expr):
+        if isinstance(expr, FunctionCallNode):
+            func_expr = getattr(expr, "function", None)
+            if func_expr is None:
+                func_expr = getattr(expr, "name", None)
+            args = list(getattr(expr, "args", []) or [])
+
+            if isinstance(func_expr, MemberAccessNode) and getattr(
+                func_expr, "member", None
+            ) in {"GetDimensions", "textureSize"}:
+                resource_expr = getattr(
+                    func_expr, "object", getattr(func_expr, "object_expr", None)
+                )
+                return self.resource_size_expression_info_for_resource(
+                    resource_expr, "resource_size"
+                )
+
+            func_name = self.function_call_name(expr)
+            if func_name == "textureSize" and args:
+                return self.resource_size_expression_info_for_resource(
+                    args[0], "texture_size"
+                )
+            if func_name == "imageSize" and args:
+                return self.resource_size_expression_info_for_resource(
+                    args[0], "image_size"
+                )
+
+        if isinstance(expr, TextureOpNode) and getattr(expr, "operation", "") in {
+            "GetDimensions",
+            "textureSize",
+        }:
+            texture_expr = getattr(expr, "texture_expr", None)
+            resource_type = self.map_type(self.expression_result_type(texture_expr))
+            helper_name = (
+                "image_size"
+                if self.is_image_resource_type(resource_type)
+                else "texture_size"
+            )
+            expected_type = self.resource_size_result_type_name(resource_type)
+            return helper_name, resource_type, expected_type
+
+        return None
+
+    def resource_size_expression_info_for_resource(self, resource_expr, helper_name):
+        resource_type = self.map_type(self.expression_result_type(resource_expr))
+        if helper_name == "resource_size":
+            helper_name = (
+                "image_size"
+                if self.is_image_resource_type(resource_type)
+                else "texture_size"
+            )
+        expected_type = self.resource_size_result_type_name(resource_type)
+        return helper_name, resource_type, expected_type
+
+    def image_result_expression_info(self, expr):
+        if isinstance(expr, FunctionCallNode):
+            func_expr = getattr(expr, "function", None)
+            if func_expr is None:
+                func_expr = getattr(expr, "name", None)
+            args = list(getattr(expr, "args", []) or [])
+
+            if isinstance(func_expr, MemberAccessNode):
+                member = getattr(func_expr, "member", None)
+                resource_expr = getattr(
+                    func_expr, "object", getattr(func_expr, "object_expr", None)
+                )
+                atomic_helper = MOJO_ATOMIC_OP_ALIASES.get(member)
+                if member == "Load":
+                    return self.image_result_expression_info_for_resource(
+                        resource_expr, "image_load"
+                    )
+                if atomic_helper is not None:
+                    return self.image_result_expression_info_for_resource(
+                        resource_expr, atomic_helper
+                    )
+
+            func_name = self.function_call_name(expr)
+            if func_name == "imageLoad" and args:
+                return self.image_result_expression_info_for_resource(
+                    args[0], "image_load"
+                )
+            atomic_helper = MOJO_IMAGE_ATOMIC_BUILTINS.get(func_name)
+            if atomic_helper is not None and args:
+                return self.image_result_expression_info_for_resource(
+                    args[0], atomic_helper
+                )
+
+        if isinstance(expr, TextureOpNode):
+            operation = getattr(expr, "operation", "")
+            args = self.texture_op_args(expr, include_sampler=False)
+            if args:
+                if operation in {"Load", "texelFetch"}:
+                    return self.image_result_expression_info_for_resource(
+                        args[0], "image_load"
+                    )
+                atomic_helper = MOJO_ATOMIC_OP_ALIASES.get(operation)
+                if atomic_helper is not None:
+                    return self.image_result_expression_info_for_resource(
+                        args[0], atomic_helper
+                    )
+
+        if isinstance(expr, AtomicOpNode):
+            helper_base = MOJO_ATOMIC_OP_ALIASES.get(getattr(expr, "operation", ""))
+            if helper_base is not None:
+                return self.image_result_expression_info_for_resource(
+                    expr.target, helper_base
+                )
+
+        return None
+
+    def buffer_result_expression_info(self, expr):
+        if isinstance(expr, FunctionCallNode):
+            func_expr = getattr(expr, "function", None)
+            if func_expr is None:
+                func_expr = getattr(expr, "name", None)
+            args = list(getattr(expr, "args", []) or [])
+
+            if isinstance(func_expr, MemberAccessNode):
+                member = getattr(func_expr, "member", None)
+                resource_expr = getattr(
+                    func_expr, "object", getattr(func_expr, "object_expr", None)
+                )
+                info = self.buffer_resource_info(
+                    self.expression_result_type(resource_expr)
+                )
+                return self.buffer_result_info_for_operation(member, info)
+
+            func_name = self.function_call_name(expr)
+            if func_name == "buffer_load" and args:
+                info = self.buffer_resource_info(self.expression_result_type(args[0]))
+                return self.buffer_result_info_for_operation("Load", info)
+            if func_name == "buffer_consume" and args:
+                info = self.buffer_resource_info(self.expression_result_type(args[0]))
+                return self.buffer_result_info_for_operation("Consume", info)
+
+        if isinstance(expr, BufferOpNode):
+            operation = MOJO_BUFFER_OP_ALIASES.get(getattr(expr, "operation", ""))
+            info = self.buffer_resource_info(
+                self.expression_result_type(getattr(expr, "buffer_expr", None))
+            )
+            return self.buffer_result_info_for_operation(operation, info)
+
+        return None
+
+    def buffer_result_info_for_operation(self, operation, info):
+        if operation is None or info is None:
+            return None
+
+        buffer_type, element_type = info
+        if operation == "Load":
+            expected_type = self.buffer_helper_element_type(buffer_type, element_type)
+            return "buffer_load", self.mapped_buffer_type(*info), expected_type
+
+        if operation in MOJO_BYTE_ADDRESS_LOAD_METHODS:
+            width = MOJO_BYTE_ADDRESS_LOAD_METHODS[operation]
+            helper_name = "buffer_load" if width == 1 else f"buffer_load{width}"
+            return helper_name, buffer_type, self.byte_address_load_result_type(width)
+
+        if operation == "Consume":
+            return "buffer_consume", self.mapped_buffer_type(*info), element_type
+
+        return None
+
+    def reinterpret_result_expression_info(self, expr):
+        if not isinstance(expr, FunctionCallNode):
+            return None
+
+        func_name = self.function_call_name(expr)
+        if func_name not in MOJO_REINTERPRET_BUILTINS:
+            return None
+
+        source_type = self.expression_result_type(expr.args[0]) if expr.args else None
+        return func_name, self.reinterpret_return_type_name(func_name, source_type)
+
+    def image_result_expression_info_for_resource(self, resource_expr, helper_name):
+        resource_type = self.map_type(self.expression_result_type(resource_expr))
+        if not self.is_image_resource_type(resource_type):
+            return None
+
+        if helper_name == "image_load":
+            return (
+                helper_name,
+                resource_type,
+                self.image_result_type_name(resource_type),
+            )
+
+        expected_type = self.image_atomic_result_type_name(resource_type)
+        return helper_name, resource_type, expected_type
+
+    def image_atomic_result_type_name(self, resource_type):
+        value_type = self.image_value_type(resource_type)
+        if value_type == "Int32":
+            return "int"
+        if value_type == "UInt32":
+            return "uint"
+        return None
+
+    def resource_size_target_matches(self, expected_type, target_type):
+        if expected_type == "int":
+            return self.map_type(target_type) == "Int32"
+
+        expected_info = self.vector_type_info(expected_type)
+        target_info = self.vector_type_info(target_type)
+        if expected_info is None or target_info is None:
+            return False
+        return expected_info[0] == target_info[0] and expected_info[1] == target_info[1]
+
+    def image_result_target_matches(self, expected_type, target_type):
+        if self.map_type(expected_type) == self.map_type(target_type):
+            return True
+
+        expected_info = self.vector_type_info(expected_type)
+        target_info = self.vector_type_info(target_type)
+        if expected_info is not None or target_info is not None:
+            if expected_info is None or target_info is None:
+                return False
+            return (
+                expected_info[0] == target_info[0]
+                and expected_info[1] == target_info[1]
+            )
+
+        return False
+
+    def result_shape_target_matches(self, expected_type, target_type):
+        if self.map_type(expected_type) == self.map_type(target_type):
+            return True
+
+        expected_info = self.vector_type_info(expected_type)
+        target_info = self.vector_type_info(target_type)
+        if expected_info is not None or target_info is not None:
+            return (
+                expected_info is not None
+                and target_info is not None
+                and expected_info[1] == target_info[1]
+            )
+
+        return self.is_scalar_type_name(expected_type) and self.is_scalar_type_name(
+            target_type
+        )
+
+    def explicit_scalar_conversion_context(self, context):
+        if context is None:
+            return False
+        return context.startswith("cast to ") or context.startswith(
+            "scalar constructor "
+        )
+
+    def is_scalar_type_name(self, type_name):
+        if type_name is None:
+            return False
+        if self.vector_type_info(type_name) is not None:
+            return False
+        return self.map_type(type_name) in {
+            "Float16",
+            "Float32",
+            "Float64",
+            "Int16",
+            "Int32",
+            "Int64",
+            "UInt16",
+            "UInt32",
+            "UInt64",
+            "Bool",
+        }
+
     def generate_resource_size_call(self, args, helper_name):
+        if helper_name == "texture_size":
+            required_kind = "texture"
+            is_valid_kind = self.is_texture_resource_type
+            expected_args = {1, 2}
+        else:
+            required_kind = "image"
+            is_valid_kind = self.is_image_resource_type
+            expected_args = {1}
+
         if not args:
-            return f"{helper_name}()"
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"{required_kind} resource required: <missing>"
+            )
 
         resource_type = self.map_type(self.expression_result_type(args[0]))
-        if self.resource_size_return_type(resource_type) is not None:
-            self.required_resource_size_types.add(resource_type)
+
+        if not is_valid_kind(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"{required_kind} resource required: {resource_type}"
+            )
+        if len(args) not in expected_args:
+            expected_counts = sorted(count - 1 for count in expected_args)
+            expected_text = " or ".join(str(count) for count in expected_counts)
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; expected "
+                f"{expected_text} argument(s) after {required_kind} resource, "
+                f"got {len(args) - 1}"
+            )
+        if len(args) == 2:
+            self.validate_resource_argument_type(
+                args[1], "Int32", helper_name, resource_type, "lod"
+            )
+
+        if self.resource_size_return_type(resource_type) is None:
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"sizable {required_kind} resource required: {resource_type}"
+            )
+        self.required_resource_size_types.add(resource_type)
+        self.required_resource_size_helpers.add((helper_name, resource_type))
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"{helper_name}({generated_args})"
@@ -4329,6 +5707,11 @@ class MojoCodeGen:
         if args:
             info = self.buffer_resource_info(self.expression_result_type(args[0]))
             if info is not None:
+                if len(args) not in {2, 3}:
+                    raise ValueError(
+                        "Unsupported buffer_dimensions for Mojo codegen; "
+                        f"expected 1 or 2 dimension argument(s), got {len(args) - 1}"
+                    )
                 self.register_buffer_resource_type(info[0])
                 self.required_buffer_dimensions_helpers.add(info)
 
@@ -4412,6 +5795,8 @@ class MojoCodeGen:
         obj_type = self.expression_result_type(obj_expr)
         info = self.buffer_resource_info(obj_type)
         if info is None:
+            self.reject_invalid_resource_query_member_receiver(member, obj_type)
+            self.reject_invalid_resource_operation_member_receiver(member, obj_type)
             return None
 
         obj = self.generate_expression(obj_expr)
@@ -4529,6 +5914,30 @@ class MojoCodeGen:
             )
 
         return None
+
+    def reject_invalid_resource_query_member_receiver(self, member, obj_type):
+        requirement = MOJO_RESOURCE_QUERY_MEMBER_REQUIREMENTS.get(member)
+        if requirement is None:
+            return
+
+        helper_name, required_receiver = requirement
+        mapped_type = self.map_type(obj_type) if obj_type is not None else "<unknown>"
+        raise ValueError(
+            f"Unsupported {helper_name} for Mojo codegen; "
+            f"{required_receiver} required: {mapped_type}"
+        )
+
+    def reject_invalid_resource_operation_member_receiver(self, member, obj_type):
+        requirement = MOJO_RESOURCE_OPERATION_MEMBER_REQUIREMENTS.get(member)
+        if requirement is None:
+            return
+
+        helper_name, required_receiver = requirement
+        mapped_type = self.map_type(obj_type) if obj_type is not None else "<unknown>"
+        raise ValueError(
+            f"Unsupported {helper_name} for Mojo codegen; "
+            f"{required_receiver} required: {mapped_type}"
+        )
 
     def generate_texture_member_function_call(self, func_expr, args):
         member = getattr(func_expr, "member", None)
@@ -4891,12 +6300,18 @@ class MojoCodeGen:
 
         self.validate_resource_read_write_access(args[0], helper_base)
         resource_type = self.map_type(self.expression_result_type(args[0]))
+        if not self.is_image_resource_type(resource_type):
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"image resource required: {resource_type}"
+            )
         return_type = self.image_value_type(resource_type)
         if return_type not in {"Int32", "UInt32"}:
             raise ValueError(
                 "Unsupported image atomic for Mojo codegen; "
                 f"scalar integer image required: {resource_type}"
             )
+        self.validate_image_atomic_args(args, helper_base, resource_type, return_type)
 
         arg_types = tuple(self.resource_builtin_arg_type(arg) for arg in args)
         helper_name = self.resource_builtin_helper_name(helper_base, arg_types)
@@ -4908,6 +6323,40 @@ class MojoCodeGen:
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"{helper_name}({generated_args})"
+
+    def validate_image_atomic_args(self, args, helper_base, resource_type, value_type):
+        coord_type = self.resource_texel_coord_type(resource_type)
+        if coord_type is None:
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; "
+                f"atomic image resource required: {resource_type}"
+            )
+
+        value_count = 2 if helper_base == "image_atomic_comp_swap" else 1
+        sample_count = 1 if self.is_multisample_resource_type(resource_type) else 0
+        expected_count = 2 + sample_count + value_count
+        if len(args) != expected_count:
+            raise ValueError(
+                f"Unsupported {helper_base} for Mojo codegen; expected "
+                f"{expected_count - 1} argument(s) after image resource, "
+                f"got {len(args) - 1}"
+            )
+
+        self.validate_resource_argument_type(
+            args[1], coord_type, helper_base, resource_type, "coordinate"
+        )
+        value_index = 2
+        if sample_count:
+            self.validate_resource_argument_type(
+                args[2], "Int32", helper_base, resource_type, "sample"
+            )
+            value_index = 3
+
+        labels = ("compare", "value") if value_count == 2 else ("value",)
+        for label, arg in zip(labels, args[value_index:]):
+            self.validate_resource_argument_type(
+                arg, value_type, helper_base, resource_type, label
+            )
 
     def resource_builtin_arg_type(self, arg):
         if isinstance(arg, bool):
@@ -5026,7 +6475,12 @@ class MojoCodeGen:
             "pieces": pieces,
         }
 
-        call_args = [self.generate_expression(piece["expr"]) for piece in pieces]
+        call_args = [
+            self.generate_constructor_helper_argument(
+                piece, dtype, f"matrix constructor helper argument {index}"
+            )
+            for index, piece in enumerate(pieces, start=1)
+        ]
         return f"{helper_name}({', '.join(call_args)})"
 
     def matrix_constructor_helper_key(self, dtype, columns, rows, pieces):
@@ -5040,6 +6494,12 @@ class MojoCodeGen:
         return (
             f"_crossgl_construct_matrix_{MOJO_DTYPE_SUFFIX[dtype]}_"
             f"c{columns}_r{rows}_{suffix}"
+        )
+
+    def matrix_diagonal_helper_name(self, dtype, columns, rows):
+        return (
+            f"_crossgl_matrix_diagonal_{MOJO_DTYPE_SUFFIX[dtype]}_"
+            f"c{columns}_r{rows}"
         )
 
     def matrix_type_name(self, dtype, columns, rows):
@@ -5136,6 +6596,26 @@ class MojoCodeGen:
         code += f"    return {matrix_type}({', '.join(column_args)})\n\n"
         return code
 
+    def generate_matrix_diagonal_helper(self, dtype, columns, rows):
+        scalar_type, _, _ = MOJO_DTYPE_INFO[dtype]
+        mojo_scalar_type = self.map_type(scalar_type)
+        matrix_type = self.matrix_type_name(dtype, columns, rows)
+        storage_rows = self.matrix_storage_rows(rows)
+        column_type = f"SIMD[{dtype}, {storage_rows}]"
+        zero = self.matrix_zero_literal(dtype)
+        column_args = []
+
+        for column in range(columns):
+            components = ["s" if column == row else zero for row in range(rows)]
+            if rows == 3:
+                components.append(zero)
+            column_args.append(f"{column_type}({', '.join(components)})")
+
+        helper_name = self.matrix_diagonal_helper_name(dtype, columns, rows)
+        code = f"fn {helper_name}(s: {mojo_scalar_type}) -> {matrix_type}:\n"
+        code += f"    return {matrix_type}({', '.join(column_args)})\n\n"
+        return code
+
     def generate_vector_binary_op(self, expr):
         op = self.map_operator(expr.op)
         if op not in MOJO_VECTOR_ARITHMETIC_OPS:
@@ -5185,6 +6665,7 @@ class MojoCodeGen:
             and not self.required_select_helpers
             and not self.required_matrix_types
             and not self.required_matrix_constructor_helpers
+            and not self.required_matrix_diagonal_helpers
             and not self.required_fract_helpers
             and not self.required_saturate_helpers
             and not self.required_resource_types
@@ -5252,8 +6733,10 @@ class MojoCodeGen:
                 code += self.generate_resource_lod_helper(resource_type)
             for resource_type in sorted(self.required_resource_grad_types):
                 code += self.generate_resource_grad_helper(resource_type)
-            for resource_type in sorted(self.required_resource_size_types):
-                code += self.generate_resource_size_helper(resource_type)
+            for helper_name, resource_type in sorted(
+                self.required_resource_size_helpers
+            ):
+                code += self.generate_resource_size_helper(helper_name, resource_type)
             for resource_type in sorted(self.required_resource_query_level_types):
                 code += self.generate_resource_query_levels_helper(resource_type)
             for helper_name, resource_type in sorted(
@@ -5321,6 +6804,7 @@ class MojoCodeGen:
             or self.required_constructor_helpers
             or self.required_select_helpers
             or self.required_matrix_constructor_helpers
+            or self.required_matrix_diagonal_helpers
         ):
             code += "# CrossGL vector helpers\n"
         for dtype, op, helper_kind in sorted(self.required_helpers):
@@ -5339,6 +6823,8 @@ class MojoCodeGen:
             code += self.generate_matrix_constructor_helper(
                 self.required_matrix_constructor_helpers[key]
             )
+        for key in sorted(self.required_matrix_diagonal_helpers):
+            code += self.generate_matrix_diagonal_helper(*key)
         return code + "\n"
 
     def generate_sync_helper(self, helper_name):
@@ -5399,11 +6885,17 @@ class MojoCodeGen:
 
     def generate_buffer_dimensions_helper(self, buffer_type, element_type):
         buffer_mojo_type = self.mapped_buffer_type(buffer_type, element_type)
-        code = ""
+        code = f"fn buffer_dimensions(buffer: {buffer_mojo_type}) -> SIMD[DType.int32, 2]:\n"
+        code += "    return SIMD[DType.int32, 2](0, 0)\n\n"
         for dimensions_type in ("Int32", "UInt32"):
             code += (
                 f"fn buffer_dimensions(buffer: {buffer_mojo_type}, "
                 f"dimensions: {dimensions_type}):\n"
+            )
+            code += "    pass\n\n"
+            code += (
+                f"fn buffer_dimensions(buffer: {buffer_mojo_type}, "
+                f"dimensions: {dimensions_type}, stride: {dimensions_type}):\n"
             )
             code += "    pass\n\n"
         return code
@@ -5472,14 +6964,20 @@ class MojoCodeGen:
         code += f"    return {self.zero_mojo_value(return_type)}\n\n"
         return code
 
-    def generate_resource_size_helper(self, resource_type):
+    def generate_resource_size_helper(self, helper_name, resource_type):
         return_type = self.resource_size_return_type(resource_type)
         zero_value = self.zero_mojo_value(return_type)
-        code = f"fn texture_size(tex: {resource_type}) -> {return_type}:\n"
-        code += f"    return {zero_value}\n\n"
-        code += f"fn texture_size(tex: {resource_type}, lod: Int32) -> {return_type}:\n"
-        code += f"    return {zero_value}\n\n"
-        code += f"fn image_size(image: {resource_type}) -> {return_type}:\n"
+        if helper_name == "texture_size":
+            code = f"fn texture_size(tex: {resource_type}) -> {return_type}:\n"
+            code += f"    return {zero_value}\n\n"
+            code += (
+                f"fn texture_size(tex: {resource_type}, lod: Int32) -> "
+                f"{return_type}:\n"
+            )
+            code += f"    return {zero_value}\n\n"
+            return code
+
+        code = f"fn image_size(image: {resource_type}) -> {return_type}:\n"
         code += f"    return {zero_value}\n\n"
         return code
 
@@ -5768,7 +7266,12 @@ class MojoCodeGen:
             "pieces": pieces,
         }
 
-        call_args = [self.generate_expression(piece["expr"]) for piece in pieces]
+        call_args = [
+            self.generate_constructor_helper_argument(
+                piece, dtype, f"constructor helper argument {index}"
+            )
+            for index, piece in enumerate(pieces, start=1)
+        ]
         return f"{helper_name}({', '.join(call_args)})"
 
     def select_constructor_pieces(self, pieces, source_width):
@@ -5828,6 +7331,165 @@ class MojoCodeGen:
             "expr": expr,
             "dtype": self.expression_mojo_dtype(expr),
         }
+
+    def generate_constructor_helper_argument(self, piece, target_dtype, context):
+        target_type = self.constructor_helper_argument_target_type(piece, target_dtype)
+        self.validate_expression_target_shape(piece["expr"], target_type, context)
+        return self.generate_expression(piece["expr"], target_type, context)
+
+    def generate_scalar_constructor_argument(self, expr, target_dtype, context):
+        target_type = self.constructor_scalar_expression_target_type(
+            expr, target_dtype, force_scalar_target=True
+        )
+        self.validate_expression_target_shape(expr, target_type, context)
+        return self.generate_expression(expr, target_type, context)
+
+    def constructor_helper_argument_target_type(self, piece, target_dtype):
+        if piece["kind"] == "scalar" and self.image_result_target_types_in_expression(
+            piece["expr"]
+        ):
+            return MOJO_DTYPE_INFO[target_dtype][0]
+
+        expr_type = self.expression_result_type(piece["expr"])
+        if expr_type is not None:
+            return expr_type
+
+        if piece["kind"] == "scalar":
+            piece_dtype = piece.get("dtype")
+            return self.constructor_scalar_expression_target_type(
+                piece["expr"], target_dtype, piece_dtype
+            )
+
+        return None
+
+    def constructor_scalar_expression_target_type(
+        self, expr, target_dtype, fallback_dtype=None, force_scalar_target=False
+    ):
+        if self.image_result_target_types_in_expression(expr):
+            return MOJO_DTYPE_INFO[target_dtype][0]
+
+        expr_type = self.expression_result_type(expr)
+        if expr_type is not None:
+            if force_scalar_target and self.vector_type_info(expr_type) is not None:
+                resource_targets = self.expression_target_types_in_expression(expr)
+                if any(
+                    self.vector_type_info(resource_target) is not None
+                    for resource_target in resource_targets
+                ):
+                    return MOJO_DTYPE_INFO[target_dtype][0]
+            return expr_type
+
+        resource_targets = self.expression_target_types_in_expression(expr)
+        if any(
+            self.vector_type_info(resource_target) is not None
+            for resource_target in resource_targets
+        ):
+            return MOJO_DTYPE_INFO[target_dtype][0]
+        if "int" in resource_targets:
+            return "int"
+
+        dtype = fallback_dtype if fallback_dtype is not None else target_dtype
+        return MOJO_DTYPE_INFO[dtype][0]
+
+    def resource_size_target_types_in_expression(self, expr):
+        size_info = self.resource_size_expression_info(expr)
+        if size_info is not None:
+            _, _, expected_type = size_info
+            return [expected_type] if expected_type is not None else []
+
+        if isinstance(expr, TernaryOpNode):
+            return [
+                *self.resource_size_target_types_in_expression(expr.true_expr),
+                *self.resource_size_target_types_in_expression(expr.false_expr),
+            ]
+
+        if isinstance(expr, MatchNode):
+            target_types = []
+            for arm in getattr(expr, "arms", []) or []:
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                target_types.extend(
+                    self.resource_size_target_types_in_expression(arm_expr)
+                )
+            return target_types
+
+        return []
+
+    def image_result_target_types_in_expression(self, expr):
+        image_info = self.image_result_expression_info(expr)
+        if image_info is not None:
+            _, _, expected_type = image_info
+            return [expected_type] if expected_type is not None else []
+
+        if isinstance(expr, TernaryOpNode):
+            return [
+                *self.image_result_target_types_in_expression(expr.true_expr),
+                *self.image_result_target_types_in_expression(expr.false_expr),
+            ]
+
+        if isinstance(expr, MatchNode):
+            target_types = []
+            for arm in getattr(expr, "arms", []) or []:
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                target_types.extend(
+                    self.image_result_target_types_in_expression(arm_expr)
+                )
+            return target_types
+
+        return []
+
+    def buffer_result_target_types_in_expression(self, expr):
+        buffer_info = self.buffer_result_expression_info(expr)
+        if buffer_info is not None:
+            _, _, expected_type = buffer_info
+            return [expected_type] if expected_type is not None else []
+
+        if isinstance(expr, TernaryOpNode):
+            return [
+                *self.buffer_result_target_types_in_expression(expr.true_expr),
+                *self.buffer_result_target_types_in_expression(expr.false_expr),
+            ]
+
+        if isinstance(expr, MatchNode):
+            target_types = []
+            for arm in getattr(expr, "arms", []) or []:
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                target_types.extend(
+                    self.buffer_result_target_types_in_expression(arm_expr)
+                )
+            return target_types
+
+        return []
+
+    def reinterpret_result_target_types_in_expression(self, expr):
+        reinterpret_info = self.reinterpret_result_expression_info(expr)
+        if reinterpret_info is not None:
+            _, expected_type = reinterpret_info
+            return [expected_type] if expected_type is not None else []
+
+        if isinstance(expr, TernaryOpNode):
+            return [
+                *self.reinterpret_result_target_types_in_expression(expr.true_expr),
+                *self.reinterpret_result_target_types_in_expression(expr.false_expr),
+            ]
+
+        if isinstance(expr, MatchNode):
+            target_types = []
+            for arm in getattr(expr, "arms", []) or []:
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                target_types.extend(
+                    self.reinterpret_result_target_types_in_expression(arm_expr)
+                )
+            return target_types
+
+        return []
+
+    def expression_target_types_in_expression(self, expr):
+        return [
+            *self.resource_size_target_types_in_expression(expr),
+            *self.image_result_target_types_in_expression(expr),
+            *self.buffer_result_target_types_in_expression(expr),
+            *self.reinterpret_result_target_types_in_expression(expr),
+        ]
 
     def constructor_helper_key(self, dtype, source_width, storage_width, pieces):
         signature = []
@@ -5939,6 +7601,25 @@ class MojoCodeGen:
     def is_array_type_name(self, type_name):
         return type_name is not None and "[" in str(type_name) and "]" in str(type_name)
 
+    def parse_array_type_name(self, type_name):
+        type_text = str(type_name)
+        if not self.is_array_type_name(type_text) or not type_text.endswith("]"):
+            return type_text, None
+
+        open_bracket = type_text.rfind("[")
+        if open_bracket == -1:
+            return parse_array_type(type_text)
+
+        element_type = type_text[:open_bracket]
+        size_text = type_text[open_bracket + 1 : -1]
+        if not size_text:
+            return element_type, None
+
+        try:
+            return element_type, int(size_text)
+        except ValueError:
+            return element_type, None
+
     def is_struct_type_name(self, type_name):
         if type_name is None:
             return False
@@ -5963,26 +7644,28 @@ class MojoCodeGen:
         return f"{array_type}(unsafe_uninitialized=True)"
 
     def array_initial_value_for_type(self, type_name):
-        element_type, size = parse_array_type(str(type_name))
+        element_type, size = self.parse_array_type_name(type_name)
         return self.array_initial_value(element_type, size)
 
     def array_element_type(self, type_name):
         if not self.is_array_type_name(type_name):
             return None
-        element_type, _ = parse_array_type(str(type_name))
+        element_type, _ = self.parse_array_type_name(type_name)
         return element_type
 
     def generate_array_literal_expression(self, expr, target_type=None):
         if target_type is not None and self.is_array_type_name(target_type):
-            element_type, size = parse_array_type(str(target_type))
+            element_type, size = self.parse_array_type_name(target_type)
         else:
             element_type = self.infer_array_literal_element_type(expr)
             size = len(expr.elements)
 
         array_type = self.array_storage_type(element_type, size)
         elements = [
-            self.generate_array_literal_element(element, element_type)
-            for element in expr.elements
+            self.generate_array_literal_element(
+                element, element_type, f"array literal element {index}"
+            )
+            for index, element in enumerate(expr.elements, start=1)
         ]
 
         if size is not None:
@@ -5998,11 +7681,20 @@ class MojoCodeGen:
             return "float"
         return self.expression_result_type(expr.elements[0]) or "float"
 
-    def generate_array_literal_element(self, element, element_type):
+    def generate_array_literal_element(
+        self, element, element_type, context="array literal element"
+    ):
+        self.validate_expression_target_shape(element, element_type, context)
+        if isinstance(element, ArrayLiteralNode) and self.is_array_type_name(
+            element_type
+        ):
+            return self.generate_array_literal_expression(element, element_type)
+        if isinstance(element, MatchNode):
+            return self.generate_expression(element, element_type, context)
         target_dtype = MOJO_SCALAR_DTYPES.get(self.type_name(element_type))
         if target_dtype is not None:
             return self.generate_constructor_scalar_expression(element, target_dtype)
-        return self.generate_expression(element)
+        return self.generate_expression(element, element_type, context)
 
     def zero_value_for_type(self, type_name):
         type_name = self.type_name(type_name)
@@ -6011,7 +7703,7 @@ class MojoCodeGen:
             return f"{self.mapped_buffer_type(*buffer_info)}()"
 
         if self.is_array_type_name(type_name):
-            element_type, size = parse_array_type(type_name)
+            element_type, size = self.parse_array_type_name(type_name)
             return self.zero_array_value(element_type, size)
 
         if type_name in self.struct_types:
@@ -6131,6 +7823,15 @@ class MojoCodeGen:
         if isinstance(expr, ArrayLiteralNode):
             element_type = self.infer_array_literal_element_type(expr)
             return self.array_type_name(element_type, len(expr.elements))
+        if isinstance(expr, MatchNode):
+            arms = getattr(expr, "arms", []) or []
+            self.validate_match_expression_arms(arms)
+            for arm in arms:
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                arm_type = self.expression_result_type(arm_expr)
+                if arm_type is not None:
+                    return arm_type
+            return None
         if isinstance(expr, ArrayAccessNode):
             array_type = self.expression_result_type(expr.array)
             array_element_type = self.array_element_type(array_type)
@@ -6156,12 +7857,24 @@ class MojoCodeGen:
             if right_info is not None:
                 return right_type
             return left_type if left_type == right_type else left_type or right_type
+        if isinstance(expr, TernaryOpNode):
+            true_type = self.expression_result_type(expr.true_expr)
+            false_type = self.expression_result_type(expr.false_expr)
+            if true_type == false_type:
+                return true_type
+            if true_type is None:
+                return false_type
+            if false_type is None:
+                return true_type
+            return None
         if isinstance(expr, FunctionCallNode):
             member_result_type = self.member_function_result_type(expr)
             if member_result_type is not None:
                 return member_result_type
 
             func_name = self.function_call_name(expr)
+            if func_name in self.struct_types:
+                return func_name
             if func_name in self.vector_constructor_info:
                 return func_name
             vector_func_name = self.normalize_generic_vector_type_name(func_name)
@@ -6538,8 +8251,15 @@ class MojoCodeGen:
             return component
         return f"{component}.cast[{target_dtype}]()"
 
-    def generate_constructor_scalar_expression(self, expr, target_dtype):
-        expr_text = self.generate_expression(expr)
+    def generate_constructor_scalar_expression(
+        self, expr, target_dtype, target_context=None
+    ):
+        target_type = self.constructor_scalar_expression_target_type(expr, target_dtype)
+        if target_context is not None:
+            self.validate_expression_target_shape(expr, target_type, target_context)
+            expr_text = self.generate_expression(expr, target_type, target_context)
+        else:
+            expr_text = self.generate_expression(expr)
         if self.is_literal_expression(expr):
             return expr_text
         return self.cast_scalar_text(
@@ -6600,8 +8320,20 @@ class MojoCodeGen:
         return f"SIMD[{dtype}, {storage_width}]({', '.join(components)})"
 
     def is_duplicate_sensitive_expression(self, expr):
-        if isinstance(expr, (FunctionCallNode, BinaryOpNode, TernaryOpNode)):
+        if isinstance(
+            expr,
+            (
+                FunctionCallNode,
+                BinaryOpNode,
+                TernaryOpNode,
+                BufferOpNode,
+                TextureOpNode,
+                AtomicOpNode,
+            ),
+        ):
             return True
+        if isinstance(expr, CastNode):
+            return self.is_duplicate_sensitive_expression(expr.expression)
         if isinstance(expr, UnaryOpNode):
             return self.is_duplicate_sensitive_expression(expr.operand)
         if isinstance(expr, MemberAccessNode):
@@ -6653,7 +8385,7 @@ class MojoCodeGen:
             vtype_str = str(vtype)
 
         if "[" in vtype_str and "]" in vtype_str:
-            base_type, size = parse_array_type(vtype_str)
+            base_type, size = self.parse_array_type_name(vtype_str)
             base_mapped = self.map_type(base_type)
             if size:
                 return f"InlineArray[{base_mapped}, {size}]"
@@ -6687,7 +8419,7 @@ class MojoCodeGen:
 
     def is_resource_type_name(self, type_name):
         if self.is_array_type_name(type_name):
-            base_type, _ = parse_array_type(str(type_name))
+            base_type, _ = self.parse_array_type_name(type_name)
             return self.is_resource_type_name(base_type)
         if self.buffer_resource_info(type_name) is not None:
             return True

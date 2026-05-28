@@ -3396,17 +3396,22 @@ def test_image_type_keywords_parse():
     shader Resources {
         iimage2d signedImage;
         iimage3d signedVolume;
+        iimageCube signedCube;
+        iimageCubeArray signedCubeLayers;
         iimage2darray signedLayers;
         iimage2dms signedMs;
         iimage2dmsarray signedMsLayers;
         uimage2d unsignedImage;
         uimage3d unsignedVolume;
+        uimageCube unsignedCube;
+        uimageCubeArray unsignedCubeLayers;
         uimage2darray unsignedLayers;
         uimage2dms unsignedMs;
         uimage2dmsarray unsignedMsLayers;
         image2D outputImage;
         image3D volumeImage;
         imageCube cubeImage;
+        imageCubeArray cubeLayerImage;
         image2DArray layerImage;
         image2DMS outputMs;
         image2DMSArray layerMs;
@@ -3420,17 +3425,22 @@ def test_image_type_keywords_parse():
     assert resource_types == [
         "iimage2D",
         "iimage3D",
+        "iimageCube",
+        "iimageCubeArray",
         "iimage2DArray",
         "iimage2DMS",
         "iimage2DMSArray",
         "uimage2D",
         "uimage3D",
+        "uimageCube",
+        "uimageCubeArray",
         "uimage2DArray",
         "uimage2DMS",
         "uimage2DMSArray",
         "image2D",
         "image3D",
         "imageCube",
+        "imageCubeArray",
         "image2DArray",
         "image2DMS",
         "image2DMSArray",

@@ -209,13 +209,13 @@ class MetalToCrossGLConverter:
         }
         self.global_variable_types = {}
         self.current_variable_types = {}
-        self.sampled_texture_names = set()
         self.storage_texture_declaration_ids = set()
         self.global_storage_texture_names = set()
         self.current_storage_texture_names = set()
         self.global_structured_buffer_names = set()
         self.current_structured_buffer_names = set()
         self.suppress_structured_buffer_index_lowering = False
+        self.struct_member_types = {}
         self.texture_method_functions = {
             "read": "textureLoad",
             "write": "textureStore",
@@ -241,6 +241,12 @@ class MetalToCrossGLConverter:
             "sample_compare_level": "sample_compare_lod",
             "gather": "gather",
             "gather_compare": "gather_compare",
+        }
+        self.texture_size_query_methods = {
+            "get_width",
+            "get_height",
+            "get_depth",
+            "get_array_size",
         }
 
         self.map_semantics = {
@@ -306,6 +312,269 @@ class MetalToCrossGLConverter:
         descriptor["operation"] = self.texture_method_operations.get(method)
         return descriptor
 
+    def unwrap_texture_option_argument(self, expr, option_name):
+        if (
+            isinstance(expr, FunctionCallNode)
+            and expr.name == option_name
+            and len(expr.args) == 1
+        ):
+            return expr.args[0]
+        return expr
+
+    def texture_sample_options_call(self, options, sample_args, is_main=False):
+        if not options:
+            return f"texture({', '.join(sample_args)})"
+        if len(options) > 2:
+            return None
+
+        option = options[0]
+        offset = options[1] if len(options) == 2 else None
+
+        if (
+            isinstance(option, FunctionCallNode)
+            and option.name == "bias"
+            and len(option.args) == 1
+        ):
+            bias = self.generate_expression(option.args[0], is_main)
+            if offset is not None:
+                rendered_offset = self.generate_expression(offset, is_main)
+                args = sample_args + [rendered_offset, bias]
+                return f"textureOffset({', '.join(args)})"
+            return f"texture({', '.join(sample_args + [bias])})"
+
+        gradient_args = self.texture_gradient_option_arguments(option)
+        if gradient_args is not None:
+            ddx = self.generate_expression(gradient_args[0], is_main)
+            ddy = self.generate_expression(gradient_args[1], is_main)
+            if offset is not None:
+                rendered_offset = self.generate_expression(offset, is_main)
+                return (
+                    f"textureGradOffset("
+                    f"{', '.join(sample_args + [ddx, ddy, rendered_offset])})"
+                )
+            return f"textureGrad({', '.join(sample_args + [ddx, ddy])})"
+
+        level_arg = self.unwrap_texture_option_argument(option, "level")
+        if level_arg is not option or not self.texture_sample_option_is_offset(option):
+            lod = self.generate_expression(level_arg, is_main)
+            if offset is not None:
+                rendered_offset = self.generate_expression(offset, is_main)
+                return (
+                    f"textureLodOffset("
+                    f"{', '.join(sample_args + [lod, rendered_offset])})"
+                )
+            return f"textureLod({', '.join(sample_args + [lod])})"
+
+        rendered_offset = self.generate_expression(option, is_main)
+        return f"textureOffset({', '.join(sample_args + [rendered_offset])})"
+
+    def texture_sample_option_is_offset(self, option):
+        mapped_type = self.expression_mapped_type(option)
+        if self.is_integer_vector_type(mapped_type):
+            return True
+        constructor_type = getattr(option, "name", None) or getattr(
+            option, "type_name", None
+        )
+        if constructor_type is None:
+            return False
+        return self.is_integer_vector_type(self.map_type(str(constructor_type)))
+
+    def is_integer_vector_type(self, type_name):
+        return type_name in {
+            "ivec2",
+            "ivec3",
+            "ivec4",
+            "uvec2",
+            "uvec3",
+            "uvec4",
+            "i16vec2",
+            "i16vec3",
+            "i16vec4",
+            "u16vec2",
+            "u16vec3",
+            "u16vec4",
+            "i8vec2",
+            "i8vec3",
+            "i8vec4",
+            "u8vec2",
+            "u8vec3",
+            "u8vec4",
+        }
+
+    def texture_gradient_option_arguments(self, option):
+        if (
+            isinstance(option, FunctionCallNode)
+            and option.name in {"gradient2d", "gradient3d", "gradientcube"}
+            and len(option.args) == 2
+        ):
+            return option.args
+        return None
+
+    def texture_compare_method_base_arguments(
+        self, obj_expr, method_args, is_main=False
+    ):
+        mapped_type = self.expression_mapped_type(obj_expr)
+        if mapped_type == "sampler2DArrayShadow" and len(method_args) >= 4:
+            sampler = self.generate_expression(method_args[0], is_main)
+            coord = self.generate_expression(method_args[1], is_main)
+            layer = self.generate_expression(method_args[2], is_main)
+            compare = self.generate_expression(method_args[3], is_main)
+            return [sampler, f"vec3({coord}, {layer})", compare], 4
+        if mapped_type == "samplerCubeArrayShadow" and len(method_args) >= 4:
+            sampler = self.generate_expression(method_args[0], is_main)
+            coord = self.generate_expression(method_args[1], is_main)
+            layer = self.generate_expression(method_args[2], is_main)
+            compare = self.generate_expression(method_args[3], is_main)
+            return [sampler, f"vec4({coord}, {layer})", compare], 4
+        return [self.generate_expression(arg, is_main) for arg in method_args[:3]], 3
+
+    def texture_compare_option_method_call(
+        self, obj, obj_expr, method_args, is_main=False
+    ):
+        compare_args, compare_arg_count = self.texture_compare_method_base_arguments(
+            obj_expr, method_args, is_main
+        )
+        if len(method_args) == compare_arg_count and compare_arg_count == 4:
+            return f"textureCompare({obj}, {', '.join(compare_args)})"
+        if len(method_args) not in {compare_arg_count + 1, compare_arg_count + 2}:
+            return None
+
+        option = method_args[compare_arg_count]
+        level_arg = self.unwrap_texture_option_argument(option, "level")
+        if level_arg is not option:
+            lod = self.generate_expression(level_arg, is_main)
+            if len(method_args) == compare_arg_count + 1:
+                return f"textureCompareLod({obj}, {', '.join(compare_args + [lod])})"
+            offset = self.generate_expression(
+                method_args[compare_arg_count + 1], is_main
+            )
+            return (
+                f"textureCompareLodOffset("
+                f"{obj}, {', '.join(compare_args + [lod, offset])})"
+            )
+
+        gradient_args = self.texture_gradient_option_arguments(option)
+        if gradient_args is not None:
+            ddx = self.generate_expression(gradient_args[0], is_main)
+            ddy = self.generate_expression(gradient_args[1], is_main)
+            if len(method_args) == compare_arg_count + 1:
+                return (
+                    f"textureCompareGrad({obj}, {', '.join(compare_args + [ddx, ddy])})"
+                )
+            offset = self.generate_expression(
+                method_args[compare_arg_count + 1], is_main
+            )
+            return (
+                f"textureCompareGradOffset("
+                f"{obj}, {', '.join(compare_args + [ddx, ddy, offset])})"
+            )
+
+        if len(method_args) == compare_arg_count + 1 and not isinstance(
+            option, FunctionCallNode
+        ):
+            offset = self.generate_expression(option, is_main)
+            return f"textureCompareOffset({obj}, {', '.join(compare_args + [offset])})"
+
+        return None
+
+    def is_multisample_resource_type(self, mapped_type):
+        return bool(mapped_type and "MS" in str(mapped_type))
+
+    def scalar_size_resource_type(self, mapped_type):
+        return mapped_type in {
+            "sampler1D",
+            "isampler1D",
+            "usampler1D",
+            "samplerBuffer",
+            "isamplerBuffer",
+            "usamplerBuffer",
+            "image1D",
+            "iimage1D",
+            "uimage1D",
+        }
+
+    def array_size_component(self, mapped_type):
+        return "y" if mapped_type and "1DArray" in str(mapped_type) else "z"
+
+    def resource_size_query_info(self, expr, is_main=False):
+        if not isinstance(expr, MethodCallNode):
+            return None
+        method = expr.method
+        if method not in self.texture_size_query_methods:
+            return None
+
+        obj = self.generate_expression(expr.object, is_main)
+        mapped_type = self.expression_mapped_type(expr.object)
+        query_function = (
+            "imageSize"
+            if self.is_storage_image_expression(expr.object)
+            else "textureSize"
+        )
+        multisample = self.is_multisample_resource_type(mapped_type)
+
+        lod = None
+        if (
+            query_function == "textureSize"
+            and not multisample
+            and method != "get_array_size"
+        ):
+            lod = self.generate_expression(expr.args[0], is_main) if expr.args else "0"
+
+        components = {
+            "get_width": "" if self.scalar_size_resource_type(mapped_type) else "x",
+            "get_height": "y",
+            "get_depth": "z",
+            "get_array_size": self.array_size_component(mapped_type),
+        }
+        return {
+            "object": obj,
+            "function": query_function,
+            "component": components[method],
+            "lod": lod,
+            "multisample": multisample,
+        }
+
+    def resource_size_query_call(self, info, lod=None):
+        args = [info["object"]]
+        if info["function"] == "textureSize" and not info["multisample"]:
+            args.append(lod if lod is not None else info["lod"] or "0")
+        return f"{info['function']}({', '.join(args)})"
+
+    def resource_size_method_expression(self, expr, is_main=False):
+        info = self.resource_size_query_info(expr, is_main)
+        if info is None:
+            return None
+        size_call = self.resource_size_query_call(info)
+        component = info["component"]
+        return f"{size_call}.{component}" if component else size_call
+
+    def texture_size_constructor_expression(self, expr, is_main=False):
+        infos = [
+            self.resource_size_query_info(arg, is_main)
+            for arg in getattr(expr, "args", [])
+        ]
+        if not infos or any(info is None for info in infos):
+            return None
+
+        first = infos[0]
+        if any(
+            info["object"] != first["object"]
+            or info["function"] != first["function"]
+            or info["multisample"] != first["multisample"]
+            for info in infos
+        ):
+            return None
+
+        components = [info["component"] for info in infos]
+        if components not in (["x", "y"], ["x", "y", "z"]):
+            return None
+
+        lods = {info["lod"] for info in infos if info["lod"] is not None}
+        if len(lods) > 1:
+            return None
+        lod = next(iter(lods), None)
+        return self.resource_size_query_call(first, lod)
+
     def generate(self, ast):
         """Generate a complete CrossGL shader from a parsed Metal AST."""
         self.prepare_texture_usage(ast)
@@ -332,6 +601,7 @@ class MetalToCrossGLConverter:
 
         # Get structs - support both 'struct' and 'structs' attributes
         structs = getattr(ast, "structs", []) or getattr(ast, "struct", []) or []
+        self.struct_member_types = self.collect_struct_member_types(structs)
         enums = getattr(ast, "enums", []) or []
         typedefs = getattr(ast, "typedefs", []) or []
 
@@ -450,6 +720,21 @@ class MetalToCrossGLConverter:
                     struct.name for struct in structs if struct.name == constant.name
                 )
 
+    def collect_struct_member_types(self, structs):
+        member_types = {}
+        for struct_node in structs or []:
+            struct_name = getattr(struct_node, "name", None)
+            if not struct_name:
+                continue
+            members = {}
+            for member in getattr(struct_node, "members", []) or []:
+                member_name = getattr(member, "name", None)
+                member_type = getattr(member, "vtype", None)
+                if member_name and member_type:
+                    members[member_name] = member_type
+            member_types[struct_name] = members
+        return member_types
+
     def iter_ast_children(self, node):
         if node is None or isinstance(node, (str, int, float, bool)):
             return
@@ -464,42 +749,15 @@ class MetalToCrossGLConverter:
         for value in getattr(node, "__dict__", {}).values():
             yield value
 
-    def collect_sampled_texture_names(self, root):
-        sampled_names = set()
-        direct_sample_methods = {"sample"}
-
-        def visit(node):
-            if node is None or isinstance(node, (str, int, float, bool)):
-                return
-            if isinstance(node, TextureSampleNode):
-                name = self.expression_base_name(node.texture)
-                if name:
-                    sampled_names.add(name)
-            elif isinstance(node, MethodCallNode):
-                descriptor = self.resource_method_descriptor(node.method)
-                if node.method in direct_sample_methods or (
-                    descriptor and descriptor["sampled_texture"]
-                ):
-                    name = self.expression_base_name(node.object)
-                    if name:
-                        sampled_names.add(name)
-            for child in self.iter_ast_children(node):
-                visit(child)
-
-        visit(root)
-        return sampled_names
-
     def collect_storage_texture_declaration_ids(self, root):
         storage_ids = set()
 
         def visit(node):
             if node is None or isinstance(node, (str, int, float, bool)):
                 return
-            if (
-                isinstance(node, VariableNode)
-                and self.is_access_qualified_storage_texture_type(node.vtype)
-                and node.name not in self.sampled_texture_names
-            ):
+            if isinstance(
+                node, VariableNode
+            ) and self.is_access_qualified_storage_texture_type(node.vtype):
                 storage_ids.add(id(node))
             for child in self.iter_ast_children(node):
                 visit(child)
@@ -514,10 +772,10 @@ class MetalToCrossGLConverter:
         self.current_storage_texture_names = set()
         self.global_structured_buffer_names = set()
         self.current_structured_buffer_names = set()
-        self.sampled_texture_names = self.collect_sampled_texture_names(ast)
         self.storage_texture_declaration_ids = (
             self.collect_storage_texture_declaration_ids(ast)
         )
+        self.struct_member_types = {}
 
     def format_array_suffix(self, var):
         array_type = self.metal_array_type_parts(getattr(var, "vtype", None))
@@ -778,13 +1036,45 @@ class MetalToCrossGLConverter:
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             method = expr.method
+            resource_size_expr = self.resource_size_method_expression(expr, is_main)
+            if resource_size_expr is not None:
+                return resource_size_expr
+            if method == "get_num_mip_levels":
+                return f"textureQueryLevels({obj})"
+            if method == "get_num_samples":
+                samples_function = (
+                    "imageSamples"
+                    if self.is_storage_image_expression(expr.object)
+                    else "textureSamples"
+                )
+                return f"{samples_function}({obj})"
             descriptor = self.resource_method_descriptor(method)
+            if descriptor and descriptor["sampled_texture"]:
+                diagnostic = self.unsupported_storage_texture_sampled_method(
+                    expr.object, method, is_main
+                )
+                if diagnostic is not None:
+                    return diagnostic
+            if method == "sample_compare":
+                option_call = self.texture_compare_option_method_call(
+                    obj,
+                    expr.object,
+                    expr.args,
+                    is_main,
+                )
+                if option_call is not None:
+                    return option_call
             if descriptor and descriptor["storage_operation"] == "read":
                 if self.is_storage_image_expression(expr.object):
                     coord = self.storage_image_coordinate_expression(
                         expr.object, expr.args
                     )
                     return f"imageLoad({obj}, {coord})" if coord else f"{obj}.read()"
+                sampled_read = self.sampled_texture_read_expression(
+                    expr.object, expr.args, is_main
+                )
+                if sampled_read is not None:
+                    return sampled_read
                 return (
                     f"{descriptor['function']}({obj}, {args})"
                     if args
@@ -803,10 +1093,8 @@ class MetalToCrossGLConverter:
                     if coord and value:
                         return f"imageStore({obj}, {coord}, {value})"
                     return f"{obj}.write({args})"
-                return (
-                    f"{descriptor['function']}({obj}, {args})"
-                    if args
-                    else f"{obj}.write()"
+                return self.unsupported_sampled_texture_write(
+                    expr.object, method, is_main
                 )
             if descriptor:
                 return f"{descriptor['function']}({obj}, {args})"
@@ -834,11 +1122,19 @@ class MetalToCrossGLConverter:
         elif isinstance(expr, CastNode):
             return f"({self.map_type(expr.target_type)}){self.generate_expression(expr.expression, is_main)}"
         elif isinstance(expr, VectorConstructorNode):
+            size_query = self.texture_size_constructor_expression(expr, is_main)
+            if size_query is not None:
+                return size_query
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             return f"{self.map_type(expr.type_name)}({args})"
         elif isinstance(expr, TextureSampleNode):
+            diagnostic = self.unsupported_storage_texture_sampled_method(
+                expr.texture, "sample", is_main
+            )
+            if diagnostic is not None:
+                return diagnostic
             texture = self.generate_expression(expr.texture, is_main)
             sampler = self.generate_expression(expr.sampler, is_main)
             coords = self.generate_expression(expr.coordinates, is_main)
@@ -849,7 +1145,15 @@ class MetalToCrossGLConverter:
 
             # Handle LOD parameter if present
             if hasattr(expr, "lod") and expr.lod is not None:
-                lod = self.generate_expression(expr.lod, is_main)
+                options = getattr(expr, "options", None) or [expr.lod]
+                option_call = self.texture_sample_options_call(
+                    options, sample_args, is_main
+                )
+                if option_call is not None:
+                    return option_call
+
+                lod_expr = self.unwrap_texture_option_argument(expr.lod, "level")
+                lod = self.generate_expression(lod_expr, is_main)
                 return f"textureLod({', '.join(sample_args + [lod])})"
 
             return f"texture({', '.join(sample_args)})"
@@ -1019,25 +1323,42 @@ class MetalToCrossGLConverter:
             return self.expression_base_name(expr.object)
         return None
 
-    def expression_mapped_type(self, expr):
-        name = self.expression_base_name(expr)
-        if not name:
+    def expression_metal_type(self, expr):
+        if expr is None:
             return None
-        metal_type = self.current_variable_types.get(name)
-        if metal_type is None:
-            metal_type = self.global_variable_types.get(name)
-        for _ in range(self.array_access_depth(expr)):
-            array_type = self.metal_array_type_parts(metal_type)
-            if not array_type:
-                break
-            metal_type = array_type[0]
-        if (
-            name in self.current_storage_texture_names
-            or name in self.global_storage_texture_names
-        ):
-            storage_type = self.map_storage_texture_type(metal_type)
-            if storage_type:
-                return storage_type
+        if isinstance(expr, str):
+            return self.current_variable_types.get(
+                expr, self.global_variable_types.get(expr)
+            )
+        if isinstance(expr, VariableNode):
+            name = getattr(expr, "name", None)
+            if not name:
+                return None
+            return self.current_variable_types.get(
+                name, self.global_variable_types.get(name)
+            )
+        if isinstance(expr, ArrayAccessNode):
+            array_type = self.expression_metal_type(expr.array)
+            array_parts = self.metal_array_type_parts(array_type)
+            if array_parts:
+                return array_parts[0]
+            return array_type
+        if isinstance(expr, MemberAccessNode):
+            object_type = self.expression_metal_type(expr.object)
+            if object_type is None:
+                return None
+            object_type = self.normalized_metal_type(object_type)
+            member_types = self.struct_member_types.get(object_type)
+            if not member_types:
+                return None
+            return member_types.get(str(expr.member))
+        return None
+
+    def expression_mapped_type(self, expr):
+        metal_type = self.expression_metal_type(expr)
+        storage_type = self.map_storage_texture_type(metal_type)
+        if storage_type:
+            return storage_type
         return self.map_type(metal_type) if metal_type else None
 
     def has_attribute(self, node, name):
@@ -1137,18 +1458,29 @@ class MetalToCrossGLConverter:
             rendered_value = f"{current_value} {binary_op} {rendered_value}"
         return f"buffer_store({buffer}, {index}, {rendered_value})"
 
-    def array_access_depth(self, expr):
-        depth = 0
-        while isinstance(expr, ArrayAccessNode):
-            depth += 1
-            expr = expr.array
-        return depth
-
     def is_storage_image_expression(self, expr):
         mapped_type = self.expression_mapped_type(expr)
         return bool(
             mapped_type and str(mapped_type).startswith(("image", "iimage", "uimage"))
         )
+
+    def unsupported_storage_texture_sampled_method(self, texture_expr, method, is_main):
+        if not self.is_storage_image_expression(texture_expr):
+            return None
+        texture = self.generate_expression(texture_expr, is_main)
+        fallback = (
+            "0.0"
+            if method in {"sample_compare", "sample_compare_level"}
+            else "vec4(0.0)"
+        )
+        return (
+            f"{fallback} /* unsupported Metal storage texture sampled method: "
+            f"{method} on {texture} */"
+        )
+
+    def unsupported_sampled_texture_write(self, texture_expr, method, is_main):
+        texture = self.generate_expression(texture_expr, is_main)
+        return f"/* unsupported Metal sampled texture write: {method} on {texture} */"
 
     def storage_image_coordinate_expression(self, image_expr, args):
         if not args:
@@ -1166,6 +1498,60 @@ class MetalToCrossGLConverter:
         ):
             return f"uvec3({rendered_args[0]}, {rendered_args[1]})"
         return rendered_args[0]
+
+    def sampled_texture_read_expression(self, texture_expr, args, is_main=False):
+        mapped_type = self.expression_mapped_type(texture_expr)
+        if not self.is_sampled_texture_type(mapped_type) or not args:
+            return None
+
+        texture = self.generate_expression(texture_expr, is_main)
+        rendered_args = [self.generate_expression(arg, is_main) for arg in args]
+        coord, tail = self.sampled_texture_read_coordinate_and_tail(
+            mapped_type, rendered_args
+        )
+        if coord is None:
+            return None
+
+        if self.is_multisample_resource_type(mapped_type):
+            if not tail:
+                return None
+            return f"texelFetch({texture}, {coord}, {tail[0]})"
+
+        lod = tail[0] if tail else "0"
+        return f"texelFetch({texture}, {coord}, {lod})"
+
+    def is_sampled_texture_type(self, mapped_type):
+        if mapped_type == "sampler":
+            return False
+        return bool(
+            mapped_type
+            and str(mapped_type).startswith(("sampler", "isampler", "usampler"))
+        )
+
+    def sampled_texture_read_coordinate_and_tail(self, mapped_type, rendered_args):
+        if not rendered_args:
+            return None, []
+
+        coord = rendered_args[0]
+        tail = rendered_args[1:]
+        constructor = self.sampled_texture_array_coordinate_constructor(mapped_type)
+        if constructor is not None:
+            if not tail:
+                return None, []
+            coord = f"{constructor}({coord}, {tail[0]})"
+            tail = tail[1:]
+
+        return coord, tail
+
+    def sampled_texture_array_coordinate_constructor(self, mapped_type):
+        mapped_type = str(mapped_type)
+        if "1DArray" in mapped_type:
+            return "uvec2"
+        if "2DArray" in mapped_type or "2DMSArray" in mapped_type:
+            return "uvec3"
+        if "CubeArray" in mapped_type:
+            return "vec4"
+        return None
 
     def map_semantic(self, semantic):
         """Map Metal attributes to CrossGL semantic annotation syntax."""

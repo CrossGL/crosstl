@@ -139,6 +139,18 @@ class VulkanSPIRVCodeGen:
         self.current_stage = None
         self.current_return_type = None
         self.mesh_output_counts_by_function = {}
+        self.mesh_vertex_output_variable = None
+        self.mesh_vertex_output_limit = None
+        self.mesh_primitive_index_outputs = {}
+        self.current_mesh_output_parameters = {}
+        self.function_mesh_output_parameter_indices = {}
+        self.mesh_output_member_variables = {}
+        self.mesh_output_member_shadow_variables = {}
+        self.mesh_output_member_locations = {}
+        self.struct_member_metadata = {}
+        self.task_payload_shared_variables = {}
+        self.task_payload_interface_by_function = {}
+        self.entry_point_private_variables = []
 
         self.glsl_std450_id = None
         self.main_fn_id = None
@@ -1649,6 +1661,61 @@ class VulkanSPIRVCodeGen:
             "Cube": 3,
         }.get(dim, 2)
 
+    def resource_query_size_default_value(self, metadata) -> SpirvId:
+        if metadata and metadata.get("kind") in {"sampled_image", "storage_image"}:
+            return self.default_value_for_type(
+                self.resource_query_size_result_type(metadata)
+            )
+        return self.register_constant(0, self.register_primitive_type("int"))
+
+    def validate_resource_query_lod_operand(
+        self, function_name: str, lod_id: SpirvId
+    ) -> bool:
+        if self.integer_value_component_count(lod_id) == 1:
+            return True
+
+        self.emit(f"; WARNING: {function_name} requires a scalar integer LOD operand")
+        return False
+
+    def resource_query_lod_default_value(self) -> SpirvId:
+        float_type = self.register_primitive_type("float")
+        result_type = self.register_vector_type(float_type, 2)
+        return self.default_value_for_type(result_type)
+
+    def floating_value_component_count(self, value_id: SpirvId) -> Optional[int]:
+        value_type = self.value_types.get(
+            value_id.id
+        ) or self.find_registered_type_by_base(value_id.type.base_type)
+        type_name = (
+            value_type.type.base_type
+            if value_type is not None
+            else value_id.type.base_type
+        )
+        vector_info = self.vector_component_type_and_count(type_name)
+        if vector_info is not None:
+            component_type_name, component_count = vector_info
+            if component_type_name in {"float", "double"}:
+                return component_count
+            return None
+
+        if self.normalize_primitive_name(type_name) in {"float", "double"}:
+            return 1
+        return None
+
+    def validate_resource_query_lod_coordinate(
+        self, function_name: str, metadata, coord_id: SpirvId
+    ) -> bool:
+        required_count = self.resource_query_lod_coordinate_components(metadata)
+        actual_count = self.floating_value_component_count(coord_id)
+        if actual_count is not None and actual_count >= required_count:
+            return True
+
+        self.emit(
+            f"; WARNING: {function_name} requires a {required_count}-component "
+            "floating-point coordinate operand"
+        )
+        return False
+
     def trim_image_query_lod_coordinate(self, coord_id: SpirvId, metadata) -> SpirvId:
         required_count = self.resource_query_lod_coordinate_components(metadata)
         vector_info = self.vector_component_type_and_count(coord_id.type.base_type)
@@ -1727,15 +1794,25 @@ class VulkanSPIRVCodeGen:
         metadata,
         int_type: SpirvId,
     ) -> SpirvId:
+        result_type = self.resource_access_result_type(metadata)
         offsets, component_id = self.texture_gather_offsets_arguments(extra_args)
         if len(offsets) != 4:
             self.emit("; WARNING: textureGatherOffsets requires four offset operands")
-            return self.register_constant(0.0, self.register_primitive_type("float"))
+            return self.default_value_for_type(result_type)
 
         if component_id is None:
             component_id = self.register_constant(0, int_type)
 
-        result_type = self.resource_access_result_type(metadata)
+        for offset_id in offsets:
+            if not self.validate_sampled_texture_offset_operand(
+                "textureGatherOffsets", metadata, offset_id
+            ):
+                return self.default_value_for_type(result_type)
+        if not self.validate_texture_gather_component_operand(
+            "textureGatherOffsets", component_id
+        ):
+            return self.default_value_for_type(result_type)
+
         component_type = self.register_primitive_type(
             metadata.get("component_type", "float")
         )
@@ -1822,8 +1899,39 @@ class VulkanSPIRVCodeGen:
                 f"; WARNING: {function_name} requires a shadow sampled image operand"
             )
             return None
+        if len(args) > required_arg_count:
+            self.emit(self.shadow_compare_excess_operand_warning(function_name))
+            return None
 
         return sampled_image_id, coord_id, depth_id, extra_args
+
+    def shadow_compare_excess_operand_warning(self, function_name: str) -> str:
+        extra_operands = {
+            "textureCompare": "",
+            "textureCompareOffset": "offset",
+            "textureCompareLod": "LOD",
+            "textureCompareLodOffset": "LOD and offset",
+            "textureCompareGrad": "dx and dy gradient",
+            "textureCompareGradOffset": "dx and dy gradient and offset",
+            "textureCompareProj": "",
+            "textureCompareProjOffset": "offset",
+            "textureCompareProjLod": "LOD",
+            "textureCompareProjLodOffset": "LOD and offset",
+            "textureCompareProjGrad": "dx and dy gradient",
+            "textureCompareProjGradOffset": "dx and dy gradient and offset",
+            "textureGatherCompare": "",
+            "textureGatherCompareOffset": "offset",
+        }[function_name]
+        if extra_operands:
+            return (
+                f"; WARNING: {function_name} accepts only texture, optional "
+                "sampler, coordinate, depth, and "
+                f"{extra_operands} operands"
+            )
+        return (
+            f"; WARNING: {function_name} accepts only texture, optional sampler, "
+            "coordinate, and depth operands"
+        )
 
     def sampled_texture_operands(
         self, function_name: str, args: List[SpirvId], extra_arg_count: int = 0
@@ -1851,6 +1959,24 @@ class VulkanSPIRVCodeGen:
             return None
 
         return sampled_image_id, coord_id, extra_args, metadata
+
+    def sampled_texture_excess_operand_warning(self, function_name: str) -> str:
+        operation_operands = {
+            "textureLod": "LOD",
+            "textureLodOffset": "LOD and offset",
+            "textureGrad": "dx and dy gradient",
+            "textureGradOffset": "dx and dy gradient and offset",
+            "textureGatherOffsets": (
+                "one offsets value or four offsets and optional component"
+            ),
+            "texelFetch": "LOD/sample",
+            "texelFetchOffset": "LOD/sample and offset",
+        }[function_name]
+        return (
+            f"; WARNING: {function_name} accepts only texture, optional sampler, "
+            "coordinate, and "
+            f"{operation_operands} operands"
+        )
 
     def is_scalar_numeric_value(self, value_id: SpirvId) -> bool:
         value_type = self.value_types.get(
@@ -1880,6 +2006,118 @@ class VulkanSPIRVCodeGen:
             )
             return None
         return f"Bias %{bias_id.id}"
+
+    def sampled_texture_axis_component_count(self, metadata) -> int:
+        dim = metadata.get("dim", "2D") if metadata else "2D"
+        return {
+            "1D": 1,
+            "Buffer": 1,
+            "2D": 2,
+            "Rect": 2,
+            "3D": 3,
+            "Cube": 3,
+        }.get(dim, 2)
+
+    def sampled_texture_coordinate_component_count(self, metadata) -> int:
+        component_count = self.sampled_texture_axis_component_count(metadata)
+        if metadata and metadata.get("arrayed"):
+            component_count += 1
+        return component_count
+
+    def validate_sampled_texture_coordinate(
+        self, function_name: str, metadata, coord_id: SpirvId, *, integer: bool = False
+    ) -> bool:
+        expected_count = self.sampled_texture_coordinate_component_count(metadata)
+        actual_count = (
+            self.integer_value_component_count(coord_id)
+            if integer
+            else self.floating_value_component_count(coord_id)
+        )
+        if actual_count == expected_count:
+            return True
+
+        coordinate_kind = "integer" if integer else "floating-point"
+        self.emit(
+            f"; WARNING: {function_name} requires a {expected_count}-component "
+            f"{coordinate_kind} coordinate operand"
+        )
+        return False
+
+    def validate_sampled_texture_lod_operand(
+        self, function_name: str, lod_id: SpirvId
+    ) -> bool:
+        if self.floating_value_component_count(lod_id) == 1:
+            return True
+
+        self.emit(
+            f"; WARNING: {function_name} requires a scalar floating-point LOD operand"
+        )
+        return False
+
+    def validate_shadow_compare_depth_operand(
+        self, function_name: str, depth_id: SpirvId
+    ) -> bool:
+        if self.floating_value_component_count(depth_id) == 1:
+            return True
+
+        self.emit(
+            f"; WARNING: {function_name} requires a scalar floating-point depth operand"
+        )
+        return False
+
+    def validate_sampled_texture_fetch_operand(
+        self, function_name: str, operand_id: SpirvId, operand_name: str
+    ) -> bool:
+        if self.integer_value_component_count(operand_id) == 1:
+            return True
+
+        self.emit(
+            f"; WARNING: {function_name} requires a scalar integer {operand_name} operand"
+        )
+        return False
+
+    def validate_sampled_texture_gradient_operand(
+        self, function_name: str, metadata, gradient_id: SpirvId, operand_name: str
+    ) -> bool:
+        expected_count = self.sampled_texture_axis_component_count(metadata)
+        if self.floating_value_component_count(gradient_id) == expected_count:
+            return True
+
+        self.emit(
+            f"; WARNING: {function_name} requires a {expected_count}-component "
+            f"floating-point {operand_name} gradient operand"
+        )
+        return False
+
+    def validate_sampled_texture_offset_operand(
+        self, function_name: str, metadata, offset_id: SpirvId
+    ) -> bool:
+        if metadata and metadata.get("dim") == "Cube":
+            self.emit(
+                f"; WARNING: {function_name} offsets are not valid for cube images"
+            )
+            return False
+
+        expected_count = self.sampled_texture_axis_component_count(metadata)
+        if self.integer_value_component_count(offset_id) == expected_count:
+            return True
+
+        self.emit(
+            f"; WARNING: {function_name} requires a {expected_count}-component "
+            "integer offset operand"
+        )
+        return False
+
+    def validate_texture_gather_component_operand(
+        self, function_name: str, component_id: SpirvId
+    ) -> bool:
+        if self.integer_value_component_count(component_id) == 1:
+            return True
+
+        self.emit(
+            f"; WARNING: {function_name} requires a scalar integer component operand"
+        )
+        return False
 
     def projected_coordinate_axes(self, metadata) -> int:
         dim = metadata.get("dim", "2D") if metadata else "2D"
@@ -1970,6 +2208,11 @@ class VulkanSPIRVCodeGen:
             self.emit(f"; WARNING: {function_name} requires a read-write storage image")
             return self.default_value_for_type(result_type)
 
+        if not self.validate_storage_image_coordinate(
+            function_name, metadata, coord_id
+        ):
+            return self.default_value_for_type(result_type)
+
         if component_type_name not in {"int", "uint"}:
             self.emit(f"; WARNING: {function_name} requires an integer storage image")
             return self.register_constant(0, self.register_primitive_type("uint"))
@@ -1988,6 +2231,8 @@ class VulkanSPIRVCodeGen:
                     0, self.register_primitive_type(component_type_name)
                 )
             sample_id = args[2]
+            if not self.validate_storage_image_sample(function_name, sample_id):
+                return self.default_value_for_type(result_type)
             value_arg_index = 3
         else:
             sample_id = self.register_constant(0, self.register_primitive_type("uint"))
@@ -2006,9 +2251,17 @@ class VulkanSPIRVCodeGen:
             value_id = args[value_arg_index]
             comparator_id = None
 
-        value_id = self.convert_value_to_type(value_id, result_type)
+        value_id = self.convert_storage_image_value_operand(
+            function_name, "value", value_id, result_type
+        )
+        if value_id is None:
+            return self.default_value_for_type(result_type)
         if comparator_id is not None:
-            comparator_id = self.convert_value_to_type(comparator_id, result_type)
+            comparator_id = self.convert_storage_image_value_operand(
+                function_name, "compare", comparator_id, result_type
+            )
+            if comparator_id is None:
+                return self.default_value_for_type(result_type)
 
         pointer_type = self.register_pointer_type(result_type, "Image")
         texel_pointer_id = self.get_id()
@@ -2073,12 +2326,34 @@ class VulkanSPIRVCodeGen:
 
         return self.register_constant(0, self.register_primitive_type("uint"))
 
+    def default_value_for_buffer_load_failure(self, args: List[SpirvId]) -> SpirvId:
+        if args:
+            metadata = self.structured_buffer_metadata_for_pointer(args[0])
+            if metadata is not None:
+                element_type = metadata.get("element_type")
+                if element_type is not None:
+                    return self.default_value_for_type(element_type)
+        return self.register_constant(0.0, self.register_primitive_type("float"))
+
     def call_buffer_atomic_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         if len(args) < 2:
             self.emit(f"; WARNING: {function_name} requires target and value operands")
             return self.register_constant(0, self.register_primitive_type("uint"))
+
+        expected_arg_count = 3 if function_name == "atomicCompSwap" else 2
+        if len(args) > expected_arg_count:
+            if function_name == "atomicCompSwap":
+                self.emit(
+                    f"; WARNING: {function_name} accepts only target, compare, "
+                    "and value operands"
+                )
+            else:
+                self.emit(
+                    f"; WARNING: {function_name} accepts only target and value operands"
+                )
+            return self.default_value_for_buffer_atomic_failure(function_name, args)
 
         target_pointer = args[0]
         target_type = self.variable_value_types.get(target_pointer.id)
@@ -2202,6 +2477,26 @@ class VulkanSPIRVCodeGen:
             "textureProjGradOffset": 3,
         }[function_name]
 
+    def projected_texture_max_operand_counts(self, function_name: str) -> int:
+        return {
+            "textureProj": 1,
+            "textureProjOffset": 2,
+            "textureProjLod": 1,
+            "textureProjLodOffset": 2,
+            "textureProjGrad": 2,
+            "textureProjGradOffset": 3,
+        }[function_name]
+
+    def projected_texture_operand_description(self, function_name: str) -> str:
+        return {
+            "textureProj": "optional bias",
+            "textureProjOffset": "offset and optional bias",
+            "textureProjLod": "LOD",
+            "textureProjLodOffset": "LOD and offset",
+            "textureProjGrad": "dx and dy gradient",
+            "textureProjGradOffset": "dx and dy gradient and offset",
+        }[function_name]
+
     def projected_shadow_operand_counts(self, function_name: str) -> int:
         return {
             "textureCompareProj": 0,
@@ -2258,15 +2553,45 @@ class VulkanSPIRVCodeGen:
             return self.register_constant(0.0, self.register_primitive_type("float"))
 
         sampled_image_id, coord_id, extra_args, metadata = sample_args
+        result_type = self.resource_access_result_type(metadata)
+        if len(extra_args) > self.projected_texture_max_operand_counts(function_name):
+            self.emit(
+                f"; WARNING: {function_name} accepts only texture, optional "
+                "sampler, coordinate, and "
+                f"{self.projected_texture_operand_description(function_name)} operands"
+            )
+            return self.default_value_for_type(result_type)
+        if function_name in {"textureProjLod", "textureProjLodOffset"}:
+            if not self.validate_sampled_texture_lod_operand(
+                function_name, extra_args[0]
+            ):
+                return self.default_value_for_type(result_type)
+        if function_name in {"textureProjGrad", "textureProjGradOffset"}:
+            if not self.validate_sampled_texture_gradient_operand(
+                function_name, metadata, extra_args[0], "dx"
+            ):
+                return self.default_value_for_type(result_type)
+            if not self.validate_sampled_texture_gradient_operand(
+                function_name, metadata, extra_args[1], "dy"
+            ):
+                return self.default_value_for_type(result_type)
+        offset_indices = {
+            "textureProjOffset": 0,
+            "textureProjLodOffset": 1,
+            "textureProjGradOffset": 2,
+        }
+        offset_index = offset_indices.get(function_name)
+        if (
+            offset_index is not None
+            and not self.validate_sampled_texture_offset_operand(
+                function_name, metadata, extra_args[offset_index]
+            )
+        ):
+            return self.default_value_for_type(result_type)
+
         projected_coord = self.project_texture_coordinate(
             function_name, coord_id, metadata
         )
-        result_type = self.resource_access_result_type(metadata)
-        if "Offset" in function_name and metadata.get("dim") == "Cube":
-            self.emit(
-                f"; WARNING: {function_name} offsets are not valid for cube images"
-            )
-            return self.default_value_for_type(result_type)
         if projected_coord is None:
             return self.default_value_for_type(result_type)
 
@@ -2330,15 +2655,39 @@ class VulkanSPIRVCodeGen:
 
         sampled_image_id, coord_id, depth_id, extra_args = compare_args
         metadata = self.resource_metadata_for_value(sampled_image_id)
+        result_type = self.register_primitive_type("float")
+        if not self.validate_shadow_compare_depth_operand(function_name, depth_id):
+            return self.default_value_for_type(result_type)
+
+        if function_name in {
+            "textureCompareProjLod",
+            "textureCompareProjLodOffset",
+        }:
+            if not self.validate_sampled_texture_lod_operand(
+                function_name, extra_args[0]
+            ):
+                return self.default_value_for_type(result_type)
+        if function_name in {
+            "textureCompareProjGrad",
+            "textureCompareProjGradOffset",
+        }:
+            if not self.validate_sampled_texture_gradient_operand(
+                function_name, metadata, extra_args[0], "dx"
+            ):
+                return self.default_value_for_type(result_type)
+            if not self.validate_sampled_texture_gradient_operand(
+                function_name, metadata, extra_args[1], "dy"
+            ):
+                return self.default_value_for_type(result_type)
+        if "Offset" in function_name:
+            if not self.validate_sampled_texture_offset_operand(
+                function_name, metadata, extra_args[-1]
+            ):
+                return self.default_value_for_type(result_type)
+
         projected_coord = self.project_texture_coordinate(
             function_name, coord_id, metadata
         )
-        result_type = self.register_primitive_type("float")
-        if "Offset" in function_name and metadata.get("dim") == "Cube":
-            self.emit(
-                f"; WARNING: {function_name} offsets are not valid for cube images"
-            )
-            return self.default_value_for_type(result_type)
         if projected_coord is None:
             return self.default_value_for_type(result_type)
 
@@ -2372,23 +2721,23 @@ class VulkanSPIRVCodeGen:
         if function_name == "buffer_load":
             if len(args) < 2:
                 self.emit("; WARNING: buffer_load requires buffer and index operands")
-                return self.register_constant(
-                    0.0, self.register_primitive_type("float")
+                return self.default_value_for_buffer_load_failure(args)
+
+            if len(args) > 2:
+                self.emit(
+                    "; WARNING: buffer_load accepts only buffer and index operands"
                 )
+                return self.default_value_for_buffer_load_failure(args)
 
             metadata = self.structured_buffer_metadata_for_pointer(args[0])
             if metadata is not None and metadata.get("writeonly"):
                 self.emit("; WARNING: buffer_load requires a readable buffer")
-                return self.register_constant(
-                    0.0, self.register_primitive_type("float")
-                )
+                return self.default_value_for_buffer_load_failure(args)
 
             element_pointer = self.structured_buffer_element_pointer(args[0], args[1])
             if element_pointer is None:
                 self.emit("; WARNING: buffer_load requires a StructuredBuffer operand")
-                return self.register_constant(
-                    0.0, self.register_primitive_type("float")
-                )
+                return self.default_value_for_buffer_load_failure(args)
 
             element_type = self.variable_value_types[element_pointer.id]
             return self.load_from_variable(element_pointer, element_type)
@@ -2397,6 +2746,13 @@ class VulkanSPIRVCodeGen:
             if len(args) < 3:
                 self.emit(
                     "; WARNING: buffer_store requires buffer, index, and value operands"
+                )
+                return None
+
+            if len(args) > 3:
+                self.emit(
+                    "; WARNING: buffer_store accepts only buffer, index, and "
+                    "value operands"
                 )
                 return None
 
@@ -2440,13 +2796,18 @@ class VulkanSPIRVCodeGen:
                 self.emit("; WARNING: imageLoad requires a readable storage image")
                 return self.default_value_for_type(result_type)
 
+            if not self.validate_storage_image_coordinate(
+                function_name, metadata, coord_id
+            ):
+                return self.default_value_for_type(result_type)
+
             image_operands = ""
             if metadata.get("multisampled"):
                 if len(args) < 3:
                     self.emit("; WARNING: imageLoad requires a sample operand")
-                    return self.register_constant(
-                        0.0, self.register_primitive_type("float")
-                    )
+                    return self.default_value_for_type(result_type)
+                if not self.validate_storage_image_sample(function_name, args[2]):
+                    return self.default_value_for_type(result_type)
                 image_operands = f" Sample %{args[2].id}"
 
             id_value = self.get_id()
@@ -2473,13 +2834,27 @@ class VulkanSPIRVCodeGen:
                 self.emit("; WARNING: imageStore requires a writable storage image")
                 return None
 
+            if not self.validate_storage_image_coordinate(
+                function_name, metadata, coord_id
+            ):
+                return None
+
+            texel_type = self.resource_access_result_type(metadata)
             image_operands = ""
             if metadata.get("multisampled"):
                 if len(args) < 4:
                     self.emit("; WARNING: imageStore requires a sample operand")
                     return None
                 sample_id, texel_id = args[2], args[3]
+                if not self.validate_storage_image_sample(function_name, sample_id):
+                    return None
                 image_operands = f" Sample %{sample_id.id}"
+
+            texel_id = self.convert_storage_image_value_operand(
+                function_name, "value", texel_id, texel_type
+            )
+            if texel_id is None:
+                return None
 
             self.emit(
                 f"OpImageWrite %{image_id.id} %{coord_id.id} %{texel_id.id}"
@@ -2497,6 +2872,17 @@ class VulkanSPIRVCodeGen:
             sampled_image_id, coord_id, extra_args, metadata = sample_args
 
             result_type = self.resource_access_result_type(metadata)
+            if len(extra_args) > 1:
+                self.emit(
+                    f"; WARNING: {function_name} accepts only texture, optional "
+                    "sampler, coordinate, and optional bias operands"
+                )
+                return self.default_value_for_type(result_type)
+            if not self.validate_sampled_texture_coordinate(
+                function_name, metadata, coord_id
+            ):
+                return self.default_value_for_type(result_type)
+
             bias_operand = None
             if extra_args:
                 bias_operand = self.texture_bias_operand(function_name, extra_args[0])
@@ -2545,8 +2931,40 @@ class VulkanSPIRVCodeGen:
 
             sampled_image_id, coord_id, depth_id, extra_args = compare_args
             result_type = self.register_primitive_type("float")
-            id_value = self.get_id()
+            metadata = self.resource_metadata_for_value(sampled_image_id)
+            if not self.validate_sampled_texture_coordinate(
+                function_name, metadata, coord_id
+            ):
+                return self.default_value_for_type(result_type)
+            if not self.validate_shadow_compare_depth_operand(function_name, depth_id):
+                return self.default_value_for_type(result_type)
 
+            if function_name in {"textureCompareLod", "textureCompareLodOffset"}:
+                if not self.validate_sampled_texture_lod_operand(
+                    function_name, extra_args[0]
+                ):
+                    return self.default_value_for_type(result_type)
+            if function_name in {"textureCompareGrad", "textureCompareGradOffset"}:
+                if not self.validate_sampled_texture_gradient_operand(
+                    function_name, metadata, extra_args[0], "dx"
+                ):
+                    return self.default_value_for_type(result_type)
+                if not self.validate_sampled_texture_gradient_operand(
+                    function_name, metadata, extra_args[1], "dy"
+                ):
+                    return self.default_value_for_type(result_type)
+            if function_name in {
+                "textureCompareOffset",
+                "textureCompareLodOffset",
+                "textureCompareGradOffset",
+            }:
+                offset_index = -1
+                if not self.validate_sampled_texture_offset_operand(
+                    function_name, metadata, extra_args[offset_index]
+                ):
+                    return self.default_value_for_type(result_type)
+
+            id_value = self.get_id()
             if function_name == "textureCompare":
                 if self.requires_explicit_lod_sampling():
                     self.emit(
@@ -2610,14 +3028,25 @@ class VulkanSPIRVCodeGen:
             compare_args = self.shadow_compare_operands(
                 function_name, args, extra_arg_count
             )
-            if compare_args is None:
-                return self.register_constant(
-                    0.0, self.register_primitive_type("float")
-                )
-
-            sampled_image_id, coord_id, depth_id, extra_args = compare_args
             float_type = self.register_primitive_type("float")
             result_type = self.register_vector_type(float_type, 4)
+            if compare_args is None:
+                return self.default_value_for_type(result_type)
+
+            sampled_image_id, coord_id, depth_id, extra_args = compare_args
+            metadata = self.resource_metadata_for_value(sampled_image_id)
+            if not self.validate_sampled_texture_coordinate(
+                function_name, metadata, coord_id
+            ):
+                return self.default_value_for_type(result_type)
+            if not self.validate_shadow_compare_depth_operand(function_name, depth_id):
+                return self.default_value_for_type(result_type)
+            if function_name == "textureGatherCompareOffset":
+                if not self.validate_sampled_texture_offset_operand(
+                    function_name, metadata, extra_args[0]
+                ):
+                    return self.default_value_for_type(result_type)
+
             id_value = self.get_id()
             image_operands = (
                 f" {self.image_offset_operand(extra_args[0])}"
@@ -2643,6 +3072,21 @@ class VulkanSPIRVCodeGen:
             offset_id = extra_args[0]
 
             result_type = self.resource_access_result_type(metadata)
+            if len(extra_args) > 2:
+                self.emit(
+                    "; WARNING: textureOffset accepts only texture, optional "
+                    "sampler, coordinate, offset, and optional bias operands"
+                )
+                return self.default_value_for_type(result_type)
+            if not self.validate_sampled_texture_coordinate(
+                function_name, metadata, coord_id
+            ):
+                return self.default_value_for_type(result_type)
+            if not self.validate_sampled_texture_offset_operand(
+                function_name, metadata, offset_id
+            ):
+                return self.default_value_for_type(result_type)
+
             bias_operand = None
             if len(extra_args) >= 2:
                 bias_operand = self.texture_bias_operand(function_name, extra_args[1])
@@ -2682,12 +3126,33 @@ class VulkanSPIRVCodeGen:
 
             sampled_image_id, coord_id, extra_args, metadata = sample_args
             int_type = self.register_primitive_type("int")
+            result_type = self.resource_access_result_type(metadata)
+            if not self.validate_sampled_texture_coordinate(
+                function_name, metadata, coord_id
+            ):
+                return self.default_value_for_type(result_type)
+
             if function_name == "textureGather":
+                if len(extra_args) > 1:
+                    self.emit(
+                        "; WARNING: textureGather accepts only texture, optional "
+                        "sampler, coordinate, and optional component operands"
+                    )
+                    return self.default_value_for_type(result_type)
                 component_id = (
                     extra_args[0] if extra_args else self.register_constant(0, int_type)
                 )
+                if not self.validate_texture_gather_component_operand(
+                    function_name, component_id
+                ):
+                    return self.default_value_for_type(result_type)
                 offset_id = None
             elif function_name == "textureGatherOffsets":
+                if len(extra_args) not in {1, 2, 4, 5}:
+                    self.emit(
+                        self.sampled_texture_excess_operand_warning(function_name)
+                    )
+                    return self.default_value_for_type(result_type)
                 return self.emit_texture_gather_offsets(
                     sampled_image_id,
                     coord_id,
@@ -2696,14 +3161,28 @@ class VulkanSPIRVCodeGen:
                     int_type,
                 )
             else:
+                if len(extra_args) > 2:
+                    self.emit(
+                        "; WARNING: textureGatherOffset accepts only texture, "
+                        "optional sampler, coordinate, offset, and optional "
+                        "component operands"
+                    )
+                    return self.default_value_for_type(result_type)
                 offset_id = extra_args[0]
+                if not self.validate_sampled_texture_offset_operand(
+                    function_name, metadata, offset_id
+                ):
+                    return self.default_value_for_type(result_type)
                 component_id = (
                     extra_args[1]
                     if len(extra_args) >= 2
                     else self.register_constant(0, int_type)
                 )
+                if not self.validate_texture_gather_component_operand(
+                    function_name, component_id
+                ):
+                    return self.default_value_for_type(result_type)
 
-            result_type = self.resource_access_result_type(metadata)
             return self.emit_image_gather(
                 sampled_image_id,
                 coord_id,
@@ -2725,26 +3204,46 @@ class VulkanSPIRVCodeGen:
             sampled_image_id, coord_id, extra_args, metadata = sample_args
             operand_id = extra_args[0]
             offset_id = extra_args[1] if function_name == "texelFetchOffset" else None
+            result_type = self.resource_access_result_type(metadata)
+            if len(extra_args) > required_extra_count:
+                self.emit(self.sampled_texture_excess_operand_warning(function_name))
+                return self.default_value_for_type(result_type)
 
             if metadata.get("dim") == "Cube":
                 self.emit(f"; WARNING: {function_name} is not valid for cube images")
-                result_type = self.resource_access_result_type(metadata)
                 return self.default_value_for_type(result_type)
 
-            image_id = self.extract_image_from_sampled_image(sampled_image_id, metadata)
-            if image_id is None:
-                return self.register_constant(
-                    0.0, self.register_primitive_type("float")
-                )
+            if not self.validate_sampled_texture_coordinate(
+                function_name, metadata, coord_id, integer=True
+            ):
+                return self.default_value_for_type(result_type)
+            if metadata.get("multisampled"):
+                if not self.validate_sampled_texture_fetch_operand(
+                    function_name, operand_id, "sample"
+                ):
+                    return self.default_value_for_type(result_type)
+            elif not self.validate_sampled_texture_fetch_operand(
+                function_name, operand_id, "LOD"
+            ):
+                return self.default_value_for_type(result_type)
 
             if metadata.get("multisampled") and offset_id is not None:
                 self.emit(
                     "; WARNING: texelFetchOffset is not valid for multisample images"
                 )
-                result_type = self.resource_access_result_type(metadata)
+                return self.default_value_for_type(result_type)
+            if (
+                offset_id is not None
+                and not self.validate_sampled_texture_offset_operand(
+                    function_name, metadata, offset_id
+                )
+            ):
                 return self.default_value_for_type(result_type)
 
-            result_type = self.resource_access_result_type(metadata)
+            image_id = self.extract_image_from_sampled_image(sampled_image_id, metadata)
+            if image_id is None:
+                return self.default_value_for_type(result_type)
+
             id_value = self.get_id()
             image_operand = (
                 f"Sample %{operand_id.id}"
@@ -2777,13 +3276,31 @@ class VulkanSPIRVCodeGen:
                 self.emit(
                     f"; WARNING: {function_name} requires a {expected_kind} operand"
                 )
-                return self.register_constant(0, self.register_primitive_type("int"))
+                return self.resource_query_size_default_value(metadata)
 
             image_id = self.image_operand_for_query(resource_id, metadata)
             if image_id is None:
-                return self.register_constant(0, self.register_primitive_type("int"))
+                return self.resource_query_size_default_value(metadata)
 
             result_type = self.resource_query_size_result_type(metadata)
+            if function_name == "imageSize" and len(args) > 1:
+                self.emit("; WARNING: imageSize accepts only an image operand")
+                return self.default_value_for_type(result_type)
+
+            if function_name == "textureSize" and len(args) > 2:
+                self.emit(
+                    "; WARNING: textureSize accepts only texture and optional "
+                    "LOD operands"
+                )
+                return self.default_value_for_type(result_type)
+
+            if (
+                function_name == "textureSize"
+                and len(args) >= 2
+                and not self.validate_resource_query_lod_operand(function_name, args[1])
+            ):
+                return self.default_value_for_type(result_type)
+
             id_value = self.get_id()
             self.require_capability("ImageQuery")
             if (
@@ -2806,6 +3323,10 @@ class VulkanSPIRVCodeGen:
         if function_name in {"textureSamples", "imageSamples"}:
             if not args:
                 self.emit(f"; WARNING: {function_name} requires an image operand")
+                return self.register_constant(0, self.register_primitive_type("int"))
+
+            if len(args) > 1:
+                self.emit(f"; WARNING: {function_name} accepts only an image operand")
                 return self.register_constant(0, self.register_primitive_type("int"))
 
             resource_id = args[0]
@@ -2844,11 +3365,24 @@ class VulkanSPIRVCodeGen:
                 self.emit("; WARNING: textureQueryLevels requires a texture operand")
                 return self.register_constant(0, self.register_primitive_type("int"))
 
+            if len(args) > 1:
+                self.emit(
+                    "; WARNING: textureQueryLevels accepts only a texture operand"
+                )
+                return self.register_constant(0, self.register_primitive_type("int"))
+
             sampled_image_id = args[0]
             metadata = self.resource_metadata_for_value(sampled_image_id)
             if not metadata or metadata.get("kind") != "sampled_image":
                 self.emit(
                     "; WARNING: textureQueryLevels requires a sampled image operand"
+                )
+                return self.register_constant(0, self.register_primitive_type("int"))
+
+            if metadata.get("multisampled"):
+                self.emit(
+                    "; WARNING: textureQueryLevels requires a non-multisample "
+                    "sampled image operand"
                 )
                 return self.register_constant(0, self.register_primitive_type("int"))
 
@@ -2870,23 +3404,41 @@ class VulkanSPIRVCodeGen:
                 self.emit(
                     "; WARNING: textureQueryLod requires texture and coordinate operands"
                 )
-                return self.register_constant(
-                    0.0, self.register_primitive_type("float")
-                )
+                return self.resource_query_lod_default_value()
 
             sampled_image_id = args[0]
             coord_id = args[1]
-            if len(args) >= 3:
-                sampler_metadata = self.resource_metadata_for_value(args[1])
-                if sampler_metadata and sampler_metadata.get("kind") == "sampler":
-                    coord_id = args[2]
+            sampler_metadata = self.resource_metadata_for_value(args[1])
+            if sampler_metadata and sampler_metadata.get("kind") == "sampler":
+                if len(args) < 3:
+                    self.emit(
+                        "; WARNING: textureQueryLod requires a coordinate operand "
+                        "after the sampler"
+                    )
+                    return self.resource_query_lod_default_value()
+                if len(args) > 3:
+                    self.emit(
+                        "; WARNING: textureQueryLod accepts only texture, sampler, "
+                        "and coordinate operands"
+                    )
+                    return self.resource_query_lod_default_value()
+                coord_id = args[2]
+            elif len(args) > 2:
+                self.emit(
+                    "; WARNING: textureQueryLod accepts only texture and coordinate "
+                    "operands unless the second operand is a sampler"
+                )
+                return self.resource_query_lod_default_value()
 
             metadata = self.resource_metadata_for_value(sampled_image_id)
             if not metadata or metadata.get("kind") != "sampled_image":
                 self.emit("; WARNING: textureQueryLod requires a sampled image operand")
-                return self.register_constant(
-                    0.0, self.register_primitive_type("float")
-                )
+                return self.resource_query_lod_default_value()
+
+            if not self.validate_resource_query_lod_coordinate(
+                function_name, metadata, coord_id
+            ):
+                return self.resource_query_lod_default_value()
 
             coord_id = self.trim_image_query_lod_coordinate(coord_id, metadata)
             float_type = self.register_primitive_type("float")
@@ -2924,22 +3476,62 @@ class VulkanSPIRVCodeGen:
                 )
 
             sampled_image_id, coord_id, extra_args, metadata = sample_args
+            result_type = self.resource_access_result_type(metadata)
+            if len(extra_args) > extra_arg_count:
+                self.emit(self.sampled_texture_excess_operand_warning(function_name))
+                return self.default_value_for_type(result_type)
+            if not self.validate_sampled_texture_coordinate(
+                function_name, metadata, coord_id
+            ):
+                return self.default_value_for_type(result_type)
+
             if function_name == "textureLod":
+                if not self.validate_sampled_texture_lod_operand(
+                    function_name, extra_args[0]
+                ):
+                    return self.default_value_for_type(result_type)
                 image_operands = f"Lod %{extra_args[0].id}"
             elif function_name == "textureLodOffset":
+                if not self.validate_sampled_texture_lod_operand(
+                    function_name, extra_args[0]
+                ):
+                    return self.default_value_for_type(result_type)
+                if not self.validate_sampled_texture_offset_operand(
+                    function_name, metadata, extra_args[1]
+                ):
+                    return self.default_value_for_type(result_type)
                 image_operands = self.image_operands(
                     f"Lod %{extra_args[0].id}",
                     self.image_offset_operand(extra_args[1]),
                 )
             elif function_name == "textureGrad":
+                if not self.validate_sampled_texture_gradient_operand(
+                    function_name, metadata, extra_args[0], "dx"
+                ):
+                    return self.default_value_for_type(result_type)
+                if not self.validate_sampled_texture_gradient_operand(
+                    function_name, metadata, extra_args[1], "dy"
+                ):
+                    return self.default_value_for_type(result_type)
                 image_operands = f"Grad %{extra_args[0].id} %{extra_args[1].id}"
             else:
+                if not self.validate_sampled_texture_gradient_operand(
+                    function_name, metadata, extra_args[0], "dx"
+                ):
+                    return self.default_value_for_type(result_type)
+                if not self.validate_sampled_texture_gradient_operand(
+                    function_name, metadata, extra_args[1], "dy"
+                ):
+                    return self.default_value_for_type(result_type)
+                if not self.validate_sampled_texture_offset_operand(
+                    function_name, metadata, extra_args[2]
+                ):
+                    return self.default_value_for_type(result_type)
                 image_operands = self.image_operands(
                     f"Grad %{extra_args[0].id} %{extra_args[1].id}",
                     self.image_offset_operand(extra_args[2]),
                 )
 
-            result_type = self.resource_access_result_type(metadata)
             id_value = self.get_id()
             self.emit(
                 f"%{id_value} = OpImageSampleExplicitLod %{result_type.id} "
@@ -3949,6 +4541,1122 @@ class VulkanSPIRVCodeGen:
 
         return self.register_constant(0, uint_type)
 
+    def process_mesh_output_function_call(
+        self, function_name: str, args: List
+    ) -> Optional[SpirvId]:
+        """Lower represented mesh output helper calls to SPIR-V Output stores."""
+        uint_type = self.register_primitive_type("uint")
+        if self.current_execution_model != "MeshEXT":
+            self.emit(
+                f"; WARNING: SPIR-V mesh {function_name} is only valid in mesh stages"
+            )
+            return self.register_constant(0, uint_type)
+
+        if len(args) != 2:
+            self.emit(
+                f"; WARNING: SPIR-V mesh {function_name} requires exactly 2 arguments"
+            )
+            return self.register_constant(0, uint_type)
+
+        if function_name == "SetVertex":
+            self.process_mesh_set_vertex(args)
+        elif function_name == "SetPrimitive":
+            self.process_mesh_set_primitive(args)
+
+        return self.register_constant(0, uint_type)
+
+    def process_mesh_set_vertex(self, args: List):
+        """Lower SetVertex(index, value) to a Position builtin output store."""
+        index = self.process_expression(args[0])
+        if index is None:
+            self.emit("; WARNING: SPIR-V mesh SetVertex requires an index operand")
+            return
+
+        position_value = self.mesh_vertex_position_value(args[1])
+        if position_value is None:
+            return
+
+        vertex_output = self.ensure_mesh_vertex_position_output(
+            self.literal_int_argument(args[0])
+        )
+        if vertex_output is None:
+            return
+
+        int_type = self.register_primitive_type("int")
+        member_index = self.register_constant(0, int_type)
+        vec4_type = self.register_vector_type(self.register_primitive_type("float"), 4)
+        ptr_type = self.register_pointer_type(vec4_type, "Output")
+        access = self.access_chain(vertex_output, [index, member_index], ptr_type)
+        self.variable_value_types[access.id] = vec4_type
+        self.store_to_variable(access, position_value)
+
+    def process_mesh_set_primitive(self, args: List):
+        """Lower SetPrimitive(index, value) to primitive-index builtin output."""
+        index = self.process_expression(args[0])
+        if index is None:
+            self.emit("; WARNING: SPIR-V mesh SetPrimitive requires an index operand")
+            return
+
+        primitive_output, element_type = self.ensure_mesh_primitive_index_output(
+            self.literal_int_argument(args[0])
+        )
+        if primitive_output is None or element_type is None:
+            return
+
+        value = self.process_expression(args[1])
+        if value is None:
+            self.emit("; WARNING: SPIR-V mesh SetPrimitive requires a value operand")
+            return
+
+        value = self.convert_value_to_type(value, element_type)
+        if not self.value_has_type(value, element_type):
+            self.emit(
+                "; WARNING: SPIR-V mesh SetPrimitive value does not match "
+                f"{element_type.type.base_type}"
+            )
+            return
+
+        ptr_type = self.register_pointer_type(element_type, "Output")
+        access = self.access_chain(primitive_output, [index], ptr_type)
+        self.variable_value_types[access.id] = element_type
+        self.store_to_variable(access, value)
+
+    def mesh_stage_current_output_limits(self) -> Tuple[int, int]:
+        """Return current mesh output limits from observed counts and metadata."""
+        observed_vertices, observed_primitives = (None, None)
+        if self.current_function_id is not None:
+            observed_vertices, observed_primitives = (
+                self.mesh_output_counts_by_function.get(
+                    self.current_function_id, (None, None)
+                )
+            )
+
+        max_vertices = self.mesh_stage_limit(self.current_stage, "max_vertices")
+        max_primitives = self.mesh_stage_limit(self.current_stage, "max_primitives")
+        if observed_vertices is not None:
+            max_vertices = max(observed_vertices, max_vertices or 0)
+        if observed_primitives is not None:
+            max_primitives = max(observed_primitives, max_primitives or 0)
+        return max(1, max_vertices or 1), max(1, max_primitives or 1)
+
+    def ensure_mesh_vertex_position_output(
+        self, literal_index: Optional[int] = None
+    ) -> Optional[SpirvId]:
+        """Create the mesh Position output array used by SetVertex."""
+        if literal_index is not None and literal_index < 0:
+            self.emit(
+                "; WARNING: SPIR-V mesh SetVertex literal index must be non-negative"
+            )
+            return None
+
+        minimum_size = (literal_index + 1) if literal_index is not None else 1
+        max_vertices, _ = self.mesh_stage_current_output_limits()
+        max_vertices = max(max_vertices, minimum_size)
+
+        if self.mesh_vertex_output_variable is not None:
+            if (
+                self.mesh_vertex_output_limit is not None
+                and minimum_size > self.mesh_vertex_output_limit
+            ):
+                self.emit(
+                    "; WARNING: SPIR-V mesh SetVertex literal index exceeds the "
+                    "declared mesh vertex output limit"
+                )
+                return None
+            return self.mesh_vertex_output_variable
+
+        float_type = self.register_primitive_type("float")
+        vec4_type = self.register_vector_type(float_type, 4)
+        vertex_type = self.register_struct_type(
+            "_CrossGLMeshVertexOutputEXT", [(vec4_type, "position")]
+        )
+        self.decorations.append(
+            f"OpMemberDecorate %{vertex_type.id} 0 BuiltIn Position"
+        )
+        array_type = self.register_array_type(vertex_type, max_vertices)
+        variable = self.create_variable(array_type, "Output", "_CrossGLMeshVerticesEXT")
+        self.outputs.append(variable)
+        self.mesh_vertex_output_variable = variable
+        self.mesh_vertex_output_limit = max_vertices
+        return variable
+
+    def ensure_mesh_member_output_variable(
+        self,
+        info: dict,
+        member_name: str,
+        member_type: SpirvId,
+        semantic: Optional[str],
+        literal_index: Optional[int] = None,
+    ) -> Optional[SpirvId]:
+        """Create a mesh output array for a signature member assignment."""
+        role = info["role"]
+        if literal_index is not None and literal_index < 0:
+            self.emit(
+                f"; WARNING: SPIR-V mesh {info['name']} output literal index "
+                "must be non-negative"
+            )
+            return None
+
+        if role == "vertices":
+            max_vertices, _ = self.mesh_stage_current_output_limits()
+            element_count = max(info.get("count") or max_vertices, max_vertices)
+        else:
+            _, max_primitives = self.mesh_stage_current_output_limits()
+            element_count = max(info.get("count") or max_primitives, max_primitives)
+
+        if literal_index is not None:
+            element_count = max(element_count, literal_index + 1)
+
+        builtin = self.mesh_output_member_builtin(role, semantic)
+        location = (
+            None
+            if builtin
+            else self.mesh_output_member_location(semantic, role, member_name)
+        )
+        key = (
+            role,
+            member_name,
+            member_type.id,
+            builtin,
+            location,
+            element_count,
+        )
+        if key in self.mesh_output_member_variables:
+            return self.mesh_output_member_variables[key]
+
+        array_type = self.register_array_type(member_type, element_count)
+        variable_name = f"_CrossGLMesh_{role}_{member_name}"
+        variable = self.create_variable(array_type, "Output", variable_name)
+        if builtin:
+            self.decorations.append(f"OpDecorate %{variable.id} BuiltIn {builtin}")
+        else:
+            self.decorations.append(f"OpDecorate %{variable.id} Location {location}")
+        if role == "primitives":
+            self.decorations.append(f"OpDecorate %{variable.id} PerPrimitiveEXT")
+        self.outputs.append(variable)
+        self.mesh_output_member_variables[key] = variable
+        return variable
+
+    def mesh_output_member_builtin(
+        self, role: str, semantic: Optional[str]
+    ) -> Optional[str]:
+        """Return a SPIR-V BuiltIn decoration for mesh output member semantics."""
+        if semantic is None:
+            return None
+
+        semantic_map = {
+            "SV_Position": "gl_Position",
+            "POSITION": "POSITION",
+            "gl_Position": "gl_Position",
+            "gl_PrimitiveID": "gl_PrimitiveID",
+            "SV_PrimitiveID": "gl_PrimitiveID",
+            "gl_Layer": "gl_Layer",
+            "gl_ViewportIndex": "gl_ViewportIndex",
+            "gl_CullPrimitiveEXT": "gl_CullPrimitiveEXT",
+        }
+        normalized = semantic_map.get(str(semantic), str(semantic))
+        if role == "vertices" and normalized == "gl_Position":
+            return "Position"
+        if role == "primitives":
+            return {
+                "gl_PrimitiveID": "PrimitiveId",
+                "gl_Layer": "Layer",
+                "gl_ViewportIndex": "ViewportIndex",
+                "gl_CullPrimitiveEXT": "CullPrimitiveEXT",
+            }.get(normalized)
+        return None
+
+    def mesh_output_member_location(
+        self, semantic: Optional[str], role: str, member_name: str
+    ) -> int:
+        """Return or allocate a Location decoration for user mesh outputs."""
+        key = (role, member_name, str(semantic or ""))
+        if key in self.mesh_output_member_locations:
+            return self.mesh_output_member_locations[key]
+
+        location = self.mesh_output_semantic_location(semantic)
+        if location is None:
+            location = self.next_output_location
+            self.next_output_location += 1
+
+        self.mesh_output_member_locations[key] = location
+        return location
+
+    def mesh_output_semantic_location(self, semantic: Optional[str]) -> Optional[int]:
+        if semantic is None:
+            return None
+
+        semantic_text = str(semantic)
+        fixed_locations = {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TANGENT": 2,
+            "BINORMAL": 3,
+            "TEXCOORD": 4,
+            "COLOR": 13,
+            "COLOR0": 13,
+        }
+        if semantic_text in fixed_locations:
+            return fixed_locations[semantic_text]
+
+        match = re.fullmatch(r"TEXCOORD(\d+)", semantic_text)
+        if match:
+            return 5 + int(match.group(1))
+
+        match = re.fullmatch(r"COLOR(\d+)", semantic_text)
+        if match:
+            return 13 + int(match.group(1))
+
+        return None
+
+    def ensure_mesh_primitive_index_output(
+        self, literal_index: Optional[int] = None
+    ) -> Tuple[Optional[SpirvId], Optional[SpirvId]]:
+        """Create the topology-specific primitive-index output array."""
+        if literal_index is not None and literal_index < 0:
+            self.emit(
+                "; WARNING: SPIR-V mesh SetPrimitive literal index must be "
+                "non-negative"
+            )
+            return None, None
+
+        info = self.mesh_primitive_index_builtin_info()
+        if info is None:
+            self.emit(
+                "; WARNING: SPIR-V mesh SetPrimitive requires point, line, or "
+                "triangle output topology"
+            )
+            return None, None
+
+        builtin_name, element_type = info
+        minimum_size = (literal_index + 1) if literal_index is not None else 1
+        _, max_primitives = self.mesh_stage_current_output_limits()
+        max_primitives = max(max_primitives, minimum_size)
+
+        cached = self.mesh_primitive_index_outputs.get(builtin_name)
+        if cached is not None:
+            variable, cached_type, cached_limit = cached
+            if minimum_size > cached_limit:
+                self.emit(
+                    "; WARNING: SPIR-V mesh SetPrimitive literal index exceeds the "
+                    "declared mesh primitive output limit"
+                )
+                return None, None
+            return variable, cached_type
+
+        array_type = self.register_array_type(element_type, max_primitives)
+        variable = self.create_variable(
+            array_type, "Output", f"_CrossGLMesh{builtin_name}"
+        )
+        self.decorations.append(f"OpDecorate %{variable.id} BuiltIn {builtin_name}")
+        self.outputs.append(variable)
+        self.mesh_primitive_index_outputs[builtin_name] = (
+            variable,
+            element_type,
+            max_primitives,
+        )
+        return variable, element_type
+
+    def mesh_primitive_index_builtin_info(
+        self,
+    ) -> Optional[Tuple[str, SpirvId]]:
+        """Return primitive-index builtin metadata for the current topology."""
+        mode = self.mesh_stage_topology_mode(self.current_stage)
+        uint_type = self.register_primitive_type("uint")
+        if mode == "OutputPoints":
+            return "PrimitivePointIndicesEXT", uint_type
+        if mode == "OutputLinesEXT":
+            return (
+                "PrimitiveLineIndicesEXT",
+                self.register_vector_type(uint_type, 2),
+            )
+        if mode == "OutputTrianglesEXT":
+            return (
+                "PrimitiveTriangleIndicesEXT",
+                self.register_vector_type(uint_type, 3),
+            )
+        return None
+
+    def mesh_vertex_position_value(self, expr) -> Optional[SpirvId]:
+        """Return a vec4 position value for SetVertex."""
+        value = self.process_expression(expr)
+        if value is None:
+            self.emit("; WARNING: SPIR-V mesh SetVertex requires a value operand")
+            return None
+
+        position = self.mesh_vertex_position_from_value(value)
+        if position is None:
+            self.emit(
+                "; WARNING: SPIR-V mesh SetVertex value must be a vec3, vec4, "
+                "or struct with a position member"
+            )
+        return position
+
+    def mesh_vertex_position_from_value(self, value: SpirvId) -> Optional[SpirvId]:
+        """Convert a SetVertex value to the Position builtin's vec4 type."""
+        float_type = self.register_primitive_type("float")
+        vec4_type = self.register_vector_type(float_type, 4)
+        vector_info = self.vector_component_type_and_count(value.type.base_type)
+
+        if vector_info is not None:
+            component_type_name, component_count = vector_info
+            if component_count == 4:
+                converted = self.convert_value_to_type(value, vec4_type)
+                return converted if self.value_has_type(converted, vec4_type) else None
+            if component_count == 3:
+                component_type = self.register_primitive_type(component_type_name)
+                components = [
+                    self.convert_scalar_to_type(
+                        self.composite_extract(value, component_type, index),
+                        float_type,
+                    )
+                    for index in range(3)
+                ]
+                components.append(self.register_constant(1.0, float_type))
+                return self.composite_construct(vec4_type, components)
+            return None
+
+        member_info = self.struct_member_info(value.type.base_type, "position")
+        if member_info is None:
+            member_info = self.struct_member_info(value.type.base_type, "gl_Position")
+        if member_info is None:
+            return None
+
+        member_index, member_type = member_info
+        member_value = self.composite_extract(value, member_type, member_index)
+        return self.mesh_vertex_position_from_value(member_value)
+
+    def process_mesh_output_assignment(self, target, value_expr) -> bool:
+        """Lower assignments to mesh output signature parameters."""
+        access = self.mesh_output_assignment_access(target)
+        if access is None:
+            return False
+
+        info, index_expr, member_name, member_component = access
+        index = self.process_expression(index_expr)
+        if index is None:
+            self.emit("; WARNING: SPIR-V mesh output assignment requires an index")
+            return True
+
+        literal_index = self.literal_int_argument(index_expr)
+        if literal_index is not None and literal_index < 0:
+            self.emit(
+                f"; WARNING: SPIR-V mesh {info['name']} output literal index "
+                "must be non-negative"
+            )
+            return True
+
+        role = info["role"]
+        if role == "indices":
+            self.store_mesh_index_output(info, index, literal_index, value_expr)
+            return True
+
+        if member_component is not None:
+            member_info = info["members"].get(member_name)
+            if member_info is None:
+                self.emit(
+                    f"; WARNING: SPIR-V mesh output {info['name']} has no "
+                    f"member {member_name}"
+                )
+                return True
+            if not self.validate_mesh_output_member_component_target(
+                info, member_name, member_component
+            ):
+                return True
+            value = self.process_expression(value_expr)
+            if value is not None:
+                self.store_mesh_output_member_component(
+                    info,
+                    member_name,
+                    member_component,
+                    index,
+                    literal_index,
+                    value,
+                )
+            return True
+
+        if member_name is not None:
+            member_info = info["members"].get(member_name)
+            if member_info is None:
+                self.emit(
+                    f"; WARNING: SPIR-V mesh output {info['name']} has no "
+                    f"member {member_name}"
+                )
+                return True
+            value = self.process_expression(value_expr)
+            if value is not None:
+                self.store_mesh_output_member(
+                    info, member_name, index, literal_index, value
+                )
+            return True
+
+        value = self.process_expression(value_expr)
+        if value is None:
+            return True
+
+        element_type = info["element_type"]
+        value = self.convert_value_to_type(value, element_type)
+        if not self.value_has_type(value, element_type):
+            self.emit(
+                f"; WARNING: SPIR-V mesh {info['name']} output assignment value "
+                f"does not match {element_type.type.base_type}"
+            )
+            return True
+
+        for member_name, member_info in info["members"].items():
+            member_value = self.composite_extract(
+                value, member_info["type"], member_info["index"]
+            )
+            self.store_mesh_output_member(
+                info, member_name, index, literal_index, member_value
+            )
+        return True
+
+    def validate_mesh_output_member_component_target(
+        self, info: dict, member_name: str, component_name: str
+    ) -> bool:
+        member_info = info["members"][member_name]
+        member_type = member_info["type"]
+
+        swizzle_info = self.vector_swizzle_info(
+            member_type.type.base_type, component_name
+        )
+        if swizzle_info is not None:
+            component_indices, _, _ = swizzle_info
+            if len(set(component_indices)) != len(component_indices):
+                self.emit(
+                    f"; WARNING: Cannot assign to vector swizzle {component_name} "
+                    "with duplicate components"
+                )
+                return False
+            return True
+
+        if self.vector_member_info(member_type.type.base_type, component_name):
+            return True
+
+        if (
+            self.vector_component_type_and_count(member_type.type.base_type) is not None
+            and len(component_name) > 1
+        ):
+            self.emit(
+                f"; WARNING: Invalid vector swizzle {component_name} "
+                f"for {member_type.type.base_type}"
+            )
+        else:
+            self.emit(
+                f"; WARNING: SPIR-V mesh output {member_name} has no "
+                f"vector component {component_name}"
+            )
+        return False
+
+    def process_mesh_output_compound_assignment(
+        self,
+        target,
+        value_expr,
+        spv_operator: str,
+        target_is_precise: bool,
+    ) -> bool:
+        """Lower compound assignments to mesh output signature parameters."""
+        access = self.mesh_output_assignment_access(target)
+        if access is None:
+            return False
+
+        info, index_expr, member_name, member_component = access
+        index = self.process_expression(index_expr)
+        if index is None:
+            self.emit("; WARNING: SPIR-V mesh output assignment requires an index")
+            return True
+
+        literal_index = self.literal_int_argument(index_expr)
+        if literal_index is not None and literal_index < 0:
+            self.emit(
+                f"; WARNING: SPIR-V mesh {info['name']} output literal index "
+                "must be non-negative"
+            )
+            return True
+
+        if info["role"] == "indices":
+            self.emit(
+                "; WARNING: Compound assignment to SPIR-V mesh indices output "
+                "cannot be lowered"
+            )
+            return True
+        if member_name is None:
+            self.emit(
+                "; WARNING: Compound assignment to whole SPIR-V mesh output "
+                "elements cannot be lowered"
+            )
+            return True
+
+        member_info = info["members"].get(member_name)
+        if member_info is None:
+            self.emit(
+                f"; WARNING: SPIR-V mesh output {info['name']} has no "
+                f"member {member_name}"
+            )
+            return True
+        if member_component is not None:
+            return self.process_mesh_output_member_component_compound_assignment(
+                info,
+                member_name,
+                member_component,
+                index,
+                literal_index,
+                value_expr,
+                spv_operator,
+                target_is_precise,
+            )
+
+        return self.process_mesh_output_member_compound_assignment(
+            info,
+            member_name,
+            index,
+            literal_index,
+            value_expr,
+            spv_operator,
+            target_is_precise,
+        )
+
+    def process_mesh_output_member_compound_assignment(
+        self,
+        info: dict,
+        member_name: str,
+        index: SpirvId,
+        literal_index: Optional[int],
+        value_expr,
+        spv_operator: str,
+        target_is_precise: bool,
+    ) -> bool:
+        member_pointer, member_type = self.mesh_output_member_shadow_pointer(
+            info, member_name, index, literal_index
+        )
+        if member_pointer is None or member_type is None:
+            return True
+
+        if target_is_precise:
+            self.precise_expression_depth += 1
+
+        try:
+            current_value = self.load_from_variable(member_pointer, member_type)
+            rhs_value = self.process_expression(value_expr)
+            if rhs_value is None:
+                return True
+            result = self.binary_operation(
+                spv_operator, member_type, current_value, rhs_value
+            )
+        finally:
+            if target_is_precise:
+                self.precise_expression_depth -= 1
+
+        self.store_mesh_output_member(info, member_name, index, literal_index, result)
+        return True
+
+    def process_mesh_output_member_component_compound_assignment(
+        self,
+        info: dict,
+        member_name: str,
+        component_name: str,
+        index: SpirvId,
+        literal_index: Optional[int],
+        value_expr,
+        spv_operator: str,
+        target_is_precise: bool,
+    ) -> bool:
+        member_info = info["members"][member_name]
+        member_type = member_info["type"]
+        swizzle_info = self.vector_swizzle_info(
+            member_type.type.base_type, component_name
+        )
+        if swizzle_info is not None:
+            component_indices, component_type, swizzle_type = swizzle_info
+            if len(set(component_indices)) != len(component_indices):
+                self.emit(
+                    f"; WARNING: Cannot assign to vector swizzle {component_name} "
+                    "with duplicate components"
+                )
+                return True
+
+            member_pointer, storage_member_type = (
+                self.mesh_output_member_shadow_pointer(
+                    info, member_name, index, literal_index
+                )
+            )
+            if member_pointer is None or storage_member_type is None:
+                return True
+
+            if target_is_precise:
+                self.precise_expression_depth += 1
+
+            try:
+                rhs_value = self.process_expression(value_expr)
+                if rhs_value is None:
+                    return True
+                rhs_components = self.convert_vector_swizzle_assignment_components(
+                    rhs_value, component_type, len(component_indices), component_name
+                )
+                if rhs_components is None:
+                    return True
+
+                rhs_vector = self.composite_construct(swizzle_type, rhs_components)
+                member_value = self.load_from_variable(
+                    member_pointer, storage_member_type
+                )
+                current_value = self.vector_shuffle(
+                    member_value, swizzle_type, component_indices
+                )
+                result = self.binary_operation(
+                    spv_operator, swizzle_type, current_value, rhs_vector
+                )
+            finally:
+                if target_is_precise:
+                    self.precise_expression_depth -= 1
+
+            for result_index, component_index in enumerate(component_indices):
+                component_value = self.composite_extract(
+                    result, component_type, result_index
+                )
+                self.store_mesh_output_member_component_value(
+                    info,
+                    member_name,
+                    index,
+                    literal_index,
+                    component_index,
+                    component_type,
+                    component_value,
+                )
+            return True
+
+        component_info = self.vector_member_info(
+            member_type.type.base_type, component_name
+        )
+        if component_info is None:
+            if (
+                self.vector_component_type_and_count(member_type.type.base_type)
+                is not None
+                and len(component_name) > 1
+            ):
+                self.emit(
+                    f"; WARNING: Invalid vector swizzle {component_name} "
+                    f"for {member_type.type.base_type}"
+                )
+            else:
+                self.emit(
+                    f"; WARNING: SPIR-V mesh output {member_name} has no "
+                    f"vector component {component_name}"
+                )
+            return True
+
+        component_index, component_type = component_info
+        component_pointer = self.mesh_output_member_shadow_component_pointer(
+            info,
+            member_name,
+            index,
+            literal_index,
+            component_index,
+            component_type,
+        )
+        if component_pointer is None:
+            return True
+
+        if target_is_precise:
+            self.precise_expression_depth += 1
+
+        try:
+            current_value = self.load_from_variable(component_pointer, component_type)
+            rhs_value = self.process_expression(value_expr)
+            if rhs_value is None:
+                return True
+            rhs_value = self.convert_vector_component_value(
+                rhs_value, component_type, component_name
+            )
+            if rhs_value is None:
+                return True
+
+            result = self.binary_operation(
+                spv_operator, component_type, current_value, rhs_value
+            )
+        finally:
+            if target_is_precise:
+                self.precise_expression_depth -= 1
+
+        self.store_mesh_output_member_component_value(
+            info,
+            member_name,
+            index,
+            literal_index,
+            component_index,
+            component_type,
+            result,
+        )
+        return True
+
+    def mesh_output_assignment_access(self, target):
+        """Return mesh output parameter assignment metadata for a target."""
+        if isinstance(target, MemberAccessNode):
+            member_access = self.mesh_output_member_access_info(target)
+            if member_access is not None:
+                info, index_expr, member_name = member_access
+                return info, index_expr, member_name, None
+
+            parent_access = self.mesh_output_member_access_info(
+                getattr(target, "object", None)
+            )
+            if parent_access is not None:
+                info, index_expr, member_name = parent_access
+                return info, index_expr, member_name, str(target.member)
+
+        if isinstance(target, ArrayAccessNode):
+            access = self.mesh_output_array_access_info(target)
+            if access is None:
+                return None
+            info, index_expr = access
+            if info["role"] not in {"vertices", "indices", "primitives"}:
+                return None
+            return info, index_expr, None, None
+
+        return None
+
+    def mesh_output_member_shadow_variable(
+        self,
+        info: dict,
+        member_name: str,
+        literal_index: Optional[int],
+    ) -> Tuple[Optional[SpirvId], Optional[SpirvId]]:
+        member_info = info["members"][member_name]
+        semantic = member_info.get("semantic")
+        member_type = member_info["type"]
+
+        if literal_index is not None and literal_index < 0:
+            self.emit(
+                f"; WARNING: SPIR-V mesh {info['name']} output literal index "
+                "must be non-negative"
+            )
+            return None, None
+
+        if info["role"] == "vertices":
+            max_vertices, _ = self.mesh_stage_current_output_limits()
+            element_count = max(info.get("count") or max_vertices, max_vertices)
+        else:
+            _, max_primitives = self.mesh_stage_current_output_limits()
+            element_count = max(info.get("count") or max_primitives, max_primitives)
+
+        if literal_index is not None:
+            element_count = max(element_count, literal_index + 1)
+
+        if (
+            info["role"] == "vertices"
+            and self.mesh_output_member_builtin("vertices", semantic) == "Position"
+        ):
+            storage_member_type = self.register_vector_type(
+                self.register_primitive_type("float"), 4
+            )
+        else:
+            storage_member_type = member_type
+
+        key = (
+            info["role"],
+            member_name,
+            storage_member_type.id,
+            element_count,
+        )
+        if key in self.mesh_output_member_shadow_variables:
+            return self.mesh_output_member_shadow_variables[key], storage_member_type
+
+        array_type = self.register_array_type(storage_member_type, element_count)
+        variable = self.create_variable(
+            array_type, "Private", f"_CrossGLMeshShadow_{info['role']}_{member_name}"
+        )
+        self.entry_point_private_variables.append(variable)
+        self.mesh_output_member_shadow_variables[key] = variable
+        return variable, storage_member_type
+
+    def mesh_output_member_shadow_pointer(
+        self,
+        info: dict,
+        member_name: str,
+        index: SpirvId,
+        literal_index: Optional[int],
+    ) -> Tuple[Optional[SpirvId], Optional[SpirvId]]:
+        variable, member_type = self.mesh_output_member_shadow_variable(
+            info, member_name, literal_index
+        )
+        if variable is None or member_type is None:
+            return None, None
+
+        ptr_type = self.register_pointer_type(member_type, "Private")
+        access = self.access_chain(variable, [index], ptr_type)
+        self.variable_value_types[access.id] = member_type
+        return access, member_type
+
+    def mesh_output_member_shadow_component_pointer(
+        self,
+        info: dict,
+        member_name: str,
+        index: SpirvId,
+        literal_index: Optional[int],
+        component_index: int,
+        component_type: SpirvId,
+    ) -> Optional[SpirvId]:
+        variable, member_type = self.mesh_output_member_shadow_variable(
+            info, member_name, literal_index
+        )
+        if variable is None or member_type is None:
+            return None
+
+        int_type = self.register_primitive_type("int")
+        component_index_id = self.register_constant(component_index, int_type)
+        ptr_type = self.register_pointer_type(component_type, "Private")
+        access = self.access_chain(variable, [index, component_index_id], ptr_type)
+
+        self.variable_value_types[access.id] = component_type
+        return access
+
+    def mesh_output_member_access_info(self, target):
+        if not isinstance(target, MemberAccessNode):
+            return None
+        array_access = getattr(target, "object", None)
+        if not isinstance(array_access, ArrayAccessNode):
+            return None
+        access = self.mesh_output_array_access_info(array_access)
+        if access is None:
+            return None
+        info, index_expr = access
+        if info["role"] not in {"vertices", "primitives"}:
+            return None
+        return info, index_expr, str(target.member)
+
+    def mesh_output_array_access_info(self, node):
+        array_expr = getattr(node, "array", getattr(node, "array_expr", None))
+        name = self.expression_name(array_expr)
+        info = self.current_mesh_output_parameters.get(name)
+        if info is None:
+            return None
+        index_expr = getattr(node, "index", getattr(node, "index_expr", None))
+        return info, index_expr
+
+    def store_mesh_index_output(
+        self, info: dict, index: SpirvId, literal_index: Optional[int], value_expr
+    ):
+        builtin_info = self.mesh_primitive_index_builtin_info()
+        if builtin_info is None:
+            self.emit(
+                "; WARNING: SPIR-V mesh SetPrimitive requires point, line, or "
+                "triangle output topology"
+            )
+            return
+        _, element_type = builtin_info
+
+        value = self.process_expression(value_expr)
+        if value is None:
+            return
+        value = self.convert_value_to_type(value, element_type)
+        if not self.value_has_type(value, element_type):
+            self.emit(
+                "; WARNING: SPIR-V mesh indices output assignment value does not "
+                f"match {element_type.type.base_type}"
+            )
+            return
+
+        primitive_output, _ = self.ensure_mesh_primitive_index_output(literal_index)
+        if primitive_output is None:
+            return
+
+        ptr_type = self.register_pointer_type(element_type, "Output")
+        access = self.access_chain(primitive_output, [index], ptr_type)
+        self.variable_value_types[access.id] = element_type
+        self.store_to_variable(access, value)
+
+    def store_mesh_output_member(
+        self,
+        info: dict,
+        member_name: str,
+        index: SpirvId,
+        literal_index: Optional[int],
+        value: SpirvId,
+    ):
+        member_info = info["members"][member_name]
+        semantic = member_info.get("semantic")
+        member_type = member_info["type"]
+
+        if (
+            info["role"] == "vertices"
+            and self.mesh_output_member_builtin("vertices", semantic) == "Position"
+        ):
+            value = self.mesh_vertex_position_from_value(value)
+            if value is None:
+                self.emit(
+                    "; WARNING: SPIR-V mesh vertex output position assignment "
+                    "requires a vec3, vec4, or struct with a position member"
+                )
+                return
+            vertex_output = self.ensure_mesh_vertex_position_output(literal_index)
+            if vertex_output is None:
+                return
+            int_type = self.register_primitive_type("int")
+            member_index = self.register_constant(0, int_type)
+            vec4_type = self.register_vector_type(
+                self.register_primitive_type("float"), 4
+            )
+            ptr_type = self.register_pointer_type(vec4_type, "Output")
+            access = self.access_chain(vertex_output, [index, member_index], ptr_type)
+            self.variable_value_types[access.id] = vec4_type
+            self.store_to_variable(access, value)
+            shadow_access, _ = self.mesh_output_member_shadow_pointer(
+                info, member_name, index, literal_index
+            )
+            if shadow_access is not None:
+                self.store_to_variable(shadow_access, value)
+            return
+
+        variable = self.ensure_mesh_member_output_variable(
+            info, member_name, member_type, semantic, literal_index
+        )
+        if variable is None:
+            return
+
+        value = self.convert_value_to_type(value, member_type)
+        if not self.value_has_type(value, member_type):
+            self.emit(
+                f"; WARNING: SPIR-V mesh output {member_name} assignment value "
+                f"does not match {member_type.type.base_type}"
+            )
+            return
+
+        ptr_type = self.register_pointer_type(member_type, "Output")
+        access = self.access_chain(variable, [index], ptr_type)
+        self.variable_value_types[access.id] = member_type
+        self.store_to_variable(access, value)
+        shadow_access, _ = self.mesh_output_member_shadow_pointer(
+            info, member_name, index, literal_index
+        )
+        if shadow_access is not None:
+            self.store_to_variable(shadow_access, value)
+
+    def store_mesh_output_member_component(
+        self,
+        info: dict,
+        member_name: str,
+        component_name: str,
+        index: SpirvId,
+        literal_index: Optional[int],
+        value: SpirvId,
+    ):
+        member_info = info["members"][member_name]
+        member_type = member_info["type"]
+
+        component_indices = None
+        component_type = None
+        component_values = None
+
+        swizzle_info = self.vector_swizzle_info(
+            member_type.type.base_type, component_name
+        )
+        if swizzle_info is not None:
+            component_indices, component_type, _ = swizzle_info
+            if len(set(component_indices)) != len(component_indices):
+                self.emit(
+                    f"; WARNING: Cannot assign to vector swizzle {component_name} "
+                    "with duplicate components"
+                )
+                return
+            component_values = self.convert_vector_swizzle_assignment_components(
+                value, component_type, len(component_indices), component_name
+            )
+        else:
+            member_component_info = self.vector_member_info(
+                member_type.type.base_type, component_name
+            )
+            if member_component_info is not None:
+                component_index, component_type = member_component_info
+                component_indices = [component_index]
+                component_value = self.convert_vector_component_value(
+                    value, component_type, component_name
+                )
+                component_values = (
+                    [component_value] if component_value is not None else None
+                )
+
+        if component_indices is None or component_type is None:
+            if (
+                self.vector_component_type_and_count(member_type.type.base_type)
+                is not None
+                and len(component_name) > 1
+            ):
+                self.emit(
+                    f"; WARNING: Invalid vector swizzle {component_name} "
+                    f"for {member_type.type.base_type}"
+                )
+            else:
+                self.emit(
+                    f"; WARNING: SPIR-V mesh output {member_name} has no "
+                    f"vector component {component_name}"
+                )
+            return
+        if component_values is None:
+            return
+
+        for component_index, component_value in zip(
+            component_indices, component_values
+        ):
+            self.store_mesh_output_member_component_value(
+                info,
+                member_name,
+                index,
+                literal_index,
+                component_index,
+                component_type,
+                component_value,
+            )
+
+    def store_mesh_output_member_component_value(
+        self,
+        info: dict,
+        member_name: str,
+        index: SpirvId,
+        literal_index: Optional[int],
+        component_index: int,
+        component_type: SpirvId,
+        component_value: SpirvId,
+    ):
+        member_info = info["members"][member_name]
+        semantic = member_info.get("semantic")
+        member_type = member_info["type"]
+        int_type = self.register_primitive_type("int")
+        component_index_id = self.register_constant(component_index, int_type)
+        ptr_type = self.register_pointer_type(component_type, "Output")
+
+        if (
+            info["role"] == "vertices"
+            and self.mesh_output_member_builtin("vertices", semantic) == "Position"
+        ):
+            vertex_output = self.ensure_mesh_vertex_position_output(literal_index)
+            if vertex_output is None:
+                return
+            member_index = self.register_constant(0, int_type)
+            access = self.access_chain(
+                vertex_output, [index, member_index, component_index_id], ptr_type
+            )
+        else:
+            variable = self.ensure_mesh_member_output_variable(
+                info, member_name, member_type, semantic, literal_index
+            )
+            if variable is None:
+                return
+            access = self.access_chain(variable, [index, component_index_id], ptr_type)
+
+        self.variable_value_types[access.id] = component_type
+        self.store_to_variable(access, component_value)
+        shadow_access = self.mesh_output_member_shadow_component_pointer(
+            info,
+            member_name,
+            index,
+            literal_index,
+            component_index,
+            component_type,
+        )
+        if shadow_access is not None:
+            self.store_to_variable(shadow_access, component_value)
+
     def process_dispatch_mesh_operation(self, expr: MeshOpNode) -> Optional[SpirvId]:
         """Lower task-shader DispatchMesh to the SPIR-V mesh-task terminator."""
         operation = expr.operation
@@ -3958,15 +5666,16 @@ class VulkanSPIRVCodeGen:
             )
 
         arguments = getattr(expr, "arguments", []) or []
-        if len(arguments) != 3:
+        if len(arguments) not in {3, 4}:
             self.emit(
-                "; WARNING: SPIR-V mesh DispatchMesh requires exactly 3 arguments"
+                "; WARNING: SPIR-V mesh DispatchMesh requires exactly 3 arguments, "
+                "or 4 with a task payload"
             )
             return self.register_constant(0, self.register_primitive_type("uint"))
 
         uint_type = self.register_primitive_type("uint")
         group_counts = []
-        for argument in arguments:
+        for argument in arguments[:3]:
             group_count = self.process_expression(argument)
             if group_count is None:
                 self.emit(
@@ -3975,12 +5684,116 @@ class VulkanSPIRVCodeGen:
                 return self.register_constant(0, uint_type)
             group_counts.append(self.convert_value_to_type(group_count, uint_type))
 
+        payload_pointer = None
+        if len(arguments) == 4:
+            payload_pointer = self.dispatch_mesh_payload_pointer(arguments[3])
+            if payload_pointer is None:
+                self.emit(
+                    "; WARNING: SPIR-V mesh DispatchMesh payload argument requires "
+                    "taskPayloadSharedEXT storage"
+                )
+                return self.register_constant(0, uint_type)
+
         self.require_capability("MeshShadingEXT")
         self.require_extension("SPV_EXT_mesh_shader")
-        self.emit(
-            "OpEmitMeshTasksEXT "
-            + " ".join(f"%{group_count.id}" for group_count in group_counts)
+        operands = [f"%{group_count.id}" for group_count in group_counts]
+        if payload_pointer is not None:
+            operands.append(f"%{payload_pointer.id}")
+        self.emit("OpEmitMeshTasksEXT " + " ".join(operands))
+        return None
+
+    def dispatch_mesh_payload_pointer(self, payload_expr) -> Optional[SpirvId]:
+        """Return a TaskPayloadWorkgroupEXT pointer for DispatchMesh payloads."""
+        target = self.dispatch_mesh_payload_target(payload_expr)
+        if target is None:
+            return None
+
+        if self.direct_expression_name(payload_expr) == target.name:
+            self.record_task_payload_interface(target)
+            return target
+
+        payload_value = self.process_expression(payload_expr)
+        if payload_value is None:
+            return None
+
+        target_type = self.pointer_pointee_type(target)
+        if target_type is not None:
+            payload_value = self.convert_value_to_type(payload_value, target_type)
+            if not self.value_has_type(payload_value, target_type):
+                self.emit(
+                    "; WARNING: SPIR-V mesh DispatchMesh payload argument type "
+                    f"{payload_value.type.base_type} does not match "
+                    f"{target_type.type.base_type}"
+                )
+                return None
+
+        self.store_to_variable(target, payload_value)
+        self.record_task_payload_interface(target)
+        return target
+
+    def record_task_payload_interface(self, payload_pointer: SpirvId):
+        """Associate a task payload variable with the current task entry point."""
+        if self.current_function_id is None:
+            return
+        self.task_payload_interface_by_function[self.current_function_id] = (
+            payload_pointer
         )
+
+    def dispatch_mesh_payload_target(self, payload_expr) -> Optional[SpirvId]:
+        """Find the shared task payload variable used by DispatchMesh."""
+        if not self.task_payload_shared_variables:
+            return None
+
+        direct_name = self.direct_expression_name(payload_expr)
+        if direct_name in self.task_payload_shared_variables:
+            return self.task_payload_shared_variables[direct_name]
+
+        payload_type = self.dispatch_mesh_payload_expression_type(payload_expr)
+        if payload_type is not None:
+            matches = [
+                variable
+                for variable in self.task_payload_shared_variables.values()
+                if (
+                    self.pointer_pointee_type(variable) is not None
+                    and self.pointer_pointee_type(variable).type.base_type
+                    == payload_type.type.base_type
+                )
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                names = ", ".join(sorted(variable.name or "" for variable in matches))
+                self.emit(
+                    "; WARNING: SPIR-V mesh DispatchMesh payload target is "
+                    f"ambiguous for {payload_type.type.base_type}: {names}"
+                )
+                return None
+
+        if len(self.task_payload_shared_variables) == 1:
+            return next(iter(self.task_payload_shared_variables.values()))
+
+        names = ", ".join(sorted(self.task_payload_shared_variables))
+        self.emit(
+            "; WARNING: SPIR-V mesh DispatchMesh payload target is ambiguous: "
+            f"{names}"
+        )
+        return None
+
+    def dispatch_mesh_payload_expression_type(self, expr) -> Optional[SpirvId]:
+        """Return a statically known payload value type without emitting code."""
+        direct_name = self.direct_expression_name(expr)
+        if direct_name:
+            variable = self.local_variables.get(
+                direct_name
+            ) or self.global_variables.get(direct_name)
+            if variable is not None:
+                value_type = self.variable_value_types.get(variable.id)
+                if value_type is not None:
+                    return value_type
+                registered_type = self.value_types.get(variable.id)
+                if registered_type is not None:
+                    return registered_type
+
         return None
 
     def flatten_vector_constructor_args(
@@ -4159,7 +5972,7 @@ class VulkanSPIRVCodeGen:
     def call_synchronization_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
-        if args or function_name not in {
+        synchronization_functions = {
             "allMemoryBarrier",
             "barrier",
             "groupMemoryBarrier",
@@ -4168,8 +5981,16 @@ class VulkanSPIRVCodeGen:
             "memoryBarrierBuffer",
             "memoryBarrierImage",
             "memoryBarrierShared",
-        }:
+        }
+        if function_name not in synchronization_functions:
             return None
+
+        if args:
+            self.emit(
+                f"; WARNING: synchronization builtin '{function_name}' "
+                "requires 0 operands"
+            )
+            return self.register_constant(0, self.register_primitive_type("int"))
 
         if function_name in {"barrier", "workgroupBarrier"}:
             workgroup_scope = self.spirv_scope_constant("Workgroup")
@@ -4667,6 +6488,27 @@ class VulkanSPIRVCodeGen:
         if synchronization_call is not None:
             return synchronization_call
 
+        exact_operand_counts = {
+            "min": 2,
+            "max": 2,
+            "clamp": 3,
+            "mix": 3,
+            "pow": 2,
+            "step": 2,
+            "smoothstep": 3,
+        }
+        expected_operand_count = exact_operand_counts.get(function_name)
+        if expected_operand_count is not None and len(args) != expected_operand_count:
+            operand_label = "operand" if expected_operand_count == 1 else "operands"
+            self.emit(
+                f"; WARNING: {function_name} requires "
+                f"{expected_operand_count} {operand_label}"
+            )
+            fallback_type = self.register_primitive_type("float")
+            if args:
+                fallback_type = self.ensure_registered_type(args[0].type)
+            return self.default_value_for_type(fallback_type)
+
         if function_name == "mix" and len(args) == 3:
             bool_mix = self.call_bool_mix_function(args)
             if bool_mix is not None:
@@ -4686,6 +6528,54 @@ class VulkanSPIRVCodeGen:
             if signed is not None:
                 return signed
 
+        if function_name == "abs" and len(args) == 1:
+            absolute = self.call_abs_function(args[0])
+            if absolute is not None:
+                return absolute
+            self.emit(
+                "; WARNING: abs requires floating-point or signed integer "
+                "scalar or vector operand"
+            )
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
+
+        if function_name == "pow" and len(args) == 2:
+            power = self.call_pow_function(args)
+            if power is not None:
+                return power
+            self.emit(
+                "; WARNING: pow requires compatible 32-bit floating-point "
+                "scalar or vector operands"
+            )
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
+
+        if function_name == "step" and len(args) == 2:
+            stepped = self.call_step_smoothstep_function("Step", args, 1)
+            if stepped is not None:
+                return stepped
+            self.emit(
+                "; WARNING: step requires compatible floating-point scalar "
+                "or vector operands"
+            )
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[1].type)
+            )
+
+        if function_name == "smoothstep" and len(args) == 3:
+            smoothed = self.call_step_smoothstep_function("SmoothStep", args, 2)
+            if smoothed is not None:
+                return smoothed
+            self.emit(
+                "; WARNING: smoothstep requires compatible floating-point "
+                "scalar or vector operands"
+            )
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[2].type)
+            )
+
         if (
             function_name in {"min", "max"}
             and len(args) == 2
@@ -4695,11 +6585,22 @@ class VulkanSPIRVCodeGen:
             min_max_clamp = self.call_min_max_clamp_function(function_name, args)
             if min_max_clamp is not None:
                 return min_max_clamp
+            self.emit(
+                f"; WARNING: {function_name} requires compatible scalar or "
+                "vector numeric operands"
+            )
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
 
         if function_name == "mix" and len(args) == 3:
             numeric_mix = self.call_numeric_mix_function(args)
             if numeric_mix is not None:
                 return numeric_mix
+            self.emit("; WARNING: mix requires compatible value operands and selector")
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
 
         vector_info = self.vector_component_type_and_count(function_name)
         if vector_info:
@@ -4790,9 +6691,13 @@ class VulkanSPIRVCodeGen:
 
         # Special case for dot product - use OpDot instead of OpExtInst
         elif function_name == "dot" and len(args) == 2:
+            if not self.dot_operands_are_valid(args):
+                self.emit(
+                    "; WARNING: dot requires matching floating-point vector operands"
+                )
+                return self.default_value_for_type(self.dot_result_type(args))
+
             component_type = self.scalar_or_vector_component_type(args[0].type)
-            if component_type not in {"float", "double"}:
-                component_type = "float"
             result_type = self.register_primitive_type(component_type)
 
             # Generate a direct OpDot instruction
@@ -4814,6 +6719,99 @@ class VulkanSPIRVCodeGen:
         else:
             # Determine result type based on the function name
             float_type = self.primitive_types["float"]
+            glsl_std450_map = {
+                "sin": "Sin",
+                "cos": "Cos",
+                "tan": "Tan",
+                "atan2": "Atan2",
+                "asin": "Asin",
+                "acos": "Acos",
+                "atan": "Atan",
+                "sinh": "Sinh",
+                "cosh": "Cosh",
+                "tanh": "Tanh",
+                "exp": "Exp",
+                "log": "Log",
+                "exp2": "Exp2",
+                "log2": "Log2",
+                "sqrt": "Sqrt",
+                "inversesqrt": "InverseSqrt",
+                "abs": "FAbs",
+                "floor": "Floor",
+                "ceil": "Ceil",
+                "fract": "Fract",
+                "trunc": "Trunc",
+                "round": "Round",
+                "roundEven": "RoundEven",
+                "degrees": "Degrees",
+                "radians": "Radians",
+                "length": "Length",
+                "distance": "Distance",
+                "cross": "Cross",
+                "normalize": "Normalize",
+                "reflect": "Reflect",
+                "refract": "Refract",
+            }
+            unary_std450_functions = {
+                "sin",
+                "cos",
+                "tan",
+                "asin",
+                "acos",
+                "atan",
+                "sinh",
+                "cosh",
+                "tanh",
+                "exp",
+                "log",
+                "exp2",
+                "log2",
+                "sqrt",
+                "inversesqrt",
+                "abs",
+                "floor",
+                "ceil",
+                "fract",
+                "trunc",
+                "round",
+                "roundEven",
+                "degrees",
+                "radians",
+                "length",
+                "normalize",
+            }
+            std450_operand_counts = {name: 1 for name in unary_std450_functions}
+            std450_operand_counts.update(
+                {
+                    "atan2": 2,
+                    "distance": 2,
+                    "cross": 2,
+                    "reflect": 2,
+                    "refract": 3,
+                }
+            )
+            expected_operand_count = std450_operand_counts.get(function_name)
+            if (
+                expected_operand_count is not None
+                and len(args) != expected_operand_count
+            ):
+                operand_label = "operand" if expected_operand_count == 1 else "operands"
+                self.emit(
+                    f"; WARNING: {function_name} requires "
+                    f"{expected_operand_count} {operand_label}"
+                )
+                fallback_type = float_type
+                if args and function_name not in {"length", "distance"}:
+                    fallback_type = self.ensure_registered_type(args[0].type)
+                return self.default_value_for_type(fallback_type)
+
+            vector_math_diagnostic = self.vector_math_operand_diagnostic(
+                function_name, args
+            )
+            if vector_math_diagnostic is not None:
+                warning, fallback_type = vector_math_diagnostic
+                self.emit(warning)
+                return self.default_value_for_type(fallback_type)
 
             # Default to float if we can't determine or no args provided
             result_type = float_type.type
@@ -4844,55 +6842,31 @@ class VulkanSPIRVCodeGen:
                     "trunc",
                     "round",
                     "roundEven",
+                    "degrees",
+                    "radians",
                 ]:
                     # These functions return the same type as their first argument
                     result_type = args[0].type
                 elif function_name in ["length", "distance"]:
-                    # These functions return a float regardless of input
-                    result_type = float_type.type
+                    # These functions return the scalar component type.
+                    result_type = self.metric_result_type(args).type
                 elif function_name in ["normalize", "reflect", "refract"]:
                     # These functions return the same vector type as their first argument
                     result_type = args[0].type
                 elif function_name in ["cross"]:
                     # cross product returns a vec3
-                    vector_type = self.register_vector_type(float_type, 3)
+                    component_type_name = "float"
+                    vector_info = self.vector_component_type_and_count(
+                        args[0].type.base_type
+                    )
+                    if vector_info is not None:
+                        component_type_name = vector_info[0]
+                    component_type = self.register_primitive_type(component_type_name)
+                    vector_type = self.register_vector_type(component_type, 3)
                     result_type = vector_type.type
 
             id_value = self.get_id()
             arg_list = " ".join([f"%{arg.id}" for arg in args])
-
-            # Use a proper mapping for GLSL.std.450 extended instructions
-            glsl_std450_map = {
-                "sin": "Sin",
-                "cos": "Cos",
-                "tan": "Tan",
-                "atan2": "Atan2",
-                "asin": "Asin",
-                "acos": "Acos",
-                "atan": "Atan",
-                "sinh": "Sinh",
-                "cosh": "Cosh",
-                "tanh": "Tanh",
-                "exp": "Exp",
-                "log": "Log",
-                "exp2": "Exp2",
-                "log2": "Log2",
-                "sqrt": "Sqrt",
-                "inversesqrt": "InverseSqrt",
-                "abs": "FAbs",
-                "floor": "Floor",
-                "ceil": "Ceil",
-                "fract": "Fract",
-                "trunc": "Trunc",
-                "round": "Round",
-                "roundEven": "RoundEven",
-                "length": "Length",
-                "distance": "Distance",
-                "cross": "Cross",
-                "normalize": "Normalize",
-                "reflect": "Reflect",
-                "refract": "Refract",
-            }
 
             glsl_function = glsl_std450_map.get(
                 function_name, function_name[0].upper() + function_name[1:]
@@ -4917,6 +6891,206 @@ class VulkanSPIRVCodeGen:
             )
 
             return SpirvId(id_value, result_type)
+
+    def dot_result_type(self, args: List[SpirvId]) -> SpirvId:
+        for arg in args:
+            vector_info = self.vector_component_type_and_count(arg.type.base_type)
+            if vector_info is not None and vector_info[0] in {"float", "double"}:
+                return self.register_primitive_type(vector_info[0])
+        return self.register_primitive_type("float")
+
+    def dot_operands_are_valid(self, args: List[SpirvId]) -> bool:
+        left_vector = self.vector_component_type_and_count(args[0].type.base_type)
+        right_vector = self.vector_component_type_and_count(args[1].type.base_type)
+        if left_vector is None or right_vector is None:
+            return False
+        if left_vector != right_vector:
+            return False
+        return left_vector[0] in {"float", "double"}
+
+    def vector_math_operand_diagnostic(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[Tuple[str, SpirvId]]:
+        if self.is_float32_unary_std450_function(
+            function_name
+        ) and not self.float32_scalar_or_vector_operand_is_valid(args[0]):
+            return (
+                f"; WARNING: {function_name} requires 32-bit floating-point "
+                "scalar or vector operand",
+                self.ensure_registered_type(args[0].type),
+            )
+
+        if function_name == "length" and not self.metric_operand_is_valid(args[0]):
+            return (
+                "; WARNING: length requires floating-point scalar or vector operand",
+                self.metric_result_type(args),
+            )
+
+        if function_name == "distance" and not self.distance_operands_are_valid(args):
+            return (
+                "; WARNING: distance requires matching floating-point scalar "
+                "or vector operands",
+                self.metric_result_type(args),
+            )
+
+        if function_name == "normalize" and not self.metric_operand_is_valid(args[0]):
+            return (
+                "; WARNING: normalize requires floating-point scalar or vector operand",
+                self.ensure_registered_type(args[0].type),
+            )
+
+        if function_name == "atan2" and not self.atan2_operands_are_valid(args):
+            return (
+                "; WARNING: atan2 requires matching 32-bit floating-point "
+                "scalar or vector operands",
+                self.ensure_registered_type(args[0].type),
+            )
+
+        if function_name == "cross" and not self.cross_operands_are_valid(args):
+            return (
+                "; WARNING: cross requires matching 3-component "
+                "floating-point vector operands",
+                self.cross_result_type(args),
+            )
+
+        if function_name == "reflect" and not self.reflect_operands_are_valid(args):
+            return (
+                "; WARNING: reflect requires matching floating-point scalar "
+                "or vector operands",
+                self.ensure_registered_type(args[0].type),
+            )
+
+        if function_name == "refract" and not self.refract_operands_are_valid(args):
+            return (
+                "; WARNING: refract requires matching floating-point incident "
+                "and normal operands plus scalar eta",
+                self.ensure_registered_type(args[0].type),
+            )
+
+        return None
+
+    def is_float32_unary_std450_function(self, function_name: str) -> bool:
+        return function_name in {
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "sinh",
+            "cosh",
+            "tanh",
+            "exp",
+            "log",
+            "exp2",
+            "log2",
+            "sqrt",
+            "inversesqrt",
+            "floor",
+            "ceil",
+            "fract",
+            "trunc",
+            "round",
+            "roundEven",
+            "degrees",
+            "radians",
+        }
+
+    def float32_scalar_or_vector_operand_is_valid(self, arg: SpirvId) -> bool:
+        component_type = self.scalar_or_vector_component_type(arg.type)
+        if component_type != "float":
+            return False
+        scalar_type = self.normalize_primitive_name(arg.type.base_type)
+        return (
+            scalar_type == "float"
+            or self.vector_component_type_and_count(arg.type.base_type) is not None
+        )
+
+    def metric_result_type(self, args: List[SpirvId]) -> SpirvId:
+        for arg in args:
+            component_type = self.scalar_or_vector_component_type(arg.type)
+            if component_type in {"float", "double"}:
+                return self.register_primitive_type(component_type)
+        return self.register_primitive_type("float")
+
+    def metric_operand_is_valid(self, arg: SpirvId) -> bool:
+        component_type = self.scalar_or_vector_component_type(arg.type)
+        if component_type not in {"float", "double"}:
+            return False
+        scalar_type = self.normalize_primitive_name(arg.type.base_type)
+        return (
+            scalar_type in {"float", "double"}
+            or self.vector_component_type_and_count(arg.type.base_type) is not None
+        )
+
+    def distance_operands_are_valid(self, args: List[SpirvId]) -> bool:
+        return (
+            self.matching_floating_scalar_or_vector_operands(args[0], args[1])
+            is not None
+        )
+
+    def atan2_operands_are_valid(self, args: List[SpirvId]) -> bool:
+        operand_shape = self.matching_floating_scalar_or_vector_operands(
+            args[0], args[1]
+        )
+        if operand_shape is None:
+            return False
+        component_type, _ = operand_shape
+        return component_type == "float"
+
+    def cross_result_type(self, args: List[SpirvId]) -> SpirvId:
+        for arg in args:
+            vector_info = self.vector_component_type_and_count(arg.type.base_type)
+            if vector_info is not None and vector_info[0] in {"float", "double"}:
+                component_type = self.register_primitive_type(vector_info[0])
+                return self.register_vector_type(component_type, 3)
+        return self.register_vector_type(self.register_primitive_type("float"), 3)
+
+    def cross_operands_are_valid(self, args: List[SpirvId]) -> bool:
+        left_vector = self.vector_component_type_and_count(args[0].type.base_type)
+        right_vector = self.vector_component_type_and_count(args[1].type.base_type)
+        return (
+            left_vector is not None
+            and right_vector is not None
+            and left_vector == right_vector
+            and left_vector[0] in {"float", "double"}
+            and left_vector[1] == 3
+        )
+
+    def matching_floating_scalar_or_vector_operands(
+        self, left: SpirvId, right: SpirvId
+    ) -> Optional[Tuple[str, Optional[int]]]:
+        left_vector = self.vector_component_type_and_count(left.type.base_type)
+        right_vector = self.vector_component_type_and_count(right.type.base_type)
+        left_component = self.scalar_or_vector_component_type(left.type)
+        right_component = self.scalar_or_vector_component_type(right.type)
+        if left_component not in {"float", "double"}:
+            return None
+        if left_component != right_component:
+            return None
+        if left_vector is None and right_vector is None:
+            return left_component, None
+        if left_vector is None or right_vector is None:
+            return None
+        if left_vector != right_vector:
+            return None
+        return left_component, left_vector[1]
+
+    def reflect_operands_are_valid(self, args: List[SpirvId]) -> bool:
+        return (
+            self.matching_floating_scalar_or_vector_operands(args[0], args[1])
+            is not None
+        )
+
+    def refract_operands_are_valid(self, args: List[SpirvId]) -> bool:
+        operand_shape = self.matching_floating_scalar_or_vector_operands(
+            args[0], args[1]
+        )
+        if operand_shape is None:
+            return False
+        eta_vector = self.vector_component_type_and_count(args[2].type.base_type)
+        eta_component = self.scalar_or_vector_component_type(args[2].type)
+        return eta_vector is None and eta_component in {"float", "double"}
 
     def struct_constructor_args(
         self, struct_name: str, args: List[SpirvId]
@@ -4987,6 +7161,74 @@ class VulkanSPIRVCodeGen:
             return None
 
         return self.select_operation(result_type, condition, true_value, false_value)
+
+    def call_abs_function(self, value: SpirvId) -> Optional[SpirvId]:
+        """Lower abs to typed GLSL.std.450 floating or signed-integer ops."""
+        result_type = self.ensure_registered_type(value.type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        glsl_function = {
+            "float": "FAbs",
+            "double": "FAbs",
+            "int": "SAbs",
+        }.get(component_type)
+        if glsl_function is None:
+            return None
+
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"{glsl_function} %{value.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_pow_function(self, args: List[SpirvId]) -> Optional[SpirvId]:
+        """Lower pow to GLSL.std.450 with validator-compatible operand types."""
+        result_type = self.ensure_registered_type(args[0].type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        if component_type != "float":
+            return None
+
+        operands = self.match_extinst_operands_to_result_type(result_type, args)
+        if operands is None:
+            return None
+
+        id_value = self.get_id()
+        arg_list = " ".join(f"%{arg.id}" for arg in operands)
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"Pow {arg_list}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_step_smoothstep_function(
+        self, glsl_function: str, args: List[SpirvId], value_index: int
+    ) -> Optional[SpirvId]:
+        """Lower step/smoothstep using the value operand's scalar/vector type."""
+        result_type = self.ensure_registered_type(args[value_index].type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        if component_type not in {"float", "double"}:
+            return None
+
+        operands = self.match_extinst_operands_to_result_type(result_type, args)
+        if operands is None:
+            return None
+
+        id_value = self.get_id()
+        arg_list = " ".join(f"%{arg.id}" for arg in operands)
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"{glsl_function} {arg_list}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
 
     def call_sign_function(self, value: SpirvId) -> Optional[SpirvId]:
         """Lower sign to typed GLSL.std.450 or unsigned select operations."""
@@ -5517,6 +7759,81 @@ class VulkanSPIRVCodeGen:
             return component_type
         return self.register_vector_type(component_type, component_count)
 
+    def image_coordinate_component_count(self, metadata) -> int:
+        component_count = {
+            "1D": 1,
+            "Buffer": 1,
+            "2D": 2,
+            "Rect": 2,
+            "3D": 3,
+            "Cube": 3,
+        }.get(metadata.get("dim", "2D"), 2)
+        if metadata.get("arrayed"):
+            component_count += 1
+        return component_count
+
+    def integer_value_component_count(self, value_id: SpirvId) -> Optional[int]:
+        value_type = self.value_types.get(
+            value_id.id
+        ) or self.find_registered_type_by_base(value_id.type.base_type)
+        type_name = (
+            value_type.type.base_type
+            if value_type is not None
+            else value_id.type.base_type
+        )
+        vector_info = self.vector_component_type_and_count(type_name)
+        if vector_info is not None:
+            component_type_name, component_count = vector_info
+            if component_type_name in {"int", "uint"}:
+                return component_count
+            return None
+
+        if self.normalize_primitive_name(type_name) in {"int", "uint"}:
+            return 1
+        return None
+
+    def validate_storage_image_coordinate(
+        self, function_name: str, metadata, coord_id: SpirvId
+    ) -> bool:
+        expected_components = self.image_coordinate_component_count(metadata)
+        actual_components = self.integer_value_component_count(coord_id)
+        if actual_components == expected_components:
+            return True
+
+        self.emit(
+            f"; WARNING: {function_name} requires a {expected_components}-component "
+            f"integer coordinate for {metadata.get('type_name', 'storage image')}"
+        )
+        return False
+
+    def validate_storage_image_sample(
+        self, function_name: str, sample_id: SpirvId
+    ) -> bool:
+        if self.integer_value_component_count(sample_id) == 1:
+            return True
+
+        self.emit(
+            f"; WARNING: {function_name} requires a scalar integer sample operand"
+        )
+        return False
+
+    def convert_storage_image_value_operand(
+        self,
+        function_name: str,
+        operand_name: str,
+        value_id: SpirvId,
+        target_type: SpirvId,
+    ) -> Optional[SpirvId]:
+        converted = self.convert_value_to_type(value_id, target_type)
+        if self.value_has_type(converted, target_type):
+            return converted
+
+        self.emit(
+            f"; WARNING: {function_name} {operand_name} operand does not match "
+            f"{target_type.type.base_type} storage image texel type"
+        )
+        return None
+
     def resource_metadata_for_value(self, value_id: SpirvId):
         metadata = self.resource_type_metadata.get(value_id.id)
         if metadata is not None:
@@ -5570,6 +7887,37 @@ class VulkanSPIRVCodeGen:
             return int(str(value_text), 0)
         except ValueError:
             return None
+
+    def semantic_from_node(self, node) -> Optional[str]:
+        semantic = getattr(node, "semantic", None)
+        if semantic is not None:
+            return semantic
+
+        ignored = {
+            "binding",
+            "component",
+            "format",
+            "group",
+            "index",
+            "input",
+            "location",
+            "output",
+            "readonly",
+            "set",
+            "vertices",
+            "indices",
+            "primitives",
+            "writeonly",
+        }
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            normalized = self.normalized_metadata_name(attr_name)
+            if normalized in ignored:
+                continue
+            return str(attr_name)
+        return None
 
     def max_optional_int(self, first: Optional[int], second: Optional[int]):
         if first is None:
@@ -5813,6 +8161,7 @@ class VulkanSPIRVCodeGen:
     def process_crossgl_struct(self, struct_node: StructNode) -> SpirvId:
         """Process a CrossGL struct definition."""
         members = []
+        member_metadata = {}
 
         for member in struct_node.members:
             member_type = None
@@ -5841,7 +8190,11 @@ class VulkanSPIRVCodeGen:
 
             if member_type:
                 members.append((member_type, member_name))
+                member_metadata[member_name] = {
+                    "semantic": self.semantic_from_node(member)
+                }
 
+        self.struct_member_metadata[struct_node.name] = member_metadata
         return self.register_struct_type(struct_node.name, members)
 
     def process_cbuffer_declaration(self, cbuffer_node: StructNode) -> SpirvId:
@@ -6606,6 +8959,21 @@ class VulkanSPIRVCodeGen:
 
         return None
 
+    def execution_model_hint_for_function(self, function_node, stage=None):
+        if stage is not None:
+            return self.spirv_execution_model(self.stage_key(stage.stage))
+
+        qualifier = self.get_function_qualifier(function_node)
+        if qualifier is not None:
+            return self.spirv_execution_model(qualifier)
+
+        execution_models = self.function_execution_models.get(function_node.name, set())
+        if "GLCompute" in execution_models:
+            return "GLCompute"
+        if len(execution_models) == 1:
+            return next(iter(execution_models))
+        return None
+
     def process_function_node(self, function_node, stage=None):
         """Process a CrossGL function definition."""
         return_type = self.map_crossgl_type(function_node.return_type)
@@ -6615,6 +8983,11 @@ class VulkanSPIRVCodeGen:
         if stage is not None:
             self.current_stage = stage
 
+        execution_model_hint = self.execution_model_hint_for_function(
+            function_node, stage
+        )
+        mesh_output_parameters = {}
+        runtime_parameters = []
         param_types = []
         param_value_types = []
         resource_array_param_indices = set()
@@ -6624,13 +8997,30 @@ class VulkanSPIRVCodeGen:
         storage_image_pointer_params = self.function_storage_image_pointer_params.get(
             function_node.name, set()
         )
-        for param in getattr(
+        parameters = getattr(
             function_node, "parameters", getattr(function_node, "params", [])
-        ):
+        )
+        has_mesh_output_parameters = any(
+            self.is_mesh_output_parameter(param) for param in parameters
+        )
+        mesh_parameter_execution_model = execution_model_hint
+        if mesh_parameter_execution_model is None and has_mesh_output_parameters:
+            mesh_parameter_execution_model = "MeshEXT"
+        mesh_output_parameter_indices = set()
+
+        for source_param_index, param in enumerate(parameters):
             param_type_source = getattr(
                 param, "param_type", getattr(param, "vtype", None)
             )
             param_name = getattr(param, "name", None)
+            mesh_output_info = self.mesh_output_parameter_info(
+                param, mesh_parameter_execution_model
+            )
+            if mesh_output_info is not None:
+                mesh_output_parameters[param_name] = mesh_output_info
+                mesh_output_parameter_indices.add(source_param_index)
+                continue
+
             if param_name in param_type_hints:
                 param_type_source = param_type_hints[param_name]
             if param_type_source is not None:
@@ -6652,41 +9042,43 @@ class VulkanSPIRVCodeGen:
                 param_type = self.register_pointer_type(param_type, "UniformConstant")
 
             param_types.append(param_type)
+            runtime_parameters.append((param, param_type, param_value_types[-1]))
 
         function_id = self.create_function(function_node.name, return_type, param_types)
         self.function_resource_array_params[function_node.name] = (
             resource_array_param_indices
         )
+        self.function_mesh_output_parameter_indices[function_node.name] = (
+            mesh_output_parameter_indices
+        )
 
-        for i, param in enumerate(
-            getattr(function_node, "parameters", getattr(function_node, "params", []))
-        ):
+        for i, (param, param_type, param_value_type) in enumerate(runtime_parameters):
             if hasattr(param, "name"):
                 param_name = param.name
             else:
                 param_name = f"param{i}"
 
-            param_id = self.create_function_parameter(param_types[i], param_name)
+            param_id = self.create_function_parameter(param_type, param_name)
             self.local_variables[param_name] = param_id
             if i in resource_array_param_indices:
-                self.variable_value_types[param_id.id] = param_value_types[i]
-            self.register_declared_resource_metadata(
-                param, param_id, param_value_types[i]
-            )
+                self.variable_value_types[param_id.id] = param_value_type
+            self.register_declared_resource_metadata(param, param_id, param_value_type)
 
         self.begin_block()
 
         previous_execution_model = self.current_execution_model
         previous_function_id = self.current_function_id
+        previous_mesh_output_parameters = self.current_mesh_output_parameters
         self.current_function_id = function_id.id
-        if self.current_execution_model is None:
-            execution_models = self.function_execution_models.get(
-                function_node.name, set()
+        if execution_model_hint is not None:
+            self.current_execution_model = execution_model_hint
+        elif has_mesh_output_parameters:
+            self.current_execution_model = "MeshEXT"
+        elif self.current_execution_model is None:
+            self.current_execution_model = self.execution_model_hint_for_function(
+                function_node
             )
-            if "GLCompute" in execution_models:
-                self.current_execution_model = "GLCompute"
-            elif len(execution_models) == 1:
-                self.current_execution_model = next(iter(execution_models))
+        self.current_mesh_output_parameters = mesh_output_parameters
 
         self.process_statements(function_node.body)
 
@@ -6700,6 +9092,7 @@ class VulkanSPIRVCodeGen:
 
         self.current_execution_model = previous_execution_model
         self.current_function_id = previous_function_id
+        self.current_mesh_output_parameters = previous_mesh_output_parameters
         self.current_stage = previous_stage
         self.current_return_type = previous_return_type
         self.local_variables.clear()
@@ -6762,6 +9155,13 @@ class VulkanSPIRVCodeGen:
     def process_variable_declaration(self, node: VariableNode):
         """Process a local CrossGL variable declaration."""
         var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
+        var_type_name = self.type_name_from_value(var_type_source)
+        if self.local_variable_requires_descriptor_storage(node, var_type_name):
+            raise ValueError(
+                f"SPIR-V descriptor resource '{node.name}' cannot be declared "
+                "inside a function; declare it at shader or stage scope"
+            )
+
         var_type = self.map_resource_type_with_format(var_type_source, node)
         if self.type_contains_runtime_array(var_type):
             self.emit(
@@ -6786,6 +9186,17 @@ class VulkanSPIRVCodeGen:
                 )
             if rhs_value is not None:
                 self.store_to_variable(var_id, rhs_value)
+
+    def local_variable_requires_descriptor_storage(
+        self, node: VariableNode, type_name: str
+    ) -> bool:
+        base_type = self.array_base_type_name(type_name)
+        return (
+            self.is_resource_type_name(base_type)
+            or self.is_acceleration_structure_type_name(base_type)
+            or self.is_structured_buffer_type_name(base_type)
+            or self.is_glsl_buffer_block_node(node)
+        )
 
     def process_global_variable_declaration(
         self, node: VariableNode, default_storage_class: str = "Private"
@@ -6821,6 +9232,10 @@ class VulkanSPIRVCodeGen:
             var_id = self.create_variable(
                 var_type, storage_class, node.name, initializer
             )
+            if storage_class == "TaskPayloadWorkgroupEXT":
+                self.require_capability("MeshShadingEXT")
+                self.require_extension("SPV_EXT_mesh_shader")
+                self.task_payload_shared_variables[node.name] = var_id
             if storage_class == "UniformConstant":
                 descriptor_set, binding = self.resource_descriptor_slot(node)
                 self.decorations.append(
@@ -7047,6 +9462,90 @@ class VulkanSPIRVCodeGen:
             for attr in getattr(node, "attributes", []) or []
         )
 
+    def normalized_metadata_name(self, name) -> str:
+        normalized = str(name).lower().replace("-", "_")
+        if normalized.startswith("glsl_"):
+            normalized = normalized[len("glsl_") :]
+        return normalized
+
+    def declaration_metadata_names(self, node) -> set:
+        names = {
+            self.normalized_metadata_name(getattr(attribute, "name", ""))
+            for attribute in getattr(node, "attributes", [])
+        }
+        names.update(
+            self.normalized_metadata_name(qualifier)
+            for qualifier in getattr(node, "qualifiers", [])
+        )
+        return names
+
+    def is_task_payload_shared_node(self, node) -> bool:
+        return bool(
+            self.declaration_metadata_names(node)
+            & {"task_payload_shared", "taskpayloadshared", "taskpayloadsharedext"}
+        )
+
+    def mesh_output_parameter_role(self, node) -> Optional[str]:
+        metadata = self.declaration_metadata_names(node)
+        if metadata & {"vertices", "vertex", "mesh_vertices"}:
+            return "vertices"
+        if metadata & {"indices", "index", "primitive_indices"}:
+            return "indices"
+        if metadata & {"primitives", "primitive", "mesh_primitives"}:
+            return "primitives"
+        return None
+
+    def is_mesh_output_parameter(self, node) -> bool:
+        if self.mesh_output_parameter_role(node) is None:
+            return False
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        return bool(qualifiers & {"out", "inout"})
+
+    def mesh_output_parameter_info(self, param, execution_model: Optional[str]):
+        if execution_model != "MeshEXT" or not self.is_mesh_output_parameter(param):
+            return None
+
+        param_name = getattr(param, "name", None)
+        if not param_name:
+            return None
+
+        type_name = self.type_name_from_value(
+            getattr(param, "param_type", getattr(param, "vtype", None))
+        )
+        array_info = self.split_outer_array_type(type_name)
+        if array_info is None:
+            self.emit(
+                f"; WARNING: SPIR-V mesh output parameter {param_name} must be "
+                "an array type"
+            )
+            element_type_name = type_name
+            element_count = None
+        else:
+            element_type_name, element_count = array_info
+
+        element_type = self.map_crossgl_type(element_type_name)
+        members = {}
+        for index, (member_type, member_name) in enumerate(
+            self.current_struct_members.get(element_type_name, [])
+        ):
+            metadata = self.struct_member_metadata.get(element_type_name, {}).get(
+                member_name, {}
+            )
+            members[member_name] = {
+                "index": index,
+                "type": member_type,
+                "semantic": metadata.get("semantic"),
+            }
+
+        return {
+            "name": param_name,
+            "role": self.mesh_output_parameter_role(param),
+            "element_type_name": element_type_name,
+            "element_type": element_type,
+            "count": element_count,
+            "members": members,
+        }
+
     def validate_interface_interpolation_attributes(self, node: VariableNode):
         for first, second in (("flat", "noperspective"), ("centroid", "sample")):
             if self.has_attribute(node, first) and self.has_attribute(node, second):
@@ -7103,6 +9602,8 @@ class VulkanSPIRVCodeGen:
             str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
         }
 
+        if self.is_task_payload_shared_node(node):
+            return "TaskPayloadWorkgroupEXT"
         if attribute_names & {"input", "in"} or qualifiers & {"input", "in"}:
             return "Input"
         if attribute_names & {"output", "out"} or qualifiers & {"output", "out"}:
@@ -7278,6 +9779,25 @@ class VulkanSPIRVCodeGen:
 
         return arg_type
 
+    def resource_array_param_type_is_compatible(
+        self, declared_type: str, arg_type: str
+    ) -> bool:
+        declared_type = self.normalize_generic_vector_type(str(declared_type))
+        arg_type = self.normalize_generic_vector_type(str(arg_type))
+
+        if not self.is_unsized_resource_array_type_name(declared_type):
+            return True
+
+        if self.fixed_type_for_unsized_resource_param(declared_type, arg_type):
+            return True
+
+        if not self.is_unsized_resource_array_type_name(arg_type):
+            return False
+
+        return self.array_base_type_name(declared_type) == self.array_base_type_name(
+            arg_type
+        ) and self.array_dimensions(declared_type) == self.array_dimensions(arg_type)
+
     def expression_name(self, expr):
         if isinstance(expr, str):
             return expr
@@ -7286,6 +9806,13 @@ class VulkanSPIRVCodeGen:
         if isinstance(expr, ArrayAccessNode):
             array_expr = getattr(expr, "array", getattr(expr, "array_expr", None))
             return self.expression_name(array_expr)
+        return None
+
+    def direct_expression_name(self, expr):
+        if isinstance(expr, str):
+            return expr
+        if isinstance(expr, (IdentifierNode, VariableNode)):
+            return getattr(expr, "name", None)
         return None
 
     def function_call_name(self, call):
@@ -8218,6 +10745,15 @@ class VulkanSPIRVCodeGen:
                         if arg_type is None:
                             continue
 
+                        if not self.resource_array_param_type_is_compatible(
+                            declared_type, arg_type
+                        ):
+                            raise ValueError(
+                                "Incompatible SPIR-V resource array parameter shape "
+                                f"for '{param_name}': expected {declared_type}, "
+                                f"got {arg_type}"
+                            )
+
                         fixed_type = self.fixed_type_for_unsized_resource_param(
                             declared_type, arg_type
                         )
@@ -8834,6 +11370,9 @@ class VulkanSPIRVCodeGen:
             self.process_compound_assignment(node, target, operator, target_is_precise)
             return
 
+        if self.process_mesh_output_assignment(target, node.value):
+            return
+
         if isinstance(node.value, ArrayLiteralNode):
             target_pointer = self.assignable_pointer_from_expression(target)
             target_type = (
@@ -8918,6 +11457,11 @@ class VulkanSPIRVCodeGen:
             return
         if isinstance(node.value, ArrayLiteralNode):
             self.emit("; WARNING: Compound array literal assignment is unsupported")
+            return
+
+        if self.process_mesh_output_compound_assignment(
+            target, node.value, spv_operator, target_is_precise
+        ):
             return
 
         if isinstance(target, MemberAccessNode):
@@ -9975,6 +12519,9 @@ class VulkanSPIRVCodeGen:
             elif isinstance(callee_expr, str):
                 callee_name = callee_expr
 
+            if callee_name in {"SetVertex", "SetPrimitive"}:
+                return self.process_mesh_output_function_call(callee_name, expr.args)
+
             if callee_name == "lambda":
                 return self.unsupported_lambda_default_value("lambda expression")
 
@@ -9998,7 +12545,12 @@ class VulkanSPIRVCodeGen:
             # Evaluate arguments
             args = []
             has_errors = False
+            mesh_output_arg_indices = self.function_mesh_output_parameter_indices.get(
+                callee_name, set()
+            )
             for arg_index, arg in enumerate(expr.args):
+                if arg_index in mesh_output_arg_indices:
+                    continue
                 arg_value = self.process_call_argument(callee_name, arg, arg_index)
                 if arg_value is None:
                     self.emit(
@@ -10470,9 +13022,23 @@ class VulkanSPIRVCodeGen:
         self, execution_model: str, function_id: SpirvId, name: str, stage=None
     ):
         """Emit SPIR-V entry-point and execution-mode declarations."""
-        interface_ids = " ".join(
-            f"%{variable.id}" for variable in self.inputs + self.outputs
+        interface_variables = list(
+            self.inputs + self.outputs + self.entry_point_private_variables
         )
+        if execution_model == "TaskEXT":
+            task_payload = self.task_payload_interface_by_function.get(function_id.id)
+            if task_payload is not None:
+                interface_variables.append(task_payload)
+
+        seen_interface_ids = set()
+        interface_ids = []
+        for variable in interface_variables:
+            if variable.id in seen_interface_ids:
+                continue
+            seen_interface_ids.add(variable.id)
+            interface_ids.append(f"%{variable.id}")
+
+        interface_ids = " ".join(interface_ids)
         interface_suffix = f" {interface_ids}" if interface_ids else ""
         self.emit(
             f'OpEntryPoint {execution_model} %{function_id.id} "{name}"'

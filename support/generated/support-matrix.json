@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 280,
+        "unsupported_marker_count": 284,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 563
+        "test_count": 619
       },
       "translator_codegen": {
         "exists": true,
@@ -141,12 +141,8 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 150,
+        "unsupported_marker_count": 148,
         "unsupported_marker_samples": [
-          {
-            "path": "crosstl/translator/codegen/GLSL_codegen.py",
-            "text": "unsupported_multisample_texture_call_vector_expression,"
-          },
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_multisample_texture_compare_scalar_expression,"
@@ -161,23 +157,11 @@
           },
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
-            "text": "unsupported_multisample_texel_fetch_offset_expression,"
-          },
-          {
-            "path": "crosstl/translator/codegen/GLSL_codegen.py",
-            "text": "unsupported_projected_texture_call_expression,"
-          },
-          {
-            "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_projected_texture_operation_error,"
           },
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_image_atomic_expression as image_atomic_diagnostic_expression,"
-          },
-          {
-            "path": "crosstl/translator/codegen/GLSL_codegen.py",
-            "text": "unsupported_cube_texel_fetch_expression,"
           },
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
@@ -222,6 +206,22 @@
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "self.unsupported_structured_buffer_array_functions = {}"
+          },
+          {
+            "path": "crosstl/translator/codegen/GLSL_codegen.py",
+            "text": "self.unsupported_structured_buffer_array_functions = ("
+          },
+          {
+            "path": "crosstl/translator/codegen/GLSL_codegen.py",
+            "text": "self.collect_unsupported_structured_buffer_array_functions(functions)"
+          },
+          {
+            "path": "crosstl/translator/codegen/GLSL_codegen.py",
+            "text": "f\"'{patch_name}' is unsupported; write tessellation factors \""
+          },
+          {
+            "path": "crosstl/translator/codegen/GLSL_codegen.py",
+            "text": "unsupported_buffer_array_info = ("
           }
         ]
       },
@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 742
+        "test_count": 808
       },
       "translator_codegen": {
         "exists": true,
@@ -260,7 +260,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 375,
+        "unsupported_marker_count": 388,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 518
+        "test_count": 566
       },
       "translator_codegen": {
         "exists": true,
@@ -437,7 +437,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 409
+        "test_count": 470
       },
       "translator_codegen": {
         "exists": true,
@@ -551,7 +551,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 307
+        "test_count": 352
       },
       "translator_codegen": {
         "exists": true,
@@ -575,7 +575,7 @@
         "path": "crosstl/backend/HIP"
       },
       "signals": {
-        "unsupported_marker_count": 11,
+        "unsupported_marker_count": 40,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
@@ -591,6 +591,38 @@
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "return self.unsupported_sampled_resource_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "return self.unsupported_sampled_resource_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "def unsupported_image_coordinate_rank_call(self, func_name, image_type):"
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "f\"/* unsupported {self.resource_backend_name()} image resource call: \""
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "return self.unsupported_image_coordinate_rank_call(func_name, image_type)"
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "def unsupported_image_atomic_coordinate_rank_call(self, func_name, image_type):"
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "f\"/* unsupported {self.resource_backend_name()} image atomic resource call: \""
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "return self.unsupported_image_atomic_coordinate_rank_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_resource_query_call("
           },
           {
@@ -603,15 +635,19 @@
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "return self.unsupported_shadow_resource_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "return self.unsupported_multisample_resource_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "return self.unsupported_sampled_resource_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "return self.unsupported_image_atomic_resource_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "return self.unsupported_multisample_resource_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "return self.unsupported_multisample_resource_call("
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
@@ -629,7 +665,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 320
+        "test_count": 368
       },
       "translator_codegen": {
         "exists": true,
@@ -653,7 +689,7 @@
         "path": "crosstl/backend/Mojo"
       },
       "signals": {
-        "unsupported_marker_count": 59,
+        "unsupported_marker_count": 85,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
@@ -725,15 +761,15 @@
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "\"Unsupported match arm for Mojo codegen; only unguarded \""
+            "text": "\"Unsupported GetDimensions overload for Mojo codegen; \""
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "raise ValueError(f\"Unsupported Mojo swizzle '{member}'\")"
+            "text": "\"Unsupported GetDimensions overload for Mojo codegen; \""
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "raise ValueError(f\"Unsupported Mojo texture operation {operation}\")"
+            "text": "\"Unsupported GetDimensions overload for Mojo codegen; \""
           }
         ]
       },
@@ -743,7 +779,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 336
+        "test_count": 397
       },
       "translator_codegen": {
         "exists": true,
@@ -857,7 +893,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 508
+        "test_count": 554
       },
       "translator_codegen": {
         "exists": true,
@@ -881,7 +917,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 217,
+        "unsupported_marker_count": 221,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -929,7 +965,23 @@
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "\"Unsupported match arm for Slang codegen; only unguarded \""
+            "text": "f\"Unsupported match arm for Slang codegen; {rejection_reason}\""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "return \"/* unsupported Slang match expression: requires typed result context */ 0\""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "\"/* unsupported Slang match expression: requires statement \""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"/* unsupported Slang match expression: {rejection_reason} */ \""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "+ f\"{temp_name} = /* unsupported Slang match expression: {reason} */ \""
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -946,22 +998,6 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_image_access_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_structured_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_structured_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "diagnostic = self.unsupported_structured_buffer_call"
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "def unsupported_structured_buffer_call(self, operation, reason, result_type=None):"
           }
         ]
       },
@@ -971,7 +1007,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 323
+        "test_count": 355
       },
       "translator_codegen": {
         "exists": true,

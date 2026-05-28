@@ -73,6 +73,19 @@ class RustToCrossGLConverter:
         "lerp": "mix",
         "mul_add": "fma",
     }
+    RESOURCE_METHOD_PREFIXES = ("sample", "texture_", "image_", "buffer_")
+    RESOURCE_TYPE_PREFIXES = (
+        "sampler",
+        "image",
+        "uimage",
+        "iimage",
+        "StructuredBuffer",
+        "RWStructuredBuffer",
+        "AppendStructuredBuffer",
+        "ConsumeStructuredBuffer",
+        "ByteAddressBuffer",
+        "RWByteAddressBuffer",
+    )
 
     def __init__(self):
         """Initialize Rust-to-CrossGL type and semantic mappings."""
@@ -431,6 +444,8 @@ class RustToCrossGLConverter:
         self.type_aliases = {}
         self.imported_type_aliases = {}
         self.imported_module_aliases = {}
+        self.struct_member_types = {}
+        self.struct_generics = {}
         self.return_result_target = object()
         self.labeled_control_counter = 0
         self.switch_break_counter = 0
@@ -453,7 +468,9 @@ class RustToCrossGLConverter:
         self.inline_expression_value_counter = 0
         self.current_function_return_type = None
         self.user_function_names = set()
-        self.impl_method_names = {}
+        self.function_return_types = {}
+        self.function_type_signatures = {}
+        self.impl_method_signatures = {}
         self.value_type_scopes = []
         self.closure_helper_counter = 0
         self.closure_helper_names = set()
@@ -496,6 +513,8 @@ class RustToCrossGLConverter:
         self.type_aliases = {}
         self.imported_type_aliases = {}
         self.imported_module_aliases = {}
+        self.struct_member_types = self.collect_struct_member_types(ast)
+        self.struct_generics = self.collect_struct_generics(ast)
         self.labeled_control_counter = 0
         self.switch_break_counter = 0
         self.for_loop_index_counter = 0
@@ -516,7 +535,9 @@ class RustToCrossGLConverter:
         self.inline_expression_value_counter = 0
         self.current_function_return_type = None
         self.user_function_names = self.collect_user_function_names(ast)
-        self.impl_method_names = self.collect_impl_method_names(ast)
+        self.function_return_types = self.collect_function_return_types(ast)
+        self.function_type_signatures = self.collect_function_type_signatures(ast)
+        self.impl_method_signatures = self.collect_impl_method_signatures(ast)
         self.value_type_scopes = []
         self.closure_helper_counter = 0
         self.closure_helper_names = set()
@@ -716,20 +737,94 @@ class RustToCrossGLConverter:
         self.current_name_alias_scope()[name] = alias
         return alias
 
-    def collect_impl_method_names(self, ast):
-        methods_by_type = {}
+    def collect_function_return_types(self, ast):
+        return_types = {}
+        for func in getattr(ast, "functions", []):
+            name = getattr(func, "name", None)
+            return_type = getattr(func, "return_type", None)
+            if name and return_type:
+                return_types[name] = return_type
+        return return_types
+
+    def collect_function_type_signatures(self, ast):
+        signatures = {}
+        for func in getattr(ast, "functions", []):
+            name = getattr(func, "name", None)
+            return_type = getattr(func, "return_type", None)
+            if not name or not return_type:
+                continue
+
+            params = []
+            for param in getattr(func, "params", []):
+                param_type = getattr(param, "vtype", None)
+                if param_type:
+                    params.append((getattr(param, "name", None), param_type))
+
+            signatures[name] = {
+                "return_type": return_type,
+                "params": params,
+                "generic_names": [
+                    self.generic_parameter_name(generic)
+                    for generic in getattr(func, "generics", []) or []
+                ],
+            }
+        return signatures
+
+    def collect_impl_method_signatures(self, ast):
+        signatures_by_type = {}
         for impl_block in getattr(ast, "impl_blocks", []):
             struct_name = getattr(impl_block, "struct_name", None)
             if not struct_name:
                 continue
 
-            methods = methods_by_type.setdefault(struct_name, set())
+            signature = signatures_by_type.setdefault(
+                struct_name,
+                {
+                    "struct_name": struct_name,
+                    "call_prefix": self.impl_function_prefix(struct_name),
+                    "generic_names": [
+                        self.generic_parameter_name(generic)
+                        for generic in getattr(impl_block, "generics", []) or []
+                    ],
+                    "methods": {},
+                },
+            )
+
             for func in getattr(impl_block, "functions", []):
                 method_name = getattr(func, "name", None)
-                if method_name:
-                    methods.add(method_name)
+                return_type = getattr(func, "return_type", None)
+                if method_name and return_type:
+                    signature["methods"][method_name] = {
+                        "return_type": return_type,
+                    }
+        return signatures_by_type
 
-        return methods_by_type
+    def collect_struct_member_types(self, ast):
+        member_types = {}
+        for struct in getattr(ast, "structs", []):
+            if not isinstance(struct, StructNode):
+                continue
+
+            members = {}
+            for member in getattr(struct, "members", []):
+                name = getattr(member, "name", None)
+                type_name = getattr(member, "vtype", None)
+                if name and type_name:
+                    members[name] = type_name
+            member_types[struct.name] = members
+
+        return member_types
+
+    def collect_struct_generics(self, ast):
+        generics = {}
+        for struct in getattr(ast, "structs", []):
+            if not isinstance(struct, StructNode):
+                continue
+            generics[struct.name] = [
+                self.generic_parameter_name(generic)
+                for generic in getattr(struct, "generics", []) or []
+            ]
+        return generics
 
     def is_user_defined_function(self, func_name):
         return isinstance(func_name, str) and func_name in self.user_function_names
@@ -752,6 +847,16 @@ class RustToCrossGLConverter:
             self.value_type_scopes[-1][name] = normalized_type
 
     def lookup_value_type(self, name):
+        direct_type = self.lookup_direct_value_type(name)
+        if direct_type:
+            return direct_type
+
+        if isinstance(name, str):
+            return self.lookup_expression_value_type(name)
+
+        return None
+
+    def lookup_direct_value_type(self, name):
         for scope in reversed(self.value_type_scopes):
             type_name = scope.get(name)
             if type_name:
@@ -770,7 +875,466 @@ class RustToCrossGLConverter:
     def infer_value_type(self, expression):
         if isinstance(expression, StructInitializationNode):
             return expression.struct_name
+        if isinstance(expression, FunctionCallNode):
+            return self.infer_function_call_return_type(expression)
+        if isinstance(
+            expression, (str, VariableNode, MemberAccessNode, ArrayAccessNode)
+        ):
+            return self.lookup_value_type(self.generate_expression(expression))
         return None
+
+    def infer_function_call_return_type(self, expression):
+        if isinstance(expression.name, MemberAccessNode):
+            return self.infer_impl_method_call_return_type(expression.name)
+
+        function_name, explicit_type_args = self.split_function_type_arguments(
+            self.function_call_name(expression.name)
+        )
+        if function_name is None:
+            return None
+        signature = self.lookup_user_function_signature(function_name)
+        if signature is not None:
+            return self.infer_user_function_call_return_type(
+                signature,
+                expression.args,
+                explicit_type_args,
+            )
+        return self.lookup_user_function_return_type(function_name)
+
+    def infer_impl_method_call_return_type(self, member_access):
+        method_name = getattr(member_access, "member", None)
+        obj = self.generate_expression(member_access.object)
+        match = self.lookup_impl_method_receiver_match(obj, method_name)
+        if match is None:
+            return None
+
+        return_type = match["method"].get("return_type")
+        return_type = self.normalize_receiver_type(return_type, match["receiver_type"])
+        substitutions = match.get("substitutions") or {}
+        if substitutions:
+            return_type = self.apply_type_substitutions(return_type, substitutions)
+        return return_type
+
+    def function_call_name(self, name):
+        if isinstance(name, str):
+            return name
+        if isinstance(name, VariableNode):
+            return name.name
+        return None
+
+    def split_function_type_arguments(self, function_name):
+        if not isinstance(function_name, str):
+            return function_name, []
+
+        generic = self.parse_generic_type(function_name)
+        if generic is None:
+            return function_name, []
+        return generic
+
+    def lookup_user_function_signature(self, function_name):
+        if not isinstance(function_name, str):
+            return None
+
+        function_name = self.resolve_imported_module_path(function_name)
+        signature = self.function_type_signatures.get(function_name)
+        if signature is not None:
+            return signature
+
+        current_module_function = self.current_module_user_function_name(function_name)
+        if current_module_function is None:
+            return None
+        return self.function_type_signatures.get(current_module_function)
+
+    def infer_user_function_call_return_type(
+        self,
+        signature,
+        args,
+        explicit_type_args=None,
+    ):
+        return_type = signature.get("return_type")
+        if not return_type:
+            return None
+
+        generic_names = signature.get("generic_names") or []
+        if not generic_names:
+            return return_type
+
+        substitutions = {}
+        conflicts = set()
+        for generic_name, type_arg in zip(generic_names, explicit_type_args or []):
+            self.bind_generic_type_substitution(
+                generic_name,
+                type_arg,
+                substitutions,
+                conflicts,
+            )
+
+        for (_, param_type), arg in zip(signature.get("params", []), args):
+            arg_type = self.infer_call_argument_type(arg)
+            if arg_type is None:
+                continue
+            self.match_generic_type_parameters(
+                param_type,
+                arg_type,
+                generic_names,
+                substitutions,
+                conflicts,
+            )
+
+        for generic_name in conflicts:
+            substitutions.pop(generic_name, None)
+        if substitutions:
+            return self.apply_type_substitutions(return_type, substitutions)
+        return return_type
+
+    def infer_call_argument_type(self, arg):
+        inferred_type = self.infer_value_type(arg)
+        if inferred_type is not None:
+            return inferred_type
+        return self.lookup_value_type(self.generate_expression(arg))
+
+    def match_generic_type_parameters(
+        self,
+        pattern_type,
+        actual_type,
+        generic_names,
+        substitutions,
+        conflicts,
+    ):
+        pattern_type = self.normalize_receiver_type(pattern_type)
+        actual_type = self.normalize_receiver_type(actual_type)
+        if not pattern_type or not actual_type:
+            return
+
+        if pattern_type in generic_names:
+            self.bind_generic_type_substitution(
+                pattern_type,
+                actual_type,
+                substitutions,
+                conflicts,
+            )
+            return
+
+        pattern_array = self.split_array_type(pattern_type)
+        actual_array = self.split_array_type(actual_type)
+        if pattern_array and actual_array:
+            self.match_generic_type_parameters(
+                pattern_array[0],
+                actual_array[0],
+                generic_names,
+                substitutions,
+                conflicts,
+            )
+            return
+
+        for pattern_candidate in self.generic_type_match_candidates(pattern_type):
+            pattern_generic = self.parse_generic_type(pattern_candidate)
+            if pattern_generic is None:
+                continue
+            pattern_base, pattern_args = pattern_generic
+
+            for actual_candidate in self.generic_type_match_candidates(actual_type):
+                actual_generic = self.parse_generic_type(actual_candidate)
+                if actual_generic is None:
+                    continue
+                actual_base, actual_args = actual_generic
+                if not self.generic_type_bases_match(pattern_base, actual_base):
+                    continue
+                if len(pattern_args) != len(actual_args):
+                    continue
+
+                for pattern_arg, actual_arg in zip(pattern_args, actual_args):
+                    self.match_generic_type_parameters(
+                        pattern_arg,
+                        actual_arg,
+                        generic_names,
+                        substitutions,
+                        conflicts,
+                    )
+                return
+
+    def bind_generic_type_substitution(
+        self,
+        generic_name,
+        replacement,
+        substitutions,
+        conflicts,
+    ):
+        replacement = self.normalize_receiver_type(replacement)
+        if not generic_name or not replacement or generic_name in conflicts:
+            return
+
+        existing = substitutions.get(generic_name)
+        if existing is None or self.inferred_types_equivalent(existing, replacement):
+            substitutions[generic_name] = replacement
+            return
+
+        conflicts.add(generic_name)
+        substitutions.pop(generic_name, None)
+
+    def generic_type_match_candidates(self, type_name):
+        candidates = []
+
+        def add_candidate(candidate):
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+
+        add_candidate(type_name)
+        resolved = self.resolve_imported_module_path(type_name)
+        add_candidate(resolved)
+        alias_target = self.resolve_type_alias_target(type_name)
+        add_candidate(alias_target)
+        if alias_target is not None:
+            add_candidate(self.resolve_imported_module_path(alias_target))
+        return candidates
+
+    def generic_type_bases_match(self, left, right):
+        return any(
+            left_name == right_name
+            for left_name in self.type_lookup_names(left)
+            for right_name in self.type_lookup_names(right)
+        )
+
+    def inferred_types_equivalent(self, left, right):
+        if left == right:
+            return True
+        left_resource = self.map_resource_receiver_type(left)
+        right_resource = self.map_resource_receiver_type(right)
+        if left_resource == right_resource:
+            return True
+        return self.map_type(left) == self.map_type(right)
+
+    def lookup_user_function_return_type(self, function_name):
+        if not isinstance(function_name, str):
+            return None
+
+        function_name = self.resolve_imported_module_path(function_name)
+        return_type = self.function_return_types.get(function_name)
+        if return_type is not None:
+            return return_type
+
+        current_module_function = self.current_module_user_function_name(function_name)
+        if current_module_function is None:
+            return None
+        return self.function_return_types.get(current_module_function)
+
+    def lookup_expression_value_type(self, expression):
+        parts = self.split_member_expression(expression)
+        if not parts:
+            return None
+
+        current_type = self.lookup_indexed_expression_part_type(parts[0])
+        for member_part in parts[1:]:
+            if current_type is None:
+                return None
+
+            member_name, index_count = self.split_indexed_expression_part(member_part)
+            if not member_name:
+                return None
+
+            current_type = self.lookup_struct_member_type(current_type, member_name)
+            for _ in range(index_count):
+                current_type = self.array_element_type(current_type)
+                if current_type is None:
+                    return None
+
+        return current_type
+
+    def lookup_indexed_expression_part_type(self, expression):
+        root, index_count = self.split_indexed_expression_part(expression)
+        if not root:
+            return None
+
+        if len(self.split_member_expression(root)) > 1:
+            current_type = self.lookup_expression_value_type(root)
+        else:
+            current_type = self.lookup_direct_value_type(root)
+
+        for _ in range(index_count):
+            current_type = self.array_element_type(current_type)
+            if current_type is None:
+                return None
+
+        return current_type
+
+    def split_member_expression(self, expression):
+        if not isinstance(expression, str):
+            return []
+
+        parts = []
+        current = []
+        depth = 0
+        for char in expression:
+            if char == "." and depth == 0:
+                part = "".join(current).strip()
+                if not part:
+                    return []
+                parts.append(part)
+                current = []
+                continue
+
+            if char in "[({":
+                depth += 1
+            elif char in "])}":
+                depth = max(0, depth - 1)
+            current.append(char)
+
+        part = "".join(current).strip()
+        if part:
+            parts.append(part)
+        return parts
+
+    def split_indexed_expression_part(self, expression):
+        if not isinstance(expression, str):
+            return "", 0
+
+        root = expression.strip()
+        index_count = 0
+        while root.endswith("]"):
+            open_index = self.find_matching_index_open(root)
+            if open_index is None or open_index == 0:
+                break
+            root = root[:open_index].strip()
+            index_count += 1
+
+        return root, index_count
+
+    def find_matching_index_open(self, expression):
+        depth = 0
+        for index in range(len(expression) - 1, -1, -1):
+            char = expression[index]
+            if char == "]":
+                depth += 1
+            elif char == "[":
+                depth -= 1
+                if depth == 0:
+                    return index
+        return None
+
+    def array_element_type(self, type_name):
+        if not type_name:
+            return None
+
+        normalized = self.normalize_receiver_type(type_name)
+        array_parts = self.split_array_type(normalized)
+        if array_parts:
+            return array_parts[0]
+
+        mapped = self.map_type(normalized)
+        array_parts = self.split_array_type(mapped)
+        if array_parts:
+            return array_parts[0]
+
+        return None
+
+    def lookup_struct_member_type(self, struct_type, member_name):
+        if not struct_type or not member_name:
+            return None
+
+        struct_type = self.normalize_receiver_type(struct_type)
+        array_parts = self.split_array_type(struct_type)
+        if array_parts:
+            struct_type = array_parts[0]
+
+        resolved = self.resolve_struct_type(struct_type)
+        if resolved is None:
+            return None
+
+        struct_name, substitutions = resolved
+        members = self.struct_member_types.get(struct_name, {})
+        member_type = members.get(member_name)
+        if member_type is None and self.is_tuple_field_member(member_name):
+            member_type = members.get(self.tuple_field_member_name(member_name))
+        if member_type is None:
+            return None
+
+        if substitutions:
+            member_type = self.apply_type_substitutions(member_type, substitutions)
+        return self.normalize_receiver_type(member_type)
+
+    def resolve_member_access_name(self, obj, member_name):
+        if not self.is_tuple_field_member(member_name):
+            return member_name
+
+        receiver_type = self.lookup_value_type(obj)
+        if receiver_type is None:
+            return member_name
+
+        field_name = self.tuple_field_member_name(member_name)
+        if self.lookup_struct_member_type(receiver_type, field_name) is None:
+            return member_name
+        return field_name
+
+    def is_tuple_field_member(self, member_name):
+        return isinstance(member_name, str) and member_name.isdigit()
+
+    def tuple_field_member_name(self, member_name):
+        return f"field{member_name}"
+
+    def resolve_struct_type(self, type_name, seen=None):
+        seen = seen or set()
+        generic = self.parse_generic_type(type_name)
+        if generic is not None:
+            base_name, args = generic
+            for candidate in self.type_lookup_names(base_name):
+                if candidate in self.struct_member_types:
+                    generics = self.struct_generics.get(candidate, [])
+                    if len(generics) != len(args):
+                        continue
+                    substitutions = dict(zip(generics, args))
+                    return candidate, substitutions
+
+                if candidate in seen:
+                    continue
+
+                alias = self.type_aliases.get(candidate)
+                if alias is None:
+                    continue
+
+                alias_type = self.apply_alias_type_arguments(alias, args)
+                if alias_type is None:
+                    continue
+
+                seen.add(candidate)
+                resolved = self.resolve_struct_type(alias_type, seen)
+                if resolved is not None:
+                    return resolved
+            return None
+
+        for candidate in self.type_lookup_names(type_name):
+            if candidate in self.struct_member_types:
+                return candidate, {}
+
+            if candidate in seen:
+                continue
+
+            alias = self.type_aliases.get(candidate)
+            if alias is not None and not getattr(alias, "generics", None):
+                seen.add(candidate)
+                resolved = self.resolve_struct_type(alias.alias_type, seen)
+                if resolved is not None:
+                    return resolved
+
+        return None
+
+    def apply_alias_type_arguments(self, alias, args):
+        generics = getattr(alias, "generics", None) or []
+        if not generics:
+            return alias.alias_type if not args else None
+        if len(generics) != len(args):
+            return None
+
+        substitutions = {
+            self.generic_parameter_name(generic): arg
+            for generic, arg in zip(generics, args)
+        }
+        return self.apply_type_substitutions(alias.alias_type, substitutions)
+
+    def apply_type_substitutions(self, type_name, substitutions):
+        result = type_name
+        for name, replacement in substitutions.items():
+            result = self.replace_type_identifier(result, name, replacement)
+        return result
 
     def is_block_expression_node(self, node):
         return isinstance(node, BLOCK_EXPRESSION_NODE_TYPES)
@@ -849,15 +1413,18 @@ class RustToCrossGLConverter:
         params = []
         param_types = []
         for param in func.params:
-            params.append(self.format_typed_declarator(param.vtype, param.name))
             param_type = self.normalize_receiver_type(param.vtype, struct_name)
+            params.append(self.format_typed_declarator(param_type, param.name))
             param_types.append((param.name, param_type))
 
         params_str = ", ".join(params)
-        return_type = self.map_type(func.return_type)
+        display_return_type = self.normalize_receiver_type(
+            func.return_type, struct_name
+        )
+        return_type = self.map_type(display_return_type)
 
         if struct_name:
-            func_name = f"{struct_name}_{func.name}"
+            func_name = f"{self.impl_function_prefix(struct_name)}_{func.name}"
         else:
             func_name = func.name
 
@@ -879,6 +1446,11 @@ class RustToCrossGLConverter:
             self.pop_value_type_scope()
 
         return code
+
+    def impl_function_prefix(self, struct_name):
+        generic = self.parse_generic_type(struct_name)
+        type_name = generic[0] if generic is not None else struct_name
+        return self.type_lookup_names(type_name)[-1]
 
     def generate_shader_stage_function(self, func, shader_type):
         """Render a Rust shader attribute as a named CrossGL stage entry."""
@@ -2237,7 +2809,8 @@ class RustToCrossGLConverter:
                 indent,
                 loop_contexts,
             )
-            return code, f"{obj}.{expression.member}"
+            member_name = self.resolve_member_access_name(obj, expression.member)
+            return code, f"{obj}.{member_name}"
 
         if isinstance(expression, AwaitNode):
             return self.generate_try_expression(
@@ -2514,6 +3087,10 @@ class RustToCrossGLConverter:
         if impl_call is not None:
             return impl_call
 
+        resource_call = self.format_resource_method_call(method_name, obj, args)
+        if resource_call is not None:
+            return resource_call
+
         if method_name == "len" and not args:
             return f"{obj}.length"
 
@@ -2569,25 +3146,126 @@ class RustToCrossGLConverter:
 
         return None
 
+    def format_resource_method_call(self, method_name, obj, args):
+        if not self.is_resource_method_name(method_name):
+            return None
+        if not self.is_resource_method_receiver(obj):
+            return None
+
+        mapped = self.function_map.get(method_name)
+        if mapped is None:
+            return None
+
+        return f"{mapped}({', '.join([obj] + args)})"
+
+    def is_resource_method_name(self, method_name):
+        return isinstance(method_name, str) and method_name.startswith(
+            self.RESOURCE_METHOD_PREFIXES
+        )
+
+    def is_resource_method_receiver(self, obj):
+        receiver_type = self.lookup_value_type(obj)
+        if receiver_type is None:
+            return False
+
+        mapped_type = self.map_resource_receiver_type(receiver_type)
+        return isinstance(mapped_type, str) and mapped_type.startswith(
+            self.RESOURCE_TYPE_PREFIXES
+        )
+
+    def map_resource_receiver_type(self, receiver_type, seen=None):
+        mapped_type = self.map_type(receiver_type)
+        if isinstance(mapped_type, str) and mapped_type.startswith(
+            self.RESOURCE_TYPE_PREFIXES
+        ):
+            return mapped_type
+
+        alias_target = self.resolve_type_alias_target(receiver_type)
+        if alias_target is None:
+            return mapped_type
+
+        seen = seen or set()
+        if alias_target in seen:
+            return mapped_type
+
+        seen.add(alias_target)
+        return self.map_resource_receiver_type(alias_target, seen)
+
     def format_user_impl_method_call(self, method_name, obj, args):
-        struct_name = self.lookup_impl_method_receiver_type(obj, method_name)
-        if struct_name is None:
+        match = self.lookup_impl_method_receiver_match(obj, method_name)
+        if match is None:
             return None
 
         call_args = [obj] + args
-        return f"{struct_name}_{method_name}({', '.join(call_args)})"
+        return f"{match['call_prefix']}_{method_name}({', '.join(call_args)})"
 
-    def lookup_impl_method_receiver_type(self, obj, method_name):
+    def lookup_impl_method_receiver_match(self, obj, method_name):
         receiver_type = self.lookup_value_type(obj)
         if receiver_type is None:
             return None
 
-        for type_name in self.type_lookup_names(receiver_type):
-            methods = self.impl_method_names.get(type_name)
-            if methods and method_name in methods:
-                return type_name
+        for signature in self.impl_method_signatures.values():
+            method = signature["methods"].get(method_name)
+            if method is None:
+                continue
+
+            substitutions = self.match_impl_receiver_type(
+                signature["struct_name"],
+                receiver_type,
+                signature["generic_names"],
+            )
+            if substitutions is None:
+                continue
+
+            return {
+                "receiver_type": receiver_type,
+                "call_prefix": signature["call_prefix"],
+                "method": method,
+                "substitutions": substitutions,
+            }
 
         return None
+
+    def match_impl_receiver_type(self, pattern_type, receiver_type, generic_names):
+        for pattern_candidate in self.generic_type_match_candidates(pattern_type):
+            for receiver_candidate in self.generic_type_match_candidates(receiver_type):
+                if self.impl_type_names_match(pattern_candidate, receiver_candidate):
+                    return {}
+
+                pattern_generic = self.parse_generic_type(pattern_candidate)
+                receiver_generic = self.parse_generic_type(receiver_candidate)
+                if pattern_generic is None or receiver_generic is None:
+                    continue
+
+                pattern_base, pattern_args = pattern_generic
+                receiver_base, receiver_args = receiver_generic
+                if not self.generic_type_bases_match(pattern_base, receiver_base):
+                    continue
+                if len(pattern_args) != len(receiver_args):
+                    continue
+
+                substitutions = {}
+                conflicts = set()
+                for pattern_arg, receiver_arg in zip(pattern_args, receiver_args):
+                    self.match_generic_type_parameters(
+                        pattern_arg,
+                        receiver_arg,
+                        generic_names,
+                        substitutions,
+                        conflicts,
+                    )
+                if conflicts:
+                    continue
+                return substitutions
+
+        return None
+
+    def impl_type_names_match(self, left, right):
+        return any(
+            left_name == right_name
+            for left_name in self.type_lookup_names(left)
+            for right_name in self.type_lookup_names(right)
+        )
 
     def format_path_constructor_call_parts(self, function_name, args):
         if not function_name.endswith("::new"):
@@ -5865,7 +6543,8 @@ class RustToCrossGLConverter:
                 indent,
                 loop_contexts,
             )
-            return code, f"{obj}.{expression.member}"
+            member_name = self.resolve_member_access_name(obj, expression.member)
+            return code, f"{obj}.{member_name}"
 
         if isinstance(expression, ArrayAccessNode):
             array_code, array = self.generate_materialized_expression(
@@ -6185,7 +6864,8 @@ class RustToCrossGLConverter:
             return f"{func_name}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
-            return f"{obj}.{expr.member}"
+            member_name = self.resolve_member_access_name(obj, expr.member)
+            return f"{obj}.{member_name}"
         elif isinstance(expr, AwaitNode):
             return self.generate_expression(expr.expression)
         elif isinstance(expr, ArrayAccessNode):
@@ -7180,6 +7860,29 @@ class RustToCrossGLConverter:
         if not args:
             return None
 
+        sampled_texture_map = {
+            "Texture1D": "sampler1D",
+            "Texture1DArray": "sampler1DArray",
+            "Texture2D": "sampler2D",
+            "Texture2DArray": "sampler2DArray",
+            "Texture2DMS": "sampler2DMS",
+            "Texture2DMSArray": "sampler2DMSArray",
+            "Texture3D": "sampler3D",
+            "TextureCube": "samplerCube",
+            "TextureCubeArray": "samplerCubeArray",
+        }
+        if base_name in sampled_texture_map:
+            return sampled_texture_map[base_name]
+
+        depth_texture_map = {
+            "DepthTexture2D": "sampler2DShadow",
+            "DepthTexture2DArray": "sampler2DArrayShadow",
+            "DepthTextureCube": "samplerCubeShadow",
+            "DepthTextureCubeArray": "samplerCubeArrayShadow",
+        }
+        if base_name in depth_texture_map:
+            return depth_texture_map[base_name]
+
         buffer_map = {
             "Buffer": "StructuredBuffer",
             "RwBuffer": "RWStructuredBuffer",
@@ -7209,6 +7912,23 @@ class RustToCrossGLConverter:
         if element_type.startswith("i"):
             return f"iimage{suffix}"
         return f"image{suffix}"
+
+    def resolve_type_alias_target(self, rust_type):
+        generic = self.parse_generic_type(rust_type)
+        if generic is not None:
+            base_name, args = generic
+            for alias_name in self.type_lookup_names(base_name):
+                alias = self.type_aliases.get(alias_name)
+                if alias is None:
+                    continue
+                return self.apply_alias_type_arguments(alias, args)
+            return None
+
+        for alias_name in self.type_lookup_names(rust_type):
+            alias = self.type_aliases.get(alias_name)
+            if alias is not None and not getattr(alias, "generics", None):
+                return alias.alias_type
+        return None
 
     def resolve_type_alias(self, rust_type):
         for alias_name in self.type_lookup_names(rust_type):
@@ -7364,6 +8084,10 @@ class RustToCrossGLConverter:
         return "{" + ", ".join(value for _ in range(count)) + "}"
 
     def map_function(self, rust_func):
+        stripped_func, type_args = self.split_function_type_arguments(rust_func)
+        if type_args and self.lookup_user_function_signature(stripped_func) is not None:
+            rust_func = stripped_func
+
         rust_func = self.resolve_imported_module_path(rust_func)
         if self.is_user_defined_function(rust_func):
             return rust_func

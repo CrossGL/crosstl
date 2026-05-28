@@ -234,6 +234,29 @@ def test_parse_compute_attributes_and_semantics():
     assert_parses(COMPUTE_HLSL)
 
 
+def test_parse_interpolation_intrinsics_keep_free_function_calls():
+    code = """
+    float4 main(float4 color : COLOR0, uint sampleIndex : SV_SampleIndex) : SV_Target0 {
+        int2 snappedOffset = int2(1, -1);
+        float4 atSample = EvaluateAttributeAtSample(color, sampleIndex);
+        float4 atOffset = EvaluateAttributeSnapped(color, snappedOffset);
+        float4 atCentroid = EvaluateAttributeCentroid(color);
+        return atSample + atOffset + atCentroid;
+    }
+    """
+
+    ast = parse_code(code)
+    free_calls = [
+        node.name
+        for node in iter_ast_nodes(ast)
+        if isinstance(node, FunctionCallNode) and isinstance(node.name, str)
+    ]
+
+    assert "EvaluateAttributeAtSample" in free_calls
+    assert "EvaluateAttributeSnapped" in free_calls
+    assert "EvaluateAttributeCentroid" in free_calls
+
+
 def test_parse_preprocessor_directives():
     assert_parses(PREPROCESSOR_HLSL)
 
@@ -494,9 +517,32 @@ def test_parse_additional_attributes():
 def test_parse_wave_intrinsics():
     code = """
     uint WaveMain(uint value) {
-        uint sum = WaveActiveSum(value);
+        bool predicate = value != 0u;
         uint lane = WaveGetLaneIndex();
-        return sum + lane;
+        uint laneCount = WaveGetLaneCount();
+        bool first = WaveIsFirstLane();
+        uint sum = WaveActiveSum(value);
+        uint product = WaveActiveProduct(value);
+        uint andValue = WaveActiveBitAnd(value);
+        uint orValue = WaveActiveBitOr(value);
+        uint xorValue = WaveActiveBitXor(value);
+        bool allTrue = WaveActiveAllTrue(predicate);
+        bool anyTrue = WaveActiveAnyTrue(predicate);
+        uint4 ballot = WaveActiveBallot(predicate);
+        uint laneValue = WaveReadLaneAt(value, 0u);
+        uint firstValue = WaveReadLaneFirst(value);
+        uint prefixSum = WavePrefixSum(value);
+        uint prefixProduct = WavePrefixProduct(value);
+        uint4 matchMask = WaveMatch(value);
+        uint multiSum = WaveMultiPrefixSum(value, ballot);
+        uint quadX = QuadReadAcrossX(value);
+        uint quadY = QuadReadAcrossY(value);
+        uint quadDiagonal = QuadReadAcrossDiagonal(value);
+        uint quadLane = QuadReadLaneAt(value, 2u);
+        return lane + laneCount + sum + product + andValue + orValue + xorValue
+            + laneValue + firstValue + prefixSum + prefixProduct + matchMask.x
+            + multiSum + quadX + quadY + quadDiagonal + quadLane + ballot.x
+            + (first ? 1u : 0u) + (allTrue ? 1u : 0u) + (anyTrue ? 1u : 0u);
     }
     """
     assert_parses(code)
@@ -572,7 +618,10 @@ def test_parse_texture_compare_and_gather_offset_methods_keep_member_calls():
         float4 gatherCmp = shadowMap.GatherCmp(
             compareSampler, uv, depth, offset
         );
-        return gather + gatherAny + gatherCmp + float4(cmp + cmpZero);
+        float4 gatherCmpRed = shadowMap.GatherCmpRed(
+            compareSampler, uv, depth, offset
+        );
+        return gather + gatherAny + gatherCmp + gatherCmpRed + float4(cmp + cmpZero);
     }
     """
 
@@ -591,6 +640,7 @@ def test_parse_texture_compare_and_gather_offset_methods_keep_member_calls():
         "GatherRed",
         "Gather",
         "GatherCmp",
+        "GatherCmpRed",
     }.issubset(set(members))
 
 
@@ -637,9 +687,12 @@ def test_parse_texture_status_and_clamp_overloads_keep_member_calls():
         float4 gatherCmp = shadowMap.GatherCmp(
             compareSampler, uv, depth, offset, status
         );
+        float4 gatherCmpGreen = shadowMap.GatherCmpGreen(
+            compareSampler, uv, depth, offset
+        );
         return (
             plain + biased + mip + grad + gather + gatherRed + gatherOffsets
-            + gatherCmp + float4(cmp + cmpZero)
+            + gatherCmp + gatherCmpGreen + float4(cmp + cmpZero)
         );
     }
     """
@@ -664,6 +717,7 @@ def test_parse_texture_status_and_clamp_overloads_keep_member_calls():
         "Gather",
         "GatherRed",
         "GatherCmp",
+        "GatherCmpGreen",
     }.issubset(set(members))
 
 
@@ -705,6 +759,136 @@ def test_parse_tiled_resource_status_loads_and_checks_keep_calls():
     assert "CheckAccessFullyMapped" in free_calls
 
 
+def test_parse_get_dimensions_overloads_keep_member_calls():
+    code = """
+    Texture2D<float4> colorMap : register(t0);
+    Texture2DArray<float4> layerMap : register(t1);
+    Texture2DMS<float4> msMap : register(t2);
+    RWTexture3D<float4> volume : register(u0);
+    StructuredBuffer<float4> structs : register(t3);
+
+    void main(uint lod : TEXCOORD0) {
+        uint width;
+        uint height;
+        uint depth;
+        uint elements;
+        uint levels;
+        uint samples;
+        uint count;
+        uint stride;
+        colorMap.GetDimensions(width, height, levels);
+        layerMap.GetDimensions(lod, width, height, elements, levels);
+        msMap.GetDimensions(width, height, samples);
+        volume.GetDimensions(width, height, depth);
+        structs.GetDimensions(count, stride);
+    }
+    """
+
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    member_calls = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    assert member_calls.count("GetDimensions") == 5
+
+
+def test_parse_get_dimensions_edge_overloads_keep_member_calls():
+    code = """
+    Texture1D<float4> lineMap : register(t0);
+    Texture1DArray<float4> lineArray : register(t1);
+    TextureCube<float4> cubeMap : register(t2);
+    TextureCubeArray<float4> cubeArray : register(t3);
+    RWTexture1DArray<float4> imageArray : register(u0);
+    Texture2DMSArray<float4> msArray : register(t4);
+    RWTexture2DMSArray<float4> msImage : register(u1);
+
+    void main(uint lod : TEXCOORD0) {
+        uint width;
+        uint height;
+        uint elements;
+        uint levels;
+        uint samples;
+        lineMap.GetDimensions(width, levels);
+        lineArray.GetDimensions(lod, width, elements, levels);
+        cubeMap.GetDimensions(width, height, levels);
+        cubeArray.GetDimensions(lod, width, height, elements, levels);
+        imageArray.GetDimensions(width, elements);
+        msArray.GetDimensions(width, height, elements, samples);
+        msImage.GetDimensions(width, height, elements, samples);
+    }
+    """
+
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    member_calls = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    assert member_calls.count("GetDimensions") == 7
+
+
+def test_parse_texture_lod_query_methods_keep_member_calls():
+    code = """
+    Texture2D<float4> colorMap : register(t0);
+    Texture2DMS<float4> msMap : register(t1);
+    SamplerState linearSampler : register(s0);
+
+    float4 main(float2 uv : TEXCOORD0) : SV_Target0 {
+        float clamped = colorMap.CalculateLevelOfDetail(linearSampler, uv);
+        float unclamped = colorMap.CalculateLevelOfDetailUnclamped(
+            linearSampler, uv
+        );
+        float msLod = msMap.CalculateLevelOfDetail(linearSampler, uv);
+        return float4(clamped + unclamped + msLod);
+    }
+    """
+
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    member_calls = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    assert member_calls.count("CalculateLevelOfDetail") == 2
+    assert member_calls.count("CalculateLevelOfDetailUnclamped") == 1
+
+
+def test_parse_texture_sample_position_query_keeps_member_calls():
+    code = """
+    Texture2DMS<float4> msMap : register(t0);
+    Texture2DMSArray<float4> msArray : register(t1);
+    Texture2D<float4> colorMap : register(t2);
+
+    float4 main(uint sampleIndex : SV_SampleIndex) : SV_Target0 {
+        float2 pos = msMap.GetSamplePosition(sampleIndex);
+        float2 arrayPos = msArray.GetSamplePosition(sampleIndex);
+        float2 invalid = colorMap.GetSamplePosition(sampleIndex);
+        return float4(pos + arrayPos + invalid, 0.0, 1.0);
+    }
+    """
+
+    ast = parse_code(code)
+    nodes = list(iter_ast_nodes(ast))
+
+    member_calls = [
+        node.name.member
+        for node in nodes
+        if isinstance(node, FunctionCallNode)
+        and isinstance(node.name, MemberAccessNode)
+    ]
+    assert member_calls.count("GetSamplePosition") == 3
+
+
 def test_parse_resource_method_ast_shapes():
     code = """
     Texture2D tex : register(t0);
@@ -730,6 +914,15 @@ def test_parse_resource_method_ast_shapes():
             float2(0.0, 1.0)
         );
         float cmp = tex.SampleCmpLevelZero(samp, uv, 0.5);
+        float cmpLod = tex.SampleCmpLevel(samp, uv, 0.5, 1.0);
+        float cmpGrad = tex.SampleCmpGrad(
+            samp,
+            uv,
+            0.5,
+            float2(1.0, 0.0),
+            float2(0.0, 1.0)
+        );
+        float cmpBias = tex.SampleCmpBias(samp, uv, 0.5, 0.25);
         int loaded = buffer.Load(0);
         buffer.Store(
             1,
@@ -761,6 +954,9 @@ def test_parse_resource_method_ast_shapes():
     assert {
         "SampleGrad",
         "SampleCmpLevelZero",
+        "SampleCmpLevel",
+        "SampleCmpGrad",
+        "SampleCmpBias",
         "Load",
         "Store",
         "Append",

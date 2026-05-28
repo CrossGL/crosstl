@@ -5,11 +5,13 @@ import subprocess
 from typing import List
 from crosstl.translator.parser import Parser
 from crosstl.translator.ast import (
+    ArrayAccessNode,
     AtomicOpNode,
     BlockNode,
     FunctionNode,
     IdentifierNode,
     LiteralNode,
+    MemberAccessNode,
     PrimitiveType,
 )
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
@@ -1311,6 +1313,212 @@ def test_tessellation_patch_constant_input_patch_matches_hull_entry_shape():
     )
     assert "VSOut first = constantsPatch[0];" in generated_code
     assert "gl_in" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("constants_source", "domain", "topology", "control_points", "message"),
+    [
+        (
+            "float inner[1] @ gl_TessLevelInner;",
+            "tri",
+            "triangle_cw",
+            3,
+            "SV_TessFactor",
+        ),
+        (
+            "vec3 outer @ gl_TessLevelOuter;",
+            "tri",
+            "triangle_cw",
+            3,
+            "SV_InsideTessFactor",
+        ),
+        (
+            """
+            vec4 outer @ gl_TessLevelOuter;
+            float inner @ gl_TessLevelInner;
+            """,
+            "tri",
+            "triangle_cw",
+            3,
+            "3 SV_TessFactor",
+        ),
+        (
+            """
+            vec4 outer @ gl_TessLevelOuter;
+            float inner @ gl_TessLevelInner;
+            """,
+            "quad",
+            "triangle_cw",
+            4,
+            "2 SV_InsideTessFactor",
+        ),
+        (
+            """
+            vec2 outer @ gl_TessLevelOuter;
+            float inner @ gl_TessLevelInner;
+            """,
+            "isoline",
+            "line",
+            2,
+            "must not return SV_InsideTessFactor",
+        ),
+    ],
+)
+def test_tessellation_patch_constant_factor_semantics_validate_domain_counts(
+    constants_source,
+    domain,
+    topology,
+    control_points,
+    message,
+):
+    code = f"""
+    shader main {{
+        struct VSOut {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct HSOut {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct PatchConstants {{
+            {constants_source}
+        }};
+
+        tessellation_control {{
+            PatchConstants HSConst(InputPatch<VSOut, {control_points}> inputPatch) {{
+                PatchConstants patch;
+                return patch;
+            }}
+
+            HSOut main(InputPatch<VSOut, {control_points}> inputPatch)
+                @domain({domain})
+                @partitioning(integer)
+                @outputtopology({topology})
+                @outputcontrolpoints({control_points})
+                @patchconstantfunc(HSConst) {{
+                HSOut output;
+                return output;
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("constants_source", "domain", "topology", "control_points", "message"),
+    [
+        (
+            """
+            int outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+            """,
+            "tri",
+            "triangle_cw",
+            3,
+            "SV_TessFactor member 'outer'.*floating scalar",
+        ),
+        (
+            """
+            vec3 outer @ gl_TessLevelOuter;
+            uint inner @ gl_TessLevelInner;
+            """,
+            "tri",
+            "triangle_cw",
+            3,
+            "SV_InsideTessFactor member 'inner'.*floating scalar",
+        ),
+        (
+            "vec2 outer[1] @ gl_TessLevelOuter;",
+            "isoline",
+            "line",
+            2,
+            "SV_TessFactor member 'outer'.*floating scalar",
+        ),
+    ],
+)
+def test_tessellation_patch_constant_factor_semantics_reject_non_floating_types(
+    constants_source,
+    domain,
+    topology,
+    control_points,
+    message,
+):
+    code = f"""
+    shader main {{
+        struct VSOut {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct HSOut {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct PatchConstants {{
+            {constants_source}
+        }};
+
+        tessellation_control {{
+            PatchConstants HSConst(InputPatch<VSOut, {control_points}> inputPatch) {{
+                PatchConstants patch;
+                return patch;
+            }}
+
+            HSOut main(InputPatch<VSOut, {control_points}> inputPatch)
+                @domain({domain})
+                @partitioning(integer)
+                @outputtopology({topology})
+                @outputcontrolpoints({control_points})
+                @patchconstantfunc(HSConst) {{
+                HSOut output;
+                return output;
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_tessellation_patch_constant_factor_semantics_allow_isoline_outer_only():
+    code = """
+    shader main {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct HSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct PatchConstants {
+            vec2 outer @ gl_TessLevelOuter;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst(InputPatch<VSOut, 2> inputPatch) {
+                PatchConstants patch;
+                return patch;
+            }
+
+            HSOut main(InputPatch<VSOut, 2> inputPatch)
+                @domain(isoline)
+                @partitioning(integer)
+                @outputtopology(line)
+                @outputcontrolpoints(2)
+                @patchconstantfunc(HSConst) {
+                HSOut output;
+                return output;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float2 outer : SV_TessFactor;" in generated_code
+    assert "SV_InsideTessFactor" not in generated_code
 
 
 @pytest.mark.parametrize(
@@ -2662,6 +2870,552 @@ def test_mesh_and_task_intrinsics_lower_to_native_slang_calls():
     assert "unsupported Slang mesh intrinsic" not in generated_code
 
 
+def test_mesh_payload_parameter_lowers_to_native_slang_payload_qualifier():
+    code = """
+    shader SlangMeshPayload {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        groupshared MeshPayload payload;
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                payload.meshlet = 7u;
+                DispatchMesh(1, 1, 1, payload);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                uint meshlet = payload.meshlet;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "groupshared MeshPayload payload;" in generated_code
+    assert "DispatchMesh(1, 1, 1, payload);" in generated_code
+    assert "void MSMain(in payload MeshPayload payload)" in generated_code
+    assert ": mesh_payload" not in generated_code
+    assert "MeshOpNode" not in generated_code
+    assert "unsupported Slang mesh intrinsic" not in generated_code
+
+
+def test_mesh_output_signature_and_helper_roles_lower_to_native_slang():
+    code = """
+    shader SlangMeshOutputRoles {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct MeshPrimitive {
+            bool culled @ SV_CullPrimitive;
+            uint layer @ SV_RenderTargetArrayIndex;
+        };
+
+        void writeVertex(
+            @vertices inout MeshVertex verts[3],
+            uint idx
+        ) {
+            verts[idx].position = vec4(0.0, 0.0, 0.0, 1.0);
+            verts[idx].uv = vec2(0.5, 0.25);
+        }
+
+        void writePrimitive(
+            @indices out uvec3 tris[1],
+            @primitives out MeshPrimitive prims[1]
+        ) {
+            tris[0] = uvec3(0u, 1u, 2u);
+            prims[0].culled = false;
+            prims[0].layer = 0u;
+        }
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                writeVertex(verts, 0u);
+                writePrimitive(tris, prims);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void writeVertex(inout MeshVertex verts[3], uint idx)" in generated_code
+    assert (
+        "void writePrimitive(out uint3 tris[1], out MeshPrimitive prims[1])"
+        in generated_code
+    )
+    assert (
+        "void main(out vertices MeshVertex verts[3], "
+        "out indices uint3 tris[1], "
+        "out primitives MeshPrimitive prims[1])" in generated_code
+    )
+    assert "verts[idx].position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "verts[idx].uv = float2(0.5, 0.25);" in generated_code
+    assert "tris[0] = uint3(0u, 1u, 2u);" in generated_code
+    assert "prims[0].culled = false;" in generated_code
+    assert "prims[0].layer = 0u;" in generated_code
+    assert ": vertices" not in generated_code
+    assert ": indices" not in generated_code
+    assert ": primitives" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "parameter_source",
+    [
+        "@vertices MeshVertex verts[3]",
+        "@vertices in MeshVertex verts[3]",
+        "@vertices inout MeshVertex verts[3]",
+        "@vertices const MeshVertex verts[3]",
+    ],
+)
+def test_mesh_output_entry_parameters_require_out_qualifier(parameter_source):
+    code = f"""
+    shader InvalidSlangMeshOutputRole {{
+        struct MeshVertex {{
+            vec4 position @ SV_Position;
+        }};
+
+        mesh {{
+            void main(
+                {parameter_source},
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {{
+                SetMeshOutputCounts(1, 1);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match="must use the out qualifier"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_mesh_output_entry_parameters_reject_non_mesh_stages():
+    code = """
+    shader InvalidSlangMeshOutputRoleStage {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        compute {
+            void main(@vertices out MeshVertex verts[1]) @numthreads(1, 1, 1) {
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="compute stage cannot declare mesh vertices"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_mesh_output_signature_validates_roles_counts_and_topology():
+    missing_vertices_code = """
+    shader MissingSlangMeshVertices {
+        mesh {
+            void main(@indices out uvec3 tris[1])
+                @numthreads(1, 1, 1)
+                @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="out vertices"):
+        generate_code(parse_code(tokenize_code(missing_vertices_code)))
+
+    duplicate_indices_code = """
+    shader DuplicateSlangMeshIndices {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1],
+                @indices out uvec3 otherTris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="at most one indices"):
+        generate_code(parse_code(tokenize_code(duplicate_indices_code)))
+
+    unsized_vertices_code = """
+    shader UnsizedSlangMeshVertices {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="vertices.*static array size"):
+        generate_code(parse_code(tokenize_code(unsized_vertices_code)))
+
+    wrong_index_type_code = """
+    shader WrongSlangMeshIndexType {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec2 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="triangle.*uint3"):
+        generate_code(parse_code(tokenize_code(wrong_index_type_code)))
+
+    mismatched_primitives_code = """
+    shader MismatchedSlangMeshPrimitiveCount {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        struct MeshPrimitive {
+            bool culled @ SV_CullPrimitive;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[2],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="primitives.*match.*indices"):
+        generate_code(parse_code(tokenize_code(mismatched_primitives_code)))
+
+    missing_counts_code = """
+    shader MissingSlangMeshOutputCounts {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetMeshOutputCounts exactly once"):
+        generate_code(parse_code(tokenize_code(missing_counts_code)))
+
+    duplicate_counts_code = """
+    shader DuplicateSlangMeshOutputCounts {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetMeshOutputCounts exactly once"):
+        generate_code(parse_code(tokenize_code(duplicate_counts_code)))
+
+    malformed_counts_code = """
+    shader MalformedSlangMeshOutputCounts {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="requires exactly two arguments"):
+        generate_code(parse_code(tokenize_code(malformed_counts_code)))
+
+    oversized_vertex_count_code = """
+    shader OversizedSlangMeshVertexCount {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[2],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="vertex count exceeds"):
+        generate_code(parse_code(tokenize_code(oversized_vertex_count_code)))
+
+    oversized_primitive_count_code = """
+    shader OversizedSlangMeshPrimitiveCount {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 2);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="primitive count exceeds.*indices"):
+        generate_code(parse_code(tokenize_code(oversized_primitive_count_code)))
+
+
+def test_mesh_output_signature_validates_write_order_and_literal_indices():
+    valid_code = """
+    shader ValidSlangMeshOutputWrites {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(valid_code)))
+    assert "SetMeshOutputCounts(3, 1);" in generated_code
+    assert "verts[0].position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "tris[0] = uint3(0u, 1u, 2u);" in generated_code
+
+    write_before_counts_code = """
+    shader EarlySlangMeshOutputWrite {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                SetMeshOutputCounts(3, 1);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="writes must occur after"):
+        generate_code(parse_code(tokenize_code(write_before_counts_code)))
+
+    helper_before_counts_code = """
+    shader EarlySlangMeshOutputHelper {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void writeVertex(@vertices inout MeshVertex verts[3]) {
+            verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+        }
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                writeVertex(verts);
+                SetMeshOutputCounts(3, 1);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="helper calls before SetMeshOutputCounts"):
+        generate_code(parse_code(tokenize_code(helper_before_counts_code)))
+
+    vertex_index_code = """
+    shader OversizedSlangMeshVertexWrite {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[3].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="vertices output literal index"):
+        generate_code(parse_code(tokenize_code(vertex_index_code)))
+
+    index_array_code = """
+    shader OversizedSlangMeshIndexWrite {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[1] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="indices output literal index"):
+        generate_code(parse_code(tokenize_code(index_array_code)))
+
+
+@pytest.mark.parametrize(
+    ("parameter_source", "message"),
+    [
+        (
+            "@mesh_payload out MeshPayload payload",
+            "mesh payload parameter 'payload' must use the in qualifier",
+        ),
+        (
+            "@mesh_payload inout MeshPayload payload",
+            "mesh payload parameter 'payload' must use the in qualifier",
+        ),
+        (
+            "@mesh_payload in float payload",
+            "mesh payload parameter 'payload' must use a user-defined struct type",
+        ),
+    ],
+)
+def test_mesh_payload_parameter_rejects_invalid_slang_shapes(parameter_source, message):
+    code = f"""
+    shader InvalidSlangMeshPayload {{
+        struct MeshPayload {{
+            uint meshlet;
+        }};
+
+        mesh {{
+            void main(
+                {parameter_source}
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {{
+                SetMeshOutputCounts(3, 1);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("payload_source", "mesh_parameter_source", "message"),
+    [
+        (
+            "MeshPayload payload;",
+            "",
+            "DispatchMesh payload argument requires a mesh stage @mesh_payload parameter",
+        ),
+        (
+            "OtherPayload payload;",
+            "@mesh_payload in MeshPayload payload",
+            "DispatchMesh payload argument type OtherPayload must match mesh payload type MeshPayload",
+        ),
+    ],
+)
+def test_dispatch_mesh_payload_argument_matches_mesh_payload_parameter(
+    payload_source, mesh_parameter_source, message
+):
+    code = f"""
+    shader InvalidSlangDispatchMeshPayload {{
+        struct MeshPayload {{
+            uint meshlet;
+        }};
+        struct OtherPayload {{
+            uint meshlet;
+        }};
+
+        groupshared {payload_source}
+
+        task {{
+            void main() @numthreads(1, 1, 1) {{
+                DispatchMesh(1, 1, 1, payload);
+            }}
+        }}
+
+        mesh {{
+            void main(
+                {mesh_parameter_source}
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {{
+                SetMeshOutputCounts(3, 1);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_mesh_intrinsic_invalid_arities_emit_slang_diagnostics():
     code = """
     shader InvalidSlangMeshIntrinsics {
@@ -3150,6 +3904,7 @@ def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes():
             void main() {
                 HitAttributes attributes;
                 bool accepted = ReportHit(1.0, 0, attributes);
+                bool acceptedWithoutAttributes = ReportHit(2.0, 1);
             }
         }
 
@@ -3157,6 +3912,12 @@ def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes():
             void main(RayPayload payload @ payload, HitAttributes attributes @ hit_attribute) {
                 IgnoreHit();
                 AcceptHitAndEndSearch();
+            }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) {
+                data.value = data.value + 1u;
             }
         }
     }
@@ -3175,10 +3936,455 @@ def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes():
     ) in generated_code
     assert "CallShader(1, callableData);" in generated_code
     assert "bool accepted = ReportHit(1.0, 0, attributes);" in generated_code
+    assert "bool acceptedWithoutAttributes = ReportHit(2.0, 1);" in generated_code
     assert "IgnoreHit();" in generated_code
     assert "AcceptHitAndEndSearch();" in generated_code
+    assert "void CallableMain(inout CallableData data)" in generated_code
+    assert "data.value = data.value + 1u;" in generated_code
     assert "RayTracingOpNode" not in generated_code
     assert "accelerationStructureEXT" not in generated_code
+
+
+def test_slang_report_hit_helper_return_attributes_emit_native_calls():
+    code = """
+    shader SlangReportHitHelperReturnAttributes {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        HitAttributes makeAttributes(float u) {
+            HitAttributes attributes;
+            attributes.barycentrics = vec2(u, 1.0 - u);
+            return attributes;
+        }
+
+        HitAttributes relayAttributes() {
+            return makeAttributes(0.25);
+        }
+
+        ray_intersection {
+            void main() {
+                bool directAccepted = ReportHit(1.0, 0, makeAttributes(0.5));
+                bool relayAccepted = ReportHit(2.0, 1, relayAttributes());
+            }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute
+            ) { }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "HitAttributes makeAttributes(float u)" in generated_code
+    assert "attributes.barycentrics = float2(u, 1.0 - u);" in generated_code
+    assert "HitAttributes relayAttributes()" in generated_code
+    assert "return makeAttributes(0.25);" in generated_code
+    assert (
+        "bool directAccepted = ReportHit(1.0, 0, makeAttributes(0.5));"
+        in generated_code
+    )
+    assert (
+        "bool relayAccepted = ReportHit(2.0, 1, relayAttributes());" in generated_code
+    )
+
+
+def test_slang_ray_tracing_intrinsic_helpers_validate_in_stage_context():
+    code = """
+    shader SlangRayIntrinsicHelpers {
+        accelerationStructureEXT scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        void traceScene(
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray,
+            inout RayPayload payload
+        ) {
+            TraceRay(accelerationStructure, 0, 0xFF, 0, 1, 0, ray, payload);
+        }
+
+        void invokeCallable(uint shaderIndex, inout CallableData data) {
+            CallShader(shaderIndex, data);
+        }
+
+        bool reportHit(HitAttributes attributes) {
+            return ReportHit(1.0, 0, attributes);
+        }
+
+        HitAttributes makeAttributes() {
+            HitAttributes attributes;
+            return attributes;
+        }
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                CallableData data;
+                traceScene(scene, ray, payload);
+                invokeCallable(1, data);
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                bool accepted = reportHit(attributes);
+                bool helperReturnAccepted = reportHit(makeAttributes());
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void traceScene(RaytracingAccelerationStructure accelerationStructure, "
+        "RayDesc ray, inout RayPayload payload)" in generated_code
+    )
+    assert (
+        "TraceRay(accelerationStructure, 0, 255, 0, 1, 0, ray, payload);"
+        in generated_code
+    )
+    assert (
+        "void invokeCallable(uint shaderIndex, inout CallableData data)"
+        in generated_code
+    )
+    assert "CallShader(shaderIndex, data);" in generated_code
+    assert "bool reportHit(HitAttributes attributes)" in generated_code
+    assert "return ReportHit(1.0, 0, attributes);" in generated_code
+    assert "HitAttributes makeAttributes()" in generated_code
+    assert "traceScene(scene, ray, payload);" in generated_code
+    assert "invokeCallable(1, data);" in generated_code
+    assert "bool accepted = reportHit(attributes);" in generated_code
+    assert "bool helperReturnAccepted = reportHit(makeAttributes());" in generated_code
+
+
+def test_slang_ray_tracing_interface_member_lvalues_emit_native_calls():
+    code = """
+    shader SlangRayInterfaceLvalues {
+        accelerationStructureEXT scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct RayPayloadHolder {
+            RayPayload primary;
+            RayPayload payloads[2];
+        };
+
+        struct CallableDataHolder {
+            CallableData primary;
+            CallableData items[2];
+        };
+
+        struct HitAttributeHolder {
+            HitAttributes primary;
+            HitAttributes items[2];
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayloadHolder rays;
+                CallableDataHolder callables;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, rays.primary);
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, rays.payloads[1]);
+                CallShader(0, callables.primary);
+                CallShader(1, callables.items[0]);
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributeHolder hits;
+                bool memberAccepted = ReportHit(1.0, 0, hits.primary);
+                bool indexedAccepted = ReportHit(2.0, 1, hits.items[1]);
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) { }
+        }
+
+        ray_closest_hit {
+            void main(RayPayload payload @ payload, HitAttributes attributes @ hit_attribute) { }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) { }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, rays.primary);" in generated_code
+    assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, rays.payloads[1]);" in generated_code
+    assert "CallShader(0, callables.primary);" in generated_code
+    assert "CallShader(1, callables.items[0]);" in generated_code
+    assert "bool memberAccepted = ReportHit(1.0, 0, hits.primary);" in generated_code
+    assert "bool indexedAccepted = ReportHit(2.0, 1, hits.items[1]);" in generated_code
+
+
+def test_slang_ray_tracing_interface_pointer_and_reference_aliases_emit_native_calls():
+    code = """
+    shader SlangRayInterfacePointerReferenceAliases {
+        accelerationStructureEXT scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct RayPayloadHolder {
+            RayPayload primary;
+            RayPayload payloads[2];
+        };
+
+        struct CallableDataHolder {
+            CallableData primary;
+            CallableData items[2];
+        };
+
+        struct HitAttributeHolder {
+            HitAttributes primary;
+            HitAttributes items[2];
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                RayPayload& payloadRef = payload;
+                RayPayloadHolder rays;
+                RayPayloadHolder* rayPtr = &rays;
+                RayPayloadHolder& rayRef = rays;
+                CallableData callableData;
+                CallableData& callableDataRef = callableData;
+                CallableDataHolder callables;
+                CallableDataHolder* callablePtr = &callables;
+                CallableDataHolder& callableRef = callables;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, rayPtr->primary);
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, rayRef.payloads[1]);
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payloadRef);
+                CallShader(0, callablePtr->primary);
+                CallShader(1, callableRef.items[0]);
+                CallShader(2, callableDataRef);
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                HitAttributes& attributesRef = attributes;
+                HitAttributeHolder hits;
+                HitAttributeHolder* hitPtr = &hits;
+                HitAttributeHolder& hitRef = hits;
+                bool pointerAccepted = ReportHit(1.0, 0, hitPtr->primary);
+                bool indexedReferenceAccepted = ReportHit(2.0, 1, hitRef.items[1]);
+                bool directReferenceAccepted = ReportHit(3.0, 2, attributesRef);
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) { }
+        }
+
+        ray_closest_hit {
+            void main(RayPayload payload @ payload, HitAttributes attributes @ hit_attribute) { }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) { }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RayPayload& payloadRef = payload;" in generated_code
+    assert "RayPayloadHolder* rayPtr = &rays;" in generated_code
+    assert "RayPayloadHolder& rayRef = rays;" in generated_code
+    assert "CallableData& callableDataRef = callableData;" in generated_code
+    assert "CallableDataHolder* callablePtr = &callables;" in generated_code
+    assert "CallableDataHolder& callableRef = callables;" in generated_code
+    assert "HitAttributes& attributesRef = attributes;" in generated_code
+    assert "HitAttributeHolder* hitPtr = &hits;" in generated_code
+    assert "HitAttributeHolder& hitRef = hits;" in generated_code
+    assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, rayPtr->primary);" in generated_code
+    assert (
+        "TraceRay(scene, 0, 255, 0, 1, 0, ray, rayRef.payloads[1]);" in generated_code
+    )
+    assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, payloadRef);" in generated_code
+    assert "CallShader(0, callablePtr->primary);" in generated_code
+    assert "CallShader(1, callableRef.items[0]);" in generated_code
+    assert "CallShader(2, callableDataRef);" in generated_code
+    assert (
+        "bool pointerAccepted = ReportHit(1.0, 0, hitPtr->primary);" in generated_code
+    )
+    assert (
+        "bool indexedReferenceAccepted = ReportHit(2.0, 1, hitRef.items[1]);"
+        in generated_code
+    )
+    assert (
+        "bool directReferenceAccepted = ReportHit(3.0, 2, attributesRef);"
+        in generated_code
+    )
+
+
+def test_slang_ray_tracing_helper_pointer_holder_aliases_emit_native_calls():
+    code = """
+    shader SlangRayPointerHolderHelpers {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct RayPayloadHolder {
+            RayPayload primary;
+            RayPayload payloads[2];
+        };
+
+        struct CallableDataHolder {
+            CallableData primary;
+            CallableData items[2];
+        };
+
+        struct HitAttributeHolder {
+            HitAttributes primary;
+            HitAttributes items[2];
+        };
+
+        void traceHolder(
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray,
+            RayPayloadHolder* rays
+        ) {
+            RayPayload& alias = rays->primary;
+            TraceRay(accelerationStructure, 0, 0xFF, 0, 1, 0, ray, alias);
+            TraceRay(accelerationStructure, 0, 0xFF, 0, 1, 0, ray, rays->payloads[1]);
+        }
+
+        void invokeHolder(uint shaderIndex, CallableDataHolder* callables) {
+            CallableData& alias = callables->items[0];
+            CallShader(shaderIndex, alias);
+            CallShader(shaderIndex + 1u, callables->primary);
+        }
+
+        bool reportHolder(HitAttributeHolder* hits) {
+            HitAttributes& alias = hits->items[1];
+            return ReportHit(1.0, 0, alias) || ReportHit(2.0, 1, hits->primary);
+        }
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayloadHolder rays;
+                RayPayloadHolder* rayPtr = &rays;
+                CallableDataHolder callables;
+                CallableDataHolder* callablePtr = &callables;
+                traceHolder(scene, ray, rayPtr);
+                invokeHolder(0, callablePtr);
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributeHolder hits;
+                HitAttributeHolder* hitPtr = &hits;
+                bool accepted = reportHolder(hitPtr);
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) { }
+        }
+
+        ray_closest_hit {
+            void main(RayPayload payload @ payload, HitAttributes attributes @ hit_attribute) { }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) { }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void traceHolder(RaytracingAccelerationStructure accelerationStructure, "
+        "RayDesc ray, RayPayloadHolder* rays)" in generated_code
+    )
+    assert "RayPayload& alias = rays->primary;" in generated_code
+    assert (
+        "TraceRay(accelerationStructure, 0, 255, 0, 1, 0, ray, alias);"
+        in generated_code
+    )
+    expected_indexed_trace = "".join(
+        [
+            "TraceRay(accelerationStructure, 0, 255, 0, 1, 0, ray, ",
+            "rays->payloads[1]);",
+        ]
+    )
+    assert expected_indexed_trace in generated_code
+    assert (
+        "void invokeHolder(uint shaderIndex, CallableDataHolder* callables)"
+        in generated_code
+    )
+    assert "CallableData& alias = callables->items[0];" in generated_code
+    assert "CallShader(shaderIndex, alias);" in generated_code
+    assert "CallShader(shaderIndex + 1u, callables->primary);" in generated_code
+    assert "bool reportHolder(HitAttributeHolder* hits)" in generated_code
+    assert "HitAttributes& alias = hits->items[1];" in generated_code
+    assert (
+        "return ReportHit(1.0, 0, alias) || ReportHit(2.0, 1, hits->primary);"
+        in generated_code
+    )
+    assert "traceHolder(scene, ray, rayPtr);" in generated_code
+    assert "invokeHolder(0, callablePtr);" in generated_code
+    assert "bool accepted = reportHolder(hitPtr);" in generated_code
+    assert "RayTracingOpNode" not in generated_code
 
 
 def test_slang_ray_query_methods_emit_native_calls_and_infer_results():
@@ -3192,9 +4398,12 @@ def test_slang_ray_query_methods_emit_native_calls_and_infer_results():
                 RayQuery<RAY_FLAG_NONE> rq;
                 rq.TraceRayInline(scene, 0, 0xFF, ray);
                 let advanced = rq.Proceed();
+                RayQuery<RAY_FLAG_NONE> indexedQueries[2];
+                let indexedAdvanced = indexedQueries[0].Proceed();
                 let candidateType = rq.CandidateType();
                 let origin = rq.CandidateObjectRayOrigin();
                 let barycentrics = rq.CandidateTriangleBarycentrics();
+                let objectToWorld = rq.CommittedObjectToWorld3x4();
                 let committedT = rq.CommittedRayT();
                 rq.CommitProceduralPrimitiveHit(1.0);
                 rq.CommitNonOpaqueTriangleHit();
@@ -3212,13 +4421,106 @@ def test_slang_ray_query_methods_emit_native_calls_and_infer_results():
     assert "RayQuery<RAY_FLAG_NONE> rq;" in generated_code
     assert "rq.TraceRayInline(scene, 0, 255, ray);" in generated_code
     assert "bool advanced = rq.Proceed();" in generated_code
+    assert "RayQuery<RAY_FLAG_NONE> indexedQueries[2];" in generated_code
+    assert "bool indexedAdvanced = indexedQueries[0].Proceed();" in generated_code
     assert "uint candidateType = rq.CandidateType();" in generated_code
     assert "float3 origin = rq.CandidateObjectRayOrigin();" in generated_code
     assert "float2 barycentrics = rq.CandidateTriangleBarycentrics();" in generated_code
+    assert "float3x4 objectToWorld = rq.CommittedObjectToWorld3x4();" in generated_code
     assert "float committedT = rq.CommittedRayT();" in generated_code
     assert "rq.CommitProceduralPrimitiveHit(1.0);" in generated_code
     assert "rq.CommitNonOpaqueTriangleHit();" in generated_code
     assert "rq.Abort();" in generated_code
+    assert "RayQueryOpNode" not in generated_code
+
+
+def test_slang_ray_query_reference_and_member_receivers_emit_native_calls():
+    code = """
+    shader SlangRayQueryAliases {
+        struct QueryHolder {
+            RayQuery<RAY_FLAG_NONE> query;
+            RayQuery<RAY_FLAG_NONE> queries[2];
+        }
+        RaytracingAccelerationStructure scene;
+
+        compute {
+            void main() {
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                RayQuery<RAY_FLAG_NONE>& rqRef = rq;
+                rqRef.TraceRayInline(scene, 0, 0xFF, ray);
+                let refAdvanced = rqRef.Proceed();
+                rqRef.CommitProceduralPrimitiveHit(1.0);
+                QueryHolder holder;
+                holder.query.TraceRayInline(scene, 0, 0xFF, ray);
+                let memberAdvanced = holder.query.Proceed();
+                let indexedCommittedT = holder.queries[1].CommittedRayT();
+                QueryHolder* holderPtr = &holder;
+                let pointerMemberType = holderPtr->query.CandidateType();
+                holderPtr->query.CommitNonOpaqueTriangleHit();
+                RayQuery<RAY_FLAG_NONE>& indexedRef = holder.queries[0];
+                let indexedRefBarycentrics = indexedRef.CandidateTriangleBarycentrics();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RayQuery<RAY_FLAG_NONE>& rqRef = rq;" in generated_code
+    assert "rqRef.TraceRayInline(scene, 0, 255, ray);" in generated_code
+    assert "bool refAdvanced = rqRef.Proceed();" in generated_code
+    assert "rqRef.CommitProceduralPrimitiveHit(1.0);" in generated_code
+    assert "holder.query.TraceRayInline(scene, 0, 255, ray);" in generated_code
+    assert "bool memberAdvanced = holder.query.Proceed();" in generated_code
+    assert (
+        "float indexedCommittedT = holder.queries[1].CommittedRayT();" in generated_code
+    )
+    assert "QueryHolder* holderPtr = &holder;" in generated_code
+    assert (
+        "uint pointerMemberType = holderPtr->query.CandidateType();" in generated_code
+    )
+    assert "holderPtr->query.CommitNonOpaqueTriangleHit();" in generated_code
+    assert "RayQuery<RAY_FLAG_NONE>& indexedRef = holder.queries[0];" in generated_code
+    assert (
+        "float2 indexedRefBarycentrics = "
+        "indexedRef.CandidateTriangleBarycentrics();" in generated_code
+    )
+    assert "RayQueryOpNode" not in generated_code
+
+
+def test_slang_ray_query_inout_helper_receivers_emit_native_calls():
+    code = """
+    shader SlangRayQueryInoutHelper {
+        RaytracingAccelerationStructure scene;
+
+        void advanceQuery(
+            inout RayQuery<RAY_FLAG_NONE> query,
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray
+        ) {
+            query.TraceRayInline(accelerationStructure, 0, 0xFF, ray);
+            let advanced = query.Proceed();
+        }
+
+        compute {
+            void main() {
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                advanceQuery(rq, scene, ray);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void advanceQuery(inout RayQuery<RAY_FLAG_NONE> query, "
+        "RaytracingAccelerationStructure accelerationStructure, RayDesc ray)"
+        in generated_code
+    )
+    assert "query.TraceRayInline(accelerationStructure, 0, 255, ray);" in generated_code
+    assert "bool advanced = query.Proceed();" in generated_code
+    assert "advanceQuery(rq, scene, ray);" in generated_code
     assert "RayQueryOpNode" not in generated_code
 
 
@@ -3337,11 +4639,11 @@ def test_invalid_slang_ray_stage_semantic_parameters_raise(stage_source, message
             """
             ray_intersection {
                 void main() {
-                    ReportHit(1.0, 0);
+                    ReportHit(1.0);
                 }
             }
             """,
-            "ReportHit requires 3 argument",
+            "ReportHit requires 2 or 3 argument",
         ),
     ],
 )
@@ -3353,6 +4655,641 @@ def test_invalid_slang_ray_tracing_intrinsic_stage_and_arity_raise(
         struct HitAttributes {{
             vec2 barycentrics;
         }};
+
+        {stage_source}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("helper_source", "stage_source", "message"),
+    [
+        (
+            """
+            void traceScene(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+            """,
+            """
+            compute {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    RayPayload payload;
+                    traceScene(scene, ray, payload);
+                }
+            }
+            """,
+            "compute stage cannot call TraceRay",
+        ),
+        (
+            """
+            void invokeCallable(uint shaderIndex, inout CallableData data) {
+                CallShader(shaderIndex, data);
+            }
+            """,
+            """
+            compute {
+                void main() {
+                    CallableData data;
+                    invokeCallable(0, data);
+                }
+            }
+            """,
+            "compute stage cannot call CallShader",
+        ),
+        (
+            """
+            bool reportHit(HitAttributes attributes) {
+                return ReportHit(1.0, 0, attributes);
+            }
+            """,
+            """
+            ray_any_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute
+                ) {
+                    bool accepted = reportHit(attributes);
+                }
+            }
+            """,
+            "ray_any_hit stage cannot call ReportHit",
+        ),
+        (
+            """
+            void traceScene(uint scene, RayDesc ray, inout RayPayload payload) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    uint scene;
+                    RayDesc ray;
+                    RayPayload payload;
+                    traceScene(scene, ray, payload);
+                }
+            }
+            """,
+            "TraceRay acceleration structure.*RaytracingAccelerationStructure",
+        ),
+    ],
+)
+def test_invalid_slang_ray_tracing_helper_intrinsics_raise(
+    helper_source, stage_source, message
+):
+    code = f"""
+    shader InvalidSlangRayIntrinsicHelper {{
+        struct RayPayload {{
+            vec3 color;
+        }};
+
+        struct CallableData {{
+            uint value;
+        }};
+
+        struct HitAttributes {{
+            vec2 barycentrics;
+        }};
+
+        {helper_source}
+
+        {stage_source}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_slang_ray_hit_control_helpers_validate_through_deep_calls():
+    code = """
+    shader SlangRayHitControlHelperChain {
+        struct RayPayload {
+            uint value;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        void acceptLeaf() {
+            AcceptHitAndEndSearch();
+        }
+
+        void acceptRelay() {
+            acceptLeaf();
+        }
+
+        void ignoreLeaf() {
+            IgnoreHit();
+        }
+
+        void ignoreRelay() {
+            ignoreLeaf();
+        }
+
+        ray_any_hit {
+            void main(RayPayload payload @ payload, HitAttributes attributes @ hit_attribute) {
+                if (payload.value != 0u) {
+                    acceptRelay();
+                } else {
+                    ignoreRelay();
+                }
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void acceptLeaf()" in generated_code
+    assert "AcceptHitAndEndSearch();" in generated_code
+    assert "void ignoreLeaf()" in generated_code
+    assert "IgnoreHit();" in generated_code
+    assert "acceptRelay();" in generated_code
+    assert "ignoreRelay();" in generated_code
+    assert "RayTracingOpNode" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("helper_source", "stage_source", "message"),
+    [
+        (
+            """
+            void traceScene(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    OtherPayload payload;
+                    traceScene(scene, ray, payload);
+                }
+            }
+            """,
+            "traceScene payload argument type OtherPayload must match parameter type RayPayload",
+        ),
+        (
+            """
+            RayPayload makePayload() {
+                RayPayload payload;
+                return payload;
+            }
+
+            void traceScene(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    traceScene(scene, ray, makePayload());
+                }
+            }
+            """,
+            "traceScene payload argument.*lvalue",
+        ),
+        (
+            """
+            void traceScene(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    traceScene(
+                        scene,
+                        ray,
+                        RayPayload(vec3(0.0, 0.0, 0.0))
+                    );
+                }
+            }
+            """,
+            "traceScene payload argument.*lvalue",
+        ),
+        (
+            """
+            void invokeCallable(uint shaderIndex, inout CallableData data) {
+                CallShader(shaderIndex, data);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    OtherCallableData data;
+                    invokeCallable(0, data);
+                }
+            }
+            """,
+            (
+                "invokeCallable callable data argument type OtherCallableData "
+                "must match parameter type CallableData"
+            ),
+        ),
+        (
+            """
+            CallableData makeCallableData() {
+                CallableData data;
+                return data;
+            }
+
+            void invokeCallable(uint shaderIndex, inout CallableData data) {
+                CallShader(shaderIndex, data);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    invokeCallable(0, makeCallableData());
+                }
+            }
+            """,
+            "invokeCallable callable data argument.*lvalue",
+        ),
+        (
+            """
+            void invokeCallable(uint shaderIndex, inout CallableData data) {
+                CallShader(shaderIndex, data);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    invokeCallable(0, CallableData(1u));
+                }
+            }
+            """,
+            "invokeCallable callable data argument.*lvalue",
+        ),
+        (
+            """
+            bool reportHit(HitAttributes attributes) {
+                return ReportHit(1.0, 0, attributes);
+            }
+            """,
+            """
+            ray_intersection {
+                void main() {
+                    OtherHitAttributes attributes;
+                    bool accepted = reportHit(attributes);
+                }
+            }
+            """,
+            (
+                "reportHit hit attribute argument type OtherHitAttributes "
+                "must match parameter type HitAttributes"
+            ),
+        ),
+        (
+            """
+            void traceScene(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+
+            void relayTrace(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout OtherPayload payload
+            ) {
+                traceScene(scene, ray, payload);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    OtherPayload payload;
+                    relayTrace(scene, ray, payload);
+                }
+            }
+            """,
+            "traceScene payload argument type OtherPayload must match parameter type RayPayload",
+        ),
+        (
+            """
+            void traceScene(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                RayPayload& alias = payload;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, alias);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    OtherPayload payload;
+                    traceScene(scene, ray, payload);
+                }
+            }
+            """,
+            "traceScene payload argument type OtherPayload must match parameter type RayPayload",
+        ),
+        (
+            """
+            void invokeCallable(uint shaderIndex, inout CallableData data) {
+                CallableData& alias = data;
+                CallShader(shaderIndex, alias);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    OtherCallableData data;
+                    invokeCallable(0, data);
+                }
+            }
+            """,
+            (
+                "invokeCallable callable data argument type OtherCallableData "
+                "must match parameter type CallableData"
+            ),
+        ),
+        (
+            """
+            bool reportHit(HitAttributes attributes) {
+                HitAttributes& alias = attributes;
+                return ReportHit(1.0, 0, alias);
+            }
+            """,
+            """
+            ray_intersection {
+                void main() {
+                    OtherHitAttributes attributes;
+                    bool accepted = reportHit(attributes);
+                }
+            }
+            """,
+            (
+                "reportHit hit attribute argument type OtherHitAttributes "
+                "must match parameter type HitAttributes"
+            ),
+        ),
+        (
+            """
+            void traceScene(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayloadHolder rays
+            ) {
+                RayPayload& alias = rays.primary;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, alias);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    OtherPayloadHolder rays;
+                    traceScene(scene, ray, rays);
+                }
+            }
+            """,
+            (
+                "traceScene payload argument type OtherPayloadHolder "
+                "must match parameter type RayPayloadHolder"
+            ),
+        ),
+        (
+            """
+            void invokeCallable(uint shaderIndex, inout CallableDataHolder callables) {
+                CallableData& alias = callables.items[0];
+                CallShader(shaderIndex, alias);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    OtherCallableDataHolder callables;
+                    invokeCallable(0, callables);
+                }
+            }
+            """,
+            (
+                "invokeCallable callable data argument type OtherCallableDataHolder "
+                "must match parameter type CallableDataHolder"
+            ),
+        ),
+        (
+            """
+            bool reportHit(HitAttributeHolder hits) {
+                HitAttributes& alias = hits.items[1];
+                return ReportHit(1.0, 0, alias);
+            }
+            """,
+            """
+            ray_intersection {
+                void main() {
+                    OtherHitAttributeHolder hits;
+                    bool accepted = reportHit(hits);
+                }
+            }
+            """,
+            (
+                "reportHit hit attribute argument type OtherHitAttributeHolder "
+                "must match parameter type HitAttributeHolder"
+            ),
+        ),
+        (
+            """
+            void traceHolder(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                RayPayloadHolder* rays
+            ) {
+                RayPayload& alias = rays->primary;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, alias);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    OtherPayloadHolder wrongs;
+                    OtherPayloadHolder* rays = &wrongs;
+                    traceHolder(scene, ray, rays);
+                }
+            }
+            """,
+            (
+                "traceHolder payload argument type OtherPayloadHolder\\* "
+                "must match parameter type RayPayloadHolder\\*"
+            ),
+        ),
+        (
+            """
+            void tracePayload(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+
+            void relayTrace(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                RayPayloadHolder* rays
+            ) {
+                tracePayload(scene, ray, rays->primary);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    OtherPayloadHolder wrongs;
+                    OtherPayloadHolder* rays = &wrongs;
+                    relayTrace(scene, ray, rays);
+                }
+            }
+            """,
+            (
+                "relayTrace payload argument type OtherPayloadHolder\\* "
+                "must match parameter type RayPayloadHolder\\*"
+            ),
+        ),
+        (
+            """
+            void invokeHolder(uint shaderIndex, CallableDataHolder* callables) {
+                CallableData& alias = callables->items[0];
+                CallShader(shaderIndex, alias);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    OtherCallableDataHolder wrongs;
+                    OtherCallableDataHolder* callables = &wrongs;
+                    invokeHolder(0, callables);
+                }
+            }
+            """,
+            (
+                "invokeHolder callable data argument type OtherCallableDataHolder\\* "
+                "must match parameter type CallableDataHolder\\*"
+            ),
+        ),
+        (
+            """
+            bool reportHolder(HitAttributeHolder* hits) {
+                HitAttributes& alias = hits->items[1];
+                return ReportHit(1.0, 0, alias);
+            }
+            """,
+            """
+            ray_intersection {
+                void main() {
+                    OtherHitAttributeHolder wrongs;
+                    OtherHitAttributeHolder* hits = &wrongs;
+                    bool accepted = reportHolder(hits);
+                }
+            }
+            """,
+            (
+                "reportHolder hit attribute argument type OtherHitAttributeHolder\\* "
+                "must match parameter type HitAttributeHolder\\*"
+            ),
+        ),
+    ],
+)
+def test_invalid_slang_ray_tracing_helper_interface_arguments_raise(
+    helper_source, stage_source, message
+):
+    code = f"""
+    shader InvalidSlangRayHelperInterfaceArgs {{
+        struct RayPayload {{
+            vec3 color;
+        }};
+
+        struct OtherPayload {{
+            vec3 color;
+        }};
+
+        struct CallableData {{
+            uint value;
+        }};
+
+        struct OtherCallableData {{
+            uint value;
+        }};
+
+        struct HitAttributes {{
+            vec2 barycentrics;
+        }};
+
+        struct OtherHitAttributes {{
+            vec2 barycentrics;
+        }};
+
+        struct RayPayloadHolder {{
+            RayPayload primary;
+            RayPayload payloads[2];
+        }};
+
+        struct OtherPayloadHolder {{
+            OtherPayload primary;
+            OtherPayload payloads[2];
+        }};
+
+        struct CallableDataHolder {{
+            CallableData primary;
+            CallableData items[2];
+        }};
+
+        struct OtherCallableDataHolder {{
+            OtherCallableData primary;
+            OtherCallableData items[2];
+        }};
+
+        struct HitAttributeHolder {{
+            HitAttributes primary;
+            HitAttributes items[2];
+        }};
+
+        struct OtherHitAttributeHolder {{
+            OtherHitAttributes primary;
+            OtherHitAttributes items[2];
+        }};
+
+        {helper_source}
 
         {stage_source}
     }}
@@ -3408,6 +5345,89 @@ def test_invalid_slang_ray_tracing_intrinsic_stage_and_arity_raise(
             ray_generation {
                 void main() {
                     RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    OtherRayPayload payload;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                }
+            }
+
+            ray_miss {
+                void main(RayPayload payload @ rayPayloadInEXT) { }
+            }
+            """,
+            "TraceRay payload argument type OtherRayPayload "
+            "must match ray payload parameter type RayPayload",
+        ),
+        (
+            """
+            RayPayload makePayload() {
+                RayPayload payload;
+                return payload;
+            }
+
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, makePayload());
+                }
+            }
+
+            ray_miss {
+                void main(RayPayload payload @ rayPayloadInEXT) { }
+            }
+            """,
+            "TraceRay payload argument.*lvalue",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    TraceRay(
+                        scene,
+                        0,
+                        0xFF,
+                        0,
+                        1,
+                        0,
+                        ray,
+                        RayPayload(vec3(0.0, 0.0, 0.0))
+                    );
+                }
+            }
+
+            ray_miss {
+                void main(RayPayload payload @ rayPayloadInEXT) { }
+            }
+            """,
+            "TraceRay payload argument.*lvalue",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    OtherRayPayload payload;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                }
+            }
+
+            ray_miss {
+                @rayPayloadInEXT RayPayload payload;
+                void main() { }
+            }
+            """,
+            "TraceRay payload argument type OtherRayPayload "
+            "must match ray payload parameter type RayPayload",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
                     RayPayload payload;
                     TraceRay(
                         scene,
@@ -3440,6 +5460,72 @@ def test_invalid_slang_ray_tracing_intrinsic_stage_and_arity_raise(
         ),
         (
             """
+            ray_generation {
+                void main() {
+                    OtherCallableData data;
+                    CallShader(1, data);
+                }
+            }
+
+            ray_callable {
+                void main(CallableData data @ callableDataInEXT) { }
+            }
+            """,
+            "CallShader callable data argument type OtherCallableData "
+            "must match callable data parameter type CallableData",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    OtherCallableData data;
+                    CallShader(1, data);
+                }
+            }
+
+            ray_callable {
+                @callableDataInEXT CallableData data;
+                void main() { }
+            }
+            """,
+            "CallShader callable data argument type OtherCallableData "
+            "must match callable data parameter type CallableData",
+        ),
+        (
+            """
+            CallableData makeCallableData() {
+                CallableData data;
+                return data;
+            }
+
+            ray_generation {
+                void main() {
+                    CallShader(1, makeCallableData());
+                }
+            }
+
+            ray_callable {
+                void main(CallableData data @ callableDataInEXT) { }
+            }
+            """,
+            "CallShader callable data argument.*lvalue",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    CallShader(1, CallableData(1u));
+                }
+            }
+
+            ray_callable {
+                void main(CallableData data @ callableDataInEXT) { }
+            }
+            """,
+            "CallShader callable data argument.*lvalue",
+        ),
+        (
+            """
             ray_intersection {
                 void main() {
                     HitAttributes attributes;
@@ -3461,6 +5547,104 @@ def test_invalid_slang_ray_tracing_intrinsic_stage_and_arity_raise(
             """,
             "ReportHit hit attribute.*user-defined struct",
         ),
+        (
+            """
+            ray_intersection {
+                void main() {
+                    OtherHitAttributes attributes;
+                    ReportHit(1.0, 0, attributes);
+                }
+            }
+
+            ray_closest_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute
+                ) { }
+            }
+            """,
+            "ReportHit hit attribute argument type OtherHitAttributes "
+            "must match hit attribute parameter type HitAttributes",
+        ),
+        (
+            """
+            ray_intersection {
+                void main() {
+                    OtherHitAttributes attributes;
+                    ReportHit(1.0, 0, attributes);
+                }
+            }
+
+            ray_closest_hit {
+                @hitAttributeEXT HitAttributes attributes;
+                void main(RayPayload payload @ payload) { }
+            }
+            """,
+            "ReportHit hit attribute argument type OtherHitAttributes "
+            "must match hit attribute parameter type HitAttributes",
+        ),
+        (
+            """
+            OtherHitAttributes makeOtherAttributes() {
+                OtherHitAttributes attributes;
+                return attributes;
+            }
+
+            ray_intersection {
+                void main() {
+                    ReportHit(1.0, 0, makeOtherAttributes());
+                }
+            }
+
+            ray_closest_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute
+                ) { }
+            }
+            """,
+            "ReportHit hit attribute argument type OtherHitAttributes "
+            "must match hit attribute parameter type HitAttributes",
+        ),
+        (
+            """
+            OtherHitAttributes makeOtherAttributes() {
+                OtherHitAttributes attributes;
+                return attributes;
+            }
+
+            OtherHitAttributes relayAttributes() {
+                return makeOtherAttributes();
+            }
+
+            ray_intersection {
+                void main() {
+                    ReportHit(1.0, 0, relayAttributes());
+                }
+            }
+
+            ray_closest_hit {
+                @hitAttributeEXT HitAttributes attributes;
+                void main(RayPayload payload @ payload) { }
+            }
+            """,
+            "ReportHit hit attribute argument type OtherHitAttributes "
+            "must match hit attribute parameter type HitAttributes",
+        ),
+        (
+            """
+            uint makeAttributeScalar() {
+                return 1u;
+            }
+
+            ray_intersection {
+                void main() {
+                    ReportHit(1.0, 0, makeAttributeScalar());
+                }
+            }
+            """,
+            "ReportHit hit attribute.*user-defined struct",
+        ),
     ],
 )
 def test_invalid_slang_ray_tracing_intrinsic_argument_types_raise(
@@ -3472,12 +5656,301 @@ def test_invalid_slang_ray_tracing_intrinsic_argument_types_raise(
             vec3 color;
         }};
 
+        struct OtherRayPayload {{
+            vec3 color;
+        }};
+
         struct CallableData {{
+            uint value;
+        }};
+
+        struct OtherCallableData {{
             uint value;
         }};
 
         struct HitAttributes {{
             vec2 barycentrics;
+        }};
+
+        struct OtherHitAttributes {{
+            vec2 barycentrics;
+        }};
+
+        {stage_source}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    RayPayloadHolder rays;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, rays.wrong);
+                }
+            }
+
+            ray_miss {
+                void main(RayPayload payload @ rayPayloadInEXT) { }
+            }
+            """,
+            "TraceRay payload argument type OtherRayPayload "
+            "must match ray payload parameter type RayPayload",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    CallableDataHolder callables;
+                    CallShader(0, callables.wrong);
+                }
+            }
+
+            ray_callable {
+                void main(CallableData data @ callableDataInEXT) { }
+            }
+            """,
+            "CallShader callable data argument type OtherCallableData "
+            "must match callable data parameter type CallableData",
+        ),
+        (
+            """
+            ray_intersection {
+                void main() {
+                    HitAttributeHolder hits;
+                    ReportHit(1.0, 0, hits.wrong);
+                }
+            }
+
+            ray_closest_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute
+                ) { }
+            }
+            """,
+            "ReportHit hit attribute argument type OtherHitAttributes "
+            "must match hit attribute parameter type HitAttributes",
+        ),
+    ],
+)
+def test_invalid_slang_ray_tracing_member_lvalue_interface_types_raise(
+    stage_source, message
+):
+    code = f"""
+    shader InvalidSlangRayInterfaceLvalues {{
+        struct RayPayload {{
+            vec3 color;
+        }};
+
+        struct OtherRayPayload {{
+            vec3 color;
+        }};
+
+        struct CallableData {{
+            uint value;
+        }};
+
+        struct OtherCallableData {{
+            uint value;
+        }};
+
+        struct HitAttributes {{
+            vec2 barycentrics;
+        }};
+
+        struct OtherHitAttributes {{
+            vec2 barycentrics;
+        }};
+
+        struct RayPayloadHolder {{
+            RayPayload primary;
+            RayPayload payloads[2];
+            OtherRayPayload wrong;
+        }};
+
+        struct CallableDataHolder {{
+            CallableData primary;
+            CallableData items[2];
+            OtherCallableData wrong;
+        }};
+
+        struct HitAttributeHolder {{
+            HitAttributes primary;
+            HitAttributes items[2];
+            OtherHitAttributes wrong;
+        }};
+
+        {stage_source}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    OtherRayPayload wrong;
+                    OtherRayPayload& wrongRef = wrong;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, wrongRef);
+                }
+            }
+
+            ray_miss {
+                void main(RayPayload payload @ rayPayloadInEXT) { }
+            }
+            """,
+            "TraceRay payload argument type OtherRayPayload "
+            "must match ray payload parameter type RayPayload",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    OtherRayPayloadHolder wrongs;
+                    OtherRayPayloadHolder* wrongPtr = &wrongs;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, wrongPtr->primary);
+                }
+            }
+
+            ray_miss {
+                void main(RayPayload payload @ rayPayloadInEXT) { }
+            }
+            """,
+            "TraceRay payload argument type OtherRayPayload "
+            "must match ray payload parameter type RayPayload",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    OtherCallableData wrong;
+                    OtherCallableData& wrongRef = wrong;
+                    CallShader(0, wrongRef);
+                }
+            }
+
+            ray_callable {
+                void main(CallableData data @ callableDataInEXT) { }
+            }
+            """,
+            "CallShader callable data argument type OtherCallableData "
+            "must match callable data parameter type CallableData",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    OtherCallableDataHolder wrongs;
+                    OtherCallableDataHolder* wrongPtr = &wrongs;
+                    CallShader(0, wrongPtr->primary);
+                }
+            }
+
+            ray_callable {
+                void main(CallableData data @ callableDataInEXT) { }
+            }
+            """,
+            "CallShader callable data argument type OtherCallableData "
+            "must match callable data parameter type CallableData",
+        ),
+        (
+            """
+            ray_intersection {
+                void main() {
+                    OtherHitAttributes wrong;
+                    OtherHitAttributes& wrongRef = wrong;
+                    ReportHit(1.0, 0, wrongRef);
+                }
+            }
+
+            ray_closest_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute
+                ) { }
+            }
+            """,
+            "ReportHit hit attribute argument type OtherHitAttributes "
+            "must match hit attribute parameter type HitAttributes",
+        ),
+        (
+            """
+            ray_intersection {
+                void main() {
+                    OtherHitAttributeHolder wrongs;
+                    OtherHitAttributeHolder* wrongPtr = &wrongs;
+                    ReportHit(1.0, 0, wrongPtr->primary);
+                }
+            }
+
+            ray_closest_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute
+                ) { }
+            }
+            """,
+            "ReportHit hit attribute argument type OtherHitAttributes "
+            "must match hit attribute parameter type HitAttributes",
+        ),
+    ],
+)
+def test_invalid_slang_ray_tracing_pointer_reference_interface_types_raise(
+    stage_source, message
+):
+    code = f"""
+    shader InvalidSlangRayPointerReferenceInterfaceTypes {{
+        struct RayPayload {{
+            vec3 color;
+        }};
+
+        struct OtherRayPayload {{
+            vec3 color;
+        }};
+
+        struct CallableData {{
+            uint value;
+        }};
+
+        struct OtherCallableData {{
+            uint value;
+        }};
+
+        struct HitAttributes {{
+            vec2 barycentrics;
+        }};
+
+        struct OtherHitAttributes {{
+            vec2 barycentrics;
+        }};
+
+        struct OtherRayPayloadHolder {{
+            OtherRayPayload primary;
+        }};
+
+        struct OtherCallableDataHolder {{
+            OtherCallableData primary;
+        }};
+
+        struct OtherHitAttributeHolder {{
+            OtherHitAttributes primary;
         }};
 
         {stage_source}
@@ -3500,6 +5973,71 @@ def test_invalid_slang_ray_tracing_intrinsic_argument_types_raise(
             }
             """,
             "RayQuery.Proceed receiver.*RayQuery",
+        ),
+        (
+            """
+            compute {
+                void main() {
+                    uint queries[2];
+                    queries[0].CandidateObjectRayOrigin();
+                }
+            }
+            """,
+            "RayQuery.CandidateObjectRayOrigin receiver.*RayQuery",
+        ),
+        (
+            """
+            compute {
+                void main() {
+                    vec3 origin;
+                    origin.CommittedObjectToWorld3x4();
+                }
+            }
+            """,
+            "RayQuery.CommittedObjectToWorld3x4 receiver.*RayQuery",
+        ),
+        (
+            """
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    RayQuery<RAY_FLAG_NONE>* rqPtr = &rq;
+                    rqPtr->Proceed();
+                }
+            }
+            """,
+            "RayQuery.Proceed receiver.*RayQuery",
+        ),
+        (
+            """
+            RayQuery<RAY_FLAG_NONE> pick(RayQuery<RAY_FLAG_NONE> query) {
+                return query;
+            }
+            compute {
+                void main() {
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    pick(rq).Proceed();
+                }
+            }
+            """,
+            "RayQuery.Proceed receiver.*RayQuery lvalue",
+        ),
+        (
+            """
+            struct QueryHolder {
+                RayQuery<RAY_FLAG_NONE> query;
+            }
+            QueryHolder pick(QueryHolder holder) {
+                return holder;
+            }
+            compute {
+                void main() {
+                    QueryHolder holder;
+                    let t = pick(holder).query.CommittedRayT();
+                }
+            }
+            """,
+            "RayQuery.CommittedRayT receiver.*RayQuery lvalue",
         ),
         (
             """
@@ -3568,6 +6106,57 @@ def test_invalid_slang_ray_query_method_arguments_raise(stage_source, message):
     code = f"""
     shader InvalidSlangRayQuery {{
         {stage_source}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("helper_source", "message"),
+    [
+        (
+            """
+            void invalidReceiver(uint value) {
+                value.Proceed();
+            }
+            """,
+            "Slang function RayQuery.Proceed receiver.*RayQuery",
+        ),
+        (
+            """
+            RayQuery<RAY_FLAG_NONE> pick(RayQuery<RAY_FLAG_NONE> query) {
+                return query;
+            }
+            void invalidTemporary(RayQuery<RAY_FLAG_NONE> query) {
+                pick(query).Proceed();
+            }
+            """,
+            "Slang function RayQuery.Proceed receiver.*RayQuery lvalue",
+        ),
+        (
+            """
+            void invalidTrace(
+                RayQuery<RAY_FLAG_NONE> query,
+                uint accelerationStructure,
+                RayDesc ray
+            ) {
+                query.TraceRayInline(accelerationStructure, 0, 0xFF, ray);
+            }
+            """,
+            "Slang function RayQuery.TraceRayInline acceleration structure"
+            ".*RaytracingAccelerationStructure",
+        ),
+    ],
+)
+def test_invalid_slang_ray_query_helper_method_arguments_raise(helper_source, message):
+    code = f"""
+    shader InvalidSlangRayQueryHelper {{
+        {helper_source}
+
+        compute {{
+            void main() {{ }}
+        }}
     }}
     """
     with pytest.raises(ValueError, match=message):
@@ -9411,6 +12000,10 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         ivec2 vectorImageSize;
     };
 
+    struct QueryEnvelope {
+        QueryShapeResult result;
+    };
+
     shader UnsupportedResourceQueries {
         sampler querySampler;
         sampler1d line;
@@ -9422,6 +12015,15 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         image2DMS msImage;
 
         compute {
+            void acceptScalarTexture(int value) {
+            }
+
+            void acceptVectorTexture(ivec2 value) {
+            }
+
+            void acceptEnvelope(QueryEnvelope envelope) {
+            }
+
             void main() {
                 vec2 badMip = vec2(0.0, 1.0);
                 int missingTextureSize = textureSize();
@@ -9463,6 +12065,20 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
                     imageSize(colorImage),
                     imageSize(values)
                 );
+                QueryEnvelope nestedConstructed = QueryEnvelope(QueryShapeResult(
+                    textureSize(colorMap, 0),
+                    textureSize(line, 0),
+                    imageSize(colorImage),
+                    imageSize(values)
+                ));
+                acceptScalarTexture(textureSize(colorMap, 0));
+                acceptVectorTexture(textureSize(line, 0));
+                acceptEnvelope(QueryEnvelope(QueryShapeResult(
+                    textureSize(colorMap, 0),
+                    textureSize(line, 0),
+                    imageSize(colorImage),
+                    imageSize(values)
+                )));
             }
         }
     }
@@ -9611,12 +12227,800 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "/* unsupported Slang resource query: imageSize returns int but target "
         "expects int2 */ int2(0));" in generated_code
     )
-    assert generated_code.count("unsupported Slang resource query") == 35
+    assert (
+        "QueryEnvelope nestedConstructed = QueryEnvelope(QueryShapeResult("
+        "/* unsupported Slang resource query: textureSize returns int2 but target "
+        "expects int */ 0, "
+        "/* unsupported Slang resource query: textureSize returns int but target "
+        "expects int2 */ int2(0), "
+        "/* unsupported Slang resource query: imageSize returns int2 but target "
+        "expects int */ 0, "
+        "/* unsupported Slang resource query: imageSize returns int but target "
+        "expects int2 */ int2(0)));" in generated_code
+    )
+    assert (
+        "acceptScalarTexture(/* unsupported Slang resource query: textureSize "
+        "returns int2 but target expects int */ 0);" in generated_code
+    )
+    assert (
+        "acceptVectorTexture(/* unsupported Slang resource query: textureSize "
+        "returns int but target expects int2 */ int2(0));" in generated_code
+    )
+    assert (
+        "acceptEnvelope(QueryEnvelope(QueryShapeResult("
+        "/* unsupported Slang resource query: textureSize returns int2 but target "
+        "expects int */ 0, "
+        "/* unsupported Slang resource query: textureSize returns int but target "
+        "expects int2 */ int2(0), "
+        "/* unsupported Slang resource query: imageSize returns int2 but target "
+        "expects int */ 0, "
+        "/* unsupported Slang resource query: imageSize returns int but target "
+        "expects int2 */ int2(0))));" in generated_code
+    )
+    assert generated_code.count("unsupported Slang resource query") == 45
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
     assert "textureQueryLevels(" not in generated_code
     assert "textureSamples(" not in generated_code
     assert "imageSamples(" not in generated_code
+
+
+def test_resource_query_expected_types_flow_into_ternaries_and_array_literals():
+    code = """
+    struct QueryShapeResult {
+        int scalarTextureSize;
+        ivec2 vectorTextureSize;
+        int scalarImageSize;
+        ivec2 vectorImageSize;
+    };
+
+    shader ResourceQueryExpectedContexts {
+        sampler1d line;
+        sampler2d colorMap;
+        image1D values;
+        image2D colorImage;
+
+        compute {
+            int chooseScalar(bool take) {
+                return take ? textureSize(colorMap, 0) : imageSize(colorImage);
+            }
+
+            ivec2 chooseVector(bool take) {
+                return take ? textureSize(line, 0) : imageSize(values);
+            }
+
+            void acceptScalarTexture(int value) {
+            }
+
+            void acceptVectorTexture(ivec2 value) {
+            }
+
+            void acceptScalarArray(int values[2]) {
+            }
+
+            void acceptVectorArray(ivec2 values[2]) {
+            }
+
+            void main() {
+                bool take = true;
+                int scalarFromTernary =
+                    take ? textureSize(colorMap, 0) : imageSize(colorImage);
+                ivec2 vectorFromTernary =
+                    take ? textureSize(line, 0) : imageSize(values);
+                QueryShapeResult constructed = QueryShapeResult(
+                    take ? textureSize(colorMap, 0) : imageSize(colorImage),
+                    take ? textureSize(line, 0) : imageSize(values),
+                    take ? imageSize(colorImage) : textureSize(colorMap, 0),
+                    take ? imageSize(values) : textureSize(line, 0)
+                );
+                int scalarArray[2] = {
+                    textureSize(colorMap, 0),
+                    imageSize(colorImage)
+                };
+                ivec2 vectorArray[2] = {
+                    textureSize(line, 0),
+                    imageSize(values)
+                };
+                acceptScalarTexture(
+                    take ? textureSize(colorMap, 0) : imageSize(colorImage)
+                );
+                acceptVectorTexture(
+                    take ? textureSize(line, 0) : imageSize(values)
+                );
+                acceptScalarArray({
+                    textureSize(colorMap, 0),
+                    imageSize(colorImage)
+                });
+                acceptVectorArray({
+                    textureSize(line, 0),
+                    imageSize(values)
+                });
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "return (take ? /* unsupported Slang resource query: textureSize returns "
+        "int2 but target expects int */ 0 : /* unsupported Slang resource query: "
+        "imageSize returns int2 but target expects int */ 0);" in generated_code
+    )
+    assert (
+        "return (take ? /* unsupported Slang resource query: textureSize returns "
+        "int but target expects int2 */ int2(0) : /* unsupported Slang resource "
+        "query: imageSize returns int but target expects int2 */ int2(0));"
+        in generated_code
+    )
+    assert (
+        "int scalarFromTernary = (take ? /* unsupported Slang resource query: "
+        "textureSize returns int2 but target expects int */ 0 : /* unsupported "
+        "Slang resource query: imageSize returns int2 but target expects int */ 0);"
+        in generated_code
+    )
+    assert (
+        "int2 vectorFromTernary = (take ? /* unsupported Slang resource query: "
+        "textureSize returns int but target expects int2 */ int2(0) : "
+        "/* unsupported Slang resource query: imageSize returns int but target "
+        "expects int2 */ int2(0));" in generated_code
+    )
+    assert (
+        "QueryShapeResult constructed = QueryShapeResult((take ? "
+        "/* unsupported Slang resource query: textureSize returns int2 but target "
+        "expects int */ 0 : /* unsupported Slang resource query: imageSize returns "
+        "int2 but target expects int */ 0), (take ? /* unsupported Slang resource "
+        "query: textureSize returns int but target expects int2 */ int2(0) : "
+        "/* unsupported Slang resource query: imageSize returns int but target "
+        "expects int2 */ int2(0)), (take ? /* unsupported Slang resource query: "
+        "imageSize returns int2 but target expects int */ 0 : /* unsupported Slang "
+        "resource query: textureSize returns int2 but target expects int */ 0), "
+        "(take ? /* unsupported Slang resource query: imageSize returns int but "
+        "target expects int2 */ int2(0) : /* unsupported Slang resource query: "
+        "textureSize returns int but target expects int2 */ int2(0)));"
+        in generated_code
+    )
+    assert (
+        "int scalarArray[2] = {/* unsupported Slang resource query: textureSize "
+        "returns int2 but target expects int */ 0, /* unsupported Slang resource "
+        "query: imageSize returns int2 but target expects int */ 0};" in generated_code
+    )
+    assert (
+        "int2 vectorArray[2] = {/* unsupported Slang resource query: textureSize "
+        "returns int but target expects int2 */ int2(0), /* unsupported Slang "
+        "resource query: imageSize returns int but target expects int2 */ int2(0)};"
+        in generated_code
+    )
+    assert (
+        "acceptScalarTexture((take ? /* unsupported Slang resource query: "
+        "textureSize returns int2 but target expects int */ 0 : /* unsupported "
+        "Slang resource query: imageSize returns int2 but target expects int */ 0));"
+        in generated_code
+    )
+    assert (
+        "acceptVectorTexture((take ? /* unsupported Slang resource query: "
+        "textureSize returns int but target expects int2 */ int2(0) : "
+        "/* unsupported Slang resource query: imageSize returns int but target "
+        "expects int2 */ int2(0)));" in generated_code
+    )
+    assert (
+        "acceptScalarArray({/* unsupported Slang resource query: textureSize "
+        "returns int2 but target expects int */ 0, /* unsupported Slang resource "
+        "query: imageSize returns int2 but target expects int */ 0});" in generated_code
+    )
+    assert (
+        "acceptVectorArray({/* unsupported Slang resource query: textureSize "
+        "returns int but target expects int2 */ int2(0), /* unsupported Slang "
+        "resource query: imageSize returns int but target expects int2 */ int2(0)});"
+        in generated_code
+    )
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+
+
+def test_resource_query_expected_types_flow_through_nested_array_return_helpers():
+    code = """
+    shader ResourceQueryNestedArrayContexts {
+        sampler1d line;
+        sampler2d colorMap;
+        image1D values;
+        image2D colorImage;
+
+        compute {
+            int[2] makeScalarRow() {
+                return {
+                    textureSize(colorMap, 0),
+                    imageSize(colorImage)
+                };
+            }
+
+            ivec2[2] makeVectorRow() {
+                return {
+                    textureSize(line, 0),
+                    imageSize(values)
+                };
+            }
+
+            void acceptScalarRows(int rows[2][2]) {
+            }
+
+            void acceptVectorRows(ivec2 rows[2][2]) {
+            }
+
+            void main() {
+                int scalarRows[2][2] = {
+                    makeScalarRow(),
+                    {
+                        textureSize(colorMap, 0),
+                        imageSize(colorImage)
+                    }
+                };
+                ivec2 vectorRows[2][2] = {
+                    makeVectorRow(),
+                    {
+                        textureSize(line, 0),
+                        imageSize(values)
+                    }
+                };
+                acceptScalarRows({
+                    makeScalarRow(),
+                    {
+                        textureSize(colorMap, 0),
+                        imageSize(colorImage)
+                    }
+                });
+                acceptVectorRows({
+                    makeVectorRow(),
+                    {
+                        textureSize(line, 0),
+                        imageSize(values)
+                    }
+                });
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int[2] makeScalarRow()" in generated_code
+    assert "int2[2] makeVectorRow()" in generated_code
+    assert "ivec2[2] makeVectorRow()" not in generated_code
+    assert (
+        "return {/* unsupported Slang resource query: textureSize returns int2 "
+        "but target expects int */ 0, /* unsupported Slang resource query: "
+        "imageSize returns int2 but target expects int */ 0};" in generated_code
+    )
+    assert (
+        "return {/* unsupported Slang resource query: textureSize returns int "
+        "but target expects int2 */ int2(0), /* unsupported Slang resource query: "
+        "imageSize returns int but target expects int2 */ int2(0)};" in generated_code
+    )
+    assert (
+        "int scalarRows[2][2] = {makeScalarRow(), "
+        "{/* unsupported Slang resource query: textureSize returns int2 but target "
+        "expects int */ 0, /* unsupported Slang resource query: imageSize returns "
+        "int2 but target expects int */ 0}};" in generated_code
+    )
+    assert (
+        "int2 vectorRows[2][2] = {makeVectorRow(), "
+        "{/* unsupported Slang resource query: textureSize returns int but target "
+        "expects int2 */ int2(0), /* unsupported Slang resource query: imageSize "
+        "returns int but target expects int2 */ int2(0)}};" in generated_code
+    )
+    assert (
+        "acceptScalarRows({makeScalarRow(), {/* unsupported Slang resource query: "
+        "textureSize returns int2 but target expects int */ 0, /* unsupported "
+        "Slang resource query: imageSize returns int2 but target expects int */ 0}});"
+        in generated_code
+    )
+    assert (
+        "acceptVectorRows({makeVectorRow(), {/* unsupported Slang resource query: "
+        "textureSize returns int but target expects int2 */ int2(0), /* unsupported "
+        "Slang resource query: imageSize returns int but target expects int2 */ "
+        "int2(0)}});" in generated_code
+    )
+    assert generated_code.count("unsupported Slang resource query") == 12
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+
+
+def test_resource_query_struct_array_rows_preserve_remaining_element_types():
+    code = """
+    struct QueryRows {
+        int scalarRows[2][2];
+        ivec2 vectorRows[2][2];
+    };
+
+    shader ResourceQueryStructArrayContexts {
+        sampler1d line;
+        sampler2d colorMap;
+        image1D values;
+        image2D colorImage;
+
+        compute {
+            int[2] passScalarRow(int row[2]) {
+                return row;
+            }
+
+            ivec2[2] passVectorRow(ivec2 row[2]) {
+                return row;
+            }
+
+            QueryRows makeRows() {
+                return QueryRows(
+                    {
+                        passScalarRow({
+                            textureSize(colorMap, 0),
+                            imageSize(colorImage)
+                        }),
+                        {
+                            textureSize(colorMap, 0),
+                            imageSize(colorImage)
+                        }
+                    },
+                    {
+                        passVectorRow({
+                            textureSize(line, 0),
+                            imageSize(values)
+                        }),
+                        {
+                            textureSize(line, 0),
+                            imageSize(values)
+                        }
+                    }
+                );
+            }
+
+            void main() {
+                QueryRows rows = makeRows();
+                rows.scalarRows[0] = {
+                    textureSize(colorMap, 0),
+                    imageSize(colorImage)
+                };
+                rows.vectorRows[0] = {
+                    textureSize(line, 0),
+                    imageSize(values)
+                };
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    codegen = SlangCodeGen()
+    zero = LiteralNode(0, PrimitiveType("int"))
+    codegen.variable_types["nestedRows"] = "int[2][3][4]"
+    row = ArrayAccessNode(IdentifierNode("nestedRows"), zero)
+    plane = ArrayAccessNode(row, zero)
+    assert codegen.expression_result_type(row) == "int[3][4]"
+    assert codegen.expression_result_type(plane) == "int[4]"
+    assert codegen.expression_result_type(ArrayAccessNode(plane, zero)) == "int"
+
+    codegen.variable_types["rows"] = "QueryRows"
+    codegen.struct_member_types["QueryRows"] = {"vectorRows": "ivec2[2][3]"}
+    member_row = ArrayAccessNode(
+        MemberAccessNode(IdentifierNode("rows"), "vectorRows"),
+        zero,
+    )
+    assert codegen.expression_result_type(member_row) == "ivec2[3]"
+
+    assert "int2 vectorRows[2][2];" in generated_code
+    assert "int2[2] passVectorRow(int2 row[2])" in generated_code
+    assert (
+        "return QueryRows({passScalarRow({/* unsupported Slang resource query: "
+        "textureSize returns int2 but target expects int */ 0, /* unsupported "
+        "Slang resource query: imageSize returns int2 but target expects int */ "
+        "0}), {/* unsupported Slang resource query: textureSize returns int2 "
+        "but target expects int */ 0, /* unsupported Slang resource query: "
+        "imageSize returns int2 but target expects int */ 0}}, "
+        "{passVectorRow({/* unsupported Slang resource query: textureSize "
+        "returns int but target expects int2 */ int2(0), /* unsupported Slang "
+        "resource query: imageSize returns int but target expects int2 */ "
+        "int2(0)}), {/* unsupported Slang resource query: textureSize returns "
+        "int but target expects int2 */ int2(0), /* unsupported Slang resource "
+        "query: imageSize returns int but target expects int2 */ int2(0)}});"
+        in generated_code
+    )
+    assert (
+        "rows.scalarRows[0] = {/* unsupported Slang resource query: textureSize "
+        "returns int2 but target expects int */ 0, /* unsupported Slang "
+        "resource query: imageSize returns int2 but target expects int */ 0};"
+        in generated_code
+    )
+    assert (
+        "rows.vectorRows[0] = {/* unsupported Slang resource query: textureSize "
+        "returns int but target expects int2 */ int2(0), /* unsupported Slang "
+        "resource query: imageSize returns int but target expects int2 */ "
+        "int2(0)};" in generated_code
+    )
+    assert generated_code.count("unsupported Slang resource query") == 12
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+
+
+def test_resource_query_expected_types_flow_through_tail_expression_returns():
+    code = """
+    shader ResourceQueryTailExpressionContexts {
+        sampler1d line;
+        sampler2d colorMap;
+        image1D values;
+        image2D colorImage;
+
+        compute {
+            int[2] chooseScalarRow(bool take, int mode) {
+                if (take) {
+                    ({
+                        textureSize(colorMap, 0),
+                        imageSize(colorImage)
+                    })
+                }
+                match mode {
+                    0 => ({
+                        textureSize(colorMap, 0),
+                        imageSize(colorImage)
+                    }),
+                    _ => ({
+                        textureSize(colorMap, 0),
+                        imageSize(colorImage)
+                    })
+                }
+            }
+
+            ivec2[2] chooseVectorRow(bool take, int mode) {
+                if (take) {
+                    ({
+                        textureSize(line, 0),
+                        imageSize(values)
+                    })
+                }
+                match mode {
+                    0 => ({
+                        textureSize(line, 0),
+                        imageSize(values)
+                    }),
+                    _ => ({
+                        textureSize(line, 0),
+                        imageSize(values)
+                    })
+                }
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int[2] chooseScalarRow(bool take, int mode)" in generated_code
+    assert "int2[2] chooseVectorRow(bool take, int mode)" in generated_code
+    assert "ivec2[2] chooseVectorRow" not in generated_code
+    assert (
+        "if (take)\n"
+        "    {\n"
+        "        return {/* unsupported Slang resource query: textureSize returns "
+        "int2 but target expects int */ 0, /* unsupported Slang resource query: "
+        "imageSize returns int2 but target expects int */ 0};\n"
+        "    }" in generated_code
+    )
+    assert (
+        "case 0:\n"
+        "            return {/* unsupported Slang resource query: textureSize "
+        "returns int2 but target expects int */ 0, /* unsupported Slang resource "
+        "query: imageSize returns int2 but target expects int */ 0};" in generated_code
+    )
+    assert (
+        "default:\n"
+        "            return {/* unsupported Slang resource query: textureSize "
+        "returns int2 but target expects int */ 0, /* unsupported Slang resource "
+        "query: imageSize returns int2 but target expects int */ 0};" in generated_code
+    )
+    assert (
+        "return {/* unsupported Slang resource query: textureSize returns int "
+        "but target expects int2 */ int2(0), /* unsupported Slang resource query: "
+        "imageSize returns int but target expects int2 */ int2(0)};" in generated_code
+    )
+    assert generated_code.count("unsupported Slang resource query") == 12
+    assert "break;" not in generated_code
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+
+
+def test_resource_query_expected_types_flow_through_match_expressions():
+    code = """
+    shader ResourceQueryMatchExpressionContexts {
+        sampler1d line;
+        sampler2d colorMap;
+        image1D values;
+        image2D colorImage;
+
+        compute {
+            int[2] chooseScalarRow(int mode) {
+                return match mode {
+                    0 => ({
+                        textureSize(colorMap, 0),
+                        imageSize(colorImage)
+                    }),
+                    _ => ({
+                        textureSize(colorMap, 0),
+                        imageSize(colorImage)
+                    })
+                };
+            }
+
+            ivec2[2] chooseVectorRow(int mode) {
+                return match mode {
+                    0 => ({
+                        textureSize(line, 0),
+                        imageSize(values)
+                    }),
+                    _ => ({
+                        textureSize(line, 0),
+                        imageSize(values)
+                    })
+                };
+            }
+
+            void acceptScalarRow(int row[2]) {
+            }
+
+            void acceptVectorRow(ivec2 row[2]) {
+            }
+
+            void main() {
+                int mode = 0;
+                int scalarRow[2] = match mode {
+                    0 => ({
+                        textureSize(colorMap, 0),
+                        imageSize(colorImage)
+                    }),
+                    _ => ({
+                        textureSize(colorMap, 0),
+                        imageSize(colorImage)
+                    })
+                };
+                ivec2 vectorRow[2];
+                vectorRow = match mode {
+                    0 => ({
+                        textureSize(line, 0),
+                        imageSize(values)
+                    }),
+                    _ => ({
+                        textureSize(line, 0),
+                        imageSize(values)
+                    })
+                };
+                acceptScalarRow(match mode {
+                    0 => ({
+                        textureSize(colorMap, 0),
+                        imageSize(colorImage)
+                    }),
+                    _ => ({
+                        textureSize(colorMap, 0),
+                        imageSize(colorImage)
+                    })
+                });
+                acceptVectorRow(match mode {
+                    0 => ({
+                        textureSize(line, 0),
+                        imageSize(values)
+                    }),
+                    _ => ({
+                        textureSize(line, 0),
+                        imageSize(values)
+                    })
+                });
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "MatchNode(" not in generated_code
+    assert "int2[2] chooseVectorRow(int mode)" in generated_code
+    assert "ivec2[2] chooseVectorRow" not in generated_code
+    assert generated_code.count("switch (mode)") == 6
+    assert "int cgl_match_value[2];" in generated_code
+    assert "int2 cgl_match_value[2];" in generated_code
+    assert "return cgl_match_value;" in generated_code
+    assert "return {/* unsupported Slang resource query" not in generated_code
+    assert (
+        "int scalarRow[2] = cgl_match_value;" in generated_code
+        or "int scalarRow[2] = cgl_match_value_1;" in generated_code
+    )
+    assert (
+        "vectorRow = cgl_match_value;" in generated_code
+        or "vectorRow = cgl_match_value_1;" in generated_code
+    )
+    assert "acceptScalarRow(cgl_match_value" in generated_code
+    assert "acceptVectorRow(cgl_match_value" in generated_code
+    assert (
+        "cgl_match_value = {/* unsupported Slang resource query: textureSize "
+        "returns int2 but target expects int */ 0, /* unsupported Slang resource "
+        "query: imageSize returns int2 but target expects int */ 0};" in generated_code
+    )
+    assert (
+        "cgl_match_value = {/* unsupported Slang resource query: textureSize "
+        "returns int but target expects int2 */ int2(0), /* unsupported Slang "
+        "resource query: imageSize returns int but target expects int2 */ int2(0)};"
+        in generated_code
+    )
+    assert generated_code.count("unsupported Slang resource query") == 24
+    assert "textureSize(" not in generated_code
+    assert "imageSize(" not in generated_code
+
+
+def test_match_expression_defaults_assign_typed_values_for_missing_value_paths():
+    code = """
+    shader SlangMatchExpressionDefaults {
+        compute {
+            int chooseScalar(int mode) {
+                return match mode {
+                    0 => 7,
+                };
+            }
+
+            ivec2[2] chooseVectorRow(int mode) {
+                return match mode {
+                    0 => ({
+                        ivec2(1, 2),
+                        ivec2(3, 4)
+                    }),
+                    1 => {
+                        int scratch = mode;
+                    },
+                };
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "MatchNode(" not in generated_code
+    assert "int chooseScalar(int mode)" in generated_code
+    assert "int2[2] chooseVectorRow(int mode)" in generated_code
+    assert generated_code.count("default:") == 2
+    assert (
+        "cgl_match_value = /* unsupported Slang match expression: no wildcard "
+        "arm handles remaining cases */ 0;" in generated_code
+    )
+    assert (
+        "cgl_match_value = /* unsupported Slang match expression: arm does not "
+        "produce a value */ {int2(0), int2(0)};" in generated_code
+    )
+    assert (
+        "cgl_match_value = /* unsupported Slang match expression: no wildcard "
+        "arm handles remaining cases */ {int2(0), int2(0)};" in generated_code
+    )
+    assert "cgl_match_value = scratch;" not in generated_code
+    assert generated_code.count("unsupported Slang match expression") == 3
+
+
+def test_match_expression_rejects_guarded_and_range_patterns_with_typed_values():
+    code = """
+    shader SlangMatchExpressionPatternDiagnostics {
+        compute {
+            int chooseGuarded(int mode) {
+                return match mode {
+                    0 if mode > 0 => 7,
+                    _ => 1,
+                };
+            }
+
+            ivec2[2] chooseRangeStyle(int mode) {
+                return match mode {
+                    .. => ({
+                        ivec2(1, 2),
+                        ivec2(3, 4)
+                    }),
+                };
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "MatchNode(" not in generated_code
+    assert "if mode > 0" not in generated_code
+    assert "case .." not in generated_code
+    assert (
+        "return /* unsupported Slang match expression: guarded arms cannot be "
+        "lowered to switch */ 0;" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang match expression: range-style patterns "
+        "cannot be lowered to switch */ {int2(0), int2(0)};" in generated_code
+    )
+
+
+def test_match_expression_reports_wildcard_and_destructuring_pattern_diagnostics():
+    code = """
+    shader SlangMatchExpressionPatternDetailDiagnostics {
+        compute {
+            int chooseDuplicateWildcard(int mode) {
+                return match mode {
+                    _ => 1,
+                    _ => 2,
+                };
+            }
+
+            int chooseNonFinalWildcard(int mode) {
+                return match mode {
+                    _ => 1,
+                    0 => 2,
+                };
+            }
+
+            int chooseBinding(int mode) {
+                return match mode {
+                    candidate => candidate,
+                    _ => 0,
+                };
+            }
+
+            int chooseConstructor(int mode) {
+                return match mode {
+                    Option::Some(value) => value,
+                    _ => 0,
+                };
+            }
+
+            int chooseStructDestructure(int mode) {
+                return match mode {
+                    Pair { left, right } => left + right,
+                    _ => 0,
+                };
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "MatchNode(" not in generated_code
+    assert "case candidate" not in generated_code
+    assert "case Option::Some" not in generated_code
+    assert "case Pair" not in generated_code
+    assert "only unguarded literal patterns" not in generated_code
+    assert (
+        "return /* unsupported Slang match expression: multiple wildcard arms "
+        "cannot be lowered to switch */ 0;" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang match expression: wildcard arm must be "
+        "final */ 0;" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang match expression: identifier binding "
+        "patterns cannot be lowered to switch */ 0;" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang match expression: constructor patterns "
+        "cannot be lowered to switch */ 0;" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang match expression: struct destructuring "
+        "patterns cannot be lowered to switch */ 0;" in generated_code
+    )
 
 
 def test_slangc_smoke_compiles_generated_resource_query_helpers_if_available(

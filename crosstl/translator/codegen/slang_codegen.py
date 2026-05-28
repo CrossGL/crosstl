@@ -11,10 +11,12 @@ from ..ast import (
     CaseNode,
     CbufferNode,
     ContinueNode,
+    ConstructorPatternNode,
     ExpressionStatementNode,
     ForInNode,
     ForNode,
     FunctionCallNode,
+    IdentifierPatternNode,
     IdentifierNode,
     FunctionNode,
     IfNode,
@@ -24,11 +26,15 @@ from ..ast import (
     MemberAccessNode,
     MeshOpNode,
     ParameterNode,
+    PointerAccessNode,
+    PointerType,
     RangeNode,
+    ReferenceType,
     ReturnNode,
     RayQueryOpNode,
     RayTracingOpNode,
     ShaderNode,
+    StructPatternNode,
     StructNode,
     SwitchNode,
     TernaryOpNode,
@@ -123,9 +129,16 @@ class SlangCodeGen:
         self.current_shader_type = None
         self.current_expression_expected_type = None
         self.user_function_names = set()
+        self.user_functions_by_name = {}
         self.user_function_return_types = {}
+        self.user_function_parameter_types = {}
         self.user_struct_names = set()
+        self.user_structs_by_name = {}
         self.struct_member_types = {}
+        self.slang_mesh_payload_parameter_types = set()
+        self.slang_ray_payload_parameter_types = set()
+        self.slang_callable_data_parameter_types = set()
+        self.slang_hit_attribute_parameter_types = set()
         self.stage_entry_name_overrides = {}
         self.identifier_aliases = {}
         self.slang_resource_register_cursors = {}
@@ -200,13 +213,29 @@ class SlangCodeGen:
             self.current_shader_type = None
             self.current_expression_expected_type = None
             self.user_function_names = self.collect_user_function_names(ast)
+            self.user_functions_by_name = self.collect_user_functions_by_name(ast)
             self.user_function_return_types = self.collect_user_function_return_types(
                 ast
             )
-            self.user_struct_names = self.collect_user_struct_names(ast)
-            self.struct_member_types = collect_struct_member_types(
-                self.collect_user_structs(ast), self.type_name_string
+            self.user_function_parameter_types = (
+                self.collect_user_function_parameter_types(ast)
             )
+            user_structs = self.collect_user_structs(ast)
+            self.user_struct_names = {
+                struct.name for struct in user_structs if getattr(struct, "name", None)
+            }
+            self.user_structs_by_name = {
+                struct.name: struct
+                for struct in user_structs
+                if getattr(struct, "name", None)
+            }
+            self.struct_member_types = collect_struct_member_types(
+                user_structs, self.type_name_string
+            )
+            self.slang_mesh_payload_parameter_types = set()
+            self.slang_ray_payload_parameter_types = set()
+            self.slang_callable_data_parameter_types = set()
+            self.slang_hit_attribute_parameter_types = set()
             self.stage_entry_name_overrides = {}
             self.identifier_aliases = {}
             self.slang_resource_register_cursors = {}
@@ -262,6 +291,18 @@ class SlangCodeGen:
             # Handle shader stages (new AST structure)
             if hasattr(ast, "stages") and ast.stages:
                 self.validate_slang_tessellation_stage_shapes(ast.stages)
+                self.slang_mesh_payload_parameter_types = (
+                    self.collect_slang_mesh_payload_parameter_types(ast.stages)
+                )
+                self.slang_ray_payload_parameter_types = (
+                    self.collect_slang_ray_payload_parameter_types(ast.stages)
+                )
+                self.slang_callable_data_parameter_types = (
+                    self.collect_slang_callable_data_parameter_types(ast.stages)
+                )
+                self.slang_hit_attribute_parameter_types = (
+                    self.collect_slang_hit_attribute_parameter_types(ast.stages)
+                )
                 self.stage_entry_name_overrides = (
                     self.collect_stage_entry_name_overrides(ast.stages)
                 )
@@ -310,6 +351,40 @@ class SlangCodeGen:
         collect(node)
         names.discard(None)
         return names
+
+    def collect_user_functions_by_name(self, node):
+        functions = {}
+        ambiguous_names = set()
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, FunctionNode):
+                name = getattr(current, "name", None)
+                if name:
+                    if name in functions and functions[name] is not current:
+                        ambiguous_names.add(name)
+                    else:
+                        functions[name] = current
+            for function in getattr(current, "functions", []):
+                collect(function)
+            for function in getattr(current, "local_functions", []):
+                collect(function)
+            collect(getattr(current, "entry_point", None))
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        for name in ambiguous_names:
+            functions.pop(name, None)
+        functions.pop(None, None)
+        return functions
 
     def collect_user_symbol_names(self, node):
         names = set()
@@ -377,6 +452,54 @@ class SlangCodeGen:
         collect(node)
         return_types.pop(None, None)
         return return_types
+
+    def collect_user_function_parameter_types(self, node):
+        parameter_types = {}
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, FunctionNode):
+                type_names = self.function_parameter_type_names(current)
+                if (
+                    current.name in parameter_types
+                    and parameter_types[current.name] != type_names
+                ):
+                    parameter_types[current.name] = []
+                else:
+                    parameter_types[current.name] = type_names
+            for function in getattr(current, "functions", []):
+                collect(function)
+            for function in getattr(current, "local_functions", []):
+                collect(function)
+            collect(getattr(current, "entry_point", None))
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        parameter_types.pop(None, None)
+        return parameter_types
+
+    def function_parameter_type_names(self, function):
+        names = []
+        for parameter in getattr(
+            function, "parameters", getattr(function, "params", [])
+        ):
+            if hasattr(parameter, "param_type"):
+                names.append(self.convert_type_node_to_string(parameter.param_type))
+            elif hasattr(parameter, "vtype"):
+                names.append(str(parameter.vtype))
+            elif isinstance(parameter, (list, tuple)) and parameter:
+                names.append(self.type_name_string(parameter[0]))
+            else:
+                names.append(None)
+        return names
 
     def collect_user_structs(self, node):
         structs = []
@@ -465,6 +588,18 @@ class SlangCodeGen:
 
         stages = getattr(node, "stages", {})
         self.validate_slang_tessellation_stage_shapes(stages)
+        self.slang_mesh_payload_parameter_types = (
+            self.collect_slang_mesh_payload_parameter_types(stages)
+        )
+        self.slang_ray_payload_parameter_types = (
+            self.collect_slang_ray_payload_parameter_types(stages)
+        )
+        self.slang_callable_data_parameter_types = (
+            self.collect_slang_callable_data_parameter_types(stages)
+        )
+        self.slang_hit_attribute_parameter_types = (
+            self.collect_slang_hit_attribute_parameter_types(stages)
+        )
         self.stage_entry_name_overrides = self.collect_stage_entry_name_overrides(
             stages
         )
@@ -1014,6 +1149,34 @@ class SlangCodeGen:
         self.validate_slang_mesh_output_topology(func, stage_name)
         self.validate_slang_numthreads(func, stage_name)
 
+    def validate_slang_mesh_payload_parameter(self, shader_type, parameters):
+        payload_parameters = self.slang_mesh_payload_parameters(parameters)
+        if not payload_parameters:
+            return
+
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        if shader_stage != "mesh":
+            raise ValueError(
+                f"Slang {shader_type} stage cannot declare a mesh payload parameter"
+            )
+        if len(payload_parameters) > 1:
+            raise ValueError(
+                "Slang mesh stage must declare at most one mesh payload parameter"
+            )
+
+        parameter = payload_parameters[0]
+        directions = self.slang_parameter_direction_qualifiers(parameter)
+        if "in" not in directions or directions & {"out", "inout"}:
+            raise ValueError(
+                f"Slang mesh payload parameter '{parameter.name}' "
+                "must use the in qualifier"
+            )
+        if self.slang_parameter_user_struct_type(parameter) is None:
+            raise ValueError(
+                f"Slang mesh payload parameter '{parameter.name}' "
+                "must use a user-defined struct type"
+            )
+
     def validate_slang_stage_body_builtins(
         self, body_statements, stage_name, params, stage_role=None
     ):
@@ -1144,10 +1307,593 @@ class SlangCodeGen:
                 self.is_resource_format_attribute(attr)
                 or self.is_resource_binding_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
+                or self.slang_mesh_payload_parameter_attribute_name(attr)
+                or self.slang_mesh_output_parameter_role(attr)
             ):
                 continue
             if hasattr(attr, "name"):
                 return attr.name
+        return None
+
+    def slang_mesh_output_parameter_role(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return None
+
+        normalized = str(attr_name).lower()
+        if normalized.startswith("slang_"):
+            normalized = normalized[len("slang_") :]
+        elif normalized.startswith("hlsl_"):
+            normalized = normalized[len("hlsl_") :]
+
+        if normalized in {"vertices", "indices", "primitives"}:
+            return normalized
+        return None
+
+    def slang_mesh_output_role_from_parameter(self, parameter):
+        roles = self.slang_mesh_output_roles_from_parameter(parameter)
+        if len(roles) > 1:
+            raise ValueError(
+                f"Slang mesh stage parameter '{parameter.name}' "
+                "can use only one mesh role qualifier"
+            )
+        if roles:
+            return roles[0]
+        return None
+
+    def slang_mesh_output_roles_from_parameter(self, parameter):
+        roles = []
+        for attr in getattr(parameter, "attributes", []) or []:
+            role = self.slang_mesh_output_parameter_role(attr)
+            if role is not None and role not in roles:
+                roles.append(role)
+        return roles
+
+    def slang_parameter_mapped_base_and_array_suffix(self, parameter):
+        type_name = self.slang_parameter_type_name(parameter)
+        if not type_name:
+            return None, None
+
+        mapped_type = self.map_resource_type_with_format(type_name, parameter)
+        return split_array_type_suffix(str(mapped_type))
+
+    def slang_parameter_array_size_expression(self, parameter):
+        type_name = self.slang_parameter_type_name(parameter)
+        if not type_name:
+            return None
+
+        _base_type, array_suffix = split_array_type_suffix(str(type_name))
+        if not array_suffix.startswith("["):
+            return None
+
+        closing_bracket = array_suffix.find("]")
+        if closing_bracket < 0:
+            return None
+        size_expr = array_suffix[1:closing_bracket]
+        if not size_expr:
+            return None
+        return size_expr
+
+    def slang_parameter_array_count(self, parameter):
+        size_expr = self.slang_parameter_array_size_expression(parameter)
+        if size_expr is None:
+            return None
+        return self.slang_int_literal_value(size_expr)
+
+    def validate_slang_mesh_output_array_parameter(self, parameter, role):
+        directions = self.slang_parameter_direction_qualifiers(parameter)
+        if "out" not in directions or directions & {"in", "inout", "const"}:
+            raise ValueError(
+                f"Slang mesh stage {role} parameter '{parameter.name}' "
+                "must use the out qualifier"
+            )
+
+        if self.slang_parameter_array_size_expression(parameter) is None:
+            raise ValueError(
+                f"Slang mesh stage {role} parameter '{parameter.name}' "
+                "must declare a static array size"
+            )
+
+        array_count = self.slang_parameter_array_count(parameter)
+        if array_count is not None and array_count <= 0:
+            raise ValueError(
+                f"Slang mesh stage {role} parameter '{parameter.name}' "
+                "array size must be positive"
+            )
+
+    def slang_set_mesh_output_count_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if isinstance(node, MeshOpNode):
+                if getattr(node, "operation", None) == "SetMeshOutputCounts":
+                    calls.append(getattr(node, "arguments", []))
+                continue
+            if not isinstance(node, FunctionCallNode):
+                continue
+
+            func_expr = getattr(node, "function", None) or getattr(node, "name", None)
+            if hasattr(func_expr, "name"):
+                call_name = func_expr.name
+            elif isinstance(func_expr, str):
+                call_name = func_expr
+            else:
+                call_name = None
+            if call_name == "SetMeshOutputCounts":
+                calls.append(getattr(node, "arguments", getattr(node, "args", [])))
+        return calls
+
+    def validate_slang_mesh_output_parameters(self, func, shader_type, parameters):
+        if self.slang_shader_stage_name(shader_type) != "mesh":
+            return
+
+        role_parameters = {}
+        for parameter in parameters or []:
+            roles = self.slang_mesh_output_roles_from_parameter(parameter)
+            if len(roles) > 1:
+                raise ValueError(
+                    f"Slang mesh stage parameter '{parameter.name}' "
+                    "can use only one mesh role qualifier"
+                )
+            if roles:
+                role_parameters.setdefault(roles[0], []).append(parameter)
+
+        if not role_parameters:
+            return
+
+        for role, role_params in role_parameters.items():
+            if len(role_params) > 1:
+                raise ValueError(
+                    f"Slang mesh stage must declare at most one {role} "
+                    "output parameter"
+                )
+            self.validate_slang_mesh_output_array_parameter(role_params[0], role)
+
+        if "vertices" not in role_parameters:
+            raise ValueError(
+                "Slang mesh stage output signature must declare an out vertices "
+                "array"
+            )
+        if "indices" not in role_parameters:
+            raise ValueError(
+                "Slang mesh stage output signature must declare an out indices array"
+            )
+
+        topology = self.normalized_slang_stage_attribute_argument(
+            func, "outputtopology"
+        )
+        expected_index_types = {
+            "point": "uint",
+            "line": "uint2",
+            "triangle": "uint3",
+        }
+        expected_index_type = expected_index_types.get(topology)
+        if expected_index_type is not None:
+            index_param = role_parameters["indices"][0]
+            index_base_type, _array_suffix = (
+                self.slang_parameter_mapped_base_and_array_suffix(index_param)
+            )
+            if index_base_type != expected_index_type:
+                raise ValueError(
+                    f"Slang mesh stage outputtopology '{topology}' requires "
+                    f"indices parameter '{index_param.name}' to use "
+                    f"{expected_index_type}, got {index_base_type}"
+                )
+
+        if "primitives" in role_parameters:
+            index_count = self.slang_parameter_array_count(
+                role_parameters["indices"][0]
+            )
+            primitive_count = self.slang_parameter_array_count(
+                role_parameters["primitives"][0]
+            )
+            if (
+                index_count is not None
+                and primitive_count is not None
+                and index_count != primitive_count
+            ):
+                raise ValueError(
+                    "Slang mesh stage primitives output array size must match "
+                    "the indices output array size"
+                )
+
+        output_count_calls = self.slang_set_mesh_output_count_calls(func)
+        if len(output_count_calls) != 1:
+            raise ValueError(
+                "Slang mesh stage output signature must call "
+                "SetMeshOutputCounts exactly once"
+            )
+        self.validate_slang_set_mesh_output_counts(
+            output_count_calls[0], role_parameters
+        )
+        self.validate_slang_mesh_output_accesses(func, role_parameters)
+
+    def validate_slang_set_mesh_output_counts(self, args, role_parameters):
+        if len(args) != 2:
+            raise ValueError(
+                "Slang mesh SetMeshOutputCounts requires exactly two arguments"
+            )
+
+        vertex_count = self.slang_int_literal_value(args[0])
+        primitive_count = self.slang_int_literal_value(args[1])
+        declared_counts = {
+            role: self.slang_parameter_array_count(parameters[0])
+            for role, parameters in role_parameters.items()
+            if role in {"vertices", "indices", "primitives"}
+        }
+
+        if (
+            vertex_count is not None
+            and declared_counts.get("vertices") is not None
+            and vertex_count > declared_counts["vertices"]
+        ):
+            raise ValueError(
+                "Slang mesh SetMeshOutputCounts vertex count exceeds the "
+                "vertices output array size"
+            )
+
+        for role in ("indices", "primitives"):
+            if (
+                primitive_count is not None
+                and declared_counts.get(role) is not None
+                and primitive_count > declared_counts[role]
+            ):
+                raise ValueError(
+                    "Slang mesh SetMeshOutputCounts primitive count exceeds the "
+                    f"{role} output array size"
+                )
+
+    def slang_call_name(self, node):
+        if isinstance(node, MeshOpNode):
+            return getattr(node, "operation", None)
+        if not isinstance(node, FunctionCallNode):
+            return None
+
+        func_expr = getattr(node, "function", None) or getattr(node, "name", None)
+        if hasattr(func_expr, "name"):
+            return func_expr.name
+        if isinstance(func_expr, str):
+            return func_expr
+        return None
+
+    def slang_statement_expression(self, statement):
+        if isinstance(statement, ExpressionStatementNode):
+            return getattr(statement, "expression", None)
+        return statement
+
+    def slang_statement_is_set_mesh_output_counts(self, statement):
+        expr = self.slang_statement_expression(statement)
+        return self.slang_call_name(expr) == "SetMeshOutputCounts"
+
+    def slang_mesh_output_role_by_parameter(self, role_parameters):
+        role_by_name = {}
+        for role, parameters in role_parameters.items():
+            if not parameters:
+                continue
+            param_name = getattr(parameters[0], "name", None)
+            if param_name:
+                role_by_name[param_name] = role
+        return role_by_name
+
+    def slang_mesh_output_access(self, target, role_by_name):
+        if isinstance(target, MemberAccessNode):
+            obj = getattr(target, "object", getattr(target, "object_expr", None))
+            return self.slang_mesh_output_access(obj, role_by_name)
+        if isinstance(target, ArrayAccessNode):
+            array = getattr(target, "array", getattr(target, "array_expr", None))
+            array_name = self.identifier_name(array)
+            if array_name in role_by_name:
+                return (
+                    role_by_name[array_name],
+                    array_name,
+                    getattr(target, "index", getattr(target, "index_expr", None)),
+                )
+            return self.slang_mesh_output_access(array, role_by_name)
+
+        target_name = self.identifier_name(target)
+        if target_name in role_by_name:
+            return role_by_name[target_name], target_name, None
+        return None
+
+    def slang_expression_mentions_mesh_output(self, expr, role_by_name):
+        for node in self.walk_ast(expr):
+            if isinstance(node, IdentifierNode) and node.name in role_by_name:
+                return True
+            if self.slang_mesh_output_access(node, role_by_name) is not None:
+                return True
+        return False
+
+    def validate_slang_mesh_output_accesses(self, func, role_parameters):
+        role_by_name = self.slang_mesh_output_role_by_parameter(role_parameters)
+        if not role_by_name:
+            return
+
+        declared_counts = {
+            getattr(parameters[0], "name", None): self.slang_parameter_array_count(
+                parameters[0]
+            )
+            for parameters in role_parameters.values()
+            if parameters and getattr(parameters[0], "name", None)
+        }
+
+        output_counts_seen = False
+        for statement in self.get_statements(getattr(func, "body", [])):
+            if self.slang_statement_is_set_mesh_output_counts(statement):
+                output_counts_seen = True
+                continue
+
+            for node in self.walk_ast(statement):
+                if isinstance(node, ArrayAccessNode):
+                    access = self.slang_mesh_output_access(node, role_by_name)
+                    if access is not None:
+                        self.validate_slang_mesh_output_literal_index(
+                            access, declared_counts
+                        )
+
+                if isinstance(node, AssignmentNode):
+                    access = self.slang_mesh_output_access(node.left, role_by_name)
+                    if access is None:
+                        continue
+                    role, _name, index_expr = access
+                    if index_expr is None:
+                        raise ValueError(
+                            f"Slang mesh {role} output writes must target an "
+                            "indexed output element"
+                        )
+                    if not output_counts_seen:
+                        raise ValueError(
+                            "Slang mesh output writes must occur after "
+                            "SetMeshOutputCounts"
+                        )
+
+                if output_counts_seen or not isinstance(
+                    node, (FunctionCallNode, MeshOpNode)
+                ):
+                    continue
+                if self.slang_call_name(node) == "SetMeshOutputCounts":
+                    continue
+                for arg in getattr(node, "arguments", getattr(node, "args", [])):
+                    if self.slang_expression_mentions_mesh_output(arg, role_by_name):
+                        raise ValueError(
+                            "Slang mesh output arrays cannot be passed to helper "
+                            "calls before SetMeshOutputCounts"
+                        )
+
+    def validate_slang_mesh_output_literal_index(self, access, declared_counts):
+        role, param_name, index_expr = access
+        index_value = self.slang_int_literal_value(index_expr)
+        if index_value is None:
+            return
+
+        declared_count = declared_counts.get(param_name)
+        if declared_count is None:
+            return
+        if index_value < 0 or index_value >= declared_count:
+            raise ValueError(
+                f"Slang mesh {role} output literal index {index_value} exceeds "
+                f"the {role} output array size"
+            )
+
+    def slang_mesh_output_parameter_declaration(
+        self, declaration, parameter, shader_type
+    ):
+        role = self.slang_mesh_output_role_from_parameter(parameter)
+        if role is None:
+            return None
+
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        if shader_stage == "mesh":
+            directions = self.slang_parameter_direction_qualifiers(parameter)
+            if "out" not in directions or directions & {"in", "inout", "const"}:
+                raise ValueError(
+                    f"Slang mesh output parameter '{parameter.name}' "
+                    "must use the out qualifier"
+                )
+            return f"out {role} {declaration}"
+
+        if shader_type:
+            raise ValueError(
+                f"Slang {shader_type} stage cannot declare mesh {role} "
+                "output parameter"
+            )
+
+        return f"{self.slang_parameter_qualifier_prefix(parameter)}{declaration}"
+
+    def slang_mesh_payload_parameter_attribute_name(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return None
+
+        normalized = str(attr_name).lower()
+        if normalized.startswith("slang_"):
+            normalized = normalized[len("slang_") :]
+        elif normalized.startswith("hlsl_"):
+            normalized = normalized[len("hlsl_") :]
+
+        if normalized == "mesh_payload":
+            return "payload"
+        return None
+
+    def is_slang_mesh_payload_parameter(self, parameter):
+        return any(
+            self.slang_mesh_payload_parameter_attribute_name(attr)
+            for attr in getattr(parameter, "attributes", []) or []
+        )
+
+    def slang_mesh_payload_parameters(self, parameters):
+        return [
+            parameter
+            for parameter in parameters or []
+            if self.is_slang_mesh_payload_parameter(parameter)
+        ]
+
+    def collect_slang_mesh_payload_parameter_types(self, stages):
+        payload_types = set()
+        if not isinstance(stages, dict):
+            return payload_types
+
+        for stage_type, stage in stages.items():
+            stage_name = self.get_stage_name(stage_type)
+            if self.slang_shader_stage_name(stage_name) != "mesh":
+                continue
+
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is None:
+                continue
+
+            parameters = getattr(
+                entry_point, "parameters", getattr(entry_point, "params", [])
+            )
+            for parameter in self.slang_mesh_payload_parameters(parameters):
+                payload_type = self.slang_parameter_user_struct_type(parameter)
+                if payload_type is not None:
+                    payload_types.add(payload_type)
+
+        return payload_types
+
+    def collect_slang_callable_data_parameter_types(self, stages):
+        callable_data_types = set()
+        if not isinstance(stages, dict):
+            return callable_data_types
+
+        for stage_type, stage in stages.items():
+            stage_name = self.get_stage_name(stage_type)
+            if self.slang_shader_stage_name(stage_name) != "callable":
+                continue
+
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                parameters = getattr(
+                    entry_point, "parameters", getattr(entry_point, "params", [])
+                )
+                for parameter in parameters or []:
+                    if (
+                        self.slang_ray_semantic_role(parameter, stage_name)
+                        != "callable_data"
+                    ):
+                        continue
+                    callable_type = self.slang_parameter_user_struct_type(parameter)
+                    if callable_type is not None:
+                        callable_data_types.add(callable_type)
+
+            for local_var in self.slang_stage_interface_local_variables(
+                stage_name, getattr(stage, "local_variables", [])
+            ):
+                if (
+                    self.slang_ray_semantic_role(local_var, stage_name)
+                    != "callable_data"
+                ):
+                    continue
+                callable_type = self.slang_parameter_user_struct_type(local_var)
+                if callable_type is not None:
+                    callable_data_types.add(callable_type)
+
+        return callable_data_types
+
+    def collect_slang_ray_payload_parameter_types(self, stages):
+        payload_types = set()
+        if not isinstance(stages, dict):
+            return payload_types
+
+        for stage_type, stage in stages.items():
+            stage_name = self.get_stage_name(stage_type)
+            if (
+                self.slang_shader_stage_name(stage_name)
+                not in self.slang_ray_stage_types()
+            ):
+                continue
+
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                parameters = getattr(
+                    entry_point, "parameters", getattr(entry_point, "params", [])
+                )
+                for parameter in parameters or []:
+                    if self.slang_ray_semantic_role(parameter, stage_name) != "payload":
+                        continue
+                    payload_type = self.slang_parameter_user_struct_type(parameter)
+                    if payload_type is not None:
+                        payload_types.add(payload_type)
+
+            for local_var in self.slang_stage_interface_local_variables(
+                stage_name, getattr(stage, "local_variables", [])
+            ):
+                if self.slang_ray_semantic_role(local_var, stage_name) != "payload":
+                    continue
+                payload_type = self.slang_parameter_user_struct_type(local_var)
+                if payload_type is not None:
+                    payload_types.add(payload_type)
+
+        return payload_types
+
+    def collect_slang_hit_attribute_parameter_types(self, stages):
+        hit_attribute_types = set()
+        if not isinstance(stages, dict):
+            return hit_attribute_types
+
+        for stage_type, stage in stages.items():
+            stage_name = self.get_stage_name(stage_type)
+            if (
+                self.slang_shader_stage_name(stage_name)
+                not in self.slang_ray_stage_types()
+            ):
+                continue
+
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                parameters = getattr(
+                    entry_point, "parameters", getattr(entry_point, "params", [])
+                )
+                for parameter in parameters or []:
+                    if (
+                        self.slang_ray_semantic_role(parameter, stage_name)
+                        != "hit_attribute"
+                    ):
+                        continue
+                    hit_attribute_type = self.slang_parameter_user_struct_type(
+                        parameter
+                    )
+                    if hit_attribute_type is not None:
+                        hit_attribute_types.add(hit_attribute_type)
+
+            for local_var in self.slang_stage_interface_local_variables(
+                stage_name, getattr(stage, "local_variables", [])
+            ):
+                if (
+                    self.slang_ray_semantic_role(local_var, stage_name)
+                    != "hit_attribute"
+                ):
+                    continue
+                hit_attribute_type = self.slang_parameter_user_struct_type(local_var)
+                if hit_attribute_type is not None:
+                    hit_attribute_types.add(hit_attribute_type)
+
+        return hit_attribute_types
+
+    def slang_parameter_direction_qualifiers(self, parameter):
+        return {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+            if str(qualifier).lower() in {"const", "in", "out", "inout"}
+        }
+
+    def slang_parameter_user_struct_type(self, parameter):
+        type_name = self.type_name_string(
+            getattr(
+                parameter,
+                "param_type",
+                getattr(parameter, "var_type", getattr(parameter, "vtype", None)),
+            )
+        )
+        if not type_name:
+            return None
+
+        base_type, array_suffix = split_array_type_suffix(type_name)
+        if array_suffix:
+            return None
+
+        mapped_type = self.convert_type(base_type)
+        if mapped_type in self.user_struct_names:
+            return mapped_type
         return None
 
     def slang_shader_stage_marker_name(self, name):
@@ -1452,19 +2198,191 @@ class SlangCodeGen:
                     "InputPatch<..., N> parameter"
                 )
 
-            if not patch_constant_input_patches or not hull_input_patches:
+            if patch_constant_input_patches and hull_input_patches:
+                _patch_param, patch_shape = patch_constant_input_patches[0]
+                _hull_param, hull_shape = hull_input_patches[0]
+                if patch_shape != hull_shape:
+                    patch_type = self.format_slang_patch_shape(
+                        "InputPatch", patch_shape
+                    )
+                    hull_type = self.format_slang_patch_shape("InputPatch", hull_shape)
+                    raise ValueError(
+                        "Slang tessellation_control stage patchconstantfunc "
+                        f"'{function_name}' {patch_type} must match hull entry "
+                        f"{hull_type}"
+                    )
+
+            self.validate_slang_patch_constant_tess_factor_semantics(
+                entry_point, patch_constant_function, function_name
+            )
+
+    def validate_slang_patch_constant_tess_factor_semantics(
+        self, hull_entry, patch_function, function_name
+    ):
+        return_struct = self.slang_return_struct(patch_function)
+        if return_struct is None:
+            return
+
+        semantics = self.slang_struct_semantics(return_struct)
+        if "sv_tessfactor" not in semantics:
+            raise ValueError(
+                "Slang tessellation_control stage patchconstantfunc "
+                f"'{function_name}' must return a struct containing "
+                "SV_TessFactor"
+            )
+
+        domain = self.normalized_slang_stage_attribute_argument(hull_entry, "domain")
+        domain = self.canonical_slang_tessellation_domain(domain)
+        if domain in {"tri", "quad"} and "sv_insidetessfactor" not in semantics:
+            raise ValueError(
+                "Slang tessellation_control stage patchconstantfunc "
+                f"'{function_name}' must return a struct containing "
+                f"SV_InsideTessFactor for {domain} domains"
+            )
+
+        self.validate_slang_tess_factor_member_types(return_struct, function_name)
+
+        factor_counts = self.slang_struct_semantic_member_counts(return_struct)
+        expected_outer_counts = {
+            "tri": 3,
+            "quad": 4,
+            "isoline": 2,
+        }
+        expected_inner_counts = {
+            "tri": 1,
+            "quad": 2,
+        }
+        expected_outer_count = expected_outer_counts.get(domain)
+        expected_inner_count = expected_inner_counts.get(domain)
+        outer_count = factor_counts.get("sv_tessfactor")
+        inner_count = factor_counts.get("sv_insidetessfactor")
+
+        if (
+            expected_outer_count is not None
+            and outer_count is not None
+            and outer_count != expected_outer_count
+        ):
+            raise ValueError(
+                "Slang tessellation_control stage patchconstantfunc "
+                f"'{function_name}' must return {expected_outer_count} "
+                f"SV_TessFactor value(s) for {domain} domains"
+            )
+        if (
+            expected_inner_count is not None
+            and inner_count is not None
+            and inner_count != expected_inner_count
+        ):
+            raise ValueError(
+                "Slang tessellation_control stage patchconstantfunc "
+                f"'{function_name}' must return {expected_inner_count} "
+                f"SV_InsideTessFactor value(s) for {domain} domains"
+            )
+        if expected_inner_count is None and inner_count is not None:
+            raise ValueError(
+                "Slang tessellation_control stage patchconstantfunc "
+                f"'{function_name}' must not return SV_InsideTessFactor "
+                f"for {domain} domains"
+            )
+
+    def validate_slang_tess_factor_member_types(self, struct_node, function_name):
+        tess_factor_semantics = {
+            "sv_tessfactor": "SV_TessFactor",
+            "sv_insidetessfactor": "SV_InsideTessFactor",
+        }
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.semantic_from_node(member)
+            if semantic is None:
                 continue
 
-            _patch_param, patch_shape = patch_constant_input_patches[0]
-            _hull_param, hull_shape = hull_input_patches[0]
-            if patch_shape != hull_shape:
-                patch_type = self.format_slang_patch_shape("InputPatch", patch_shape)
-                hull_type = self.format_slang_patch_shape("InputPatch", hull_shape)
-                raise ValueError(
-                    "Slang tessellation_control stage patchconstantfunc "
-                    f"'{function_name}' {patch_type} must match hull entry "
-                    f"{hull_type}"
-                )
+            semantic_key = str(self.map_semantic(semantic)).lower()
+            semantic_name = tess_factor_semantics.get(semantic_key)
+            if semantic_name is None:
+                continue
+
+            if self.slang_tess_factor_member_count(member) is not None:
+                continue
+
+            member_name = getattr(member, "name", "<anonymous>")
+            member_type = self.slang_tess_factor_member_type_name(member)
+            mapped_type = self.convert_type(member_type) or member_type
+            raise ValueError(
+                "Slang tessellation_control stage patchconstantfunc "
+                f"'{function_name}' {semantic_name} member '{member_name}' "
+                f"uses invalid type {mapped_type}; tessellation factors "
+                "must use a floating scalar, vector, or scalar array type"
+            )
+
+    def slang_return_struct(self, func):
+        return_type_name = self.type_name_string(
+            getattr(func, "return_type", getattr(func, "vtype", None))
+        )
+        if not return_type_name:
+            return None
+        base_type = return_type_name.split("<", 1)[0].split("[", 1)[0].strip()
+        return self.user_structs_by_name.get(base_type)
+
+    def slang_struct_semantics(self, struct_node):
+        semantics = set()
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.semantic_from_node(member)
+            if semantic is None:
+                continue
+            semantics.add(str(self.map_semantic(semantic)).lower())
+        return semantics
+
+    def slang_struct_semantic_member_counts(self, struct_node):
+        counts = {}
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.semantic_from_node(member)
+            if semantic is None:
+                continue
+            semantic_key = str(self.map_semantic(semantic)).lower()
+            count = self.slang_tess_factor_member_count(member)
+            if count is not None:
+                counts[semantic_key] = counts.get(semantic_key, 0) + count
+        return counts
+
+    def slang_tess_factor_member_count(self, member):
+        type_name = self.slang_tess_factor_member_type_name(member)
+        mapped_type = self.convert_type(type_name)
+        if mapped_type is None:
+            return None
+
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        if array_suffix:
+            if self.slang_tess_factor_scalar_count(base_type) != 1:
+                return None
+
+            first_dimension = array_suffix[1:].split("]", 1)[0]
+            remaining_dimensions = array_suffix.split("]", 1)[1]
+            if remaining_dimensions:
+                return None
+
+            try:
+                return int(first_dimension)
+            except ValueError:
+                return None
+
+        return self.slang_tess_factor_scalar_count(mapped_type)
+
+    def slang_tess_factor_member_type_name(self, member):
+        member_type = getattr(member, "member_type", getattr(member, "vtype", None))
+        if member_type is None and hasattr(member, "element_type"):
+            member_type = member.element_type
+        return self.type_name_string(member_type)
+
+    def slang_tess_factor_scalar_count(self, mapped_type):
+        if mapped_type is None:
+            return None
+
+        for scalar_base in ("min16float", "float", "half", "double"):
+            if mapped_type.startswith(scalar_base):
+                suffix = mapped_type[len(scalar_base) :]
+                if suffix in {"2", "3", "4"}:
+                    return int(suffix)
+                if suffix == "":
+                    return 1
+        return None
 
     def format_slang_patch_shape(self, patch_type, shape):
         element_type, patch_size = shape
@@ -1475,6 +2393,10 @@ class SlangCodeGen:
     def convert_type_node_to_string(self, type_node) -> str:
         if isinstance(type_node, LiteralNode):
             return self.generate_literal(type_node)
+        if isinstance(type_node, PointerType):
+            return f"{self.convert_type_node_to_string(type_node.pointee_type)}*"
+        if isinstance(type_node, ReferenceType):
+            return f"{self.convert_type_node_to_string(type_node.referenced_type)}&"
         if hasattr(type_node, "name"):
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
@@ -1578,6 +2500,29 @@ class SlangCodeGen:
 
     def initializer_expected_type(self, var_type):
         return None if var_type == "auto" else var_type
+
+    def array_literal_element_expected_type(self, expected_type):
+        expected_type = self.type_name_string(expected_type)
+        if not expected_type or "[" not in expected_type:
+            return None
+
+        return self.array_element_type(expected_type)
+
+    def array_element_type(self, array_type):
+        array_type = self.type_name_string(array_type)
+        if not array_type or "[" not in array_type:
+            return None
+
+        base_type, array_suffix = split_array_type_suffix(array_type)
+        if not array_suffix.startswith("["):
+            return None
+
+        closing_bracket = array_suffix.find("]")
+        if closing_bracket < 0:
+            return None
+
+        remaining_suffix = array_suffix[closing_bracket + 1 :]
+        return f"{base_type}{remaining_suffix}" if remaining_suffix else base_type
 
     def register_variable_type(self, name, type_name, node=None):
         if not name or type_name is None:
@@ -2207,12 +3152,20 @@ class SlangCodeGen:
                 node, shader_type, effective_param_list
             )
             self.validate_slang_ray_query_calls(node, shader_type, effective_param_list)
+            self.validate_slang_mesh_payload_parameter(
+                shader_type, effective_param_list
+            )
+            self.validate_slang_mesh_output_parameters(
+                node, shader_type, effective_param_list
+            )
             self.validate_slang_stage_body_builtins(
                 body_statements,
                 shader_type,
                 effective_param_list,
                 stage_role=stage_role,
             )
+        else:
+            self.validate_slang_ray_query_calls(node, "function", effective_param_list)
         params = []
         if effective_param_list:
             if effective_param_list and hasattr(effective_param_list[0], "name"):
@@ -2242,6 +3195,22 @@ class SlangCodeGen:
                     )
                     if ray_declaration is not None:
                         params.append(ray_declaration)
+                        continue
+                    mesh_payload_declaration = (
+                        self.slang_mesh_payload_parameter_declaration(
+                            declaration, param, shader_type
+                        )
+                    )
+                    if mesh_payload_declaration is not None:
+                        params.append(mesh_payload_declaration)
+                        continue
+                    mesh_output_declaration = (
+                        self.slang_mesh_output_parameter_declaration(
+                            declaration, param, shader_type
+                        )
+                    )
+                    if mesh_output_declaration is not None:
+                        params.append(mesh_output_declaration)
                         continue
                     declaration = (
                         self.slang_parameter_qualifier_prefix(param) + declaration
@@ -2942,12 +3911,194 @@ class SlangCodeGen:
                 )
         return calls
 
+    def slang_function_call_name(self, node):
+        if not isinstance(node, FunctionCallNode):
+            return None
+        func_expr = getattr(node, "function", None) or getattr(node, "name", None)
+        if hasattr(func_expr, "name"):
+            return func_expr.name
+        if isinstance(func_expr, str):
+            return func_expr
+        return None
+
+    def slang_user_function_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            call_name = self.slang_function_call_name(node)
+            if call_name in self.user_functions_by_name:
+                calls.append(call_name)
+        return calls
+
+    def slang_user_function_call_nodes(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            call_name = self.slang_function_call_name(node)
+            if call_name in self.user_functions_by_name:
+                calls.append(node)
+        return calls
+
+    def slang_expression_root_identifier(self, expr):
+        if isinstance(expr, IdentifierNode):
+            return expr.name
+        if isinstance(expr, VariableNode):
+            return expr.name
+        if isinstance(expr, ArrayAccessNode):
+            array = getattr(expr, "array", getattr(expr, "array_expr", None))
+            return self.slang_expression_root_identifier(array)
+        if isinstance(expr, MemberAccessNode):
+            obj = getattr(expr, "object", getattr(expr, "object_expr", None))
+            return self.slang_expression_root_identifier(obj)
+        if isinstance(expr, PointerAccessNode):
+            pointer = getattr(expr, "pointer_expr", None)
+            return self.slang_expression_root_identifier(pointer)
+        return None
+
+    def slang_resolve_alias_root(self, root_name, aliases):
+        seen = set()
+        while root_name in aliases and root_name not in seen:
+            seen.add(root_name)
+            root_name = aliases[root_name]
+        return root_name
+
+    def slang_parameter_alias_roots(self, func, parameter_names):
+        aliases = {}
+
+        def alias_root(expr):
+            root_name = self.slang_expression_root_identifier(expr)
+            return self.slang_resolve_alias_root(root_name, aliases)
+
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if isinstance(node, VariableNode):
+                initial_value = getattr(
+                    node, "initial_value", getattr(node, "value", None)
+                )
+                source_root = alias_root(initial_value)
+                if source_root in parameter_names:
+                    aliases[node.name] = source_root
+                continue
+
+            if isinstance(node, AssignmentNode):
+                target = getattr(node, "left", getattr(node, "target", None))
+                target_root = self.slang_expression_root_identifier(target)
+                if target_root in parameter_names:
+                    continue
+                source_root = alias_root(
+                    getattr(node, "right", getattr(node, "value", None))
+                )
+                if target_root and source_root in parameter_names:
+                    aliases[target_root] = source_root
+
+        return aliases
+
+    def slang_ray_interface_argument_role(self, operation, args):
+        if operation == "TraceRay" and args:
+            return args[-1], "payload"
+        if operation == "CallShader" and len(args) >= 2:
+            return args[1], "callable data"
+        if operation == "ReportHit" and len(args) >= 3:
+            return args[2], "hit attribute"
+        return None, None
+
+    def slang_ray_interface_parameter_roles(self, func, visited_helpers=None):
+        if visited_helpers is None:
+            visited_helpers = set()
+
+        func_name = getattr(func, "name", None)
+        if func_name in visited_helpers:
+            return {}
+        if func_name:
+            visited_helpers = visited_helpers | {func_name}
+
+        parameters = getattr(func, "parameters", getattr(func, "params", []))
+        parameter_names = {
+            getattr(parameter, "name", None) for parameter in parameters or []
+        }
+        parameter_names.discard(None)
+        roles = {}
+        alias_roots = self.slang_parameter_alias_roots(func, parameter_names)
+
+        for operation, args in self.slang_ray_tracing_calls(func):
+            argument, role = self.slang_ray_interface_argument_role(operation, args)
+            if argument is None:
+                continue
+            root_name = self.slang_expression_root_identifier(argument)
+            root_name = self.slang_resolve_alias_root(root_name, alias_roots)
+            if root_name in parameter_names and root_name not in roles:
+                roles[root_name] = role
+
+        for call_node in self.slang_user_function_call_nodes(func):
+            helper_name = self.slang_function_call_name(call_node)
+            if helper_name in visited_helpers:
+                continue
+            helper_func = self.user_functions_by_name.get(helper_name)
+            if helper_func is None:
+                continue
+            helper_roles = self.slang_ray_interface_parameter_roles(
+                helper_func, visited_helpers
+            )
+            if not helper_roles:
+                continue
+            helper_params = getattr(
+                helper_func, "parameters", getattr(helper_func, "params", [])
+            )
+            args = getattr(call_node, "arguments", getattr(call_node, "args", []))
+            for index, helper_param in enumerate(helper_params or []):
+                helper_param_name = getattr(helper_param, "name", None)
+                if helper_param_name not in helper_roles or index >= len(args):
+                    continue
+                root_name = self.slang_expression_root_identifier(args[index])
+                root_name = self.slang_resolve_alias_root(root_name, alias_roots)
+                if root_name in parameter_names and root_name not in roles:
+                    roles[root_name] = helper_roles[helper_param_name]
+
+        return roles
+
     def slang_expression_mapped_base_and_array_suffix(self, expr):
         expr_type = self.expression_result_type(expr)
         if expr_type is None:
             return None, ""
+        expr_type = self.reference_referent_type_name(expr_type) or expr_type
         mapped_type = self.convert_type(expr_type)
         return split_array_type_suffix(mapped_type)
+
+    def slang_expression_is_lvalue(self, expr):
+        if isinstance(expr, (VariableNode, IdentifierNode)):
+            return True
+        if isinstance(expr, ArrayAccessNode):
+            return self.slang_expression_is_lvalue(
+                getattr(expr, "array", getattr(expr, "array_expr", None))
+            )
+        if isinstance(expr, MemberAccessNode):
+            return self.slang_expression_is_lvalue(
+                getattr(expr, "object", getattr(expr, "object_expr", None))
+            )
+        if isinstance(expr, PointerAccessNode):
+            return self.slang_expression_is_lvalue(getattr(expr, "pointer_expr", None))
+        return False
+
+    def validate_slang_ray_lvalue_argument(
+        self, argument, shader_type, operation, role
+    ):
+        base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
+            argument
+        )
+        if base_type is None:
+            return
+        if self.slang_expression_is_lvalue(argument):
+            return
+        actual_type = f"{base_type}{array_suffix}"
+        raise ValueError(
+            f"Slang {shader_type} {operation} {role} argument must be "
+            f"an lvalue, got {actual_type}"
+        )
+
+    def slang_parameter_requires_lvalue_argument(self, parameter):
+        directions = self.slang_parameter_direction_qualifiers(parameter)
+        if directions & {"out", "inout"}:
+            return True
+
+        param_type = self.slang_parameter_type_name(parameter)
+        return self.reference_referent_type_name(param_type) is not None
 
     def validate_slang_ray_exact_type_argument(
         self, argument, shader_type, operation, role, expected_type
@@ -3013,6 +4164,60 @@ class SlangCodeGen:
                 f"user-defined struct type, got {actual_type}"
             )
 
+    def validate_slang_call_shader_callable_data_type(self, argument, shader_type):
+        if not self.slang_callable_data_parameter_types:
+            return
+
+        base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
+            argument
+        )
+        if base_type is None or array_suffix:
+            return
+        if base_type in self.slang_callable_data_parameter_types:
+            return
+
+        expected_label = " or ".join(sorted(self.slang_callable_data_parameter_types))
+        raise ValueError(
+            f"Slang {shader_type} CallShader callable data argument type "
+            f"{base_type} must match callable data parameter type {expected_label}"
+        )
+
+    def validate_slang_trace_ray_payload_type(self, argument, shader_type):
+        if not self.slang_ray_payload_parameter_types:
+            return
+
+        base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
+            argument
+        )
+        if base_type is None or array_suffix:
+            return
+        if base_type in self.slang_ray_payload_parameter_types:
+            return
+
+        expected_label = " or ".join(sorted(self.slang_ray_payload_parameter_types))
+        raise ValueError(
+            f"Slang {shader_type} TraceRay payload argument type {base_type} "
+            f"must match ray payload parameter type {expected_label}"
+        )
+
+    def validate_slang_report_hit_attribute_type(self, argument, shader_type):
+        if not self.slang_hit_attribute_parameter_types:
+            return
+
+        base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
+            argument
+        )
+        if base_type is None or array_suffix:
+            return
+        if base_type in self.slang_hit_attribute_parameter_types:
+            return
+
+        expected_label = " or ".join(sorted(self.slang_hit_attribute_parameter_types))
+        raise ValueError(
+            f"Slang {shader_type} ReportHit hit attribute argument type {base_type} "
+            f"must match hit attribute parameter type {expected_label}"
+        )
+
     def validate_slang_trace_ray_arguments(self, args, shader_type):
         self.validate_slang_ray_exact_type_argument(
             args[0],
@@ -3051,6 +4256,10 @@ class SlangCodeGen:
         self.validate_slang_ray_struct_argument(
             args[-1], shader_type, "TraceRay", "payload"
         )
+        self.validate_slang_trace_ray_payload_type(args[-1], shader_type)
+        self.validate_slang_ray_lvalue_argument(
+            args[-1], shader_type, "TraceRay", "payload"
+        )
 
     def validate_slang_ray_tracing_call_arguments(self, operation, args, shader_type):
         if operation == "TraceRay":
@@ -3060,6 +4269,10 @@ class SlangCodeGen:
                 args[0], shader_type, "CallShader", "shader index"
             )
             self.validate_slang_ray_struct_argument(
+                args[1], shader_type, "CallShader", "callable data"
+            )
+            self.validate_slang_call_shader_callable_data_type(args[1], shader_type)
+            self.validate_slang_ray_lvalue_argument(
                 args[1], shader_type, "CallShader", "callable data"
             )
         elif operation == "ReportHit":
@@ -3073,11 +4286,64 @@ class SlangCodeGen:
                 self.validate_slang_ray_struct_argument(
                     args[2], shader_type, "ReportHit", "hit attribute"
                 )
+                self.validate_slang_report_hit_attribute_type(args[2], shader_type)
 
-    def validate_slang_ray_tracing_calls(self, func, shader_type, parameters):
-        calls = self.slang_ray_tracing_calls(func)
-        if not calls:
+    def validate_slang_ray_helper_call_arguments(self, call_node, shader_type):
+        helper_name = self.slang_function_call_name(call_node)
+        helper_func = self.user_functions_by_name.get(helper_name)
+        if helper_func is None:
             return
+
+        roles = self.slang_ray_interface_parameter_roles(helper_func)
+        if not roles:
+            return
+
+        parameters = getattr(
+            helper_func, "parameters", getattr(helper_func, "params", [])
+        )
+        args = getattr(call_node, "arguments", getattr(call_node, "args", []))
+        for index, parameter in enumerate(parameters or []):
+            param_name = getattr(parameter, "name", None)
+            if param_name not in roles or index >= len(args):
+                continue
+            role = roles[param_name]
+            expected_type = self.slang_parameter_type_name(parameter)
+            if not expected_type:
+                continue
+            expected_base, expected_suffix = split_array_type_suffix(
+                self.convert_type(expected_type)
+            )
+            actual_base, actual_suffix = (
+                self.slang_expression_mapped_base_and_array_suffix(args[index])
+            )
+            if actual_base is None:
+                continue
+            if actual_base == expected_base and actual_suffix == expected_suffix:
+                if role in {
+                    "payload",
+                    "callable data",
+                } and self.slang_parameter_requires_lvalue_argument(parameter):
+                    self.validate_slang_ray_lvalue_argument(
+                        args[index], shader_type, helper_name, role
+                    )
+                continue
+            actual_type = f"{actual_base}{actual_suffix}"
+            expected_label = f"{expected_base}{expected_suffix}"
+            raise ValueError(
+                f"Slang {shader_type} {helper_name} {role} "
+                f"argument type {actual_type} must match parameter type "
+                f"{expected_label}"
+            )
+
+    def validate_slang_ray_tracing_calls(
+        self, func, shader_type, parameters, visited_helpers=None
+    ):
+        calls = self.slang_ray_tracing_calls(func)
+        helper_call_nodes = self.slang_user_function_call_nodes(func)
+        if not calls and not helper_call_nodes:
+            return
+        if visited_helpers is None:
+            visited_helpers = set()
 
         shader_stage = self.slang_shader_stage_name(shader_type)
         allowed_stages = {
@@ -3090,7 +4356,7 @@ class SlangCodeGen:
         expected_arg_counts = {
             "TraceRay": {8, 11},
             "CallShader": {2},
-            "ReportHit": {3},
+            "ReportHit": {2, 3},
             "AcceptHitAndEndSearch": {0},
             "IgnoreHit": {0},
         }
@@ -3127,6 +4393,25 @@ class SlangCodeGen:
                     )
                 self.validate_slang_ray_tracing_call_arguments(
                     operation, args, shader_type
+                )
+            for helper_call in helper_call_nodes:
+                self.validate_slang_ray_helper_call_arguments(helper_call, shader_type)
+
+            for helper_call in helper_call_nodes:
+                helper_name = self.slang_function_call_name(helper_call)
+                if helper_name in visited_helpers:
+                    continue
+                helper_func = self.user_functions_by_name.get(helper_name)
+                if helper_func is None or helper_func is func:
+                    continue
+                helper_params = getattr(
+                    helper_func, "parameters", getattr(helper_func, "params", [])
+                )
+                self.validate_slang_ray_tracing_calls(
+                    helper_func,
+                    shader_type,
+                    helper_params,
+                    visited_helpers | {helper_name},
                 )
         finally:
             self.variable_types = saved_variable_types
@@ -3215,6 +4500,16 @@ class SlangCodeGen:
             return None
 
         func_expr = getattr(node, "function", None) or getattr(node, "name", None)
+        if isinstance(func_expr, PointerAccessNode):
+            operation = str(getattr(func_expr, "member", ""))
+            if operation not in self.slang_ray_query_method_names():
+                return None
+            return (
+                operation,
+                getattr(func_expr, "pointer_expr", None),
+                getattr(node, "arguments", getattr(node, "args", [])),
+            )
+
         if not isinstance(func_expr, MemberAccessNode):
             return None
 
@@ -3241,14 +4536,20 @@ class SlangCodeGen:
         )
         if base_type is None:
             return
-        if not (
-            not array_suffix
-            and (base_type == "RayQuery" or base_type.startswith("RayQuery<"))
-        ):
+        is_ray_query_type = base_type == "RayQuery" or (
+            base_type.startswith("RayQuery<") and base_type.endswith(">")
+        )
+        if not (not array_suffix and is_ray_query_type):
             actual_type = f"{base_type}{array_suffix}"
             raise ValueError(
                 f"Slang {shader_type} RayQuery.{operation} receiver must be "
                 f"RayQuery, got {actual_type}"
+            )
+        if not self.slang_expression_is_lvalue(query_expr):
+            actual_type = f"{base_type}{array_suffix}"
+            raise ValueError(
+                f"Slang {shader_type} RayQuery.{operation} receiver must be "
+                f"RayQuery lvalue, got {actual_type}"
             )
 
     def validate_slang_ray_query_call_arguments(
@@ -3342,6 +4643,18 @@ class SlangCodeGen:
 
         qualifier = "in" if role == "hit_attribute" else "inout"
         return f"{qualifier} {declaration}"
+
+    def slang_mesh_payload_parameter_declaration(
+        self, declaration, parameter, shader_type
+    ):
+        if self.slang_shader_stage_name(shader_type) != "mesh":
+            return None
+        if not self.is_slang_mesh_payload_parameter(parameter):
+            return None
+
+        return (
+            f"{self.slang_parameter_qualifier_prefix(parameter)}payload {declaration}"
+        )
 
     def slang_intrinsic_builtin_candidates(self, shader_type):
         shader_stage = self.slang_shader_stage_name(shader_type)
@@ -3676,6 +4989,9 @@ class SlangCodeGen:
 
     def emit_statement(self, node):
         statement = self.generate_statement(node)
+        return self.indent_statement_text(statement)
+
+    def indent_statement_text(self, statement):
         lines = statement.splitlines()
         return "\n".join(
             self.indent() + line if line and not line[0].isspace() else line
@@ -3727,6 +5043,9 @@ class SlangCodeGen:
         elif isinstance(node, AssignmentNode):
             return self.generate_assignment_statement(node)
         elif isinstance(node, ExpressionStatementNode):
+            tail_return = self.generate_tail_expression_statement(node)
+            if tail_return is not None:
+                return tail_return
             prelude, result_names, expr = self.generate_expression_with_prelude(
                 node.expression
             )
@@ -3796,6 +5115,24 @@ class SlangCodeGen:
         else:
             statement = f"{left} {node.operator} {right};"
         return self.statement_with_prelude(prelude, statement)
+
+    def tail_expression_returns(self, node):
+        if not isinstance(node, ExpressionStatementNode):
+            return False
+        if not getattr(node, "is_tail_expression", False):
+            return False
+        return_type = self.type_name_string(self.current_function_return_type)
+        return bool(return_type and return_type != "void")
+
+    def generate_tail_expression_statement(self, node):
+        if not self.tail_expression_returns(node):
+            return None
+        return_type = self.type_name_string(self.current_function_return_type)
+        prelude, _results, value = self.generate_expression_with_prelude(
+            node.expression,
+            return_type,
+        )
+        return self.statement_with_prelude(prelude, f"return {value};")
 
     def generate_for_header_statement(self, node, atomic_value_context=None):
         if atomic_value_context is not None:
@@ -4060,11 +5397,22 @@ class SlangCodeGen:
             return self.expression_result_type(expr.operand)
         if isinstance(expr, AssignmentNode):
             return self.expression_result_type(getattr(expr, "left", None))
+        if isinstance(expr, MatchNode):
+            result_types = []
+            for arm in getattr(expr, "arms", []) or []:
+                _prefix, tail = self.match_expression_tail(getattr(arm, "body", []))
+                result_type = self.expression_result_type(tail)
+                if result_type is not None:
+                    result_types.append(result_type)
+            if result_types and all(
+                result_type == result_types[0] for result_type in result_types
+            ):
+                return result_types[0]
+            return None
         if isinstance(expr, ArrayAccessNode):
             array_type = self.type_name_string(self.expression_result_type(expr.array))
             if array_type and "[" in array_type and "]" in array_type:
-                base_type, _ = split_array_type_suffix(array_type)
-                return base_type
+                return self.array_element_type(array_type)
             return array_type
         if isinstance(expr, MemberAccessNode):
             object_type = self.expression_result_type(expr.object)
@@ -4076,6 +5424,13 @@ class SlangCodeGen:
                 if component_type:
                     return f"{component_type}{len(member)}"
             member_type = self.struct_member_type(object_type, member)
+            if member_type is not None:
+                return member_type
+            return None
+        if isinstance(expr, PointerAccessNode):
+            pointer_type = self.expression_result_type(expr.pointer_expr)
+            member = str(expr.member)
+            member_type = self.struct_member_type(pointer_type, member)
             if member_type is not None:
                 return member_type
             return None
@@ -4169,7 +5524,7 @@ class SlangCodeGen:
     def struct_member_type(self, object_type, member_name):
         if object_type is None or member_name is None:
             return None
-        object_type = self.type_name_string(object_type)
+        object_type = self.type_name_string(self.member_lookup_type_name(object_type))
         if not object_type:
             return None
         object_type, _array_suffix = split_array_type_suffix(object_type)
@@ -4183,8 +5538,18 @@ class SlangCodeGen:
 
     def generate_struct_constructor_arguments(self, struct_name, args):
         expected_types = self.struct_constructor_argument_types(struct_name)
+        return self.generate_call_arguments(args, expected_types)
+
+    def user_function_argument_types(self, function_name):
+        return self.user_function_parameter_types.get(function_name) or []
+
+    def generate_user_function_arguments(self, function_name, args):
+        expected_types = self.user_function_argument_types(function_name)
+        return self.generate_call_arguments(args, expected_types)
+
+    def generate_call_arguments(self, args, expected_types):
         generated_args = []
-        for index, arg in enumerate(args):
+        for index, arg in enumerate(args or []):
             expected_type = (
                 expected_types[index] if index < len(expected_types) else None
             )
@@ -4289,8 +5654,18 @@ class SlangCodeGen:
             )
             return f"{array}[{index}]"
         elif isinstance(node, ArrayLiteralNode):
+            expected_element_type = self.array_literal_element_expected_type(
+                self.current_expression_expected_type
+            )
             elements = ", ".join(
-                self.generate_expression(element) for element in node.elements
+                (
+                    self.generate_expression_with_expected(
+                        element, expected_element_type
+                    )
+                    if expected_element_type is not None
+                    else self.generate_expression(element)
+                )
+                for element in node.elements
             )
             return f"{{{elements}}}"
         elif isinstance(node, MemberAccessNode):
@@ -4299,6 +5674,9 @@ class SlangCodeGen:
                 return hull_output_alias
             obj = self.generate_expression(node.object)
             return f"{obj}.{node.member}"
+        elif isinstance(node, PointerAccessNode):
+            pointer = self.generate_expression(node.pointer_expr)
+            return f"{pointer}->{node.member}"
         elif isinstance(node, BinaryOpNode):
             return self.generate_binary_expression(node)
         elif isinstance(node, WaveOpNode):
@@ -4346,7 +5724,10 @@ class SlangCodeGen:
             ):
                 args = self.generate_struct_constructor_arguments(callee, node.args)
                 return f"{self.convert_type(callee)}({args})"
-            args = ", ".join([self.generate_expression(arg) for arg in node.args])
+            if isinstance(callee, str) and callee in self.user_function_names:
+                args = self.generate_user_function_arguments(callee, node.args)
+            else:
+                args = ", ".join([self.generate_expression(arg) for arg in node.args])
             callee = self.convert_type(callee)
             if (
                 callee == "saturate"
@@ -4373,9 +5754,19 @@ class SlangCodeGen:
             if bool_vector_select is not None:
                 return bool_vector_select
             condition = self.generate_expression(node.condition)
-            true_expr = self.generate_expression(node.true_expr)
-            false_expr = self.generate_expression(node.false_expr)
+            if self.current_expression_expected_type is not None:
+                true_expr = self.generate_expression_with_expected(
+                    node.true_expr, self.current_expression_expected_type
+                )
+                false_expr = self.generate_expression_with_expected(
+                    node.false_expr, self.current_expression_expected_type
+                )
+            else:
+                true_expr = self.generate_expression(node.true_expr)
+                false_expr = self.generate_expression(node.false_expr)
             return f"({condition} ? {true_expr} : {false_expr})"
+        elif isinstance(node, MatchNode):
+            return self.generate_match_expression(node)
         elif isinstance(node, str):
             return node
         else:
@@ -4434,6 +5825,7 @@ class SlangCodeGen:
             )
 
         self.validate_slang_mesh_op_stage(node.operation)
+        self.validate_slang_dispatch_mesh_payload_argument(node)
         args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
         return f"{node.operation}({args})"
 
@@ -4452,6 +5844,43 @@ class SlangCodeGen:
                 f"Slang {self.current_shader_type} stage cannot call DispatchMesh; "
                 "DispatchMesh is only valid in amplification/task/object stages"
             )
+
+    def validate_slang_dispatch_mesh_payload_argument(self, node):
+        if node.operation != "DispatchMesh" or len(node.arguments) != 4:
+            return
+
+        payload_types = sorted(self.slang_mesh_payload_parameter_types)
+        if not payload_types:
+            raise ValueError(
+                "Slang DispatchMesh payload argument requires a mesh stage "
+                "@mesh_payload parameter"
+            )
+
+        payload_type = self.slang_dispatch_mesh_payload_argument_type(node.arguments[3])
+        if payload_type is None or payload_type in payload_types:
+            return
+
+        expected_label = self.slang_dispatch_mesh_payload_type_label(payload_types)
+        raise ValueError(
+            f"Slang DispatchMesh payload argument type {payload_type} must match "
+            f"mesh payload type {expected_label}"
+        )
+
+    def slang_dispatch_mesh_payload_argument_type(self, expr):
+        type_name = self.type_name_string(self.expression_result_type(expr))
+        if not type_name:
+            return None
+
+        base_type, array_suffix = split_array_type_suffix(type_name)
+        mapped_type = self.convert_type(base_type)
+        if array_suffix:
+            return f"{mapped_type}{array_suffix}"
+        return mapped_type
+
+    def slang_dispatch_mesh_payload_type_label(self, payload_types):
+        if len(payload_types) == 1:
+            return payload_types[0]
+        return " or ".join(payload_types)
 
     def unsupported_slang_mesh_op_expression(self, operation, reason):
         return f"/* unsupported Slang mesh intrinsic: {operation} {reason} */ 0"
@@ -4686,10 +6115,10 @@ class SlangCodeGen:
         result = f"switch ({expression})\n{{\n"
 
         arms = getattr(node, "arms", []) or []
-        if not self.validate_match_arms(arms):
+        rejection_reason = self.match_arm_rejection_reason(arms)
+        if rejection_reason is not None:
             raise ValueError(
-                "Unsupported match arm for Slang codegen; only unguarded "
-                "literal patterns and a final wildcard can be lowered to switch"
+                f"Unsupported match arm for Slang codegen; {rejection_reason}"
             )
 
         wildcard_body = None
@@ -4725,28 +6154,275 @@ class SlangCodeGen:
         result += self.indent() + "}"
         return self.statement_with_prelude(prelude, result)
 
+    def generate_match_expression(self, node):
+        expected_type = self.type_name_string(self.current_expression_expected_type)
+        if not expected_type:
+            expected_type = self.expression_result_type(node)
+        if not expected_type or expected_type in {"auto", "void"}:
+            return "/* unsupported Slang match expression: requires typed result context */ 0"
+
+        if not self.expression_prelude_active():
+            return (
+                "/* unsupported Slang match expression: requires statement "
+                f"prelude context */ {self.zero_value_for_type(expected_type)}"
+            )
+
+        arms = getattr(node, "arms", []) or []
+        rejection_reason = self.match_arm_rejection_reason(arms)
+        if rejection_reason is not None:
+            return (
+                f"/* unsupported Slang match expression: {rejection_reason} */ "
+                f"{self.zero_value_for_type(expected_type)}"
+            )
+
+        temp_name = self.unique_expression_temp_name("cgl_match_value")
+        self.register_variable_type(temp_name, expected_type)
+        expression = self.generate_expression(getattr(node, "expression", None))
+        lines = [
+            f"{self.format_declaration(expected_type, temp_name)};",
+            f"switch ({expression})",
+            "{",
+        ]
+
+        wildcard_body = None
+        self.indent_level += 1
+        try:
+            for arm in arms:
+                pattern = getattr(arm, "pattern", None)
+                if isinstance(pattern, WildcardPatternNode):
+                    wildcard_body = getattr(arm, "body", [])
+                    continue
+
+                lines.append(
+                    self.indent() + f"case {self.generate_expression(pattern.literal)}:"
+                )
+                self.indent_level += 1
+                try:
+                    body = getattr(arm, "body", [])
+                    lines.extend(
+                        self.generate_match_expression_arm_lines(
+                            body, temp_name, expected_type
+                        )
+                    )
+                    if not self.match_expression_arm_terminates(body):
+                        lines.append(self.indent() + "break;")
+                finally:
+                    self.indent_level -= 1
+
+            if wildcard_body is not None:
+                lines.append(self.indent() + "default:")
+                self.indent_level += 1
+                try:
+                    lines.extend(
+                        self.generate_match_expression_arm_lines(
+                            wildcard_body, temp_name, expected_type
+                        )
+                    )
+                    if not self.match_expression_arm_terminates(wildcard_body):
+                        lines.append(self.indent() + "break;")
+                finally:
+                    self.indent_level -= 1
+            else:
+                lines.append(self.indent() + "default:")
+                self.indent_level += 1
+                try:
+                    lines.extend(
+                        self.generate_match_expression_diagnostic_assignment_lines(
+                            temp_name,
+                            expected_type,
+                            "no wildcard arm handles remaining cases",
+                        )
+                    )
+                    lines.append(self.indent() + "break;")
+                finally:
+                    self.indent_level -= 1
+        finally:
+            self.indent_level -= 1
+
+        lines.append("}")
+        self.add_expression_prelude(lines, result_name=temp_name)
+        return temp_name
+
+    def generate_match_expression_arm_lines(self, body, temp_name, expected_type):
+        prefix, tail = self.match_expression_tail(body)
+        lines = []
+        for stmt in prefix:
+            lines.extend(self.emit_statement(stmt).splitlines())
+        if tail is None:
+            lines.extend(
+                self.generate_match_expression_diagnostic_assignment_lines(
+                    temp_name, expected_type, "arm does not produce a value"
+                )
+            )
+            return lines
+
+        prelude, _results, value = self.generate_expression_with_prelude(
+            tail, expected_type
+        )
+        statement = self.statement_with_prelude(prelude, f"{temp_name} = {value};")
+        lines.extend(self.indent_statement_text(statement).splitlines())
+        return lines
+
+    def generate_match_expression_diagnostic_assignment_lines(
+        self, temp_name, expected_type, reason
+    ):
+        return [
+            self.indent()
+            + f"{temp_name} = /* unsupported Slang match expression: {reason} */ "
+            f"{self.zero_value_for_type(expected_type)};"
+        ]
+
+    def match_expression_tail(self, body):
+        if body is None:
+            return [], None
+
+        if isinstance(body, ExpressionStatementNode):
+            if getattr(body, "is_tail_expression", False):
+                return [], body.expression
+            return [body], None
+
+        if hasattr(body, "statements"):
+            statements = list(body.statements)
+            if not statements:
+                return [], None
+
+            tail = statements[-1]
+            if isinstance(tail, ExpressionStatementNode) and getattr(
+                tail, "is_tail_expression", False
+            ):
+                return statements[:-1], tail.expression
+            return statements, None
+
+        if isinstance(body, list):
+            statements = body
+        else:
+            statements = [body]
+
+        if not statements:
+            return [], None
+
+        tail = statements[-1]
+        if isinstance(tail, ExpressionStatementNode) and getattr(
+            tail, "is_tail_expression", False
+        ):
+            return statements[:-1], tail.expression
+        if self.is_match_expression_value_node(tail):
+            return statements[:-1], tail
+        return statements, None
+
+    def is_match_expression_value_node(self, node):
+        return isinstance(
+            node,
+            (
+                ArrayAccessNode,
+                ArrayLiteralNode,
+                AssignmentNode,
+                AtomicOpNode,
+                BinaryOpNode,
+                FunctionCallNode,
+                IdentifierNode,
+                LiteralNode,
+                MatchNode,
+                MemberAccessNode,
+                MeshOpNode,
+                RayQueryOpNode,
+                RayTracingOpNode,
+                TernaryOpNode,
+                UnaryOpNode,
+                WaveOpNode,
+            ),
+        ) or isinstance(node, str)
+
+    def match_expression_arm_terminates(self, body):
+        statements = self.get_statements(body)
+        if not statements:
+            return False
+        return isinstance(statements[-1], (BreakNode, ContinueNode, ReturnNode))
+
     def is_supported_match_arm(self, arm):
         if getattr(arm, "guard", None) is not None:
             return False
         pattern = getattr(arm, "pattern", None)
         return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
 
-    def validate_match_arms(self, arms):
+    def match_arm_rejection_reason(self, arms):
         wildcard_index = None
         for index, arm in enumerate(arms):
-            if not self.is_supported_match_arm(arm):
-                return False
-            if isinstance(getattr(arm, "pattern", None), WildcardPatternNode):
+            if getattr(arm, "guard", None) is not None:
+                return "guarded arms cannot be lowered to switch"
+
+            pattern = getattr(arm, "pattern", None)
+            if self.is_range_style_match_pattern(pattern):
+                return "range-style patterns cannot be lowered to switch"
+
+            if isinstance(pattern, WildcardPatternNode):
                 if wildcard_index is not None:
-                    return False
+                    return "multiple wildcard arms cannot be lowered to switch"
                 wildcard_index = index
-        return wildcard_index is None or wildcard_index == len(arms) - 1
+                continue
+
+            if isinstance(pattern, LiteralPatternNode):
+                continue
+
+            if isinstance(pattern, IdentifierPatternNode):
+                return "identifier binding patterns cannot be lowered to switch"
+
+            if isinstance(pattern, ConstructorPatternNode):
+                return "constructor patterns cannot be lowered to switch"
+
+            if isinstance(pattern, StructPatternNode):
+                return "struct destructuring patterns cannot be lowered to switch"
+
+            return (
+                "only unguarded literal patterns and a final wildcard can be "
+                "lowered to switch"
+            )
+
+        if wildcard_index is not None and wildcard_index != len(arms) - 1:
+            return "wildcard arm must be final"
+        return None
+
+    def pointer_pointee_type_name(self, vtype):
+        if isinstance(vtype, PointerType):
+            return self.type_name_string(vtype.pointee_type)
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return None
+        type_name = str(type_name).strip()
+        return type_name[:-1].strip() if type_name.endswith("*") else None
+
+    def reference_referent_type_name(self, vtype):
+        if isinstance(vtype, ReferenceType):
+            return self.type_name_string(vtype.referenced_type)
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return None
+        type_name = str(type_name).strip()
+        return type_name[:-1].strip() if type_name.endswith("&") else None
+
+    def member_lookup_type_name(self, vtype):
+        return (
+            self.pointer_pointee_type_name(vtype)
+            or self.reference_referent_type_name(vtype)
+            or vtype
+        )
+
+    def is_range_style_match_pattern(self, pattern):
+        if isinstance(pattern, RangeNode):
+            return True
+        return isinstance(pattern, IdentifierPatternNode) and pattern.name == ".."
+
+    def validate_match_arms(self, arms):
+        return self.match_arm_rejection_reason(arms) is None
 
     def statement_body_terminates(self, body):
         statements = self.get_statements(body)
         if not statements:
             return False
-        return isinstance(statements[-1], (BreakNode, ContinueNode, ReturnNode))
+        tail = statements[-1]
+        return isinstance(tail, (BreakNode, ContinueNode, ReturnNode)) or (
+            self.tail_expression_returns(tail)
+        )
 
     def get_statements(self, body):
         if body is None:
@@ -4759,6 +6435,20 @@ class SlangCodeGen:
 
     def convert_type(self, type_name):
         """Map a CrossGL type name or type node to a Slang type string."""
+        type_name = self.type_name_string(type_name)
+        if type_name is None:
+            return None
+
+        for suffix in ("*", "&"):
+            if type_name.endswith(suffix):
+                base_type = type_name[: -len(suffix)].strip()
+                return f"{self.convert_type(base_type)}{suffix}"
+
+        base_type, array_suffix = split_array_type_suffix(type_name)
+        if array_suffix:
+            mapped_base_type = self.convert_type(base_type)
+            return f"{mapped_base_type}{array_suffix}"
+
         # Map CrossGL types to Slang types
         type_map = {
             "vec2<f32>": "float2",
@@ -5466,6 +7156,9 @@ class SlangCodeGen:
 
     def zero_value_for_type(self, type_name):
         type_name = self.convert_type(type_name)
+        base_type, array_suffix = split_array_type_suffix(type_name)
+        if array_suffix:
+            return self.zero_array_value(base_type, array_suffix)
         if type_name == "bool":
             return "false"
         if type_name == "uint":
@@ -5478,6 +7171,32 @@ class SlangCodeGen:
         if type_name in self.user_struct_names:
             return f"{type_name}()"
         return "0"
+
+    def zero_array_value(self, base_type, array_suffix):
+        dimensions = self.array_suffix_literal_dimensions(array_suffix)
+        if not dimensions:
+            return "0"
+        return self.zero_array_literal(base_type, dimensions)
+
+    def array_suffix_literal_dimensions(self, array_suffix):
+        dimensions = []
+        remaining = array_suffix
+        while remaining.startswith("["):
+            closing_bracket = remaining.find("]")
+            if closing_bracket < 0:
+                return []
+            size = remaining[1:closing_bracket].strip()
+            if not size.isdigit():
+                return []
+            dimensions.append(int(size))
+            remaining = remaining[closing_bracket + 1 :]
+        return dimensions if not remaining else []
+
+    def zero_array_literal(self, base_type, dimensions):
+        if not dimensions:
+            return self.zero_value_for_type(base_type)
+        element = self.zero_array_literal(base_type, dimensions[1:])
+        return "{" + ", ".join(element for _ in range(dimensions[0])) + "}"
 
     def buffer_load_expression(self, args):
         if len(args) < 2:

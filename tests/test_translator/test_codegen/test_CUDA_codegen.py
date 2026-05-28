@@ -3698,6 +3698,13 @@ class TestCudaCodeGen:
                     value
                 );
                 uint oldMember = atomicAdd(particles[index].counter, value);
+                uint addressOldAdd = atomicAdd(&counters[index], value);
+                uint addressOldCas = atomicCompareExchange(
+                    &counterArrays[which][index],
+                    oldMax,
+                    value
+                );
+                uint addressOldMember = atomicAdd(&particles[index].counter, value);
                 int oldSigned = atomicAdd(signedCounters[index], signedValue);
                 int oldSignedSub = atomicSub(signedCounters[index], signedValue);
                 int oldSignedAnd = atomicAnd(signedCounters[index], signedValue);
@@ -3709,7 +3716,12 @@ class TestCudaCodeGen:
                     signedValue
                 );
                 uint readOnlyOld = atomicAdd(readonlyCounts[index], value);
+                uint readOnlyAddressOld = atomicAdd(&readonlyCounts[index], value);
                 uint2 vectorOld = atomicAdd(vectorCounters[index], uint2(1u, 2u));
+                uint2 vectorAddressOld = atomicAdd(
+                    &vectorCounters[index],
+                    uint2(3u, 4u)
+                );
             }
 
             compute {
@@ -3746,6 +3758,15 @@ class TestCudaCodeGen:
         assert (
             "uint oldMember = atomicAdd(&particles[index].counter, value);" in cuda_code
         )
+        assert "uint addressOldAdd = atomicAdd(&counters[index], value);" in cuda_code
+        assert (
+            "uint addressOldCas = atomicCAS(&counterArrays[which][index], "
+            "oldMax, value);" in cuda_code
+        )
+        assert (
+            "uint addressOldMember = atomicAdd(&particles[index].counter, value);"
+            in cuda_code
+        )
         assert (
             "int oldSigned = atomicAdd(&signedCounters[index], signedValue);"
             in cuda_code
@@ -3776,9 +3797,28 @@ class TestCudaCodeGen:
             "*/ 0u;" in cuda_code
         )
         assert (
+            "uint readOnlyAddressOld = /* unsupported CUDA structured buffer atomic: "
+            "atomicAdd on StructuredBuffer<uint> requires RWStructuredBuffer target "
+            "*/ 0u;" in cuda_code
+        )
+        assert (
             "uint2 vectorOld = /* unsupported CUDA structured buffer atomic: "
             "atomicAdd on RWStructuredBuffer<uint2> requires supported scalar "
             "int/uint/float target */ make_uint2(0u, 0u);" in cuda_code
+        )
+        assert (
+            "uint2 vectorAddressOld = /* unsupported CUDA structured buffer atomic: "
+            "atomicAdd on RWStructuredBuffer<uint2> requires supported scalar "
+            "int/uint/float target */ make_uint2(0u, 0u);" in cuda_code
+        )
+        assert "atomicAdd(&&" not in cuda_code
+        assert "atomicCAS(&&" not in cuda_code
+        assert (
+            "uint readOnlyAddressOld = atomicAdd(&readonlyCounts[index], value);"
+            not in (cuda_code)
+        )
+        assert "uint2 vectorAddressOld = atomicAdd(&vectorCounters[index]" not in (
+            cuda_code
         )
         assert "atomicExchange(" not in cuda_code
         assert "atomicCompareExchange(" not in cuda_code

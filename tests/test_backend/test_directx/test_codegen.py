@@ -347,7 +347,40 @@ BYTE_ADDRESS_VECTOR_OPS_HLSL = textwrap.dedent("""
 
 WAVE_OPS_HLSL = textwrap.dedent("""
     uint main(uint value) : SV_Target0 {
-        return WaveActiveSum(value);
+        bool predicate = value != 0u;
+        uint lane = WaveGetLaneIndex();
+        uint laneCount = WaveGetLaneCount();
+        bool first = WaveIsFirstLane();
+        uint sum = WaveActiveSum(value);
+        uint product = WaveActiveProduct(value);
+        uint minimum = WaveActiveMin(value);
+        uint maximum = WaveActiveMax(value);
+        bool allTrue = WaveActiveAllTrue(predicate);
+        bool anyTrue = WaveActiveAnyTrue(predicate);
+        bool allEqual = WaveActiveAllEqual(value);
+        uint4 ballot = WaveActiveBallot(predicate);
+        uint countBits = WaveActiveCountBits(predicate);
+        uint laneValue = WaveReadLaneAt(value, 0u);
+        uint firstValue = WaveReadLaneFirst(value);
+        uint prefixSum = WavePrefixSum(value);
+        uint prefixProduct = WavePrefixProduct(value);
+        uint prefixCount = WavePrefixCountBits(predicate);
+        uint4 matchMask = WaveMatch(value);
+        uint multiSum = WaveMultiPrefixSum(value, ballot);
+        uint multiProduct = WaveMultiPrefixProduct(value, ballot);
+        uint multiAnd = WaveMultiPrefixBitAnd(value, ballot);
+        uint multiOr = WaveMultiPrefixBitOr(value, ballot);
+        uint multiXor = WaveMultiPrefixBitXor(value, ballot);
+        uint quadX = QuadReadAcrossX(value);
+        uint quadY = QuadReadAcrossY(value);
+        uint quadDiag = QuadReadAcrossDiagonal(value);
+        uint quadLane = QuadReadLaneAt(value, 2u);
+        return lane + laneCount + sum + product + minimum + maximum + laneValue
+            + firstValue + prefixSum + prefixProduct + matchMask.x + multiSum
+            + multiProduct + multiAnd + multiOr + multiXor + quadX + quadY
+            + quadDiag + quadLane + ballot.x + countBits + prefixCount
+            + (first ? 1u : 0u) + (allTrue ? 1u : 0u)
+            + (anyTrue ? 1u : 0u) + (allEqual ? 1u : 0u);
     }
     """).strip()
 
@@ -403,6 +436,16 @@ MATH_INTRINSICS_HLSL = textwrap.dedent("""
         float4 l = lerp(a, b, 0.5);
         float4 s = saturate(l);
         return float4(d, n.x, m.x, l.x);
+    }
+    """).strip()
+
+INTERPOLATION_INTRINSICS_HLSL = textwrap.dedent("""
+    float4 main(float4 color : COLOR0, uint sampleIndex : SV_SampleIndex) : SV_Target0 {
+        int2 snappedOffset = int2(1, -1);
+        float4 atSample = EvaluateAttributeAtSample(color, sampleIndex);
+        float4 atOffset = EvaluateAttributeSnapped(color, snappedOffset);
+        float4 atCentroid = EvaluateAttributeCentroid(color);
+        return atSample + atOffset + atCentroid;
     }
     """).strip()
 
@@ -545,6 +588,119 @@ def test_codegen_mesh_task_stages():
     assert "task" in lowered
 
 
+def test_codegen_mesh_payload_parameters_roundtrip():
+    code = textwrap.dedent("""
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct VertexOut {
+            float4 position : SV_Position;
+        };
+
+        struct PrimitiveOut {
+            bool culled : SV_CullPrimitive;
+            uint layer : SV_RenderTargetArrayIndex;
+        };
+
+        groupshared MeshPayload payload;
+
+        [shader("amplification")]
+        [numthreads(1, 1, 1)]
+        void ASMain() {
+            payload.meshlet = 7u;
+            DispatchMesh(1, 1, 1, payload);
+        }
+
+        [shader("mesh")]
+        [numthreads(32, 1, 1)]
+        [outputtopology("triangle")]
+        void MSMain(
+            in payload MeshPayload payload,
+            out vertices VertexOut verts[3],
+            out indices uint3 tris[1],
+            out primitives PrimitiveOut prims[1]
+        ) {
+            SetMeshOutputCounts(3, 1);
+            verts[0].position = float4(
+                float(payload.meshlet), 0.0, 0.0, 1.0
+            );
+            tris[0] = uint3(0, 1, 2);
+            prims[0].culled = false;
+            prims[0].layer = 0u;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "task {" in crossgl
+    assert "mesh {" in crossgl
+    assert "groupshared MeshPayload payload;" in crossgl
+    assert "@ mesh_payload in MeshPayload payload" in crossgl
+    assert "@ vertices out VertexOut verts[3]" in crossgl
+    assert "@ indices out uvec3 tris[1]" in crossgl
+    assert "@ primitives out PrimitiveOut prims[1]" in crossgl
+    assert "DispatchMesh(1, 1, 1, payload);" in crossgl
+    assert "SetMeshOutputCounts(3, 1);" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "groupshared MeshPayload payload;" in hlsl
+    assert "DispatchMesh(1, 1, 1, payload);" in hlsl
+    assert "in payload MeshPayload payload" in hlsl
+    assert "out vertices VertexOut verts[3]" in hlsl
+    assert "out indices uint3 tris[1]" in hlsl
+    assert "out primitives PrimitiveOut prims[1]" in hlsl
+    assert ": mesh_payload" not in hlsl
+
+
+def test_codegen_mesh_dispatch_mesh_id_semantic_roundtrip():
+    code = textwrap.dedent("""
+        struct VertexOut {
+            float4 position : SV_Position;
+        };
+
+        [shader("mesh")]
+        [numthreads(32, 1, 1)]
+        [outputtopology("triangle")]
+        void MSMain(
+            uint3 dispatchMeshId : SV_DispatchMeshID,
+            uint3 groupId : SV_GroupID,
+            uint3 groupThreadId : SV_GroupThreadID,
+            uint groupIndex : SV_GroupIndex,
+            out vertices VertexOut verts[3],
+            out indices uint3 tris[1]
+        ) {
+            SetMeshOutputCounts(3, 1);
+            verts[0].position = float4(
+                float(dispatchMeshId.x + groupId.x + groupThreadId.x + groupIndex),
+                0.0,
+                0.0,
+                1.0
+            );
+            tris[0] = uint3(0, 1, 2);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "uvec3 dispatchMeshId @ mesh_DispatchMeshID" in crossgl
+    assert "uvec3 groupId @ gl_WorkGroupID" in crossgl
+    assert "uvec3 groupThreadId @ gl_LocalInvocationID" in crossgl
+    assert "uint groupIndex @ gl_LocalInvocationIndex" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "uint3 dispatchMeshId : SV_DispatchMeshID" in hlsl
+    assert "uint3 groupId : SV_GroupID" in hlsl
+    assert "uint3 groupThreadId : SV_GroupThreadID" in hlsl
+    assert "uint groupIndex : SV_GroupIndex" in hlsl
+    assert "mesh_DispatchMeshID" not in hlsl
+    assert "gl_WorkGroupID" not in hlsl
+    assert "gl_LocalInvocationID" not in hlsl
+    assert "gl_LocalInvocationIndex" not in hlsl
+
+
 def test_codegen_raytracing_stage():
     output = generate_crossgl(RAYTRACING_HLSL)
     assert "ray_generation" in output.lower()
@@ -624,8 +780,8 @@ def test_codegen_buffer_method_mapping():
 
 def test_codegen_byte_address_vector_method_mapping():
     output = generate_crossgl(BYTE_ADDRESS_VECTOR_OPS_HLSL)
-    assert "buffer rawInput;" in output
-    assert "buffer rawOutput;" in output
+    assert "ByteAddressBuffer rawInput;" in output
+    assert "RWByteAddressBuffer rawOutput;" in output
     assert "@ register(t3)" in output
     assert "@ register(u4)" in output
     assert "uvec2 pair = buffer_load2(rawInput, offset);" in output
@@ -637,10 +793,92 @@ def test_codegen_byte_address_vector_method_mapping():
     assert ".Load2(" not in output
     assert ".Store4(" not in output
 
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
+    assert "ByteAddressBuffer rawInput : register(t3);" in regenerated_hlsl
+    assert "RWByteAddressBuffer rawOutput : register(u4);" in regenerated_hlsl
+    assert "uint2 pair = rawInput.Load2(offset);" in regenerated_hlsl
+    assert "uint3 triple = rawOutput.Load3((offset + 16));" in regenerated_hlsl
+    assert "uint4 quad = rawOutput.Load4((offset + 32));" in regenerated_hlsl
+    assert "rawOutput.Store2(offset, pair);" in regenerated_hlsl
+    assert "rawOutput.Store3((offset + 16), triple);" in regenerated_hlsl
+    assert "rawOutput.Store4((offset + 32), quad);" in regenerated_hlsl
+    assert "buffer_load2(" not in regenerated_hlsl
+    assert "buffer_store4(" not in regenerated_hlsl
+
 
 def test_codegen_wave_ops_passthrough():
     output = generate_crossgl(WAVE_OPS_HLSL)
-    assert "WaveActiveSum" in output
+    for intrinsic in [
+        "WaveGetLaneIndex()",
+        "WaveGetLaneCount()",
+        "WaveIsFirstLane()",
+        "WaveActiveSum(value)",
+        "WaveActiveProduct(value)",
+        "WaveActiveMin(value)",
+        "WaveActiveMax(value)",
+        "WaveActiveAllTrue(predicate)",
+        "WaveActiveAnyTrue(predicate)",
+        "WaveActiveAllEqual(value)",
+        "WaveActiveBallot(predicate)",
+        "WaveActiveCountBits(predicate)",
+        "WaveReadLaneAt(value, 0)",
+        "WaveReadLaneFirst(value)",
+        "WavePrefixSum(value)",
+        "WavePrefixProduct(value)",
+        "WavePrefixCountBits(predicate)",
+        "WaveMatch(value)",
+        "WaveMultiPrefixSum(value, ballot)",
+        "WaveMultiPrefixProduct(value, ballot)",
+        "WaveMultiPrefixBitAnd(value, ballot)",
+        "WaveMultiPrefixBitOr(value, ballot)",
+        "WaveMultiPrefixBitXor(value, ballot)",
+        "QuadReadAcrossX(value)",
+        "QuadReadAcrossY(value)",
+        "QuadReadAcrossDiagonal(value)",
+        "QuadReadLaneAt(value, 2)",
+    ]:
+        assert intrinsic in output
+    assert "uvec4 ballot = WaveActiveBallot(predicate);" in output
+    assert "uvec4 matchMask = WaveMatch(value);" in output
+
+
+def test_codegen_barrier_intrinsics_import_to_crossgl_builtins():
+    code = textwrap.dedent("""
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 tid : SV_DispatchThreadID) {
+            GroupMemoryBarrierWithGroupSync();
+            GroupMemoryBarrier();
+            DeviceMemoryBarrier();
+            AllMemoryBarrier();
+            DeviceMemoryBarrierWithGroupSync();
+            AllMemoryBarrierWithGroupSync();
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert crossgl.count("workgroupBarrier();") == 3
+    assert crossgl.count("groupMemoryBarrier();") == 1
+    assert crossgl.count("deviceMemoryBarrier();") == 2
+    assert crossgl.count("allMemoryBarrier();") == 2
+    assert "GroupMemoryBarrierWithGroupSync();" not in crossgl
+    assert "GroupMemoryBarrier();" not in crossgl
+    assert "DeviceMemoryBarrier();" not in crossgl
+    assert "AllMemoryBarrier();" not in crossgl
+    assert "DeviceMemoryBarrierWithGroupSync();" not in crossgl
+    assert "AllMemoryBarrierWithGroupSync();" not in crossgl
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert regenerated_hlsl.count("GroupMemoryBarrierWithGroupSync();") == 3
+    assert regenerated_hlsl.count("GroupMemoryBarrier();") == 1
+    assert regenerated_hlsl.count("DeviceMemoryBarrier();") == 2
+    assert regenerated_hlsl.count("AllMemoryBarrier();") == 2
+    assert "workgroupBarrier();" not in regenerated_hlsl
+    assert "groupMemoryBarrier();" not in regenerated_hlsl
+    assert "deviceMemoryBarrier();" not in regenerated_hlsl
+    assert "allMemoryBarrier();" not in regenerated_hlsl
+    assert "DeviceMemoryBarrierWithGroupSync();" not in regenerated_hlsl
+    assert "AllMemoryBarrierWithGroupSync();" not in regenerated_hlsl
 
 
 def test_codegen_resource_arrays_and_spaces():
@@ -891,6 +1129,57 @@ def test_codegen_texture_method_descriptors():
         "dropped_parameters"
     ] == ["LOD clamp", "status output"]
     assert (
+        converter.texture_method_descriptor("SampleCmpLevel", 4)["function"]
+        == "textureCompareLod"
+    )
+    assert (
+        converter.texture_method_descriptor("SampleCmpLevel", 5)["function"]
+        == "textureCompareLodOffset"
+    )
+    assert converter.texture_method_descriptor("SampleCmpLevel", 6)[
+        "dropped_parameters"
+    ] == ["status output"]
+    assert (
+        converter.texture_method_descriptor("SampleCmpGrad", 5)["function"]
+        == "textureCompareGrad"
+    )
+    assert (
+        converter.texture_method_descriptor("SampleCmpGrad", 6)["function"]
+        == "textureCompareGradOffset"
+    )
+    assert converter.texture_method_descriptor("SampleCmpGrad", 8)[
+        "dropped_parameters"
+    ] == ["LOD clamp", "status output"]
+    sample_cmp_bias = converter.texture_method_descriptor(
+        "SampleCmpBias", 4, "Texture2D<float>"
+    )
+    assert sample_cmp_bias["function"] == "textureCompare"
+    assert sample_cmp_bias["usage"] == "comparison"
+    assert sample_cmp_bias["dropped_parameters"] == ["LOD bias"]
+    sample_cmp_bias_offset = converter.texture_method_descriptor(
+        "SampleCmpBias", 5, "Texture2DArray<float>"
+    )
+    assert sample_cmp_bias_offset["function"] == "textureCompareOffset"
+    assert sample_cmp_bias_offset["dropped_parameters"] == ["LOD bias"]
+    sample_cmp_bias_status = converter.texture_method_descriptor(
+        "SampleCmpBias", 7, "Texture2D<float>"
+    )
+    assert sample_cmp_bias_status["function"] == "textureCompareOffset"
+    assert sample_cmp_bias_status["dropped_parameters"] == [
+        "LOD bias",
+        "LOD clamp",
+        "status output",
+    ]
+    sample_cmp_bias_cube = converter.texture_method_descriptor(
+        "SampleCmpBias", 6, "TextureCube<float>"
+    )
+    assert sample_cmp_bias_cube["function"] == "textureCompare"
+    assert sample_cmp_bias_cube["dropped_parameters"] == [
+        "LOD bias",
+        "LOD clamp",
+        "status output",
+    ]
+    assert (
         converter.texture_method_descriptor("SampleCmpLevelZero", 4)["function"]
         == "textureCompareOffset"
     )
@@ -911,6 +1200,23 @@ def test_codegen_texture_method_descriptors():
     assert converter.texture_method_descriptor("GatherCmp", 5)[
         "dropped_parameters"
     ] == ["status output"]
+    assert (
+        converter.texture_method_descriptor("GatherCmpRed", 3)["function"]
+        == "textureGatherCompare"
+    )
+    assert (
+        converter.texture_method_descriptor("GatherCmpRed", 4)["function"]
+        == "textureGatherCompareOffset"
+    )
+    assert converter.texture_method_descriptor("GatherCmpRed", 5)[
+        "dropped_parameters"
+    ] == ["status output"]
+    gather_cmp_red_offsets = converter.texture_method_descriptor("GatherCmpRed", 7)
+    assert gather_cmp_red_offsets["fallback_expression"] == "vec4(0.0)"
+    assert "four-offset overload" in gather_cmp_red_offsets["diagnostic_reason"]
+    gather_cmp_green = converter.texture_method_descriptor("GatherCmpGreen", 4)
+    assert gather_cmp_green["fallback_expression"] == "vec4(0.0)"
+    assert "component selector" in gather_cmp_green["diagnostic_reason"]
     assert converter.texture_method_descriptor("GatherBlue", 2) == {
         "member": "GatherBlue",
         "function": "textureGather",
@@ -957,6 +1263,15 @@ def test_codegen_texture_method_descriptors():
         == "textureCompare"
     )
     assert (
+        converter.texture_method_descriptor("SampleCmpLevel", 5, "TextureCube")[
+            "function"
+        ]
+        == "textureCompareLod"
+    )
+    assert converter.texture_method_descriptor("SampleCmpGrad", 7, "TextureCubeArray")[
+        "dropped_parameters"
+    ] == ["LOD clamp", "status output"]
+    assert (
         converter.texture_method_descriptor("Gather", 3, "TextureCubeArray")["function"]
         == "textureGather"
     )
@@ -1001,6 +1316,12 @@ def test_codegen_texture_method_descriptors():
     assert converter.resource_method_descriptor("Load", 4, "Texture2DMS<float4>")[
         "dropped_parameters"
     ] == ["status output"]
+    assert converter.resource_method_descriptor("Load", 3, "RWTexture2DMS<float4>")[
+        "dropped_parameters"
+    ] == ["status output"]
+    assert converter.resource_method_descriptor("Load", 3, "RWTexture2DMSArray<uint>")[
+        "dropped_parameters"
+    ] == ["status output"]
     assert (
         converter.texture_method_descriptor("GetDimensions", 1)["function"]
         == "buffer_dimensions"
@@ -1009,12 +1330,74 @@ def test_codegen_texture_method_descriptors():
         converter.texture_method_descriptor("GetDimensions", 2)["function"]
         == "texture_dimensions"
     )
+    assert (
+        converter.resource_method_descriptor(
+            "GetDimensions", 2, "StructuredBuffer<float4>"
+        )["function"]
+        == "buffer_dimensions"
+    )
+    assert (
+        converter.resource_method_descriptor("GetDimensions", 2, "Texture2D<float4>")[
+            "function"
+        ]
+        == "texture_dimensions"
+    )
     assert converter.texture_method_descriptor("Store", 2) is None
     assert converter.resource_method_descriptor("Load", 1)["resource"] == "buffer"
     assert converter.resource_method_descriptor("Load", 2)["resource"] == "texture"
     assert (
         converter.resource_method_descriptor("GetDimensions", 1)["operation"]
         == "dimensions"
+    )
+    assert converter.texture_method_descriptor("CalculateLevelOfDetail", 2) == {
+        "member": "CalculateLevelOfDetail",
+        "function": "textureQueryLod",
+        "texture_function": "textureQueryLod",
+        "buffer_function": None,
+        "component": None,
+        "usage": "regular",
+        "buffer_when_max_args": None,
+        "result_component": ".y",
+    }
+    assert (
+        converter.resource_method_descriptor(
+            "CalculateLevelOfDetailUnclamped", 2, "Texture2D<float4>"
+        )["result_component"]
+        == ".x"
+    )
+    assert (
+        converter.resource_method_descriptor(
+            "CalculateLevelOfDetail", 2, "Texture2D<float4>"
+        )["operation"]
+        == "query_lod"
+    )
+    invalid_lod = converter.resource_method_descriptor(
+        "CalculateLevelOfDetail", 2, "Texture2DMS<float4>"
+    )
+    assert invalid_lod["fallback_expression"] == "0.0"
+    assert "unavailable for multisample textures" in invalid_lod["diagnostic_reason"]
+    assert converter.texture_method_descriptor("GetSamplePosition", 1) == {
+        "member": "GetSamplePosition",
+        "function": "textureSamplePosition",
+        "texture_function": "textureSamplePosition",
+        "buffer_function": None,
+        "component": None,
+        "usage": "regular",
+        "buffer_when_max_args": None,
+        "diagnostic_label": "texture sample-position query",
+    }
+    assert (
+        converter.resource_method_descriptor(
+            "GetSamplePosition", 1, "Texture2DMSArray<float4>"
+        )["operation"]
+        == "query_sample_position"
+    )
+    invalid_sample_position = converter.resource_method_descriptor(
+        "GetSamplePosition", 1, "Texture2D<float4>"
+    )
+    assert invalid_sample_position["fallback_expression"] == "vec2(0.0, 0.0)"
+    assert (
+        "sampled multisample textures" in invalid_sample_position["diagnostic_reason"]
     )
     assert converter.resource_method_descriptor("Store", 2) == {
         "member": "Store",
@@ -1194,6 +1577,260 @@ def test_codegen_texture_compare_and_gather_offsets_roundtrip_through_translator
     assert "textureCompareOffset(" not in hlsl
     assert "textureGatherOffset(" not in hlsl
     assert "textureGatherCompareOffset(" not in hlsl
+
+
+def test_codegen_texture_gather_compare_red_imports_to_helpers():
+    code = textwrap.dedent("""
+        Texture2D<float> shadowMap : register(t0);
+        Texture2DArray<float> shadowArray : register(t1);
+        SamplerComparisonState compareSampler : register(s0);
+
+        float4 main(
+            float2 uv : TEXCOORD0,
+            float3 uvLayer : TEXCOORD1,
+            float depth : TEXCOORD2,
+            int2 offset0 : TEXCOORD3,
+            int2 offset1 : TEXCOORD4,
+            int2 offset2 : TEXCOORD5,
+            int2 offset3 : TEXCOORD6,
+            uint status : TEXCOORD7
+        ) : SV_Target {
+            float4 red = shadowMap.GatherCmpRed(compareSampler, uv, depth);
+            float4 redOffset = shadowArray.GatherCmpRed(
+                compareSampler, uvLayer, depth, offset0
+            );
+            float4 redStatus = shadowArray.GatherCmpRed(
+                compareSampler, uvLayer, depth, offset0, status
+            );
+            float4 redOffsets = shadowArray.GatherCmpRed(
+                compareSampler, uvLayer, depth, offset0, offset1, offset2, offset3
+            );
+            float4 redOffsetsStatus = shadowArray.GatherCmpRed(
+                compareSampler, uvLayer, depth,
+                offset0, offset1, offset2, offset3, status
+            );
+            float4 green = shadowArray.GatherCmpGreen(
+                compareSampler, uvLayer, depth, offset0
+            );
+            return red + redOffset + redStatus + redOffsets + redOffsetsStatus
+                + green;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "sampler2DShadow shadowMap;" in crossgl
+    assert "sampler2DArrayShadow shadowArray;" in crossgl
+    assert "textureGatherCompare(shadowMap, compareSampler, uv, depth)" in crossgl
+    assert (
+        "textureGatherCompareOffset(shadowArray, compareSampler, uvLayer, depth, "
+        "offset0)"
+    ) in crossgl
+    assert (
+        crossgl.count(
+            "unsupported DirectX texture overload extras for GatherCmpRed: "
+            "dropped status output"
+        )
+        == 2
+    )
+    assert (
+        "textureGatherCompareOffset(shadowArray, compareSampler, uvLayer, depth, "
+        "offset0).x"
+    ) in crossgl
+    assert (
+        "textureGatherCompareOffset(shadowArray, compareSampler, uvLayer, depth, "
+        "offset1).y"
+    ) in crossgl
+    assert (
+        "textureGatherCompareOffset(shadowArray, compareSampler, uvLayer, depth, "
+        "offset2).z"
+    ) in crossgl
+    assert (
+        "textureGatherCompareOffset(shadowArray, compareSampler, uvLayer, depth, "
+        "offset3).w"
+    ) in crossgl
+    assert (
+        "unsupported DirectX texture gather-compare component for Texture2DArray: "
+        "GatherCmpGreen requires a compare-gather component selector"
+    ) in crossgl
+    assert "GatherCmpRed four-offset overload" not in crossgl
+    assert "vec4(0.0)" in crossgl
+    assert ".GatherCmpRed(" not in crossgl
+    assert ".GatherCmpGreen(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "shadowMap.GatherCmp(compareSampler, uv, depth)" in hlsl
+    assert "shadowArray.GatherCmp(compareSampler, uvLayer, depth, offset0)" in hlsl
+    assert "shadowArray.GatherCmp(compareSampler, uvLayer, depth, offset0).x" in hlsl
+    assert "shadowArray.GatherCmp(compareSampler, uvLayer, depth, offset1).y" in hlsl
+    assert "shadowArray.GatherCmp(compareSampler, uvLayer, depth, offset2).z" in hlsl
+    assert "shadowArray.GatherCmp(compareSampler, uvLayer, depth, offset3).w" in hlsl
+    assert "GatherCmpRed" not in hlsl
+    assert "GatherCmpGreen" not in hlsl
+
+
+def test_codegen_texture_compare_lod_grad_member_imports_to_helpers():
+    code = textwrap.dedent("""
+        Texture2D<float> shadowMap : register(t0);
+        TextureCube<float> cubeShadow : register(t1);
+        SamplerComparisonState compareSampler : register(s0);
+
+        float4 main(
+            float2 uv : TEXCOORD0,
+            float depth : TEXCOORD1,
+            float lod : TEXCOORD2,
+            float2 ddx : TEXCOORD3,
+            float2 ddy : TEXCOORD4,
+            int2 offset : TEXCOORD5,
+            uint status : TEXCOORD6,
+            float3 direction : TEXCOORD7,
+            float3 ddx3 : TEXCOORD8,
+            float3 ddy3 : TEXCOORD9
+        ) : SV_Target {
+            float lodValue = shadowMap.SampleCmpLevel(
+                compareSampler, uv, depth, lod
+            );
+            float lodOffset = shadowMap.SampleCmpLevel(
+                compareSampler, uv, depth, lod, offset
+            );
+            float lodStatus = shadowMap.SampleCmpLevel(
+                compareSampler, uv, depth, lod, offset, status
+            );
+            float gradValue = shadowMap.SampleCmpGrad(
+                compareSampler, uv, depth, ddx, ddy
+            );
+            float gradOffset = shadowMap.SampleCmpGrad(
+                compareSampler, uv, depth, ddx, ddy, offset
+            );
+            float gradStatus = shadowMap.SampleCmpGrad(
+                compareSampler, uv, depth, ddx, ddy, offset, 0.0, status
+            );
+            float cubeLod = cubeShadow.SampleCmpLevel(
+                compareSampler, direction, depth, lod, status
+            );
+            float cubeGrad = cubeShadow.SampleCmpGrad(
+                compareSampler, direction, depth, ddx3, ddy3, 0.0, status
+            );
+            return float4(
+                lodValue + lodOffset + lodStatus + gradValue + gradOffset
+                + gradStatus + cubeLod + cubeGrad
+            );
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "sampler2DShadow shadowMap;" in crossgl
+    assert "samplerCubeShadow cubeShadow;" in crossgl
+    assert "textureCompareLod(shadowMap, compareSampler, uv, depth, lod)" in crossgl
+    assert (
+        "textureCompareLodOffset(shadowMap, compareSampler, uv, depth, lod, offset)"
+        in crossgl
+    )
+    assert "textureCompareGrad(shadowMap, compareSampler, uv, depth, ddx, ddy)" in (
+        crossgl
+    )
+    assert (
+        "textureCompareGradOffset("
+        "shadowMap, compareSampler, uv, depth, ddx, ddy, offset)" in crossgl
+    )
+    assert (
+        "textureCompareLod(cubeShadow, compareSampler, direction, depth, lod)"
+        in crossgl
+    )
+    assert (
+        "textureCompareGrad("
+        "cubeShadow, compareSampler, direction, depth, ddx3, ddy3)" in crossgl
+    )
+    assert (
+        "unsupported DirectX texture overload extras for SampleCmpLevel: "
+        "dropped status output"
+    ) in crossgl
+    assert (
+        "unsupported DirectX texture overload extras for SampleCmpGrad: "
+        "dropped LOD clamp, status output"
+    ) in crossgl
+    assert ".SampleCmpLevel(" not in crossgl
+    assert ".SampleCmpGrad(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "shadowMap.SampleCmpLevel(compareSampler, uv, depth, lod)" in hlsl
+    assert "shadowMap.SampleCmpLevel(compareSampler, uv, depth, lod, offset)" in hlsl
+    assert "shadowMap.SampleCmpGrad(compareSampler, uv, depth, ddx, ddy)" in hlsl
+    assert (
+        "shadowMap.SampleCmpGrad(compareSampler, uv, depth, ddx, ddy, offset)" in hlsl
+    )
+    assert "cubeShadow.SampleCmpLevel(compareSampler, direction, depth, lod)" in hlsl
+    assert "cubeShadow.SampleCmpGrad(compareSampler, direction, depth, ddx3, ddy3)" in (
+        hlsl
+    )
+    assert "lod, offset, status" not in hlsl
+    assert "ddy, offset, 0.0, status" not in hlsl
+    assert "lod, status" not in hlsl
+    assert "ddy3, 0.0, status" not in hlsl
+
+
+def test_codegen_texture_compare_bias_member_imports_as_compare_with_diagnostics():
+    code = textwrap.dedent("""
+        Texture2D<float> shadowMap : register(t0);
+        Texture2DArray<float> shadowArray : register(t1);
+        TextureCube<float> cubeShadow : register(t2);
+        SamplerComparisonState compareSampler : register(s0);
+
+        float4 main(
+            float2 uv : TEXCOORD0,
+            float3 uvLayer : TEXCOORD1,
+            float3 direction : TEXCOORD2,
+            float depth : TEXCOORD3,
+            float bias : TEXCOORD4,
+            int2 offset : TEXCOORD5
+        ) : SV_Target {
+            float sampled = shadowMap.SampleCmpBias(
+                compareSampler, uv, depth, bias
+            );
+            uint status;
+            float offsetSampled = shadowArray.SampleCmpBias(
+                compareSampler, uvLayer, depth, bias, offset, 0.0, status
+            );
+            float cubeSampled = cubeShadow.SampleCmpBias(
+                compareSampler, direction, depth, bias, 0.0, status
+            );
+            return float4(sampled + offsetSampled + cubeSampled);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "sampler2DShadow shadowMap;" in crossgl
+    assert "sampler2DArrayShadow shadowArray;" in crossgl
+    assert "samplerCubeShadow cubeShadow;" in crossgl
+    assert (
+        "unsupported DirectX texture overload extras for SampleCmpBias: "
+        "dropped LOD bias"
+    ) in crossgl
+    assert (
+        "unsupported DirectX texture overload extras for SampleCmpBias: "
+        "dropped LOD bias, LOD clamp, status output"
+    ) in crossgl
+    assert "textureCompare(shadowMap, compareSampler, uv, depth)" in crossgl
+    assert (
+        "textureCompareOffset(shadowArray, compareSampler, uvLayer, depth, offset)"
+        in crossgl
+    )
+    assert "textureCompare(cubeShadow, compareSampler, direction, depth)" in crossgl
+    assert ".SampleCmpBias(" not in crossgl
+    assert "textureCompare(shadowMap, compareSampler, uv, depth, bias)" not in crossgl
+
+    parse_crossgl(crossgl)
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "shadowMap.SampleCmp(compareSampler, uv, depth)" in hlsl
+    assert "shadowArray.SampleCmp(compareSampler, uvLayer, depth, offset)" in hlsl
+    assert "cubeShadow.SampleCmp(compareSampler, direction, depth)" in hlsl
+    assert ".SampleCmpBias(" not in hlsl
+    assert "bias, offset" not in hlsl
+    assert "0.0, status" not in hlsl
 
 
 def test_codegen_texture_status_and_clamp_overloads_import_as_valid_crossgl():
@@ -1423,6 +2060,167 @@ def test_codegen_tiled_resource_status_loads_import_as_diagnostics():
     assert ", status" not in crossgl
 
     parse_crossgl(crossgl)
+
+
+def test_codegen_tiled_resource_status_only_loads_roundtrip_without_offsets():
+    code = textwrap.dedent("""
+        Texture1D ramp : register(t0);
+        Texture2D colorMap : register(t1);
+        Texture2DArray layers : register(t2);
+        Texture3D volume : register(t3);
+        Texture2DMS<float4> msMap : register(t4);
+        Texture2DMSArray<float4> msLayers : register(t5);
+
+        float4 main(
+            int x : TEXCOORD0,
+            int2 pixel : TEXCOORD1,
+            int3 pixelLayer : TEXCOORD2,
+            int3 voxel : TEXCOORD3,
+            int lod : TEXCOORD4,
+            int sampleIndex : TEXCOORD5
+        ) : SV_Target0 {
+            uint status = 0;
+            float4 line = ramp.Load(int2(x, lod), status);
+            float4 color = colorMap.Load(int3(pixel, lod), status);
+            float4 layer = layers.Load(int4(pixelLayer, lod), status);
+            float4 volumeColor = volume.Load(int4(voxel, lod), status);
+            float4 ms = msMap.Load(pixel, sampleIndex, status);
+            float4 msLayer = msLayers.Load(pixelLayer, sampleIndex, status);
+            bool mapped = CheckAccessFullyMapped(status);
+            return mapped ? line + color + layer + volumeColor + ms + msLayer
+                : float4(0.0, 0.0, 0.0, 0.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert (
+        crossgl.count(
+            "unsupported DirectX tiled-resource status for Load: "
+            "dropped status output"
+        )
+        == 6
+    )
+    assert "texelFetch(ramp, x, lod)" in crossgl
+    assert "texelFetch(colorMap, pixel, lod)" in crossgl
+    assert "texelFetch(layers, pixelLayer, lod)" in crossgl
+    assert "texelFetch(volume, voxel, lod)" in crossgl
+    assert "texelFetch(msMap, pixel, sampleIndex)" in crossgl
+    assert "texelFetch(msLayers, pixelLayer, sampleIndex)" in crossgl
+    assert "texelFetchOffset(" not in crossgl
+    assert ".Load(" not in crossgl
+    assert ", status" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "float4 line = ramp.Load(int2(x, lod));" in hlsl
+    assert "float4 color = colorMap.Load(int3(pixel, lod));" in hlsl
+    assert "float4 layer = layers.Load(int4(pixelLayer, lod));" in hlsl
+    assert "float4 volumeColor = volume.Load(int4(voxel, lod));" in hlsl
+    assert "float4 ms = msMap.Load(pixel, sampleIndex);" in hlsl
+    assert "float4 msLayer = msLayers.Load(pixelLayer, sampleIndex);" in hlsl
+    assert "bool mapped = true;" in hlsl
+    assert "CheckAccessFullyMapped(" not in hlsl
+    assert "texelFetch(" not in hlsl
+    assert "texelFetchOffset(" not in hlsl
+    assert ", status" not in hlsl
+
+
+def test_codegen_multisample_storage_image_status_loads_roundtrip_to_srv_reads():
+    code = textwrap.dedent("""
+        RWTexture2DMS<float4> msImage : register(u0);
+        RWTexture2DMSArray<uint> counters : register(u1);
+
+        float4 main(
+            int2 pixel : TEXCOORD0,
+            int3 pixelLayer : TEXCOORD1,
+            int sampleIndex : TEXCOORD2
+        ) : SV_Target0 {
+            uint status = 0;
+            float4 color = msImage.Load(pixel, sampleIndex, status);
+            uint count = counters.Load(pixelLayer, sampleIndex, status);
+            bool mapped = CheckAccessFullyMapped(status);
+            return mapped ? color + float4(count, count, count, count) : float4(0.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert (
+        crossgl.count(
+            "unsupported DirectX tiled-resource status for Load: "
+            "dropped status output"
+        )
+        == 2
+    )
+    assert (
+        "unsupported DirectX tiled-resource status check: "
+        "CheckAccessFullyMapped assumed fully mapped"
+    ) in crossgl
+    assert "imageLoad(msImage, pixel, sampleIndex)" in crossgl
+    assert "imageLoad(counters, pixelLayer, sampleIndex)" in crossgl
+    assert ".Load(" not in crossgl
+    assert ", status)" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Texture2DMS<float4> msImage : register(t0);" in hlsl
+    assert "Texture2DMSArray<uint> counters : register(t1);" in hlsl
+    assert "float4 color = msImage.Load(pixel, sampleIndex);" in hlsl
+    assert "uint count = counters.Load(pixelLayer, sampleIndex);" in hlsl
+    assert "bool mapped = true;" in hlsl
+    assert "RWTexture2DMS" not in hlsl
+    assert "RWTexture2DMSArray" not in hlsl
+    assert "CheckAccessFullyMapped(" not in hlsl
+    assert ", status)" not in hlsl
+
+
+@pytest.mark.parametrize(
+    ("resource_decl", "main_signature", "load_expr", "type_name"),
+    [
+        (
+            "RWTexture2DMS<float4> msImage : register(u0);",
+            "float4 main(int2 pixel : TEXCOORD0, float sampleIndex : TEXCOORD1) : SV_Target0",
+            "msImage.Load(pixel, sampleIndex)",
+            "float",
+        ),
+        (
+            "RWTexture2DMSArray<uint> counters : register(u0);",
+            "float4 main(int3 pixelLayer : TEXCOORD0, int2 sampleIndex : TEXCOORD1) : SV_Target0",
+            "float4(counters.Load(pixelLayer, sampleIndex), 0.0, 0.0, 1.0)",
+            "int2",
+        ),
+        (
+            "RWTexture2DMS<float4> msImage : register(u0);",
+            "float4 main(int2 pixel : TEXCOORD0) : SV_Target0",
+            "msImage.Load(pixel, msImage)",
+            "RWTexture2DMS<float4>",
+        ),
+    ],
+)
+def test_codegen_multisample_storage_image_load_rejects_bad_sample_index_roundtrip(
+    resource_decl, main_signature, load_expr, type_name
+):
+    code = textwrap.dedent(f"""
+        {resource_decl}
+
+        {main_signature} {{
+            return {load_expr};
+        }}
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+    assert "imageLoad(" in crossgl
+    assert ".Load(" not in crossgl
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX multisample image operation 'imageLoad' requires a scalar "
+            f"integer sample index argument: .* has type {type_name}"
+        ),
+    ):
+        TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
 
 def test_codegen_resource_array_receivers_use_canonical_calls():
@@ -1806,14 +2604,547 @@ def test_codegen_math_intrinsics_mapping():
     assert "clamp(" in output
 
 
+def test_codegen_interpolation_intrinsics_roundtrip():
+    crossgl = generate_crossgl(INTERPOLATION_INTRINSICS_HLSL)
+
+    assert "interpolateAtSample(color, sampleIndex)" in crossgl
+    assert "interpolateAtOffset(color, snappedOffset)" in crossgl
+    assert "interpolateAtCentroid(color)" in crossgl
+    assert "EvaluateAttribute" not in crossgl
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "EvaluateAttributeAtSample(color, sampleIndex)" in regenerated_hlsl
+    assert "EvaluateAttributeSnapped(color, snappedOffset)" in regenerated_hlsl
+    assert "EvaluateAttributeCentroid(color)" in regenerated_hlsl
+    assert "interpolateAtSample(" not in regenerated_hlsl
+    assert "interpolateAtOffset(" not in regenerated_hlsl
+    assert "interpolateAtCentroid(" not in regenerated_hlsl
+
+
 def test_codegen_get_dimensions_mapping():
     output = generate_crossgl(DIMENSIONS_HLSL)
-    assert "texture_dimensions" in output
+    assert "w = uint(textureSize(tex, 0).x);" in output
+    assert "h = uint(textureSize(tex, 0).y);" in output
+    assert "texture_dimensions" not in output
     assert "buffer_dimensions" in output
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
     assert "buf.GetDimensions(len);" in regenerated_hlsl
+    assert "texture_dimensions" not in regenerated_hlsl
     assert "buffer_dimensions" not in regenerated_hlsl
+
+
+def test_codegen_get_dimensions_out_parameters_import_to_queries():
+    code = textwrap.dedent("""
+        Texture2D<float4> colorMap : register(t0);
+        Texture2DArray<float4> layerMap : register(t1);
+        Texture2DMS<float4> msMap : register(t2);
+        RWTexture3D<float4> volume : register(u0);
+        StructuredBuffer<float4> structs : register(t3);
+
+        void main(uint lod : TEXCOORD0) {
+            uint baseWidth;
+            uint baseHeight;
+            uint baseLevels;
+            uint arrayWidth;
+            uint arrayHeight;
+            uint arrayElements;
+            uint arrayLevels;
+            uint msWidth;
+            uint msHeight;
+            uint msSamples;
+            uint volumeWidth;
+            uint volumeHeight;
+            uint volumeDepth;
+            uint structCount;
+            uint stride;
+            colorMap.GetDimensions(baseWidth, baseHeight, baseLevels);
+            layerMap.GetDimensions(lod, arrayWidth, arrayHeight, arrayElements, arrayLevels);
+            msMap.GetDimensions(msWidth, msHeight, msSamples);
+            volume.GetDimensions(volumeWidth, volumeHeight, volumeDepth);
+            structs.GetDimensions(structCount, stride);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert ".GetDimensions(" not in crossgl
+    assert "texture_dimensions(" not in crossgl
+    assert "baseWidth = uint(textureSize(colorMap, 0).x);" in crossgl
+    assert "baseHeight = uint(textureSize(colorMap, 0).y);" in crossgl
+    assert "baseLevels = uint(textureQueryLevels(colorMap));" in crossgl
+    assert "arrayWidth = uint(textureSize(layerMap, lod).x);" in crossgl
+    assert "arrayHeight = uint(textureSize(layerMap, lod).y);" in crossgl
+    assert "arrayElements = uint(textureSize(layerMap, lod).z);" in crossgl
+    assert "arrayLevels = uint(textureQueryLevels(layerMap));" in crossgl
+    assert "msWidth = uint(textureSize(msMap).x);" in crossgl
+    assert "msHeight = uint(textureSize(msMap).y);" in crossgl
+    assert "msSamples = uint(textureSamples(msMap));" in crossgl
+    assert "volumeWidth = uint(imageSize(volume).x);" in crossgl
+    assert "volumeHeight = uint(imageSize(volume).y);" in crossgl
+    assert "volumeDepth = uint(imageSize(volume).z);" in crossgl
+    assert "buffer_dimensions(structs, structCount, stride);" in crossgl
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "texture_dimensions(" not in regenerated_hlsl
+    assert "buffer_dimensions(" not in regenerated_hlsl
+    assert "structs.GetDimensions(structCount, stride);" in regenerated_hlsl
+    assert "int textureQueryLevels(Texture2D tex)" in regenerated_hlsl
+    assert "int3 textureSize(Texture2DArray tex, int lod)" in regenerated_hlsl
+    assert "int2 textureSize(Texture2DMS<float4> tex)" in regenerated_hlsl
+    assert "int3 imageSize(RWTexture3D<float4> image)" in regenerated_hlsl
+
+
+def test_codegen_get_dimensions_edge_overloads_import_to_queries():
+    code = textwrap.dedent("""
+        Texture1D<float4> lineMap : register(t0);
+        Texture1DArray<float4> lineArray : register(t1);
+        TextureCube<float4> cubeMap : register(t2);
+        TextureCubeArray<float4> cubeArray : register(t3);
+        RWTexture1DArray<float4> imageArray : register(u0);
+        Texture2DMSArray<float4> msArray : register(t4);
+        RWTexture2DMSArray<float4> msImage : register(u1);
+
+        void main(uint lod : TEXCOORD0) {
+            uint lineWidth;
+            uint lineLevels;
+            uint arrayWidth;
+            uint arrayElements;
+            uint arrayLevels;
+            uint cubeWidth;
+            uint cubeHeight;
+            uint cubeLevels;
+            uint cubeArrayWidth;
+            uint cubeArrayHeight;
+            uint cubeArrayElements;
+            uint cubeArrayLevels;
+            uint imageWidth;
+            uint imageElements;
+            uint msWidth;
+            uint msHeight;
+            uint msElements;
+            uint msSamples;
+            uint msImageWidth;
+            uint msImageHeight;
+            uint msImageElements;
+            uint msImageSamples;
+            lineMap.GetDimensions(lineWidth, lineLevels);
+            lineArray.GetDimensions(lod, arrayWidth, arrayElements, arrayLevels);
+            cubeMap.GetDimensions(cubeWidth, cubeHeight, cubeLevels);
+            cubeArray.GetDimensions(
+                lod, cubeArrayWidth, cubeArrayHeight, cubeArrayElements,
+                cubeArrayLevels
+            );
+            imageArray.GetDimensions(imageWidth, imageElements);
+            msArray.GetDimensions(msWidth, msHeight, msElements, msSamples);
+            msImage.GetDimensions(
+                msImageWidth, msImageHeight, msImageElements, msImageSamples
+            );
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert ".GetDimensions(" not in crossgl
+    assert "texture_dimensions(" not in crossgl
+    assert "lineWidth = uint(textureSize(lineMap, 0));" in crossgl
+    assert "lineLevels = uint(textureQueryLevels(lineMap));" in crossgl
+    assert "arrayWidth = uint(textureSize(lineArray, lod).x);" in crossgl
+    assert "arrayElements = uint(textureSize(lineArray, lod).y);" in crossgl
+    assert "arrayLevels = uint(textureQueryLevels(lineArray));" in crossgl
+    assert "cubeWidth = uint(textureSize(cubeMap, 0).x);" in crossgl
+    assert "cubeHeight = uint(textureSize(cubeMap, 0).y);" in crossgl
+    assert "cubeLevels = uint(textureQueryLevels(cubeMap));" in crossgl
+    assert "cubeArrayWidth = uint(textureSize(cubeArray, lod).x);" in crossgl
+    assert "cubeArrayHeight = uint(textureSize(cubeArray, lod).y);" in crossgl
+    assert "cubeArrayElements = uint(textureSize(cubeArray, lod).z);" in crossgl
+    assert "cubeArrayLevels = uint(textureQueryLevels(cubeArray));" in crossgl
+    assert "imageWidth = uint(imageSize(imageArray).x);" in crossgl
+    assert "imageElements = uint(imageSize(imageArray).y);" in crossgl
+    assert "msWidth = uint(textureSize(msArray).x);" in crossgl
+    assert "msHeight = uint(textureSize(msArray).y);" in crossgl
+    assert "msElements = uint(textureSize(msArray).z);" in crossgl
+    assert "msSamples = uint(textureSamples(msArray));" in crossgl
+    assert "msImageWidth = uint(imageSize(msImage).x);" in crossgl
+    assert "msImageHeight = uint(imageSize(msImage).y);" in crossgl
+    assert "msImageElements = uint(imageSize(msImage).z);" in crossgl
+    assert "msImageSamples = uint(textureSamples(msImage));" in crossgl
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "int textureSize(Texture1D tex, int lod)" in regenerated_hlsl
+    assert "int2 textureSize(Texture1DArray tex, int lod)" in regenerated_hlsl
+    assert "int2 textureSize(TextureCube tex, int lod)" in regenerated_hlsl
+    assert "int3 textureSize(TextureCubeArray tex, int lod)" in regenerated_hlsl
+    assert "int2 imageSize(RWTexture1DArray<float4> image)" in regenerated_hlsl
+    assert "int3 textureSize(Texture2DMSArray<float4> tex)" in regenerated_hlsl
+    assert "int3 imageSize(Texture2DMSArray<float4> image)" in regenerated_hlsl
+    assert (
+        regenerated_hlsl.count("int textureSamples(Texture2DMSArray<float4> tex)") == 1
+    )
+
+
+def test_codegen_get_dimensions_uint_vector_component_outputs_keep_casts():
+    code = textwrap.dedent("""
+        Texture2D<float4> colorMap : register(t0);
+        Texture2DArray<float4> layerMap : register(t1);
+        Texture2DMS<float4> msMap : register(t2);
+        RWTexture2D<uint> counters : register(u0);
+
+        struct DimensionBundle {
+            uint4 color;
+            uint4 layers;
+            uint4 ms;
+            uint2 image;
+        };
+
+        void main(uint lod : TEXCOORD0) {
+            uint4 colorDims;
+            uint4 layerDims;
+            uint4 msDims;
+            uint2 imageDims;
+            DimensionBundle nestedDims;
+            colorMap.GetDimensions(colorDims.x, colorDims.y, colorDims.z);
+            layerMap.GetDimensions(
+                lod, layerDims.x, layerDims.y, layerDims.z, layerDims.w
+            );
+            msMap.GetDimensions(msDims.x, msDims.y, msDims.z);
+            counters.GetDimensions(imageDims.x, imageDims.y);
+            colorMap.GetDimensions(
+                nestedDims.color.x, nestedDims.color.y, nestedDims.color.z
+            );
+            layerMap.GetDimensions(
+                lod,
+                nestedDims.layers.x,
+                nestedDims.layers.y,
+                nestedDims.layers.z,
+                nestedDims.layers.w
+            );
+            msMap.GetDimensions(
+                nestedDims.ms.x, nestedDims.ms.y, nestedDims.ms.z
+            );
+            counters.GetDimensions(nestedDims.image.x, nestedDims.image.y);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "colorDims.x = uint(textureSize(colorMap, 0).x);" in crossgl
+    assert "colorDims.y = uint(textureSize(colorMap, 0).y);" in crossgl
+    assert "colorDims.z = uint(textureQueryLevels(colorMap));" in crossgl
+    assert "layerDims.x = uint(textureSize(layerMap, lod).x);" in crossgl
+    assert "layerDims.y = uint(textureSize(layerMap, lod).y);" in crossgl
+    assert "layerDims.z = uint(textureSize(layerMap, lod).z);" in crossgl
+    assert "layerDims.w = uint(textureQueryLevels(layerMap));" in crossgl
+    assert "msDims.x = uint(textureSize(msMap).x);" in crossgl
+    assert "msDims.y = uint(textureSize(msMap).y);" in crossgl
+    assert "msDims.z = uint(textureSamples(msMap));" in crossgl
+    assert "imageDims.x = uint(imageSize(counters).x);" in crossgl
+    assert "imageDims.y = uint(imageSize(counters).y);" in crossgl
+    assert "nestedDims.color.x = uint(textureSize(colorMap, 0).x);" in crossgl
+    assert "nestedDims.color.y = uint(textureSize(colorMap, 0).y);" in crossgl
+    assert "nestedDims.color.z = uint(textureQueryLevels(colorMap));" in crossgl
+    assert "nestedDims.layers.x = uint(textureSize(layerMap, lod).x);" in crossgl
+    assert "nestedDims.layers.y = uint(textureSize(layerMap, lod).y);" in crossgl
+    assert "nestedDims.layers.z = uint(textureSize(layerMap, lod).z);" in crossgl
+    assert "nestedDims.layers.w = uint(textureQueryLevels(layerMap));" in crossgl
+    assert "nestedDims.ms.x = uint(textureSize(msMap).x);" in crossgl
+    assert "nestedDims.ms.y = uint(textureSize(msMap).y);" in crossgl
+    assert "nestedDims.ms.z = uint(textureSamples(msMap));" in crossgl
+    assert "nestedDims.image.x = uint(imageSize(counters).x);" in crossgl
+    assert "nestedDims.image.y = uint(imageSize(counters).y);" in crossgl
+
+
+def test_codegen_get_dimensions_unsupported_overload_imports_diagnostic():
+    code = textwrap.dedent("""
+        Texture2D<float4> colorMap : register(t0);
+
+        void main() {
+            uint width;
+            uint height;
+            uint levels;
+            uint extra;
+            uint overflow;
+            colorMap.GetDimensions(width, height, levels, extra, overflow);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert ".GetDimensions(" not in crossgl
+    assert (
+        "/* unsupported DirectX GetDimensions overload for Texture2D: "
+        "preserved dimension helper call */ "
+        "texture_dimensions(colorMap, width, height, levels, extra, overflow);"
+    ) in crossgl
+
+
+def test_codegen_texture_lod_query_member_imports_to_texture_query_lod():
+    code = textwrap.dedent("""
+        Texture2D<float4> colorMap : register(t0);
+        SamplerState linearSampler : register(s0);
+
+        float4 main(float2 uv : TEXCOORD0) : SV_Target0 {
+            float clamped = colorMap.CalculateLevelOfDetail(linearSampler, uv);
+            float unclamped = colorMap.CalculateLevelOfDetailUnclamped(
+                linearSampler, uv
+            );
+            return float4(clamped, unclamped, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert ".CalculateLevelOfDetail(" not in crossgl
+    assert ".CalculateLevelOfDetailUnclamped(" not in crossgl
+    assert "clamped = textureQueryLod(colorMap, linearSampler, uv).y;" in crossgl
+    assert "unclamped = textureQueryLod(colorMap, linearSampler, uv).x;" in crossgl
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert (
+        "float clamped = float2(colorMap.CalculateLevelOfDetailUnclamped("
+        "linearSampler, uv), colorMap.CalculateLevelOfDetail(linearSampler, uv)).y;"
+        in regenerated_hlsl
+    )
+    assert (
+        "float unclamped = float2(colorMap.CalculateLevelOfDetailUnclamped("
+        "linearSampler, uv), colorMap.CalculateLevelOfDetail(linearSampler, uv)).x;"
+        in regenerated_hlsl
+    )
+    assert "textureQueryLod(" not in regenerated_hlsl
+
+
+def test_codegen_texture_lod_query_invalid_imports_diagnostic():
+    code = textwrap.dedent("""
+        Texture2D<float4> colorMap : register(t0);
+        Texture2DMS<float4> msMap : register(t1);
+        SamplerState linearSampler : register(s0);
+
+        float4 main(float2 uv : TEXCOORD0) : SV_Target0 {
+            float missingCoord = colorMap.CalculateLevelOfDetail(linearSampler);
+            float msLod = msMap.CalculateLevelOfDetail(linearSampler, uv);
+            return float4(missingCoord + msLod);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert ".CalculateLevelOfDetail(" not in crossgl
+    assert (
+        "/* unsupported DirectX texture LOD query for Texture2D: "
+        "expected sampler and coordinate arguments */ 0.0"
+    ) in crossgl
+    assert (
+        "/* unsupported DirectX texture LOD query for Texture2DMS: "
+        "CalculateLevelOfDetail is unavailable for multisample textures */ 0.0"
+    ) in crossgl
+    assert "textureQueryLod(msMap" not in crossgl
+
+
+def test_codegen_texture_sample_position_member_imports_to_helper():
+    code = textwrap.dedent("""
+        Texture2DMS<float4> msMap : register(t0);
+        Texture2DMSArray<float4> msArray : register(t1);
+
+        float4 main(uint sampleIndex : SV_SampleIndex) : SV_Target0 {
+            float2 pos = msMap.GetSamplePosition(sampleIndex);
+            float2 arrayPos = msArray.GetSamplePosition(sampleIndex);
+            return float4(pos + arrayPos, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert ".GetSamplePosition(" not in crossgl
+    assert "pos = textureSamplePosition(msMap, sampleIndex);" in crossgl
+    assert "arrayPos = textureSamplePosition(msArray, sampleIndex);" in crossgl
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "float2 pos = msMap.GetSamplePosition(sampleIndex);" in regenerated_hlsl
+    assert (
+        "float2 arrayPos = msArray.GetSamplePosition(sampleIndex);" in regenerated_hlsl
+    )
+    assert "textureSamplePosition(" not in regenerated_hlsl
+
+
+def test_codegen_texture_sample_position_rejects_non_integer_sample_index_roundtrip():
+    code = textwrap.dedent("""
+        Texture2DMS<float4> msMap : register(t0);
+
+        float4 main(float sampleIndex : TEXCOORD0) : SV_Target0 {
+            float2 pos = msMap.GetSamplePosition(sampleIndex);
+            return float4(pos, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "textureSamplePosition(msMap, sampleIndex)" in crossgl
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX texture sample-position query operation "
+            "'textureSamplePosition' requires a scalar integer sample index "
+            "argument: sampleIndex has type float"
+        ),
+    ):
+        TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+
+def test_codegen_struct_member_resource_methods_roundtrip_to_hlsl_members():
+    code = textwrap.dedent("""
+        struct ResourceBundle {
+            Texture2D<float4> color;
+            Texture2DMS<float4> ms;
+            RWTexture2D<float4> image;
+        };
+
+        SamplerState linearSampler : register(s0);
+        ResourceBundle resources;
+
+        float4 main(float2 uv : TEXCOORD0, int2 pixel : TEXCOORD1, uint sampleIndex : SV_SampleIndex) : SV_Target0 {
+            uint width;
+            uint height;
+            uint levels;
+            resources.color.GetDimensions(width, height, levels);
+            float lod = resources.color.CalculateLevelOfDetail(linearSampler, uv);
+            float2 pos = resources.ms.GetSamplePosition(sampleIndex);
+            float4 loaded = resources.image.Load(pixel);
+            return resources.color.Sample(linearSampler, uv) + loaded + float4(lod + pos.x + width + height + levels);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert ".GetDimensions(" not in crossgl
+    assert ".CalculateLevelOfDetail(" not in crossgl
+    assert ".GetSamplePosition(" not in crossgl
+    assert ".Load(" not in crossgl
+    assert "width = uint(textureSize(resources.color, 0).x);" in crossgl
+    assert "height = uint(textureSize(resources.color, 0).y);" in crossgl
+    assert "levels = uint(textureQueryLevels(resources.color));" in crossgl
+    assert "lod = textureQueryLod(resources.color, linearSampler, uv).y;" in crossgl
+    assert "pos = textureSamplePosition(resources.ms, sampleIndex);" in crossgl
+    assert "loaded = imageLoad(resources.image, pixel);" in crossgl
+    assert "texture(resources.color, linearSampler, uv)" in crossgl
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "int2 textureSize(Texture2D tex, int lod)" in regenerated_hlsl
+    assert "int textureQueryLevels(Texture2D tex)" in regenerated_hlsl
+    assert "width = uint(textureSize(resources.color, 0).x);" in regenerated_hlsl
+    assert "height = uint(textureSize(resources.color, 0).y);" in regenerated_hlsl
+    assert "levels = uint(textureQueryLevels(resources.color));" in regenerated_hlsl
+    assert (
+        "float lod = float2(resources.color.CalculateLevelOfDetailUnclamped("
+        "linearSampler, uv), resources.color.CalculateLevelOfDetail(linearSampler, uv)).y;"
+        in regenerated_hlsl
+    )
+    assert (
+        "float2 pos = resources.ms.GetSamplePosition(sampleIndex);" in regenerated_hlsl
+    )
+    assert "float4 loaded = resources.image[pixel];" in regenerated_hlsl
+    assert "resources.color.Sample(linearSampler, uv)" in regenerated_hlsl
+    assert "textureSamplePosition(" not in regenerated_hlsl
+    assert "unsupported DirectX texture sample-position query" not in regenerated_hlsl
+
+
+def test_codegen_indexed_struct_member_resource_methods_roundtrip_to_hlsl_members():
+    code = textwrap.dedent("""
+        struct ResourceBundle {
+            Texture2D<float4> color;
+            Texture2DMS<float4> ms;
+            RWTexture2D<float4> image;
+        };
+
+        SamplerState linearSampler : register(s0);
+        ResourceBundle resources[2];
+
+        float4 main(float2 uv : TEXCOORD0, int2 pixel : TEXCOORD1, uint layer : TEXCOORD2, uint sampleIndex : SV_SampleIndex) : SV_Target0 {
+            uint width;
+            uint height;
+            uint levels;
+            resources[layer].color.GetDimensions(width, height, levels);
+            float lod = resources[layer].color.CalculateLevelOfDetail(linearSampler, uv);
+            float2 pos = resources[layer].ms.GetSamplePosition(sampleIndex);
+            float4 loaded = resources[layer].image.Load(pixel);
+            return resources[layer].color.Sample(linearSampler, uv) + loaded + float4(lod + pos.x + width + height + levels);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert ".GetDimensions(" not in crossgl
+    assert ".CalculateLevelOfDetail(" not in crossgl
+    assert ".GetSamplePosition(" not in crossgl
+    assert ".Load(" not in crossgl
+    assert "width = uint(textureSize(resources[layer].color, 0).x);" in crossgl
+    assert "height = uint(textureSize(resources[layer].color, 0).y);" in crossgl
+    assert "levels = uint(textureQueryLevels(resources[layer].color));" in crossgl
+    assert (
+        "lod = textureQueryLod(resources[layer].color, linearSampler, uv).y;" in crossgl
+    )
+    assert "pos = textureSamplePosition(resources[layer].ms, sampleIndex);" in crossgl
+    assert "loaded = imageLoad(resources[layer].image, pixel);" in crossgl
+    assert "texture(resources[layer].color, linearSampler, uv)" in crossgl
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "ResourceBundle resources[2];" in regenerated_hlsl
+    assert "int2 textureSize(Texture2D tex, int lod)" in regenerated_hlsl
+    assert "int textureQueryLevels(Texture2D tex)" in regenerated_hlsl
+    assert "width = uint(textureSize(resources[layer].color, 0).x);" in regenerated_hlsl
+    assert (
+        "height = uint(textureSize(resources[layer].color, 0).y);" in regenerated_hlsl
+    )
+    assert (
+        "levels = uint(textureQueryLevels(resources[layer].color));" in regenerated_hlsl
+    )
+    assert (
+        "float lod = float2(resources[layer].color.CalculateLevelOfDetailUnclamped("
+        "linearSampler, uv), resources[layer].color.CalculateLevelOfDetail(linearSampler, uv)).y;"
+        in regenerated_hlsl
+    )
+    assert (
+        "float2 pos = resources[layer].ms.GetSamplePosition(sampleIndex);"
+        in regenerated_hlsl
+    )
+    assert "float4 loaded = resources[layer].image[pixel];" in regenerated_hlsl
+    assert "resources[layer].color.Sample(linearSampler, uv)" in regenerated_hlsl
+    assert "textureSamplePosition(" not in regenerated_hlsl
+    assert "unsupported DirectX texture sample-position query" not in regenerated_hlsl
+
+
+def test_codegen_texture_sample_position_invalid_imports_diagnostic():
+    code = textwrap.dedent("""
+        Texture2D<float4> colorMap : register(t0);
+        Texture2DMS<float4> msMap : register(t1);
+        RWTexture2DMS<float4> msImage : register(u0);
+
+        float4 main(uint sampleIndex : SV_SampleIndex) : SV_Target0 {
+            float2 missingIndex = msMap.GetSamplePosition();
+            float2 nonMultisample = colorMap.GetSamplePosition(sampleIndex);
+            float2 storageImage = msImage.GetSamplePosition(sampleIndex);
+            return float4(missingIndex + nonMultisample + storageImage, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert ".GetSamplePosition(" not in crossgl
+    assert (
+        "/* unsupported DirectX texture sample-position query for Texture2DMS: "
+        "expected sample-index argument */ vec2(0.0, 0.0)"
+    ) in crossgl
+    assert (
+        "/* unsupported DirectX texture sample-position query for Texture2D: "
+        "GetSamplePosition is only available on sampled multisample textures */ "
+        "vec2(0.0, 0.0)"
+    ) in crossgl
+    assert (
+        "/* unsupported DirectX texture sample-position query for RWTexture2DMS: "
+        "GetSamplePosition is only available on sampled multisample textures */ "
+        "vec2(0.0, 0.0)"
+    ) in crossgl
+    assert "textureSamplePosition(colorMap" not in crossgl
+    assert "textureSamplePosition(msImage" not in crossgl
 
 
 def test_codegen_preserves_parentheses():
@@ -1872,6 +3203,31 @@ def test_codegen_interlocked_compare_exchange_mapping():
         "InterlockedCompareExchange(buf[dtid.x], 2u, 1u, original);" in regenerated_hlsl
     )
     assert "atomicCompareExchange(buf" not in regenerated_hlsl
+
+
+def test_codegen_byte_address_interlocked_compare_store_roundtrip():
+    code = textwrap.dedent("""
+        RWByteAddressBuffer rawBytes : register(u4);
+
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 dtid : SV_DispatchThreadID) {
+            uint offset = dtid.x * 4u;
+            uint compare = 3u;
+            rawBytes.InterlockedCompareStore(offset, compare, 7u);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "RWByteAddressBuffer rawBytes;" in crossgl
+    assert "@ register(u4)" in crossgl
+    assert "rawBytes.InterlockedCompareStore(offset, compare, 7);" in crossgl
+    assert "atomicCompareExchange(rawBytes" not in crossgl
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "RWByteAddressBuffer rawBytes : register(u4);" in regenerated_hlsl
+    assert "rawBytes.InterlockedCompareStore(offset, compare, 7);" in regenerated_hlsl
+    assert "InterlockedCompareExchange(rawBytes" not in regenerated_hlsl
 
 
 def test_codegen_interlocked_typed_buffer_resource_array_roundtrip():

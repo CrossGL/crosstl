@@ -617,6 +617,12 @@ class HLSLParser:
             "lineadj",
             "triangleadj",
         }
+        mesh_parameter_roles = {
+            "payload": "mesh_payload",
+            "vertices": "vertices",
+            "indices": "indices",
+            "primitives": "primitives",
+        }
 
         if self.current_token[0] != "RPAREN":
             while True:
@@ -629,6 +635,18 @@ class HLSLParser:
                     attributes.append(
                         AttributeNode("primitive", [self.current_token[1]])
                     )
+                    self.eat("IDENTIFIER")
+                has_direction_qualifier = any(
+                    str(qualifier).lower() in {"in", "out", "inout"}
+                    for qualifier in qualifiers
+                )
+                while (
+                    has_direction_qualifier
+                    and self.current_token[0] == "IDENTIFIER"
+                    and self.current_token[1].lower() in mesh_parameter_roles
+                ):
+                    role = self.current_token[1].lower()
+                    attributes.append(AttributeNode(mesh_parameter_roles[role]))
                     self.eat("IDENTIFIER")
                 if not self.is_type_token(self.current_token[0]):
                     raise SyntaxError(

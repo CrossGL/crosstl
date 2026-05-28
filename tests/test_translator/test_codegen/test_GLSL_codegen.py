@@ -1284,6 +1284,50 @@ def test_glsl_fragment_component_packed_output_layouts():
     assert "fragColor" not in fragment_code
 
 
+def test_glsl_fragment_sample_mask_output_aliases_to_builtin():
+    code = """
+    shader SampleMaskOutput {
+        out int sampleMask @gl_SampleMask;
+
+        fragment {
+            void main() {
+                sampleMask = 1;
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "gl_SampleMask[0] = 1;" in fragment_code
+    assert "out int sampleMask;" not in fragment_code
+    assert "layout(location = 0) out int sampleMask;" not in fragment_code
+    assert "fragColor" not in fragment_code
+
+
+def test_glsl_fragment_sample_mask_return_aliases_to_builtin():
+    code = """
+    shader SampleMaskReturn {
+        fragment {
+            int main() @SV_Coverage {
+                return 1;
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "gl_SampleMask[0] = 1;" in fragment_code
+    assert "return;" in fragment_code
+    assert "fragColor" not in fragment_code
+    assert "layout(location = 0)" not in fragment_code
+
+
 @pytest.mark.parametrize(
     "depth_layout",
     ["depth_any", "depth_greater", "depth_less", "depth_unchanged"],
@@ -1327,6 +1371,400 @@ def test_glsl_stage_builtin_parameter_aliases_to_glsl_builtin():
 
     assert "in vec4 coord;" not in generated_code
     assert "fragColor = gl_FragCoord;" in generated_code
+
+
+def test_glsl_fragment_sample_builtin_parameter_aliases_to_inputs():
+    code = """
+    shader FragmentSampleBuiltinAliases {
+        fragment {
+            vec4 main(
+                int sampleIndex @SV_SampleIndex,
+                int sampleId @sample_id,
+                vec2 samplePosition @sample_position
+            ) @gl_FragColor {
+                return vec4(
+                    float(sampleIndex + sampleId),
+                    samplePosition.x,
+                    samplePosition.y,
+                    1.0
+                );
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "in int sampleIndex;" not in fragment_code
+    assert "in int sampleId;" not in fragment_code
+    assert "in vec2 samplePosition;" not in fragment_code
+    assert (
+        "fragColor = vec4(float((gl_SampleID + gl_SampleID)), "
+        "gl_SamplePosition.x, gl_SamplePosition.y, 1.0);"
+    ) in fragment_code
+
+
+def test_glsl_fragment_coverage_input_aliases_to_sample_mask_in():
+    code = """
+    shader FragmentCoverageInputAlias {
+        fragment {
+            vec4 main(int coverage @SV_Coverage) @gl_FragColor {
+                return vec4(float(coverage));
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "in int coverage;" not in fragment_code
+    assert "fragColor = vec4(float(gl_SampleMaskIn[0]));" in fragment_code
+    assert "float(gl_SampleMask)" not in fragment_code
+
+
+def test_glsl_fragment_interpolation_helper_aliases_to_builtins():
+    code = """
+    shader FragmentInterpolationHelpers {
+        fragment {
+            vec4 main(
+                vec4 color @location(0) @sample,
+                vec2 offset @location(1),
+                int sampleIndex @SV_SampleIndex
+            ) @gl_FragColor {
+                vec4 sampleColor = interpolate_at_sample(color, sampleIndex);
+                vec4 offsetColor = interpolate_at_offset(color, offset);
+                vec4 centroidColor = interpolate_at_centroid(color);
+                vec4 directSample = interpolateAtSample(color, 0);
+                vec4 directOffset = interpolateAtOffset(color, vec2(0.25));
+                vec4 directCentroid = interpolateAtCentroid(color);
+                return sampleColor
+                    + offsetColor
+                    + centroidColor
+                    + directSample
+                    + directOffset
+                    + directCentroid;
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 0) sample in vec4 color;" in fragment_code
+    assert "layout(location = 1) in vec2 offset;" in fragment_code
+    assert "interpolateAtSample(color, gl_SampleID)" in fragment_code
+    assert "interpolateAtOffset(color, offset)" in fragment_code
+    assert "interpolateAtCentroid(color)" in fragment_code
+    assert "interpolateAtSample(color, 0)" in fragment_code
+    assert "interpolateAtOffset(color, vec2(0.25))" in fragment_code
+    assert "interpolate_at_" not in fragment_code
+
+
+def test_glsl_fragment_interpolation_helper_arguments_are_validated():
+    wrong_sample_type = """
+    shader BadInterpolationSample {
+        fragment {
+            vec4 main(vec4 color @location(0), vec2 offset @location(1)) @gl_FragColor {
+                return interpolate_at_sample(color, offset);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL interpolation operation 'interpolateAtSample' "
+            "requires a scalar integer sample argument"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(wrong_sample_type), "fragment"
+        )
+
+    wrong_offset_type = """
+    shader BadInterpolationOffset {
+        fragment {
+            vec4 main(
+                vec4 color @location(0),
+                int sampleIndex @SV_SampleIndex
+            ) @gl_FragColor {
+                return interpolate_at_offset(color, sampleIndex);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL interpolation operation 'interpolateAtOffset' "
+            "requires a vec2 floating offset argument"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(wrong_offset_type), "fragment"
+        )
+
+    missing_sample_arg = """
+    shader MissingInterpolationSampleArg {
+        fragment {
+            vec4 main(vec4 color @location(0)) @gl_FragColor {
+                return interpolate_at_sample(color);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="OpenGL interpolation operation 'interpolateAtSample' requires 2 arguments",
+    ):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_sample_arg), "fragment"
+        )
+
+    vertex_stage_use = """
+    shader BadInterpolationStage {
+        vertex {
+            void main(vec4 color @location(0)) {
+                gl_Position = interpolate_at_centroid(color);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL interpolation operation 'interpolateAtCentroid' "
+            "is only valid in fragment stages"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vertex_stage_use), "vertex"
+        )
+
+
+def test_glsl_fragment_derivative_helper_aliases_to_builtins():
+    code = """
+    shader FragmentDerivativeHelpers {
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                float coarseX = ddx_coarse(uv.x);
+                float coarseY = ddy_coarse(uv.y);
+                float fineX = ddx_fine(uv.x);
+                float fineY = ddy_fine(uv.y);
+                float widthFine = fwidth_fine(uv.x);
+                float widthCoarse = fwidth_coarse(uv.y);
+                vec2 base = ddx(uv) + ddy(uv) + fwidth(uv);
+                return vec4(
+                    base.x + coarseX + coarseY + fineX,
+                    base.y + fineY + widthFine + widthCoarse,
+                    dFdx(uv.x),
+                    dFdy(uv.y)
+                );
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "float coarseX = dFdxCoarse(uv.x);" in fragment_code
+    assert "float coarseY = dFdyCoarse(uv.y);" in fragment_code
+    assert "float fineX = dFdxFine(uv.x);" in fragment_code
+    assert "float fineY = dFdyFine(uv.y);" in fragment_code
+    assert "float widthFine = fwidthFine(uv.x);" in fragment_code
+    assert "float widthCoarse = fwidthCoarse(uv.y);" in fragment_code
+    assert "vec2 base = ((dFdx(uv) + dFdy(uv)) + fwidth(uv));" in fragment_code
+    assert "dFdx(uv.x)" in fragment_code
+    assert "dFdy(uv.y)" in fragment_code
+    assert "ddx(" not in fragment_code
+    assert "ddy(" not in fragment_code
+    assert "ddx_" not in fragment_code
+    assert "ddy_" not in fragment_code
+    assert "fwidth_" not in fragment_code
+
+
+def test_glsl_fragment_derivative_helpers_forward_through_stage_helpers_and_gradients():
+    code = """
+    shader FragmentDerivativeHelperForwarding {
+        sampler2D colorMap @binding(0);
+
+        fragment {
+            vec2 gradientX(vec2 uv) {
+                return ddx(uv);
+            }
+
+            vec4 sampleWithGradient(vec2 uv) {
+                return textureGrad(colorMap, uv, gradientX(uv), ddy(uv));
+            }
+
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                return sampleWithGradient(uv) + vec4(fwidth_fine(uv), 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "vec2 gradientX(vec2 uv)" in fragment_code
+    assert "return dFdx(uv);" in fragment_code
+    assert "textureGrad(colorMap, uv, gradientX(uv), dFdy(uv))" in fragment_code
+    assert "vec4(fwidthFine(uv), 0.0, 1.0)" in fragment_code
+    assert "ddx(" not in fragment_code
+    assert "ddy(" not in fragment_code
+    assert "fwidth_fine" not in fragment_code
+
+
+def test_glsl_fragment_derivative_helpers_forward_through_top_level_helpers():
+    code = """
+    shader FragmentTopLevelDerivativeHelperForwarding {
+        sampler2D colorMap @binding(0);
+
+        vec2 wrappedGradientX(vec2 uv) {
+            return gradientX(uv);
+        }
+
+        fragment {
+            vec2 gradientX(vec2 uv) {
+                return ddx(uv);
+            }
+
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                return textureGrad(colorMap, uv, wrappedGradientX(uv), ddy(uv));
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "vec2 gradientX(vec2 uv)" in fragment_code
+    assert "return dFdx(uv);" in fragment_code
+    assert "vec2 wrappedGradientX(vec2 uv)" in fragment_code
+    assert "return gradientX(uv);" in fragment_code
+    assert fragment_code.index("vec2 gradientX(vec2 uv)") < fragment_code.index(
+        "vec2 wrappedGradientX(vec2 uv)"
+    )
+    assert "textureGrad(colorMap, uv, wrappedGradientX(uv), dFdy(uv))" in fragment_code
+    assert "ddx(" not in fragment_code
+    assert "ddy(" not in fragment_code
+
+
+def test_glsl_fragment_derivative_helper_arguments_are_validated():
+    wrong_value_type = """
+    shader BadDerivativeValueType {
+        fragment {
+            vec4 main(int sampleIndex @SV_SampleIndex) @gl_FragColor {
+                return vec4(ddx(sampleIndex));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL derivative operation 'dFdx' "
+            "requires a floating scalar or vector value argument"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(wrong_value_type), "fragment"
+        )
+
+    missing_arg = """
+    shader BadDerivativeArgCount {
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                return vec4(ddx_fine());
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="OpenGL derivative operation 'dFdxFine' requires 1 argument",
+    ):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(missing_arg), "fragment")
+
+    vertex_stage_use = """
+    shader BadDerivativeStage {
+        vertex {
+            void main(vec4 position @location(0)) {
+                gl_Position = vec4(ddx(position.x));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL derivative operation 'dFdx' " "is only valid in fragment stages"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vertex_stage_use), "vertex"
+        )
+
+    vertex_stage_helper_use = """
+    shader BadDerivativeHelperStage {
+        vertex {
+            float slope(vec3 position) {
+                return ddx(position.x);
+            }
+
+            void main(vec3 position @POSITION) {
+                gl_Position = vec4(position, slope(position));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL derivative operation 'dFdx' " "is only valid in fragment stages"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vertex_stage_helper_use), "vertex"
+        )
+
+    vertex_top_level_helper_use = """
+    shader BadTopLevelDerivativeHelperStage {
+        float slope(float value) {
+            return ddx(value);
+        }
+
+        float wrappedSlope(float value) {
+            return slope(value);
+        }
+
+        vertex {
+            void main(vec3 position @POSITION) {
+                gl_Position = vec4(position, wrappedSlope(position.x));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL helper function 'wrappedSlope' uses fragment-only operations "
+            "and is only valid in fragment stages"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(vertex_top_level_helper_use))
 
 
 def test_glsl_graphics_builtin_parameter_types_are_validated():
@@ -1400,6 +1838,48 @@ def test_glsl_graphics_builtin_parameter_types_are_validated():
             crosstl.translator.parse(vec3_point_coord_code), "fragment"
         )
 
+    float_sample_id_code = """
+    shader BadSampleIdBuiltinType {
+        fragment {
+            vec4 main(float sampleIndex @SV_SampleIndex) @gl_FragColor {
+                return vec4(sampleIndex);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_SampleID.*scalar int"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(float_sample_id_code), "fragment"
+        )
+
+    vec3_sample_position_code = """
+    shader BadSamplePositionBuiltinType {
+        fragment {
+            vec4 main(vec3 samplePosition @sample_position) @gl_FragColor {
+                return vec4(samplePosition, 1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_SamplePosition.*vec2"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vec3_sample_position_code), "fragment"
+        )
+
+    vec2_coverage_code = """
+    shader BadCoverageBuiltinType {
+        fragment {
+            vec4 main(vec2 coverage @SV_Coverage) @gl_FragColor {
+                return vec4(coverage, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_SampleMaskIn.*scalar int"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vec2_coverage_code), "fragment"
+        )
+
     valid_code = """
     shader ValidGraphicsBuiltins {
         vertex {
@@ -1413,10 +1893,17 @@ def test_glsl_graphics_builtin_parameter_types_are_validated():
                 int primitiveId @gl_PrimitiveID,
                 bool frontFacing @gl_FrontFacing,
                 vec4 coord @gl_FragCoord,
-                vec2 point @gl_PointCoord
+                vec2 point @gl_PointCoord,
+                int sampleIndex @SV_SampleIndex,
+                vec2 samplePosition @gl_SamplePosition,
+                int coverage @SV_Coverage
             ) @gl_FragColor {
                 return frontFacing
-                    ? (coord + vec4(point, 0.0, float(primitiveId)))
+                    ? (coord + vec4(
+                        point + samplePosition,
+                        float(primitiveId + sampleIndex + coverage),
+                        1.0
+                    ))
                     : vec4(0.0);
             }
         }
@@ -1435,10 +1922,14 @@ def test_glsl_graphics_builtin_parameter_types_are_validated():
     assert "void main()" in fragment_code
     assert (
         "fragColor = (gl_FrontFacing ? (gl_FragCoord + "
-        "vec4(gl_PointCoord, 0.0, float(gl_PrimitiveID))) : vec4(0.0));"
+        "vec4((gl_PointCoord + gl_SamplePosition), "
+        "float(((gl_PrimitiveID + gl_SampleID) + gl_SampleMaskIn[0])), "
+        "1.0)) : vec4(0.0));"
     ) in fragment_code
     assert "primitiveId @gl_PrimitiveID" not in fragment_code
     assert "coord @gl_FragCoord" not in fragment_code
+    assert "sampleIndex @SV_SampleIndex" not in fragment_code
+    assert "coverage @SV_Coverage" not in fragment_code
 
 
 @pytest.mark.parametrize(
@@ -1448,6 +1939,9 @@ def test_glsl_graphics_builtin_parameter_types_are_validated():
         ("fragment", "vec4", "gl_FragCoord", "vec4(0.0)"),
         ("fragment", "bool", "gl_FrontFacing", "true"),
         ("fragment", "vec2", "gl_PointCoord", "vec2(0.0)"),
+        ("fragment", "int", "SV_SampleIndex", "0"),
+        ("fragment", "vec2", "gl_SamplePosition", "vec2(0.0)"),
+        ("fragment", "int", "gl_SampleMaskIn", "0"),
         ("compute", "uvec3", "gl_GlobalInvocationID", "uvec3(0u)"),
     ],
 )
@@ -1486,6 +1980,559 @@ def test_glsl_void_function_return_semantics_are_rejected(stage, semantic):
 
     with pytest.raises(ValueError, match=f"{stage}.*{semantic}.*void return type"):
         GLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+def test_glsl_geometry_inputtopology_metadata_lowers_to_input_layout():
+    code = """
+    shader GeometryInputTopology {
+        geometry {
+            void main()
+                @inputtopology(triangle)
+                @invocations(2)
+                @outputtopology(line)
+                @maxvertexcount(2)
+            {
+                gl_Position = gl_in[0].gl_Position;
+                EmitVertex();
+                EndPrimitive();
+            }
+        }
+    }
+    """
+
+    geometry_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "geometry"
+    )
+
+    assert "layout(triangles, invocations = 2) in;" in geometry_code
+    assert "layout(line_strip, max_vertices = 2) out;" in geometry_code
+    assert "inputtopology" not in geometry_code
+    assert "@inputtopology" not in geometry_code
+
+
+def test_glsl_geometry_layout_counts_accept_positive_integer_constants():
+    code = """
+    shader GeometryIntegerLayout {
+        const int INVOCATION_COUNT = 1 + 1;
+        const int MAX_VERTEX_COUNT = 2 * 3;
+
+        geometry {
+            void main()
+                @inputtopology(line_adjacency)
+                @invocations(INVOCATION_COUNT)
+                @outputtopology(triangle)
+                @maxvertexcount(MAX_VERTEX_COUNT)
+            {
+                gl_Position = gl_in[0].gl_Position;
+                EmitVertex();
+                EndPrimitive();
+            }
+        }
+    }
+    """
+
+    geometry_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "geometry"
+    )
+
+    assert (
+        "layout(lines_adjacency, invocations = INVOCATION_COUNT) in;" in geometry_code
+    )
+    assert (
+        "layout(triangle_strip, max_vertices = MAX_VERTEX_COUNT) out;" in geometry_code
+    )
+
+
+def test_glsl_geometry_inputtopology_rejects_output_only_topologies():
+    code = """
+    shader BadGeometryInputTopology {
+        geometry {
+            void main()
+                @inputtopology(triangle_strip)
+                @outputtopology(line)
+                @maxvertexcount(2)
+            { }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="GLSL geometry input topology cannot be lowered: triangle_strip",
+    ):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "geometry")
+
+
+def test_glsl_geometry_outputtopology_rejects_input_only_topologies():
+    code = """
+    shader BadGeometryOutputTopology {
+        geometry {
+            void main()
+                @inputtopology(line)
+                @outputtopology(lines_adjacency)
+                @maxvertexcount(2)
+            { }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="GLSL geometry output topology cannot be lowered: lines_adjacency",
+    ):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "geometry")
+
+
+@pytest.mark.parametrize(
+    ("attribute_line", "message"),
+    [
+        (
+            "@invocations(0)",
+            "GLSL geometry invocations layout requires a positive integer constant, got 0",
+        ),
+        (
+            "@invocations(-1)",
+            r"GLSL geometry invocations layout requires a positive integer constant, got \(-1\)",
+        ),
+        (
+            "@invocations(1.5)",
+            r"GLSL geometry invocations layout requires a positive integer constant, got 1\.5",
+        ),
+        (
+            "@max_vertices(0)",
+            "GLSL geometry max_vertices layout requires a positive integer constant, got 0",
+        ),
+        (
+            "@maxvertexcount(0)",
+            "GLSL geometry max_vertices layout requires a positive integer constant, got 0",
+        ),
+        (
+            "@maxvertexcount(2.5)",
+            r"GLSL geometry max_vertices layout requires a positive integer constant, got 2\.5",
+        ),
+    ],
+)
+def test_glsl_geometry_layout_rejects_invalid_count_constants(attribute_line, message):
+    fallback_max_vertices = (
+        ""
+        if attribute_line.startswith(("@max_vertices", "@maxvertexcount"))
+        else "@maxvertexcount(2)"
+    )
+    code = f"""
+    shader BadGeometryLayoutCount {{
+        geometry {{
+            void main()
+                @inputtopology(line)
+                @outputtopology(line)
+                {fallback_max_vertices}
+                {attribute_line}
+            {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "geometry")
+
+
+@pytest.mark.parametrize(
+    ("topology", "expected_layout"),
+    [
+        ("triangle_cw", "layout(triangles, equal_spacing, cw) in;"),
+        ("triangle_ccw", "layout(triangles, equal_spacing, ccw) in;"),
+        ("point", "layout(triangles, equal_spacing, point_mode) in;"),
+    ],
+)
+def test_glsl_tessellation_evaluation_outputtopology_metadata_lowers_layout_parts(
+    topology, expected_layout
+):
+    code = f"""
+    shader TessellationOutputTopology {{
+        tessellation_evaluation {{
+            void main()
+                @domain(triangle)
+                @partitioning(equal)
+                @outputtopology({topology})
+            {{ }}
+        }}
+    }}
+    """
+
+    evaluation_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "tessellation_evaluation"
+    )
+
+    assert expected_layout in evaluation_code
+    assert "outputtopology" not in evaluation_code
+
+
+@pytest.mark.parametrize(
+    ("domain", "topology", "message"),
+    [
+        ("isoline", "triangle_cw", "triangle_cw requires triangles domain"),
+        ("triangle", "line", "line requires isolines domain"),
+        (
+            "triangle",
+            "triangle_strip",
+            "outputtopology cannot be lowered: triangle_strip",
+        ),
+    ],
+)
+def test_glsl_tessellation_evaluation_outputtopology_metadata_diagnostics(
+    domain, topology, message
+):
+    code = f"""
+    shader BadTessellationOutputTopology {{
+        tessellation_evaluation {{
+            void main()
+                @domain({domain})
+                @outputtopology({topology})
+            {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_evaluation"
+        )
+
+
+def test_glsl_tessellation_evaluation_outputtopology_rejects_winding_conflict():
+    code = """
+    shader ConflictingTessellationOutputTopology {
+        tessellation_evaluation {
+            void main()
+                @domain(triangle)
+                @outputtopology(triangle_cw)
+                @ccw
+            { }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Conflicting GLSL tessellation outputtopology triangle_cw with winding ccw",
+    ):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_evaluation"
+        )
+
+
+def test_glsl_tessellation_control_rejects_patchconstantfunc_metadata():
+    code = """
+    shader UnsupportedGLSLPatchConstantFunction {
+        struct PatchConstants {
+            float outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst() {
+                PatchConstants patch;
+                return patch;
+            }
+
+            void main()
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst)
+            { }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "patchconstantfunc 'HSConst' is unsupported; write tessellation "
+            "factors directly to gl_TessLevelOuter and gl_TessLevelInner"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
+def test_glsl_tessellation_control_rejects_malformed_patchconstantfunc_metadata():
+    code = """
+    shader MalformedGLSLPatchConstantFunction {
+        tessellation_control {
+            void main()
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst, Other)
+            { }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="patchconstantfunc requires exactly one function name",
+    ):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
+@pytest.mark.parametrize("attribute_name", ["vertices", "outputcontrolpoints"])
+def test_glsl_tessellation_control_layout_accepts_positive_integer_constants(
+    attribute_name,
+):
+    code = f"""
+    shader TessellationControlLayoutCount {{
+        const int PATCH_VERTICES = 1 + 2;
+
+        tessellation_control {{
+            void main() @{attribute_name}(PATCH_VERTICES) {{ }}
+        }}
+    }}
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "tessellation_control"
+    )
+
+    assert "layout(vertices = PATCH_VERTICES) out;" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("attribute_line", "message"),
+    [
+        (
+            "@vertices(0)",
+            "GLSL tessellation_control vertices layout requires a positive "
+            "integer constant, got 0",
+        ),
+        (
+            "@vertices(1.5)",
+            r"GLSL tessellation_control vertices layout requires a positive "
+            r"integer constant, got 1\.5",
+        ),
+        (
+            "@outputcontrolpoints(0)",
+            "GLSL tessellation_control vertices layout requires a positive "
+            "integer constant, got 0",
+        ),
+        (
+            "@outputcontrolpoints(-1)",
+            r"GLSL tessellation_control vertices layout requires a positive "
+            r"integer constant, got \(-1\)",
+        ),
+        (
+            "@outputcontrolpoints(1.5)",
+            r"GLSL tessellation_control vertices layout requires a positive "
+            r"integer constant, got 1\.5",
+        ),
+    ],
+)
+def test_glsl_tessellation_control_layout_rejects_invalid_count_constants(
+    attribute_line, message
+):
+    code = f"""
+    shader BadTessellationControlLayoutCount {{
+        tessellation_control {{
+            void main()
+                {attribute_line}
+            {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
+def test_glsl_tessellation_control_accepts_direct_factor_component_assignments():
+    code = """
+    shader DirectGLSLTessellationFactorAssignments {
+        tessellation_control {
+            void main() @outputcontrolpoints(3) {
+                gl_TessLevelOuter[0] = 1.0;
+                gl_TessLevelOuter[1] = 2;
+                gl_TessLevelOuter[3] = 4.0;
+                gl_TessLevelInner[0] = 3.0;
+                gl_TessLevelInner[1] = 5.0;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "tessellation_control"
+    )
+
+    assert "gl_TessLevelOuter[0] = 1.0;" in generated_code
+    assert "gl_TessLevelOuter[1] = 2;" in generated_code
+    assert "gl_TessLevelOuter[3] = 4.0;" in generated_code
+    assert "gl_TessLevelInner[0] = 3.0;" in generated_code
+    assert "gl_TessLevelInner[1] = 5.0;" in generated_code
+
+
+def test_glsl_tessellation_control_accepts_dynamic_integer_factor_component_indices():
+    code = """
+    shader DynamicGLSLTessellationFactorAssignments {
+        tessellation_control {
+            void main() @outputcontrolpoints(3) {
+                int outerIndex = 2;
+                uint innerIndex = 1u;
+                gl_TessLevelOuter[outerIndex] = 2.0;
+                gl_TessLevelInner[innerIndex] = 3.0;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "tessellation_control"
+    )
+
+    assert "int outerIndex = 2;" in generated_code
+    assert "uint innerIndex = 1u;" in generated_code
+    assert "gl_TessLevelOuter[outerIndex] = 2.0;" in generated_code
+    assert "gl_TessLevelInner[innerIndex] = 3.0;" in generated_code
+
+
+@pytest.mark.parametrize("builtin", ["gl_TessLevelOuter", "gl_TessLevelInner"])
+def test_glsl_tessellation_control_rejects_whole_factor_assignment(builtin):
+    code = f"""
+    shader BadWholeGLSLTessellationFactorAssignment {{
+        tessellation_control {{
+            void main() @outputcontrolpoints(3) {{
+                {builtin} = vec2(1.0, 2.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"GLSL tessellation factor {builtin} assignment requires "
+            "an indexed scalar component target"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
+@pytest.mark.parametrize(
+    ("assignment", "expected_message"),
+    [
+        (
+            "gl_TessLevelOuter[4] = 1.0;",
+            r"GLSL tessellation factor gl_TessLevelOuter component index 4 "
+            r"out of range; valid range is 0..3",
+        ),
+        (
+            "gl_TessLevelOuter[-1] = 1.0;",
+            r"GLSL tessellation factor gl_TessLevelOuter component index -1 "
+            r"out of range; valid range is 0..3",
+        ),
+        (
+            "gl_TessLevelInner[2] = 1.0;",
+            r"GLSL tessellation factor gl_TessLevelInner component index 2 "
+            r"out of range; valid range is 0..1",
+        ),
+        (
+            "gl_TessLevelOuter[1.0] = 1.0;",
+            r"GLSL tessellation factor gl_TessLevelOuter component index "
+            r"requires a scalar integer value, got float",
+        ),
+    ],
+)
+def test_glsl_tessellation_control_rejects_malformed_factor_component_indices(
+    assignment,
+    expected_message,
+):
+    code = f"""
+    shader BadGLSLTessellationFactorComponentIndex {{
+        tessellation_control {{
+            void main() @outputcontrolpoints(3) {{
+                {assignment}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_message):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
+@pytest.mark.parametrize(
+    ("index_declaration", "assignment", "expected_message"),
+    [
+        (
+            "float outerIndex = 1.0;",
+            "gl_TessLevelOuter[outerIndex] = 1.0;",
+            r"GLSL tessellation factor gl_TessLevelOuter component index "
+            r"requires a scalar integer value, got float",
+        ),
+        (
+            "vec2 outerIndex = vec2(0.0, 1.0);",
+            "gl_TessLevelOuter[outerIndex] = 1.0;",
+            r"GLSL tessellation factor gl_TessLevelOuter component index "
+            r"requires a scalar integer value, got vec2",
+        ),
+        (
+            "uvec2 innerIndex = uvec2(0u, 1u);",
+            "gl_TessLevelInner[innerIndex] = 1.0;",
+            r"GLSL tessellation factor gl_TessLevelInner component index "
+            r"requires a scalar integer value, got uvec2",
+        ),
+    ],
+)
+def test_glsl_tessellation_control_rejects_non_integer_dynamic_factor_indices(
+    index_declaration,
+    assignment,
+    expected_message,
+):
+    code = f"""
+    shader BadDynamicGLSLTessellationFactorComponentIndex {{
+        tessellation_control {{
+            void main() @outputcontrolpoints(3) {{
+                {index_declaration}
+                {assignment}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_message):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
+@pytest.mark.parametrize("builtin", ["gl_TessLevelOuter", "gl_TessLevelInner"])
+def test_glsl_tessellation_control_rejects_vector_factor_component_assignment(
+    builtin,
+):
+    code = f"""
+    shader BadGLSLTessellationFactorComponentAssignment {{
+        tessellation_control {{
+            void main() @outputcontrolpoints(3) {{
+                {builtin}[0] = vec2(1.0, 2.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"GLSL tessellation factor {builtin} component assignment "
+            "requires a scalar numeric value, got vec2"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
 
 
 def test_glsl_direct_return_semantic_ignores_stage_control_attributes():
@@ -2297,6 +3344,35 @@ def test_glsl_fragment_psoutput_return_assigns_color_and_depth():
     assert "layout(location = 0) out PSOutput fragColor;" not in generated_code
     assert "color = vec4(1.0);" in generated_code
     assert "gl_FragDepth = 0.5;" in generated_code
+    assert "return output;" not in generated_code
+
+
+def test_glsl_fragment_psoutput_sample_mask_member_uses_builtin():
+    code = """
+    shader PSOutputSampleMask {
+        struct PSOutput {
+            vec4 color @gl_FragColor;
+            int mask @gl_SampleMask;
+        };
+
+        fragment {
+            PSOutput main() {
+                PSOutput output;
+                output.color = vec4(1.0);
+                output.mask = 1;
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "layout(location = 0) out vec4 color;" in generated_code
+    assert "out int mask;" not in generated_code
+    assert "layout(location = 0) out int mask;" not in generated_code
+    assert "color = vec4(1.0);" in generated_code
+    assert "gl_SampleMask[0] = 1;" in generated_code
     assert "return output;" not in generated_code
 
 
@@ -3967,6 +5043,88 @@ def test_glsl_mesh_task_stage_extensions_and_local_size_layouts():
     )
 
 
+def test_glsl_mesh_layout_counts_accept_positive_integer_constants_and_aliases():
+    shader = """
+    shader MeshLayoutConstants {
+        const int MAX_VERTEX_COUNT = 2 * 3;
+        const int MAX_PRIMITIVE_COUNT = 1;
+
+        mesh {
+            void main()
+                @outputtopology(line)
+                @maxvertexcount(MAX_VERTEX_COUNT)
+                @maxprimitivecount(MAX_PRIMITIVE_COUNT)
+                @numthreads(1, 1, 1)
+            {
+                SetMeshOutputCounts(MAX_VERTEX_COUNT, MAX_PRIMITIVE_COUNT);
+            }
+        }
+    }
+    """
+
+    mesh_code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+    assert (
+        "layout(lines, max_vertices = MAX_VERTEX_COUNT, "
+        "max_primitives = MAX_PRIMITIVE_COUNT) out;" in mesh_code
+    )
+    assert "SetMeshOutputsEXT(MAX_VERTEX_COUNT, MAX_PRIMITIVE_COUNT);" in mesh_code
+
+
+@pytest.mark.parametrize(
+    ("attribute_line", "message"),
+    [
+        (
+            "@max_vertices(0)",
+            "GLSL mesh max_vertices layout requires a positive integer constant, got 0",
+        ),
+        (
+            "@maxvertexcount(1.5)",
+            r"GLSL mesh max_vertices layout requires a positive integer constant, got 1\.5",
+        ),
+        (
+            "@max_primitives(0)",
+            "GLSL mesh max_primitives layout requires a positive integer constant, got 0",
+        ),
+        (
+            "@maxprimitivecount(-1)",
+            r"GLSL mesh max_primitives layout requires a positive integer constant, got \(-1\)",
+        ),
+        (
+            "@maxprimitivecount(1.5)",
+            r"GLSL mesh max_primitives layout requires a positive integer constant, got 1\.5",
+        ),
+    ],
+)
+def test_glsl_mesh_layout_rejects_invalid_count_constants(attribute_line, message):
+    fallback_max_vertices = (
+        ""
+        if attribute_line.startswith(("@max_vertices", "@maxvertexcount"))
+        else "@max_vertices(3)"
+    )
+    fallback_max_primitives = (
+        ""
+        if attribute_line.startswith(("@max_primitives", "@maxprimitivecount"))
+        else "@max_primitives(1)"
+    )
+    shader = f"""
+    shader BadMeshLayoutCounts {{
+        mesh {{
+            void main()
+                @outputtopology(triangle)
+                {fallback_max_vertices}
+                {fallback_max_primitives}
+                {attribute_line}
+                @numthreads(1, 1, 1)
+            {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
 def test_glsl_task_dispatch_mesh_payload_argument_assigns_shared_payload_storage():
     shader = """
     shader MeshTaskPayloadDispatch {
@@ -3996,6 +5154,127 @@ def test_glsl_task_dispatch_mesh_payload_argument_assigns_shared_payload_storage
     assert "DispatchMesh" not in task_code
 
 
+def test_glsl_task_dispatch_mesh_accepts_scalar_integer_group_counts():
+    shader = """
+    shader MeshTaskDispatchCounts {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                uint groupsX = 2u;
+                int groupsY = 3;
+                DispatchMesh(groupsX, groupsY, 4);
+            }
+        }
+    }
+    """
+
+    task_code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "task")
+
+    assert "uint groupsX = 2u;" in task_code
+    assert "int groupsY = 3;" in task_code
+    assert "EmitMeshTasksEXT(groupsX, groupsY, 4);" in task_code
+    assert "DispatchMesh" not in task_code
+
+
+@pytest.mark.parametrize(
+    ("declarations", "dispatch_call", "message"),
+    [
+        (
+            "",
+            "DispatchMesh(1.5, 1, 1);",
+            r"GLSL DispatchMesh x group count requires a non-negative scalar "
+            r"integer value, got float",
+        ),
+        (
+            "",
+            "DispatchMesh(1, -1, 1);",
+            r"GLSL DispatchMesh y group count requires a non-negative scalar "
+            r"integer value, got \(-1\)",
+        ),
+        (
+            "vec2 groups = vec2(1.0);",
+            "DispatchMesh(groups, 1, 1);",
+            r"GLSL DispatchMesh x group count requires a non-negative scalar "
+            r"integer value, got vec2",
+        ),
+        (
+            "bool groups = true;",
+            "DispatchMesh(1, 1, groups);",
+            r"GLSL DispatchMesh z group count requires a non-negative scalar "
+            r"integer value, got bool",
+        ),
+    ],
+)
+def test_glsl_task_dispatch_mesh_rejects_invalid_group_counts(
+    declarations, dispatch_call, message
+):
+    shader = f"""
+    shader MeshTaskDispatchCounts {{
+        task {{
+            void main() @numthreads(1, 1, 1) {{
+                {declarations}
+                {dispatch_call}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "task")
+
+
+@pytest.mark.parametrize(
+    "dispatch_call",
+    [
+        "DispatchMesh();",
+        "DispatchMesh(1, 1);",
+        "DispatchMesh(1, 1, 1, 1, 1);",
+    ],
+)
+def test_glsl_task_dispatch_mesh_rejects_wrong_arity(dispatch_call):
+    shader = f"""
+    shader MeshTaskDispatchArity {{
+        task {{
+            void main() @numthreads(1, 1, 1) {{
+                {dispatch_call}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"GLSL DispatchMesh requires three group counts and optional "
+            r"payload argument"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "task")
+
+
+def test_glsl_task_dispatch_mesh_rejects_wrong_arity_in_expression_context():
+    shader = """
+    shader MeshTaskDispatchArity {
+        task {
+            void helper(uint v) {
+            }
+
+            void main() @numthreads(1, 1, 1) {
+                helper(DispatchMesh(1, 1));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"GLSL DispatchMesh requires three group counts and optional "
+            r"payload argument"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "task")
+
+
 def test_glsl_task_dispatch_mesh_payload_argument_rejects_ambiguous_shared_payload_targets():
     shader = """
     shader MeshTaskPayloadDispatch {
@@ -4022,6 +5301,69 @@ def test_glsl_task_dispatch_mesh_payload_argument_rejects_ambiguous_shared_paylo
         match=(
             r"Ambiguous GLSL DispatchMesh payload target for TaskPayload: "
             r"payloadA, payloadB"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(ast, "task")
+
+
+def test_glsl_task_dispatch_mesh_payload_argument_rejects_missing_shared_payload_storage():
+    shader = """
+    shader MeshTaskPayloadDispatch {
+        struct TaskPayload {
+            uint meshlet;
+        };
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                TaskPayload localPayload;
+                localPayload.meshlet = 7u;
+                DispatchMesh(2, 3, 4, localPayload);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"GLSL DispatchMesh payload argument requires "
+            r"taskPayloadSharedEXT storage"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(ast, "task")
+
+
+def test_glsl_task_dispatch_mesh_payload_argument_rejects_mismatched_shared_payload_type():
+    shader = """
+    shader MeshTaskPayloadDispatch {
+        struct TaskPayload {
+            uint meshlet;
+        };
+
+        struct OtherPayload {
+            uint meshlet;
+        };
+
+        task {
+            @taskPayloadSharedEXT TaskPayload payload;
+            void main() @numthreads(1, 1, 1) {
+                OtherPayload localPayload;
+                localPayload.meshlet = 7u;
+                DispatchMesh(2, 3, 4, localPayload);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"GLSL DispatchMesh payload argument type OtherPayload does not "
+            r"match taskPayloadSharedEXT payload type TaskPayload"
         ),
     ):
         GLSLCodeGen().generate_stage(ast, "task")
@@ -4184,6 +5526,460 @@ def test_glsl_mesh_output_signature_parameters_lower_to_native_outputs():
     assert "SetMeshOutputCounts" not in generated_code
 
 
+def test_glsl_mesh_point_index_signature_parameter_accepts_scalar_uint_indices():
+    shader = """
+    shader MeshPointOutputSignature {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        struct MeshPrimitive {
+            int primitiveId @ gl_PrimitiveID;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[1],
+                @indices out uint points[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(1, 1, 1)
+              @outputtopology(point)
+              @max_vertices(1)
+              @max_primitives(1)
+            {
+                SetMeshOutputCounts(1, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                points[0] = 0u;
+                prims[0].primitiveId = 3;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "mesh"
+    )
+
+    assert "layout(points, max_vertices = 1, max_primitives = 1) out;" in (
+        generated_code
+    )
+    assert "gl_PrimitivePointIndicesEXT[0] = 0u;" in generated_code
+    assert "gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 3;" in generated_code
+    assert "points[0]" not in generated_code
+    assert "SetMeshOutputCounts" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("parameter_declarations", "topology", "expected_error"),
+    [
+        (
+            "@vertices out MeshVertex verts, "
+            "@indices out uvec3 tris[1], "
+            "@primitives out MeshPrimitive prims[1]",
+            "triangle",
+            r"@vertices 'verts' requires an array with explicit size",
+        ),
+        (
+            "@vertices out MeshVertex verts[3], "
+            "@indices out uvec3 tris, "
+            "@primitives out MeshPrimitive prims[1]",
+            "triangle",
+            r"@indices 'tris' requires an array with explicit size",
+        ),
+        (
+            "@vertices out MeshVertex verts[3], "
+            "@indices out uvec3 tris[1], "
+            "@primitives out MeshPrimitive prims",
+            "triangle",
+            r"@primitives 'prims' requires an array with explicit size",
+        ),
+        (
+            "@vertices out vec4 verts[3], "
+            "@indices out uvec3 tris[1], "
+            "@primitives out MeshPrimitive prims[1]",
+            "triangle",
+            r"@vertices 'verts' requires a struct element type, got vec4",
+        ),
+        (
+            "@vertices out MeshVertex verts[3], "
+            "@indices out uvec3 tris[1], "
+            "@primitives out vec3 prims[1]",
+            "triangle",
+            r"@primitives 'prims' requires a struct element type, got vec3",
+        ),
+        (
+            "@vertices out MeshVertex verts[3], "
+            "@indices out uvec2 tris[1], "
+            "@primitives out MeshPrimitive prims[1]",
+            "triangle",
+            r"@indices 'tris' for triangles topology requires uvec3 elements, got uvec2",
+        ),
+        (
+            "@vertices out MeshVertex verts[1], "
+            "@indices out uvec2 points[1], "
+            "@primitives out MeshPrimitive prims[1]",
+            "point",
+            r"@indices 'points' for points topology requires uint elements, got uvec2",
+        ),
+    ],
+)
+def test_glsl_mesh_output_signature_parameters_reject_malformed_shapes(
+    parameter_declarations,
+    topology,
+    expected_error,
+):
+    max_vertices = {"point": 1, "line": 2, "triangle": 3}[topology]
+    shader = f"""
+    shader MeshMalformedOutputSignature {{
+        struct MeshVertex {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct MeshPrimitive {{
+            int primitiveId @ gl_PrimitiveID;
+        }};
+
+        mesh {{
+            void main({parameter_declarations})
+              @numthreads(1, 1, 1)
+              @outputtopology({topology})
+              @max_vertices({max_vertices})
+              @max_primitives(1)
+            {{
+                SetMeshOutputCounts({max_vertices}, 1);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
+@pytest.mark.parametrize(
+    ("parameter_declarations", "max_vertices", "max_primitives", "expected_error"),
+    [
+        (
+            "@vertices out MeshVertex verts[2], "
+            "@indices out uvec3 tris[1], "
+            "@primitives out MeshPrimitive prims[1]",
+            3,
+            1,
+            r"@vertices 'verts' array size 2 must match max_vertices 3",
+        ),
+        (
+            "@vertices out MeshVertex verts[3], "
+            "@indices out uvec3 tris[2], "
+            "@primitives out MeshPrimitive prims[1]",
+            3,
+            1,
+            r"@indices 'tris' array size 2 must match max_primitives 1",
+        ),
+        (
+            "@vertices out MeshVertex verts[3], "
+            "@indices out uvec3 tris[1], "
+            "@primitives out MeshPrimitive prims[2]",
+            3,
+            1,
+            r"@primitives 'prims' array size 2 must match max_primitives 1",
+        ),
+    ],
+)
+def test_glsl_mesh_output_signature_parameters_reject_layout_count_mismatches(
+    parameter_declarations,
+    max_vertices,
+    max_primitives,
+    expected_error,
+):
+    shader = f"""
+    shader MeshMismatchedOutputCounts {{
+        struct MeshVertex {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct MeshPrimitive {{
+            int primitiveId @ gl_PrimitiveID;
+        }};
+
+        mesh {{
+            void main({parameter_declarations})
+              @numthreads(1, 1, 1)
+              @outputtopology(triangle)
+              @max_vertices({max_vertices})
+              @max_primitives({max_primitives})
+            {{
+                SetMeshOutputCounts({max_vertices}, {max_primitives});
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
+@pytest.mark.parametrize(
+    ("set_counts", "expected_error"),
+    [
+        (
+            "SetMeshOutputCounts(4, 1);",
+            r"SetMeshOutputCounts vertex count 4 exceeds @vertices array size 3",
+        ),
+        (
+            "SetMeshOutputCounts(3, 2);",
+            r"SetMeshOutputCounts primitive count 2 exceeds @primitives array size 1",
+        ),
+        (
+            "SetMeshOutputCounts(3);",
+            r"SetMeshOutputCounts requires exactly two arguments",
+        ),
+        (
+            "SetMeshOutputCounts(1.5, 1);",
+            r"SetMeshOutputCounts vertex count requires a non-negative scalar "
+            r"integer value, got float",
+        ),
+        (
+            "SetMeshOutputCounts(-1, 1);",
+            r"SetMeshOutputCounts vertex count requires a non-negative scalar "
+            r"integer value, got \(-1\)",
+        ),
+        (
+            "vec2 count = vec2(1.0); SetMeshOutputCounts(count, 1);",
+            r"SetMeshOutputCounts vertex count requires a non-negative scalar "
+            r"integer value, got vec2",
+        ),
+        (
+            "bool count = true; SetMeshOutputCounts(1, count);",
+            r"SetMeshOutputCounts primitive count requires a non-negative "
+            r"scalar integer value, got bool",
+        ),
+    ],
+)
+def test_glsl_mesh_output_signature_parameters_reject_bad_output_count_calls(
+    set_counts,
+    expected_error,
+):
+    shader = f"""
+    shader MeshBadOutputCountCalls {{
+        struct MeshVertex {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct MeshPrimitive {{
+            int primitiveId @ gl_PrimitiveID;
+        }};
+
+        mesh {{
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(1, 1, 1)
+              @outputtopology(triangle)
+              @max_vertices(3)
+              @max_primitives(1)
+            {{
+                {set_counts}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
+@pytest.mark.parametrize(
+    ("mesh_statement", "expected_error"),
+    [
+        (
+            "verts[3].position = vec4(0.0, 0.0, 0.0, 1.0);",
+            r"output @vertices 'verts' index 3 out of range; valid range is 0..2",
+        ),
+        (
+            "tris[1] = uvec3(0u, 1u, 2u);",
+            r"output @indices 'tris' index 1 out of range; valid range is 0..0",
+        ),
+        (
+            "prims[-1].primitiveId = 7;",
+            r"output @primitives 'prims' index -1 out of range; valid range is 0..0",
+        ),
+    ],
+)
+def test_glsl_mesh_output_signature_parameters_reject_literal_index_bounds(
+    mesh_statement,
+    expected_error,
+):
+    shader = f"""
+    shader MeshBadOutputIndex {{
+        struct MeshVertex {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct MeshPrimitive {{
+            int primitiveId @ gl_PrimitiveID;
+        }};
+
+        mesh {{
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(1, 1, 1)
+              @outputtopology(triangle)
+              @max_vertices(3)
+              @max_primitives(1)
+            {{
+                SetMeshOutputCounts(3, 1);
+                {mesh_statement}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
+@pytest.mark.parametrize(
+    ("index_declaration", "mesh_statement", "expected_error"),
+    [
+        (
+            "float vertexIndex = 0.0;",
+            "verts[vertexIndex].position = vec4(0.0, 0.0, 0.0, 1.0);",
+            r"output @vertices 'verts' index requires a scalar integer value, got float",
+        ),
+        (
+            "float indexIndex = 0.0;",
+            "tris[indexIndex] = uvec3(0u, 1u, 2u);",
+            r"output @indices 'tris' index requires a scalar integer value, got float",
+        ),
+        (
+            "vec2 primitiveIndex = vec2(0.0, 1.0);",
+            "prims[primitiveIndex].primitiveId = 7;",
+            r"output @primitives 'prims' index requires a scalar integer value, got vec2",
+        ),
+    ],
+)
+def test_glsl_mesh_output_signature_parameters_reject_non_integer_dynamic_indices(
+    index_declaration,
+    mesh_statement,
+    expected_error,
+):
+    shader = f"""
+    shader MeshBadDynamicOutputIndex {{
+        struct MeshVertex {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct MeshPrimitive {{
+            int primitiveId @ gl_PrimitiveID;
+        }};
+
+        mesh {{
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(1, 1, 1)
+              @outputtopology(triangle)
+              @max_vertices(3)
+              @max_primitives(1)
+            {{
+                SetMeshOutputCounts(3, 1);
+                {index_declaration}
+                {mesh_statement}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
+@pytest.mark.parametrize(
+    ("helper_call", "expected_error"),
+    [
+        (
+            "SetVertex(3, vec4(0.0, 0.0, 0.0, 1.0));",
+            r"SetVertex vertex index 3 out of range; valid range is 0..2",
+        ),
+        (
+            "SetVertex(-1, vec4(0.0, 0.0, 0.0, 1.0));",
+            r"SetVertex vertex index -1 out of range; valid range is 0..2",
+        ),
+        (
+            "SetPrimitive(1, uvec3(0u, 1u, 2u));",
+            r"SetPrimitive primitive index 1 out of range; valid range is 0..0",
+        ),
+    ],
+)
+def test_glsl_mesh_helper_intrinsics_reject_literal_index_bounds(
+    helper_call,
+    expected_error,
+):
+    shader = f"""
+    shader MeshHelperBadIndex {{
+        mesh {{
+            void main()
+                @numthreads(1, 1, 1)
+                @outputtopology(triangle)
+                @max_vertices(3)
+                @max_primitives(1)
+            {{
+                SetMeshOutputCounts(3, 1);
+                {helper_call}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
+@pytest.mark.parametrize(
+    ("index_declaration", "helper_call", "expected_error"),
+    [
+        (
+            "float vertexIndex = 0.0;",
+            "SetVertex(vertexIndex, vec4(0.0, 0.0, 0.0, 1.0));",
+            r"SetVertex vertex index requires a scalar integer value, got float",
+        ),
+        (
+            "uvec2 primitiveIndex = uvec2(0u, 1u);",
+            "SetPrimitive(primitiveIndex, uvec3(0u, 1u, 2u));",
+            r"SetPrimitive primitive index requires a scalar integer value, got uvec2",
+        ),
+    ],
+)
+def test_glsl_mesh_helper_intrinsics_reject_non_integer_dynamic_indices(
+    index_declaration,
+    helper_call,
+    expected_error,
+):
+    shader = f"""
+    shader MeshHelperBadDynamicIndex {{
+        mesh {{
+            void main()
+                @numthreads(1, 1, 1)
+                @outputtopology(triangle)
+                @max_vertices(3)
+                @max_primitives(1)
+            {{
+                SetMeshOutputCounts(3, 1);
+                {index_declaration}
+                {helper_call}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
 def test_glsl_mesh_whole_output_constructor_assignments_expand_to_native_outputs():
     shader = """
     shader MeshWholeOutputConstructors {
@@ -4236,6 +6032,69 @@ def test_glsl_mesh_whole_output_constructor_assignments_expand_to_native_outputs
     assert "verts[1]" not in generated_code
     assert "prims[0]" not in generated_code
     assert "SetMeshOutputCounts" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("bad_assignment", "expected_error"),
+    [
+        (
+            "verts[0] = vec4(0.0, 0.0, 0.0, 1.0);",
+            r"GLSL mesh output @vertices 'verts' assignment requires "
+            r"MeshVertex value, got vec4",
+        ),
+        (
+            "prims[0] = vec3(0.0, 1.0, 0.0);",
+            r"GLSL mesh output @primitives 'prims' assignment requires "
+            r"MeshPrimitive value, got vec3",
+        ),
+        (
+            "prims[0] = MeshVertex { "
+            "position: vec4(0.0, 0.0, 0.0, 1.0), "
+            "uv: vec2(0.25, 0.75) };",
+            r"GLSL mesh output @primitives 'prims' assignment requires "
+            r"MeshPrimitive value, got MeshVertex",
+        ),
+        (
+            "verts[0] = MeshVertex { " "position: vec4(0.0, 0.0, 0.0, 1.0) };",
+            r"GLSL mesh output @vertices 'verts' assignment requires a "
+            r"complete MeshVertex constructor value",
+        ),
+    ],
+)
+def test_glsl_mesh_whole_output_assignments_reject_mismatched_values(
+    bad_assignment,
+    expected_error,
+):
+    shader = f"""
+    shader MeshWholeOutputBadValue {{
+        struct MeshVertex {{
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        }};
+
+        struct MeshPrimitive {{
+            int primitiveId @ gl_PrimitiveID;
+            vec3 normal @ NORMAL;
+        }};
+
+        mesh {{
+            void main(
+                @vertices out MeshVertex verts[3],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(1, 1, 1)
+              @outputtopology(triangle)
+              @max_vertices(3)
+              @max_primitives(1)
+            {{
+                SetMeshOutputCounts(3, 1);
+                {bad_assignment}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
 
 
 @pytest.mark.parametrize(
@@ -4304,6 +6163,165 @@ def test_glsl_mesh_set_vertex_and_set_primitive_helpers_lower_to_builtins(
     assert "SetVertex" not in generated_code
     assert "SetPrimitive" not in generated_code
     assert "SetMeshOutputCounts" not in generated_code
+
+
+def test_glsl_mesh_set_vertex_rejects_invalid_arity():
+    shader = """
+    shader MeshHelperBadSetVertexArity {
+        mesh {
+            void main()
+                @numthreads(1, 1, 1)
+                @outputtopology(point)
+                @max_vertices(1)
+                @max_primitives(1)
+            {
+                SetMeshOutputCounts(1, 1);
+                SetVertex(0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"GLSL mesh SetVertex helper requires exactly two arguments",
+    ):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
+def test_glsl_mesh_set_vertex_rejects_non_position_vector():
+    shader = """
+    shader MeshHelperBadSetVertexShape {
+        mesh {
+            void main()
+                @numthreads(1, 1, 1)
+                @outputtopology(point)
+                @max_vertices(1)
+                @max_primitives(1)
+            {
+                SetMeshOutputCounts(1, 1);
+                SetVertex(0, 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"GLSL mesh SetVertex position requires vec3 or vec4, got float",
+    ):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
+def test_glsl_mesh_set_primitive_rejects_invalid_arity():
+    shader = """
+    shader MeshHelperBadSetPrimitiveArity {
+        mesh {
+            void main()
+                @numthreads(1, 1, 1)
+                @outputtopology(triangle)
+                @max_vertices(3)
+                @max_primitives(1)
+            {
+                SetMeshOutputCounts(3, 1);
+                SetPrimitive(0, 0u, 1u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"GLSL mesh SetPrimitive helper requires exactly two arguments",
+    ):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
+@pytest.mark.parametrize(
+    ("topology", "max_vertices", "bad_indices", "expected_type", "actual_type"),
+    [
+        ("point", 1, "uvec2(0u, 1u)", "uint", "uvec2"),
+        ("line", 2, "0u", "uvec2", "uint"),
+        ("triangle", 3, "uvec2(0u, 1u)", "uvec3", "uvec2"),
+    ],
+)
+def test_glsl_mesh_set_primitive_rejects_topology_mismatched_indices(
+    topology,
+    max_vertices,
+    bad_indices,
+    expected_type,
+    actual_type,
+):
+    shader = f"""
+    shader MeshHelperBadSetPrimitiveShape {{
+        mesh {{
+            void main()
+                @numthreads(1, 1, 1)
+                @outputtopology({topology})
+                @max_vertices({max_vertices})
+                @max_primitives(1)
+            {{
+                SetMeshOutputCounts({max_vertices}, 1);
+                SetPrimitive(0, {bad_indices});
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"GLSL mesh SetPrimitive for .* topology requires "
+            f"{expected_type} primitive indices, got {actual_type}"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
+@pytest.mark.parametrize(
+    ("nested_helper_statement", "expected_error"),
+    [
+        (
+            "float sink = SetVertex(0, 1.0);",
+            r"GLSL mesh SetVertex position requires vec3 or vec4, got float",
+        ),
+        (
+            "uint sink = SetPrimitive(0, uvec2(0u, 1u));",
+            r"GLSL mesh SetPrimitive for .* topology requires "
+            r"uvec3 primitive indices, got uvec2",
+        ),
+        (
+            "float sink = SetVertex(0, vec4(0.0, 0.0, 0.0, 1.0));",
+            r"GLSL mesh SetVertex helper can only be used as a statement",
+        ),
+        (
+            "uint sink = SetPrimitive(0, uvec3(0u, 1u, 2u));",
+            r"GLSL mesh SetPrimitive helper can only be used as a statement",
+        ),
+    ],
+)
+def test_glsl_mesh_helpers_reject_expression_contexts(
+    nested_helper_statement,
+    expected_error,
+):
+    shader = f"""
+    shader MeshHelperExpressionContext {{
+        mesh {{
+            void main()
+                @numthreads(1, 1, 1)
+                @outputtopology(triangle)
+                @max_vertices(3)
+                @max_primitives(1)
+            {{
+                SetMeshOutputCounts(3, 1);
+                {nested_helper_statement}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_error):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
 
 
 def test_glsl_ray_stage_entries_use_distinct_names():
@@ -11601,6 +13619,255 @@ def test_opengl_projected_cube_texture_resource_arrays_lower_supported_color_for
     assert "textureGrad(" not in generated_code
 
 
+def test_opengl_integer_projected_textures_lower_supported_forms_and_diagnose_cube_arrays():
+    shader = """
+    shader IntegerProjectedTextureDiagnostics {
+        isampler2D signedMap;
+        usampler2DArray unsignedLayerMap;
+        isamplerCube signedCube;
+        usamplerCube unsignedCube;
+        isamplerCubeArray signedCubeArray;
+        usamplerCubeArray unsignedCubeArray;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec3 uvq @ TEXCOORD0;
+            vec4 uvLayerQ @ TEXCOORD1;
+            vec4 cubeProj @ TEXCOORD2;
+            float lod;
+            vec3 ddx @ TEXCOORD3;
+            vec3 ddy @ TEXCOORD4;
+            ivec2 offset @ TEXCOORD5;
+        };
+
+        ivec4 signedProjected(
+            isampler2D map,
+            isamplerCube cube,
+            isamplerCubeArray cubeArray,
+            sampler s,
+            vec3 uvq,
+            vec4 cubeProj,
+            float lod,
+            vec3 ddx,
+            vec3 ddy,
+            ivec2 offset
+        ) {
+            ivec4 planar = textureProj(map, s, uvq);
+            ivec4 cubeProjected = textureProj(cube, s, cubeProj);
+            ivec4 cubeLod = textureProjLod(cube, cubeProj, lod);
+            ivec4 cubeGrad = textureProjGrad(cube, s, cubeProj, ddx, ddy);
+            ivec4 cubeOffsetRejected = textureProjGradOffset(cube, s, cubeProj, ddx, ddy, offset);
+            ivec4 cubeArrayRejected = textureProj(cubeArray, s, cubeProj);
+            return planar + cubeProjected + cubeLod + cubeGrad + cubeOffsetRejected + cubeArrayRejected;
+        }
+
+        uvec4 unsignedProjected(
+            usampler2DArray mapArray,
+            usamplerCube cube,
+            usamplerCubeArray cubeArray,
+            sampler s,
+            vec4 uvLayerQ,
+            vec4 cubeProj,
+            float lod,
+            vec3 ddx,
+            vec3 ddy,
+            ivec2 offset
+        ) {
+            uvec4 planarArray = textureProj(mapArray, s, uvLayerQ);
+            uvec4 cubeProjected = textureProj(cube, s, cubeProj);
+            uvec4 cubeLod = textureProjLod(cube, cubeProj, lod);
+            uvec4 cubeGrad = textureProjGrad(cube, s, cubeProj, ddx, ddy);
+            uvec4 cubeOffsetRejected = textureProjGradOffset(cube, s, cubeProj, ddx, ddy, offset);
+            uvec4 cubeArrayRejected = textureProj(cubeArray, s, cubeProj);
+            return planarArray + cubeProjected + cubeLod + cubeGrad + cubeOffsetRejected + cubeArrayRejected;
+        }
+
+        fragment {
+            ivec4 main(FSInput input) @ COLOR0 {
+                uvec4 unsignedResult = unsignedProjected(
+                    unsignedLayerMap,
+                    unsignedCube,
+                    unsignedCubeArray,
+                    linearSampler,
+                    input.uvLayerQ,
+                    input.cubeProj,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+                return signedProjected(
+                    signedMap,
+                    signedCube,
+                    signedCubeArray,
+                    linearSampler,
+                    input.uvq,
+                    input.cubeProj,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                ) + ivec4(unsignedResult);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform isampler2D signedMap;" in generated_code
+    assert (
+        "layout(binding = 1) uniform usampler2DArray unsignedLayerMap;"
+        in generated_code
+    )
+    assert "layout(binding = 2) uniform isamplerCube signedCube;" in generated_code
+    assert "layout(binding = 3) uniform usamplerCube unsignedCube;" in generated_code
+    assert (
+        "layout(binding = 4) uniform isamplerCubeArray signedCubeArray;"
+        in generated_code
+    )
+    assert (
+        "layout(binding = 5) uniform usamplerCubeArray unsignedCubeArray;"
+        in generated_code
+    )
+    assert (
+        "ivec4 signedProjected(isampler2D map, isamplerCube cube, isamplerCubeArray cubeArray, vec3 uvq, vec4 cubeProj, float lod, vec3 ddx, vec3 ddy, ivec2 offset)"
+        in generated_code
+    )
+    assert (
+        "uvec4 unsignedProjected(usampler2DArray mapArray, usamplerCube cube, usamplerCubeArray cubeArray, vec4 uvLayerQ, vec4 cubeProj, float lod, vec3 ddx, vec3 ddy, ivec2 offset)"
+        in generated_code
+    )
+    assert "ivec4 planar = textureProj(map, uvq);" in generated_code
+    assert "uvec4 planarArray = textureProj(mapArray, uvLayerQ);" in generated_code
+    assert (
+        "ivec4 cubeProjected = texture(cube, cubeProj.xyz / cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "uvec4 cubeProjected = texture(cube, cubeProj.xyz / cubeProj.w);"
+        in generated_code
+    )
+    assert (
+        "ivec4 cubeLod = textureLod(cube, cubeProj.xyz / cubeProj.w, lod);"
+        in generated_code
+    )
+    assert (
+        "uvec4 cubeLod = textureLod(cube, cubeProj.xyz / cubeProj.w, lod);"
+        in generated_code
+    )
+    assert (
+        "ivec4 cubeGrad = textureGrad(cube, cubeProj.xyz / cubeProj.w, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "uvec4 cubeGrad = textureGrad(cube, cubeProj.xyz / cubeProj.w, ddx, ddy);"
+        in generated_code
+    )
+    assert (
+        "ivec4 cubeOffsetRejected = /* unsupported GLSL projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers */ ivec4(0);"
+        in generated_code
+    )
+    assert (
+        "uvec4 cubeOffsetRejected = /* unsupported GLSL projected texture: textureProjGradOffset offsets require 1D, 2D, 2D-array, 3D, or planar shadow samplers */ uvec4(0u);"
+        in generated_code
+    )
+    assert (
+        "ivec4 cubeArrayRejected = /* unsupported GLSL projected texture: textureProj requires 1D, 2D, 2D-array, or 3D projection coordinates */ ivec4(0);"
+        in generated_code
+    )
+    assert (
+        "uvec4 cubeArrayRejected = /* unsupported GLSL projected texture: textureProj requires 1D, 2D, 2D-array, or 3D projection coordinates */ uvec4(0u);"
+        in generated_code
+    )
+    assert (
+        "unsignedProjected(unsignedLayerMap, unsignedCube, unsignedCubeArray, uvLayerQ, cubeProj, lod, ddx, ddy, offset)"
+        in generated_code
+    )
+    assert (
+        "signedProjected(signedMap, signedCube, signedCubeArray, uvq, cubeProj, lod, ddx, ddy, offset)"
+        in generated_code
+    )
+    assert "linearSampler" not in generated_code
+    assert "textureProj(cube" not in generated_code
+    assert "textureProj(cubeArray" not in generated_code
+
+
+def test_opengl_integer_sampler_offsets_and_gathers_strip_sampler_arguments():
+    shader = """
+    shader IntegerTextureGatherOffset {
+        isampler2D signedMap;
+        usampler2DArray unsignedLayers;
+        isamplerCube signedCube;
+        usamplerCubeArray unsignedCubeArray;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            vec3 direction @ TEXCOORD2;
+            vec4 cubeLayer @ TEXCOORD3;
+            ivec2 offset @ TEXCOORD4;
+            int component @ TEXCOORD5;
+        };
+
+        fragment {
+            ivec4 main(FSInput input) @ COLOR0 {
+                ivec4 offsetSigned = textureOffset(signedMap, linearSampler, input.uv, input.offset);
+                uvec4 offsetUnsigned = textureLodOffset(unsignedLayers, linearSampler, input.uvLayer, 1.0, input.offset);
+                ivec4 gatheredSigned = textureGather(signedMap, linearSampler, input.uv, input.component);
+                uvec4 gatheredUnsigned = textureGatherOffset(unsignedLayers, linearSampler, input.uvLayer, input.offset, input.component);
+                ivec4 gatheredCube = textureGather(signedCube, linearSampler, input.direction);
+                uvec4 gatheredCubeArray = textureGather(unsignedCubeArray, linearSampler, input.cubeLayer);
+                return offsetSigned + gatheredSigned + gatheredCube + ivec4(offsetUnsigned + gatheredUnsigned + gatheredCubeArray);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform isampler2D signedMap;" in generated_code
+    assert (
+        "layout(binding = 1) uniform usampler2DArray unsignedLayers;" in generated_code
+    )
+    assert "layout(binding = 2) uniform isamplerCube signedCube;" in generated_code
+    assert (
+        "layout(binding = 3) uniform usamplerCubeArray unsignedCubeArray;"
+        in generated_code
+    )
+    assert (
+        "ivec4 offsetSigned = textureOffset(signedMap, uv, offset);" in generated_code
+    )
+    assert (
+        "uvec4 offsetUnsigned = textureLodOffset(unsignedLayers, uvLayer, 1.0, offset);"
+        in generated_code
+    )
+    assert "textureGather(signedMap, uv, 0)" in generated_code
+    assert "textureGather(signedMap, uv, 1)" in generated_code
+    assert "textureGather(signedMap, uv, 2)" in generated_code
+    assert "textureGather(signedMap, uv, 3)" in generated_code
+    assert "textureGatherOffset(unsignedLayers, uvLayer, offset, 0)" in generated_code
+    assert "textureGatherOffset(unsignedLayers, uvLayer, offset, 1)" in generated_code
+    assert "textureGatherOffset(unsignedLayers, uvLayer, offset, 2)" in generated_code
+    assert "textureGatherOffset(unsignedLayers, uvLayer, offset, 3)" in generated_code
+    assert (
+        "ivec4 gatheredCube = textureGather(signedCube, direction);" in generated_code
+    )
+    assert (
+        "uvec4 gatheredCubeArray = textureGather(unsignedCubeArray, cubeLayer);"
+        in generated_code
+    )
+    assert "linearSampler" not in generated_code
+    assert ", linearSampler" not in generated_code
+    assert "unsupported GLSL texture gather" not in generated_code
+    assert "unsupported GLSL texture offset" not in generated_code
+
+
 def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments():
     shader = """
     shader ShadowGatherCompareOffsets {
@@ -15891,6 +18158,107 @@ def test_opengl_multisample_texture_samples_queries_keep_builtin():
     assert "input." not in generated_code
 
 
+def test_opengl_integer_multisample_queries_and_texel_fetches_lower():
+    shader = """
+    shader IntegerMultisampleQueries {
+        isampler2DMS signedMs;
+        usampler2DMSArray unsignedMsArray;
+        isampler2DMS signedTextures[4];
+        usampler2DMSArray unsignedArrays[4];
+
+        struct FSInput {
+            ivec2 pixel @ TEXCOORD0;
+            ivec3 pixelLayer @ TEXCOORD1;
+            int sampleIndex;
+            int layer @ TEXCOORD2;
+        };
+
+        ivec4 fetchSigned(isampler2DMS tex, ivec2 pixel, int sampleIndex) {
+            return texelFetch(tex, pixel, sampleIndex);
+        }
+
+        uvec4 fetchUnsigned(usampler2DMSArray tex, ivec3 pixelLayer, int sampleIndex) {
+            return texelFetch(tex, pixelLayer, sampleIndex);
+        }
+
+        int querySigned(isampler2DMS tex) {
+            return textureSamples(tex) + imageSamples(tex) + textureQueryLevels(tex);
+        }
+
+        int queryArrays(isampler2DMS textures[], usampler2DMSArray arrays[], int layer) {
+            return textureSamples(textures[layer])
+                + imageSamples(arrays[2])
+                + textureQueryLevels(textures[1])
+                + textureQueryLevels(arrays[layer]);
+        }
+
+        fragment {
+            ivec4 main(FSInput input) @ COLOR0 {
+                uvec4 unsignedFetched = fetchUnsigned(
+                    unsignedMsArray,
+                    input.pixelLayer,
+                    input.sampleIndex
+                );
+                int directSamples = textureSamples(signedMs) + imageSamples(unsignedMsArray);
+                int directLevels = textureQueryLevels(signedMs) + textureQueryLevels(unsignedMsArray);
+                return fetchSigned(signedMs, input.pixel, input.sampleIndex)
+                    + ivec4(texelFetch(signedTextures[input.layer], input.pixel, input.sampleIndex))
+                    + ivec4(texelFetch(unsignedArrays[2], input.pixelLayer, input.sampleIndex))
+                    + ivec4(unsignedFetched)
+                    + ivec4(directSamples + directLevels + querySigned(signedMs)
+                        + queryArrays(signedTextures, unsignedArrays, input.layer));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform isampler2DMS signedMs;" in generated_code
+    assert (
+        "layout(binding = 1) uniform usampler2DMSArray unsignedMsArray;"
+        in generated_code
+    )
+    assert (
+        "layout(binding = 2) uniform isampler2DMS signedTextures[4];" in generated_code
+    )
+    assert (
+        "layout(binding = 6) uniform usampler2DMSArray unsignedArrays[4];"
+        in generated_code
+    )
+    assert (
+        "ivec4 fetchSigned(isampler2DMS tex, ivec2 pixel, int sampleIndex)"
+        in generated_code
+    )
+    assert (
+        "uvec4 fetchUnsigned(usampler2DMSArray tex, ivec3 pixelLayer, int sampleIndex)"
+        in generated_code
+    )
+    assert "int querySigned(isampler2DMS tex)" in generated_code
+    assert (
+        "int queryArrays(isampler2DMS textures[4], usampler2DMSArray arrays[4], int layer)"
+        in generated_code
+    )
+    assert "return texelFetch(tex, pixel, sampleIndex);" in generated_code
+    assert "return texelFetch(tex, pixelLayer, sampleIndex);" in generated_code
+    assert "textureSamples(tex)" in generated_code
+    assert "textureSamples(textures[layer])" in generated_code
+    assert "textureSamples(arrays[2])" in generated_code
+    assert (
+        "int directSamples = (textureSamples(signedMs) + textureSamples(unsignedMsArray));"
+        in generated_code
+    )
+    assert "int directLevels = (1 + 1);" in generated_code
+    assert "texelFetch(signedTextures[layer], pixel, sampleIndex)" in generated_code
+    assert "texelFetch(unsignedArrays[2], pixelLayer, sampleIndex)" in generated_code
+    assert "textureQueryLevels(" not in generated_code
+    assert "imageSamples(" not in generated_code
+    assert "unsupported GLSL texture samples query" not in generated_code
+    assert "input." not in generated_code
+
+
 def test_opengl_multisample_image_samples_queries_use_texture_samples_builtin():
     shader = """
     shader MultisampleImageSamplesQuery {
@@ -15947,6 +18315,374 @@ def test_opengl_multisample_image_samples_queries_use_texture_samples_builtin():
     assert "imageSamples(" not in generated_code
     assert "unsupported GLSL texture samples query" not in generated_code
     assert "input." not in generated_code
+
+
+def test_opengl_integer_multisample_invalid_sampling_and_offsets_emit_typed_diagnostics():
+    shader = """
+    shader IntegerMultisampleDiagnostics {
+        isampler2DMS signedMs;
+        usampler2DMSArray unsignedMsArray;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvLayer @ TEXCOORD1;
+            ivec2 pixel @ TEXCOORD2;
+            ivec3 pixelLayer @ TEXCOORD3;
+            ivec2 offset @ TEXCOORD4;
+            int sampleIndex;
+        };
+
+        ivec4 invalidSigned(
+            isampler2DMS tex,
+            sampler s,
+            vec2 uv,
+            ivec2 pixel,
+            int sampleIndex,
+            ivec2 offset
+        ) {
+            ivec4 sampled = texture(tex, s, uv);
+            ivec4 lod = textureLod(tex, uv, 0.0);
+            ivec4 gathered = textureGather(tex, s, uv);
+            ivec4 offsetFetch = texelFetchOffset(tex, pixel, sampleIndex, offset);
+            return sampled + lod + gathered + offsetFetch;
+        }
+
+        uvec4 invalidUnsigned(
+            usampler2DMSArray tex,
+            sampler s,
+            vec3 uvLayer,
+            ivec3 pixelLayer,
+            int sampleIndex,
+            ivec2 offset
+        ) {
+            uvec4 sampled = texture(tex, s, uvLayer);
+            uvec4 lod = textureLod(tex, uvLayer, 0.0);
+            uvec4 gathered = textureGather(tex, s, uvLayer);
+            uvec4 offsetFetch = texelFetchOffset(tex, pixelLayer, sampleIndex, offset);
+            return sampled + lod + gathered + offsetFetch;
+        }
+
+        fragment {
+            ivec4 main(FSInput input) @ COLOR0 {
+                ivec4 signedResult = invalidSigned(
+                    signedMs,
+                    linearSampler,
+                    input.uv,
+                    input.pixel,
+                    input.sampleIndex,
+                    input.offset
+                );
+                uvec4 unsignedResult = invalidUnsigned(
+                    unsignedMsArray,
+                    linearSampler,
+                    input.uvLayer,
+                    input.pixelLayer,
+                    input.sampleIndex,
+                    input.offset
+                );
+                return signedResult + ivec4(unsignedResult)
+                    + texture(signedMs, input.uv)
+                    + ivec4(texture(unsignedMsArray, input.uvLayer))
+                    + texelFetchOffset(signedMs, input.pixel, input.sampleIndex, input.offset)
+                    + ivec4(texelFetchOffset(unsignedMsArray, input.pixelLayer, input.sampleIndex, input.offset));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform isampler2DMS signedMs;" in generated_code
+    assert (
+        "layout(binding = 1) uniform usampler2DMSArray unsignedMsArray;"
+        in generated_code
+    )
+    assert "linearSampler" not in generated_code
+    assert (
+        generated_code.count(
+            "unsupported GLSL multisample texture call: texture on isampler2DMS */ ivec4(0)"
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            "unsupported GLSL multisample texture call: textureLod on isampler2DMS */ ivec4(0)"
+        )
+        == 1
+    )
+    assert (
+        generated_code.count(
+            "unsupported GLSL multisample texture call: textureGather on isampler2DMS */ ivec4(0)"
+        )
+        == 1
+    )
+    assert (
+        generated_code.count(
+            "unsupported GLSL texel fetch offset: multisample texture isampler2DMS does not support offsets */ ivec4(0)"
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            "unsupported GLSL multisample texture call: texture on usampler2DMSArray */ uvec4(0u)"
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            "unsupported GLSL multisample texture call: textureLod on usampler2DMSArray */ uvec4(0u)"
+        )
+        == 1
+    )
+    assert (
+        generated_code.count(
+            "unsupported GLSL multisample texture call: textureGather on usampler2DMSArray */ uvec4(0u)"
+        )
+        == 1
+    )
+    assert (
+        generated_code.count(
+            "unsupported GLSL texel fetch offset: multisample texture usampler2DMSArray does not support offsets */ uvec4(0u)"
+        )
+        == 2
+    )
+    assert "texture(tex," not in generated_code
+    assert "textureLod(tex," not in generated_code
+    assert "textureGather(tex," not in generated_code
+    assert "texelFetchOffset(tex," not in generated_code
+    assert "texture(signedMs," not in generated_code
+    assert "texture(unsignedMsArray," not in generated_code
+    assert "texelFetchOffset(signedMs," not in generated_code
+    assert "texelFetchOffset(unsignedMsArray," not in generated_code
+    assert "input." not in generated_code
+
+
+def test_opengl_integer_sampler_1d_3d_array_size_and_offsets_lower():
+    shader = """
+    shader IntegerSamplerCoordinateRanks {
+        isampler1D signedLine;
+        usampler1DArray unsignedLineArray;
+        isampler3D signedVolume;
+        usampler2DArray unsignedLayerMap;
+
+        struct FSInput {
+            int x @ TEXCOORD0;
+            ivec2 lineLayer @ TEXCOORD1;
+            ivec3 voxel @ TEXCOORD2;
+            ivec3 pixelLayer @ TEXCOORD3;
+            int offset1 @ TEXCOORD4;
+            ivec2 offset2 @ TEXCOORD5;
+            ivec3 offset3 @ TEXCOORD6;
+            int lod;
+        };
+
+        ivec4 fetchSignedLine(isampler1D tex, int x, int lod, int offset) {
+            return texelFetchOffset(tex, x, lod, offset);
+        }
+
+        uvec4 fetchUnsignedLineArray(usampler1DArray tex, ivec2 pixelLayer, int lod, int offset) {
+            return texelFetchOffset(tex, pixelLayer, lod, offset);
+        }
+
+        ivec4 fetchSignedVolume(isampler3D tex, ivec3 voxel, int lod, ivec3 offset) {
+            return texelFetchOffset(tex, voxel, lod, offset);
+        }
+
+        uvec4 fetchUnsignedLayer(usampler2DArray tex, ivec3 pixelLayer, int lod, ivec2 offset) {
+            return texelFetchOffset(tex, pixelLayer, lod, offset);
+        }
+
+        fragment {
+            ivec4 main(FSInput input) @ COLOR0 {
+                int signedLineSize = textureSize(signedLine, input.lod);
+                ivec2 unsignedLineSize = textureSize(unsignedLineArray, input.lod);
+                ivec3 signedVolumeSize = textureSize(signedVolume, input.lod);
+                ivec3 unsignedLayerSize = textureSize(unsignedLayerMap, input.lod);
+                return fetchSignedLine(signedLine, input.x, input.lod, input.offset1)
+                    + ivec4(fetchUnsignedLineArray(
+                        unsignedLineArray,
+                        input.lineLayer,
+                        input.lod,
+                        input.offset1
+                    ))
+                    + fetchSignedVolume(signedVolume, input.voxel, input.lod, input.offset3)
+                    + ivec4(fetchUnsignedLayer(
+                        unsignedLayerMap,
+                        input.pixelLayer,
+                        input.lod,
+                        input.offset2
+                    ))
+                    + ivec4(
+                        signedLineSize
+                            + unsignedLineSize.y
+                            + signedVolumeSize.z
+                            + unsignedLayerSize.z
+                    );
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(binding = 0) uniform isampler1D signedLine;" in generated_code
+    assert (
+        "layout(binding = 1) uniform usampler1DArray unsignedLineArray;"
+        in generated_code
+    )
+    assert "layout(binding = 2) uniform isampler3D signedVolume;" in generated_code
+    assert (
+        "layout(binding = 3) uniform usampler2DArray unsignedLayerMap;"
+        in generated_code
+    )
+    assert (
+        "ivec4 fetchSignedLine(isampler1D tex, int x, int lod, int offset)"
+        in generated_code
+    )
+    assert (
+        "uvec4 fetchUnsignedLineArray(usampler1DArray tex, ivec2 pixelLayer, int lod, int offset)"
+        in generated_code
+    )
+    assert (
+        "ivec4 fetchSignedVolume(isampler3D tex, ivec3 voxel, int lod, ivec3 offset)"
+        in generated_code
+    )
+    assert (
+        "uvec4 fetchUnsignedLayer(usampler2DArray tex, ivec3 pixelLayer, int lod, ivec2 offset)"
+        in generated_code
+    )
+    assert "texelFetchOffset(tex, x, lod, offset)" in generated_code
+    assert "texelFetchOffset(tex, pixelLayer, lod, offset)" in generated_code
+    assert "texelFetchOffset(tex, voxel, lod, offset)" in generated_code
+    assert "int signedLineSize = textureSize(signedLine, lod);" in generated_code
+    assert (
+        "ivec2 unsignedLineSize = textureSize(unsignedLineArray, lod);"
+        in generated_code
+    )
+    assert "ivec3 signedVolumeSize = textureSize(signedVolume, lod);" in generated_code
+    assert (
+        "ivec3 unsignedLayerSize = textureSize(unsignedLayerMap, lod);"
+        in generated_code
+    )
+    assert "input." not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("texture_decl", "return_expr", "match"),
+    [
+        (
+            "isampler3D tex;",
+            "ivec4(textureSize(tex))",
+            "OpenGL texture operation 'textureSize' requires 2 argument\\(s\\) for isampler3D, got 1",
+        ),
+        (
+            "usampler1DArray tex;",
+            "ivec4(textureSize(tex), 0, 0)",
+            "OpenGL texture operation 'textureSize' requires 2 argument\\(s\\) for usampler1DArray, got 1",
+        ),
+        (
+            "isampler2DMS tex;",
+            "ivec4(textureSize(tex, 0), 0, 0)",
+            "OpenGL texture operation 'textureSize' accepts 1 argument\\(s\\) for isampler2DMS, got 2",
+        ),
+        (
+            "usampler2DMSArray tex;",
+            "ivec4(textureSize(tex, 0), 0)",
+            "OpenGL texture operation 'textureSize' accepts 1 argument\\(s\\) for usampler2DMSArray, got 2",
+        ),
+    ],
+)
+def test_opengl_integer_texture_size_resource_specific_arity(
+    texture_decl, return_expr, match
+):
+    shader = f"""
+    shader InvalidIntegerTextureSizeArity {{
+        {texture_decl}
+
+        fragment {{
+            ivec4 main() @ COLOR0 {{
+                return {return_expr};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+
+
+@pytest.mark.parametrize(
+    ("texture_decl", "return_expr", "match"),
+    [
+        (
+            "isampler1D tex;",
+            "texelFetchOffset(tex, input.pixel2, input.lod, input.offset1)",
+            "OpenGL resource operation 'texelFetchOffset' requires a 1D integer coordinate",
+        ),
+        (
+            "usampler1DArray tex;",
+            "ivec4(texelFetchOffset(tex, input.pixel1, input.lod, input.offset1))",
+            "OpenGL resource operation 'texelFetchOffset' requires a 2D integer coordinate",
+        ),
+        (
+            "isampler3D tex;",
+            "texelFetchOffset(tex, input.pixel2, input.lod, input.offset3)",
+            "OpenGL resource operation 'texelFetchOffset' requires a 3D integer coordinate",
+        ),
+        (
+            "usampler2DArray tex;",
+            "ivec4(texelFetchOffset(tex, input.pixel2, input.lod, input.offset2))",
+            "OpenGL resource operation 'texelFetchOffset' requires a 3D integer coordinate",
+        ),
+        (
+            "isampler1DArray tex;",
+            "texelFetchOffset(tex, input.pixel2, input.lod, input.offset2)",
+            "OpenGL resource operation 'texelFetchOffset' requires a 1D integer offset",
+        ),
+        (
+            "usampler2DArray tex;",
+            "ivec4(texelFetchOffset(tex, input.pixel3, input.lod, input.offset3))",
+            "OpenGL resource operation 'texelFetchOffset' requires a 2D integer offset",
+        ),
+        (
+            "isampler3D tex;",
+            "texelFetchOffset(tex, input.pixel3, input.lod, input.offset2)",
+            "OpenGL resource operation 'texelFetchOffset' requires a 3D integer offset",
+        ),
+    ],
+)
+def test_opengl_integer_texel_fetch_offset_rank_diagnostics(
+    texture_decl, return_expr, match
+):
+    shader = f"""
+    shader InvalidIntegerTexelFetchOffsetRanks {{
+        {texture_decl}
+
+        struct FSInput {{
+            int pixel1;
+            ivec2 pixel2;
+            ivec3 pixel3;
+            int offset1;
+            ivec2 offset2;
+            ivec3 offset3;
+            int lod;
+        }};
+
+        fragment {{
+            ivec4 main(FSInput input) @ COLOR0 {{
+                return {return_expr};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
 
 
 def test_opengl_non_multisample_texture_samples_emit_diagnostics():
@@ -18623,6 +21359,97 @@ def test_glsl_image_1d_and_1d_array_storage_operations():
         f"return {glsl_image_atomic_parameter_diagnostic('imageAtomicCompSwap', 'uimage1DArray', '0u')};"
         in generated_code
     )
+
+
+def test_glsl_cube_storage_images_lower_load_store_and_atomics():
+    shader = """
+    shader GLSLCubeStorageImages {
+        imageCube cube;
+        imageCubeArray cubeArray @rgba16f;
+        iimageCube signedCube @r32i;
+        uimageCubeArray unsignedCubeArray @r32ui;
+
+        float touchCube(imageCube image, ivec3 coord, float value) {
+            float oldValue = imageLoad(image, coord);
+            imageStore(image, coord, oldValue + value);
+            return oldValue;
+        }
+
+        vec4 touchCubeArray(imageCubeArray image @rgba16f, ivec3 coord, vec4 value) {
+            vec4 oldLayer = imageLoad(image, coord);
+            imageStore(image, coord, oldLayer + value);
+            return oldLayer;
+        }
+
+        compute {
+            void main() {
+                ivec2 cubeSize = imageSize(cube);
+                ivec3 arraySize = imageSize(cubeArray);
+                float a = touchCube(cube, ivec3(0, 1, 2), 0.5);
+                vec4 b = touchCubeArray(cubeArray, ivec3(3, 4, 5), vec4(a));
+                int signedOld = imageAtomicExchange(signedCube, ivec3(1, 2, 3), -1);
+                imageStore(signedCube, ivec3(2, 3, 4), signedOld + 1);
+                uint unsignedOld = imageAtomicAdd(unsignedCubeArray, ivec3(4, 5, 6), 7u);
+                imageStore(unsignedCubeArray, ivec3(5, 6, 7), unsignedOld + 1u);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "layout(rgba32f, binding = 0) uniform imageCube cube;" in generated_code
+    assert (
+        "layout(rgba16f, binding = 1) uniform imageCubeArray cubeArray;"
+        in generated_code
+    )
+    assert "layout(r32i, binding = 2) uniform iimageCube signedCube;" in generated_code
+    assert (
+        "layout(r32ui, binding = 3) uniform uimageCubeArray unsignedCubeArray;"
+        in generated_code
+    )
+    assert "ivec2 cubeSize = imageSize(cube);" in generated_code
+    assert "ivec3 arraySize = imageSize(cubeArray);" in generated_code
+    assert "float oldValue = imageLoad(image, coord).x;" in generated_code
+    assert "imageStore(image, coord, vec4((oldValue + value)));" in generated_code
+    assert "vec4 oldLayer = imageLoad(image, coord);" in generated_code
+    assert "imageStore(image, coord, (oldLayer + value));" in generated_code
+    assert (
+        "int signedOld = imageAtomicExchange(signedCube, ivec3(1, 2, 3), (-1));"
+        in generated_code
+    )
+    assert (
+        "imageStore(signedCube, ivec3(2, 3, 4), ivec4((signedOld + 1)));"
+        in generated_code
+    )
+    assert (
+        "uint unsignedOld = imageAtomicAdd(unsignedCubeArray, ivec3(4, 5, 6), 7u);"
+        in generated_code
+    )
+    assert (
+        "imageStore(unsignedCubeArray, ivec3(5, 6, 7), uvec4((unsignedOld + 1u)));"
+        in generated_code
+    )
+
+
+def test_glsl_cube_storage_image_access_rejects_indexed_writeonly_load():
+    shader = """
+    shader GLSLCubeStorageImageAccessInvalid {
+        imageCubeArray targets[2] @writeonly;
+
+        compute {
+            void main() {
+                vec4 value = imageLoad(targets[0], ivec3(0, 1, 2));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match="requires read-capable storage image access"):
+        GLSLCodeGen().generate(ast)
 
 
 def test_glsl_multisample_storage_images_lower_load_store_and_atomics():

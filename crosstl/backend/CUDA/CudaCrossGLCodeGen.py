@@ -123,6 +123,11 @@ class CudaToCrossGLConverter:
         "surfCubemapLayeredread": "imageCubeArray",
         "surfCubemapLayeredwrite": "imageCubeArray",
     }
+    CUDA_DEVICE_GRAPH_LAUNCH_MODES = {
+        "cudaStreamGraphFireAndForget": "fire-and-forget",
+        "cudaStreamGraphTailLaunch": "tail",
+        "cudaStreamGraphFireAndForgetAsSibling": "fire-and-forget sibling",
+    }
 
     def __init__(self):
         """Initialize CUDA-to-CrossGL visitor state."""
@@ -573,6 +578,13 @@ class CudaToCrossGLConverter:
         if self.is_user_defined_function(stmt.name):
             return False
 
+        runtime_value = self.format_cuda_runtime_value_expression(stmt)
+        if runtime_value is not None:
+            comments, _ = runtime_value
+            for comment in comments:
+                self.emit(comment)
+            return True
+
         comments = self.format_cuda_runtime_call(stmt)
         if comments is None:
             return False
@@ -591,7 +603,44 @@ class CudaToCrossGLConverter:
         if comments is None:
             return None
 
-        return comments, "cudaSuccess"
+        return comments, self.format_cuda_success_literal(value.name)
+
+    def format_cuda_success_literal(self, name):
+        if isinstance(name, str) and name.startswith("cu") and len(name) > 2:
+            if name[2].isupper():
+                return "CUDA_SUCCESS"
+        return "cudaSuccess"
+
+    def format_cuda_runtime_expression(self, value):
+        runtime_value = self.format_cuda_runtime_value_expression(value)
+        if runtime_value is not None:
+            return runtime_value
+        return self.format_cuda_runtime_status_expression(value)
+
+    def format_cuda_runtime_value_expression(self, value):
+        if not isinstance(value, FunctionCallNode):
+            return None
+        if self.is_user_defined_function(value.name):
+            return None
+
+        name = value.name if isinstance(value.name, str) else self.visit(value.name)
+        if name == "cudaGetCurrentGraphExec" and not value.args:
+            return ["// CUDA device graph get current exec"], "0"
+        return None
+
+    def format_cuda_runtime_inline_expression(self, value):
+        runtime_expression = self.format_cuda_runtime_expression(value)
+        if runtime_expression is None:
+            return None
+
+        comments, fallback = runtime_expression
+        if not comments:
+            return fallback
+
+        comment = comments[-1]
+        if comment.startswith("// "):
+            comment = comment[3:]
+        return f"(/* {comment} */ {fallback})"
 
     def format_cuda_runtime_call(self, node):
         args = [self.visit(arg) for arg in node.args]
@@ -623,6 +672,1241 @@ class CudaToCrossGLConverter:
                 if len(args) >= 4:
                     comment += f", stream: {args[3]}"
                 return [comment]
+        elif name == "cuMemAlloc":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver memory allocate: output: {output}, "
+                    f"bytes: {args[1]}"
+                ]
+        elif name == "cuMemAllocManaged":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver memory allocate managed: "
+                    f"output: {output}, bytes: {args[1]}, flags: {args[2]}"
+                ]
+        elif name in {"cuMemAllocHost", "cuMemHostAlloc"}:
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                comment = (
+                    f"// CUDA driver host memory allocate: output: {output}, "
+                    f"bytes: {args[1]}"
+                )
+                if name == "cuMemHostAlloc" and len(args) >= 3:
+                    comment += f", flags: {args[2]}"
+                return [comment]
+        elif name == "cuMemFree":
+            if args:
+                return [f"// CUDA driver memory free: {args[0]}"]
+        elif name == "cuMemFreeHost":
+            if args:
+                return [f"// CUDA driver host memory free: {args[0]}"]
+        elif name == "cuPointerGetAttribute":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver pointer get attribute: "
+                    f"output: {output}, attribute: {args[1]}, pointer: {args[2]}"
+                ]
+        elif name == "cuPointerGetAttributes":
+            if len(args) >= 4:
+                return [
+                    "// CUDA driver pointer get attributes: "
+                    f"count: {args[0]}, attributes: {args[1]}, "
+                    f"data: {args[2]}, pointer: {args[3]}"
+                ]
+        elif name == "cuMemGetAddressRange":
+            if len(node.args) >= 3:
+                base_output = self.format_runtime_pointer_target(node.args[0])
+                size_output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// CUDA driver memory get address range: "
+                    f"base output: {base_output}, size output: {size_output}, "
+                    f"pointer: {args[2]}"
+                ]
+        elif name in {"cuMemGetInfo", "cuMemGetInfo_v2"}:
+            if len(node.args) >= 2:
+                free_output = self.format_runtime_pointer_target(node.args[0])
+                total_output = self.format_runtime_pointer_target(node.args[1])
+                suffix = " v2" if name == "cuMemGetInfo_v2" else ""
+                return [
+                    f"// CUDA driver memory get info{suffix}: "
+                    f"free output: {free_output}, total output: {total_output}"
+                ]
+        elif name == "cuMemAdvise":
+            if len(args) >= 4:
+                return [
+                    "// CUDA driver memory advise: "
+                    f"pointer: {args[0]}, bytes: {args[1]}, "
+                    f"advice: {args[2]}, device: {args[3]}"
+                ]
+        elif name == "cuMemAllocAsync":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver memory allocate async: "
+                    f"output: {output}, bytes: {args[1]}, stream: {args[2]}"
+                ]
+        elif name == "cuMemFreeAsync":
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver memory free async: "
+                    f"pointer: {args[0]}, stream: {args[1]}"
+                ]
+        elif name == "cuMemPoolCreate":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver memory pool create: "
+                    f"output: {output}, props: {args[1]}"
+                ]
+        elif name == "cuMemPoolDestroy":
+            if args:
+                return [f"// CUDA driver memory pool destroy: pool: {args[0]}"]
+        elif name == "cuMemPoolTrimTo":
+            if len(args) >= 2:
+                return [
+                    f"// CUDA driver memory pool trim: "
+                    f"pool: {args[0]}, bytes: {args[1]}"
+                ]
+        elif name in {"cuDeviceGetDefaultMemPool", "cuDeviceGetMemPool"}:
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                pool_kind = (
+                    "default memory pool"
+                    if name == "cuDeviceGetDefaultMemPool"
+                    else "memory pool"
+                )
+                return [
+                    f"// CUDA driver device get {pool_kind}: "
+                    f"output: {output}, device: {args[1]}"
+                ]
+        elif name == "cuDeviceSetMemPool":
+            if len(args) >= 2:
+                return [
+                    f"// CUDA driver device set memory pool: "
+                    f"device: {args[0]}, pool: {args[1]}"
+                ]
+        elif name in {"cuMemPoolSetAttribute", "cuMemPoolGetAttribute"}:
+            if len(node.args) >= 3:
+                value = self.format_runtime_pointer_target(node.args[2])
+                action = "set" if name == "cuMemPoolSetAttribute" else "get"
+                value_label = "value" if action == "set" else "output"
+                return [
+                    f"// CUDA driver memory pool {action} attribute: "
+                    f"pool: {args[0]}, attribute: {args[1]}, "
+                    f"{value_label}: {value}"
+                ]
+        elif name == "cuMemPoolSetAccess":
+            if len(args) >= 3:
+                return [
+                    f"// CUDA driver memory pool set access: "
+                    f"pool: {args[0]}, descriptors: {args[1]}, count: {args[2]}"
+                ]
+        elif name == "cuMemPoolGetAccess":
+            if len(node.args) >= 3:
+                flags_output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver memory pool get access: "
+                    f"flags output: {flags_output}, pool: {args[1]}, "
+                    f"location: {args[2]}"
+                ]
+        elif name == "cuMemPoolExportToShareableHandle":
+            if len(node.args) >= 4:
+                handle_output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver memory pool export shareable handle: "
+                    f"handle output: {handle_output}, pool: {args[1]}, "
+                    f"handle type: {args[2]}, flags: {args[3]}"
+                ]
+        elif name == "cuMemPoolImportFromShareableHandle":
+            if len(node.args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver memory pool import shareable handle: "
+                    f"output: {output}, handle: {args[1]}, "
+                    f"handle type: {args[2]}, flags: {args[3]}"
+                ]
+        elif name == "cuMemPoolExportPointer":
+            if len(node.args) >= 2:
+                share_data_output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver memory pool export pointer: "
+                    f"share data output: {share_data_output}, pointer: {args[1]}"
+                ]
+        elif name == "cuMemPoolImportPointer":
+            if len(node.args) >= 3:
+                pointer_output = self.format_runtime_pointer_target(node.args[0])
+                share_data = self.format_runtime_pointer_target(node.args[2])
+                return [
+                    f"// CUDA driver memory pool import pointer: "
+                    f"pointer output: {pointer_output}, pool: {args[1]}, "
+                    f"share data: {share_data}"
+                ]
+        elif name == "cuMemAddressReserve":
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver virtual memory reserve: "
+                    f"output: {output}, bytes: {args[1]}, "
+                    f"alignment: {args[2]}, address: {args[3]}, "
+                    f"flags: {args[4]}"
+                ]
+        elif name == "cuMemAddressFree":
+            if len(args) >= 2:
+                return [
+                    f"// CUDA driver virtual memory free address: "
+                    f"address: {args[0]}, bytes: {args[1]}"
+                ]
+        elif name == "cuMemCreate":
+            if len(node.args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver virtual memory create allocation: "
+                    f"output: {output}, bytes: {args[1]}, "
+                    f"props: {args[2]}, flags: {args[3]}"
+                ]
+        elif name == "cuMemRelease":
+            if args:
+                return [
+                    f"// CUDA driver virtual memory release allocation: "
+                    f"allocation: {args[0]}"
+                ]
+        elif name == "cuMemMap":
+            if len(args) >= 5:
+                return [
+                    f"// CUDA driver virtual memory map: "
+                    f"address: {args[0]}, bytes: {args[1]}, "
+                    f"offset: {args[2]}, allocation: {args[3]}, "
+                    f"flags: {args[4]}"
+                ]
+        elif name == "cuMemUnmap":
+            if len(args) >= 2:
+                return [
+                    f"// CUDA driver virtual memory unmap: "
+                    f"address: {args[0]}, bytes: {args[1]}"
+                ]
+        elif name == "cuMemSetAccess":
+            if len(args) >= 4:
+                return [
+                    f"// CUDA driver virtual memory set access: "
+                    f"address: {args[0]}, bytes: {args[1]}, "
+                    f"descriptors: {args[2]}, count: {args[3]}"
+                ]
+        elif name == "cuMemGetAccess":
+            if len(node.args) >= 3:
+                flags_output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver virtual memory get access: "
+                    f"flags output: {flags_output}, location: {args[1]}, "
+                    f"address: {args[2]}"
+                ]
+        elif name == "cuMemRetainAllocationHandle":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver virtual memory retain allocation handle: "
+                    f"output: {output}, address: {args[1]}"
+                ]
+        elif name == "cuMemExportToShareableHandle":
+            if len(node.args) >= 4:
+                handle_output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver virtual memory export shareable handle: "
+                    f"handle output: {handle_output}, allocation: {args[1]}, "
+                    f"handle type: {args[2]}, flags: {args[3]}"
+                ]
+        elif name == "cuMemImportFromShareableHandle":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver virtual memory import shareable handle: "
+                    f"output: {output}, handle: {args[1]}, "
+                    f"handle type: {args[2]}"
+                ]
+        elif name == "cuImportExternalMemory":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver external memory import: "
+                    f"output: {output}, handle: {args[1]}"
+                ]
+        elif name == "cuExternalMemoryGetMappedBuffer":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver external memory mapped buffer: "
+                    f"{args[1]}, desc: {args[2]}, output: {output}"
+                ]
+        elif name == "cuExternalMemoryGetMappedMipmappedArray":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver external memory mapped mipmapped array: "
+                    f"{args[1]}, desc: {args[2]}, output: {output}"
+                ]
+        elif name == "cuDestroyExternalMemory":
+            if args:
+                return [f"// CUDA driver external memory destroy: {args[0]}"]
+        elif name == "cuImportExternalSemaphore":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver external semaphore import: "
+                    f"output: {output}, handle: {args[1]}"
+                ]
+        elif name in {
+            "cuSignalExternalSemaphoresAsync",
+            "cuWaitExternalSemaphoresAsync",
+        }:
+            if len(args) >= 3:
+                operation = (
+                    "signal" if name == "cuSignalExternalSemaphoresAsync" else "wait"
+                )
+                comment = (
+                    f"// CUDA driver external semaphore {operation}: "
+                    f"semaphores: {args[0]}, params: {args[1]}, count: {args[2]}"
+                )
+                if len(args) >= 4:
+                    comment += f", stream: {args[3]}"
+                return [comment]
+        elif name == "cuDestroyExternalSemaphore":
+            if args:
+                return [f"// CUDA driver external semaphore destroy: {args[0]}"]
+        elif name in {"cuArrayCreate", "cuArrayCreate_v2"}:
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver array create: output: {output}, "
+                    f"desc: {args[1]}"
+                ]
+        elif name in {"cuArray3DCreate", "cuArray3DCreate_v2"}:
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver array 3D create: output: {output}, "
+                    f"desc: {args[1]}"
+                ]
+        elif name == "cuArrayDestroy":
+            if args:
+                return [f"// CUDA driver array destroy: array: {args[0]}"]
+        elif name == "cuMipmappedArrayCreate":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver mipmapped array create: output: {output}, "
+                    f"desc: {args[1]}, levels: {args[2]}"
+                ]
+        elif name == "cuMipmappedArrayGetLevel":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver mipmapped array get level: "
+                    f"output: {output}, mipmapped array: {args[1]}, "
+                    f"level: {args[2]}"
+                ]
+        elif name == "cuMipmappedArrayDestroy":
+            if args:
+                return [
+                    f"// CUDA driver mipmapped array destroy: mipmapped array: {args[0]}"
+                ]
+        elif name in {"cuArrayGetDescriptor", "cuArrayGetDescriptor_v2"}:
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver array get descriptor: "
+                    f"output: {output}, array: {args[1]}"
+                ]
+        elif name in {"cuArray3DGetDescriptor", "cuArray3DGetDescriptor_v2"}:
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver array 3D get descriptor: "
+                    f"output: {output}, array: {args[1]}"
+                ]
+        elif name == "cuArrayGetMemoryRequirements":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver array get memory requirements: "
+                    f"output: {output}, array: {args[1]}, device: {args[2]}"
+                ]
+        elif name == "cuMipmappedArrayGetMemoryRequirements":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver mipmapped array get memory requirements: "
+                    f"output: {output}, mipmapped array: {args[1]}, "
+                    f"device: {args[2]}"
+                ]
+        elif name == "cuArrayGetPlane":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver array get plane: output: {output}, "
+                    f"array: {args[1]}, plane: {args[2]}"
+                ]
+        elif name == "cuArrayGetSparseProperties":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver array get sparse properties: "
+                    f"output: {output}, array: {args[1]}"
+                ]
+        elif name == "cuMipmappedArrayGetSparseProperties":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver mipmapped array get sparse properties: "
+                    f"output: {output}, mipmapped array: {args[1]}"
+                ]
+        elif name == "cuTexObjectCreate":
+            if len(node.args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture object create: "
+                    f"output: {output}, resource desc: {args[1]}, "
+                    f"texture desc: {args[2]}, resource view desc: {args[3]}"
+                ]
+        elif name == "cuTexObjectDestroy":
+            if args:
+                return [
+                    f"// CUDA driver texture object destroy: texture object: {args[0]}"
+                ]
+        elif name == "cuTexObjectGetResourceDesc":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture object get resource desc: "
+                    f"output: {output}, texture object: {args[1]}"
+                ]
+        elif name == "cuTexObjectGetTextureDesc":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture object get texture desc: "
+                    f"output: {output}, texture object: {args[1]}"
+                ]
+        elif name == "cuTexObjectGetResourceViewDesc":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture object get resource view desc: "
+                    f"output: {output}, texture object: {args[1]}"
+                ]
+        elif name == "cuSurfObjectCreate":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver surface object create: "
+                    f"output: {output}, resource desc: {args[1]}"
+                ]
+        elif name == "cuSurfObjectDestroy":
+            if args:
+                return [
+                    f"// CUDA driver surface object destroy: surface object: {args[0]}"
+                ]
+        elif name == "cuSurfObjectGetResourceDesc":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver surface object get resource desc: "
+                    f"output: {output}, surface object: {args[1]}"
+                ]
+        elif name == "cuTexRefSetArray":
+            if len(args) >= 3:
+                return [
+                    "// CUDA driver texture reference set array: "
+                    f"texture ref: {args[0]}, array: {args[1]}, flags: {args[2]}"
+                ]
+        elif name == "cuTexRefSetMipmappedArray":
+            if len(args) >= 3:
+                return [
+                    "// CUDA driver texture reference set mipmapped array: "
+                    f"texture ref: {args[0]}, mipmapped array: {args[1]}, "
+                    f"flags: {args[2]}"
+                ]
+        elif name in {"cuTexRefSetAddress", "cuTexRefSetAddress_v2"}:
+            if len(node.args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture reference set address: "
+                    f"byte offset output: {output}, texture ref: {args[1]}, "
+                    f"pointer: {args[2]}, bytes: {args[3]}"
+                ]
+        elif name in {"cuTexRefSetAddress2D", "cuTexRefSetAddress2D_v2"}:
+            if len(args) >= 4:
+                return [
+                    "// CUDA driver texture reference set address 2D: "
+                    f"texture ref: {args[0]}, desc: {args[1]}, "
+                    f"pointer: {args[2]}, pitch: {args[3]}"
+                ]
+        elif name == "cuTexRefSetFormat":
+            if len(args) >= 3:
+                return [
+                    "// CUDA driver texture reference set format: "
+                    f"texture ref: {args[0]}, format: {args[1]}, "
+                    f"components: {args[2]}"
+                ]
+        elif name == "cuTexRefSetAddressMode":
+            if len(args) >= 3:
+                return [
+                    "// CUDA driver texture reference set address mode: "
+                    f"texture ref: {args[0]}, dimension: {args[1]}, "
+                    f"mode: {args[2]}"
+                ]
+        elif name == "cuTexRefSetFilterMode":
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver texture reference set filter mode: "
+                    f"texture ref: {args[0]}, mode: {args[1]}"
+                ]
+        elif name == "cuTexRefSetMipmapFilterMode":
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver texture reference set mipmap filter mode: "
+                    f"texture ref: {args[0]}, mode: {args[1]}"
+                ]
+        elif name == "cuTexRefSetMipmapLevelBias":
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver texture reference set mipmap level bias: "
+                    f"texture ref: {args[0]}, bias: {args[1]}"
+                ]
+        elif name == "cuTexRefSetMipmapLevelClamp":
+            if len(args) >= 3:
+                return [
+                    "// CUDA driver texture reference set mipmap level clamp: "
+                    f"texture ref: {args[0]}, min level: {args[1]}, "
+                    f"max level: {args[2]}"
+                ]
+        elif name == "cuTexRefSetMaxAnisotropy":
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver texture reference set max anisotropy: "
+                    f"texture ref: {args[0]}, anisotropy: {args[1]}"
+                ]
+        elif name == "cuTexRefSetBorderColor":
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver texture reference set border color: "
+                    f"texture ref: {args[0]}, color: {args[1]}"
+                ]
+        elif name == "cuTexRefSetFlags":
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver texture reference set flags: "
+                    f"texture ref: {args[0]}, flags: {args[1]}"
+                ]
+        elif name in {"cuTexRefGetAddress", "cuTexRefGetAddress_v2"}:
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture reference get address: "
+                    f"output: {output}, texture ref: {args[1]}"
+                ]
+        elif name == "cuTexRefGetArray":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture reference get array: "
+                    f"output: {output}, texture ref: {args[1]}"
+                ]
+        elif name == "cuTexRefGetMipmappedArray":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture reference get mipmapped array: "
+                    f"output: {output}, texture ref: {args[1]}"
+                ]
+        elif name == "cuTexRefGetAddressMode":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture reference get address mode: "
+                    f"output: {output}, texture ref: {args[1]}, "
+                    f"dimension: {args[2]}"
+                ]
+        elif name == "cuTexRefGetFilterMode":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture reference get filter mode: "
+                    f"output: {output}, texture ref: {args[1]}"
+                ]
+        elif name == "cuTexRefGetFormat":
+            if len(node.args) >= 3:
+                format_output = self.format_runtime_pointer_target(node.args[0])
+                channel_output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// CUDA driver texture reference get format: "
+                    f"format output: {format_output}, "
+                    f"channel output: {channel_output}, texture ref: {args[2]}"
+                ]
+        elif name == "cuTexRefGetMipmapFilterMode":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture reference get mipmap filter mode: "
+                    f"output: {output}, texture ref: {args[1]}"
+                ]
+        elif name == "cuTexRefGetMipmapLevelBias":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture reference get mipmap level bias: "
+                    f"output: {output}, texture ref: {args[1]}"
+                ]
+        elif name == "cuTexRefGetMipmapLevelClamp":
+            if len(node.args) >= 3:
+                min_output = self.format_runtime_pointer_target(node.args[0])
+                max_output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// CUDA driver texture reference get mipmap level clamp: "
+                    f"min output: {min_output}, max output: {max_output}, "
+                    f"texture ref: {args[2]}"
+                ]
+        elif name == "cuTexRefGetMaxAnisotropy":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture reference get max anisotropy: "
+                    f"output: {output}, texture ref: {args[1]}"
+                ]
+        elif name == "cuTexRefGetBorderColor":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture reference get border color: "
+                    f"output: {output}, texture ref: {args[1]}"
+                ]
+        elif name == "cuTexRefGetFlags":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver texture reference get flags: "
+                    f"output: {output}, texture ref: {args[1]}"
+                ]
+        elif name == "cuSurfRefSetArray":
+            if len(args) >= 3:
+                return [
+                    "// CUDA driver surface reference set array: "
+                    f"surface ref: {args[0]}, array: {args[1]}, flags: {args[2]}"
+                ]
+        elif name == "cuSurfRefGetArray":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver surface reference get array: "
+                    f"output: {output}, surface ref: {args[1]}"
+                ]
+        elif name == "cuGLInit":
+            return ["// CUDA driver OpenGL initialize"]
+        elif name in {"cuGLCtxCreate", "cuGLCtxCreate_v2"}:
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver OpenGL context create: "
+                    f"output: {output}, flags: {args[1]}, device: {args[2]}"
+                ]
+        elif name == "cuGLGetDevices":
+            if len(node.args) >= 4:
+                count_output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver OpenGL get devices: "
+                    f"count output: {count_output}, devices: {args[1]}, "
+                    f"max devices: {args[2]}, device list: {args[3]}"
+                ]
+        elif name == "cuGLRegisterBufferObject":
+            if args:
+                return [
+                    "// CUDA driver OpenGL register buffer object: "
+                    f"buffer object: {args[0]}"
+                ]
+        elif name == "cuGLSetBufferObjectMapFlags":
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver OpenGL set buffer object map flags: "
+                    f"buffer object: {args[0]}, flags: {args[1]}"
+                ]
+        elif name in {"cuGLMapBufferObject", "cuGLMapBufferObject_v2"}:
+            if len(node.args) >= 3:
+                pointer_output = self.format_runtime_pointer_target(node.args[0])
+                size_output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// CUDA driver OpenGL map buffer object: "
+                    f"pointer output: {pointer_output}, "
+                    f"size output: {size_output}, buffer object: {args[2]}"
+                ]
+        elif name in {
+            "cuGLMapBufferObjectAsync",
+            "cuGLMapBufferObjectAsync_v2",
+        }:
+            if len(node.args) >= 4:
+                pointer_output = self.format_runtime_pointer_target(node.args[0])
+                size_output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// CUDA driver OpenGL map buffer object async: "
+                    f"pointer output: {pointer_output}, "
+                    f"size output: {size_output}, buffer object: {args[2]}, "
+                    f"stream: {args[3]}"
+                ]
+        elif name == "cuGLUnmapBufferObject":
+            if args:
+                return [
+                    "// CUDA driver OpenGL unmap buffer object: "
+                    f"buffer object: {args[0]}"
+                ]
+        elif name == "cuGLUnmapBufferObjectAsync":
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver OpenGL unmap buffer object async: "
+                    f"buffer object: {args[0]}, stream: {args[1]}"
+                ]
+        elif name == "cuGLUnregisterBufferObject":
+            if args:
+                return [
+                    "// CUDA driver OpenGL unregister buffer object: "
+                    f"buffer object: {args[0]}"
+                ]
+        elif name == "cuGraphicsGLRegisterBuffer":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver graphics GL register buffer: "
+                    f"output: {output}, buffer: {args[1]}, flags: {args[2]}"
+                ]
+        elif name == "cuGraphicsGLRegisterImage":
+            if len(node.args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver graphics GL register image: "
+                    f"output: {output}, image: {args[1]}, "
+                    f"target: {args[2]}, flags: {args[3]}"
+                ]
+        elif name in {
+            "cuGraphicsD3D9RegisterResource",
+            "cuGraphicsD3D10RegisterResource",
+            "cuGraphicsD3D11RegisterResource",
+        }:
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                api = name[len("cuGraphics") : -len("RegisterResource")]
+                return [
+                    f"// CUDA driver graphics {api} register resource: "
+                    f"output: {output}, resource: {args[1]}, flags: {args[2]}"
+                ]
+        elif name == "cuGraphicsUnregisterResource":
+            if args:
+                return [
+                    f"// CUDA driver graphics unregister resource: resource: {args[0]}"
+                ]
+        elif name in {"cuGraphicsMapResources", "cuGraphicsUnmapResources"}:
+            if len(args) >= 3:
+                operation = "map" if name == "cuGraphicsMapResources" else "unmap"
+                return [
+                    f"// CUDA driver graphics {operation} resources: "
+                    f"count: {args[0]}, resources: {args[1]}, stream: {args[2]}"
+                ]
+        elif name in {
+            "cuGraphicsResourceSetMapFlags",
+            "cuGraphicsResourceSetMapFlags_v2",
+        }:
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver graphics resource set map flags: "
+                    f"resource: {args[0]}, flags: {args[1]}"
+                ]
+        elif name in {
+            "cuGraphicsResourceGetMappedPointer",
+            "cuGraphicsResourceGetMappedPointer_v2",
+        }:
+            if len(node.args) >= 3:
+                pointer_output = self.format_runtime_pointer_target(node.args[0])
+                size_output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// CUDA driver graphics mapped pointer: "
+                    f"pointer output: {pointer_output}, "
+                    f"size output: {size_output}, resource: {args[2]}"
+                ]
+        elif name == "cuGraphicsSubResourceGetMappedArray":
+            if len(node.args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver graphics subresource mapped array: "
+                    f"output: {output}, resource: {args[1]}, "
+                    f"array index: {args[2]}, mip level: {args[3]}"
+                ]
+        elif name == "cuGraphicsResourceGetMappedMipmappedArray":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver graphics mapped mipmapped array: "
+                    f"output: {output}, resource: {args[1]}"
+                ]
+        elif name in {"cuMemcpy", "cuMemcpyAsync"}:
+            if len(args) >= 3:
+                comment = (
+                    f"// CUDA driver memory copy: {args[1]} -> {args[0]}, "
+                    f"bytes: {args[2]}"
+                )
+                if name == "cuMemcpyAsync" and len(args) >= 4:
+                    comment += f", stream: {args[3]}"
+                return [comment]
+        elif name in {
+            "cuMemcpyHtoD",
+            "cuMemcpyDtoH",
+            "cuMemcpyDtoD",
+            "cuMemcpyHtoDAsync",
+            "cuMemcpyDtoHAsync",
+            "cuMemcpyDtoDAsync",
+        }:
+            if len(args) >= 3:
+                direction = name[len("cuMemcpy") :]
+                if direction.endswith("Async"):
+                    direction = direction[: -len("Async")]
+                comment = (
+                    f"// CUDA driver memory copy {direction}: "
+                    f"{args[1]} -> {args[0]}, bytes: {args[2]}"
+                )
+                if name.endswith("Async") and len(args) >= 4:
+                    comment += f", stream: {args[3]}"
+                return [comment]
+        elif name in {"cuMemcpy2D", "cuMemcpy2DAsync", "cuMemcpy2DUnaligned"}:
+            if node.args:
+                params = self.format_runtime_pointer_target(node.args[0])
+                comment = f"// CUDA driver memory copy 2D: params: {params}"
+                if name == "cuMemcpy2DAsync" and len(args) >= 2:
+                    comment += f", stream: {args[1]}"
+                return [comment]
+        elif name in {"cuMemcpy3D", "cuMemcpy3DAsync"}:
+            if node.args:
+                params = self.format_runtime_pointer_target(node.args[0])
+                comment = f"// CUDA driver memory copy 3D: params: {params}"
+                if name == "cuMemcpy3DAsync" and len(args) >= 2:
+                    comment += f", stream: {args[1]}"
+                return [comment]
+        elif name in {
+            "cuMemsetD8",
+            "cuMemsetD32",
+            "cuMemsetD8Async",
+            "cuMemsetD32Async",
+        }:
+            if len(args) >= 3:
+                width = "D32" if "D32" in name else "D8"
+                comment = (
+                    f"// CUDA driver memory set {width}: {args[0]}, "
+                    f"value: {args[1]}, count: {args[2]}"
+                )
+                if name.endswith("Async") and len(args) >= 4:
+                    comment += f", stream: {args[3]}"
+                return [comment]
+        elif name in {
+            "cuMemsetD2D8",
+            "cuMemsetD2D32",
+            "cuMemsetD2D8Async",
+            "cuMemsetD2D32Async",
+        }:
+            if len(args) >= 5:
+                width = "D32" if "D32" in name else "D8"
+                comment = (
+                    f"// CUDA driver memory set 2D {width}: {args[0]}, "
+                    f"pitch: {args[1]}, value: {args[2]}, "
+                    f"width: {args[3]}, height: {args[4]}"
+                )
+                if name.endswith("Async") and len(args) >= 6:
+                    comment += f", stream: {args[5]}"
+                return [comment]
+        elif name == "cuModuleLoad":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver module load: output: {output}, path: {args[1]}"
+                ]
+        elif name == "cuModuleLoadData":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver module load data: "
+                    f"output: {output}, image: {args[1]}"
+                ]
+        elif name == "cuModuleLoadDataEx":
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver module load data with options: "
+                    f"output: {output}, image: {args[1]}, "
+                    f"option count: {args[2]}, options: {args[3]}, "
+                    f"option values: {args[4]}"
+                ]
+        elif name == "cuLinkCreate":
+            if len(node.args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[3])
+                return [
+                    "// CUDA driver linker create: "
+                    f"output: {output}, option count: {args[0]}, "
+                    f"options: {args[1]}, option values: {args[2]}"
+                ]
+        elif name == "cuLinkAddData":
+            if len(args) >= 8:
+                return [
+                    "// CUDA driver linker add data: "
+                    f"state: {args[0]}, type: {args[1]}, data: {args[2]}, "
+                    f"bytes: {args[3]}, name: {args[4]}, option count: {args[5]}, "
+                    f"options: {args[6]}, option values: {args[7]}"
+                ]
+        elif name == "cuLinkAddFile":
+            if len(args) >= 6:
+                return [
+                    "// CUDA driver linker add file: "
+                    f"state: {args[0]}, type: {args[1]}, path: {args[2]}, "
+                    f"option count: {args[3]}, options: {args[4]}, "
+                    f"option values: {args[5]}"
+                ]
+        elif name == "cuLinkComplete":
+            if len(node.args) >= 3:
+                cubin_output = self.format_runtime_pointer_target(node.args[1])
+                size_output = self.format_runtime_pointer_target(node.args[2])
+                return [
+                    "// CUDA driver linker complete: "
+                    f"state: {args[0]}, cubin output: {cubin_output}, "
+                    f"size output: {size_output}"
+                ]
+        elif name == "cuLinkDestroy":
+            if args:
+                return [f"// CUDA driver linker destroy: state: {args[0]}"]
+        elif name == "cuModuleGetFunction":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver module get function: "
+                    f"output: {output}, module: {args[1]}, name: {args[2]}"
+                ]
+        elif name == "cuModuleGetTexRef":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver module get texture reference: "
+                    f"output: {output}, module: {args[1]}, name: {args[2]}"
+                ]
+        elif name == "cuModuleGetSurfRef":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver module get surface reference: "
+                    f"output: {output}, module: {args[1]}, name: {args[2]}"
+                ]
+        elif name == "cuModuleGetGlobal":
+            if len(node.args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                byte_output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// CUDA driver module get global: "
+                    f"output: {output}, bytes output: {byte_output}, "
+                    f"module: {args[2]}, name: {args[3]}"
+                ]
+        elif name == "cuModuleUnload":
+            if args:
+                return [f"// CUDA driver module unload: {args[0]}"]
+        elif name in {"cuLaunchKernel", "cuLaunchCooperativeKernel"}:
+            if len(args) >= 10:
+                launch_kind = (
+                    "launch cooperative kernel"
+                    if name == "cuLaunchCooperativeKernel"
+                    else "launch kernel"
+                )
+                comment = (
+                    f"// CUDA driver {launch_kind}: function: {args[0]}, "
+                    f"grid: {args[1]} x {args[2]} x {args[3]}, "
+                    f"block: {args[4]} x {args[5]} x {args[6]}, "
+                    f"shared memory: {args[7]}, stream: {args[8]}, "
+                    f"params: {args[9]}"
+                )
+                if name == "cuLaunchKernel" and len(args) >= 11:
+                    comment += f", extra: {args[10]}"
+                return [comment]
+        elif name == "cuLaunchCooperativeKernelMultiDevice":
+            if len(node.args) >= 3:
+                params = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver launch cooperative kernel multi-device: "
+                    f"params: {params}, count: {args[1]}, flags: {args[2]}"
+                ]
+        elif name in {
+            "cuOccupancyMaxActiveBlocksPerMultiprocessor",
+            "cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags",
+        }:
+            if len(node.args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                comment = (
+                    "// CUDA driver occupancy active blocks: "
+                    f"output: {output}, function: {args[1]}, "
+                    f"block size: {args[2]}, dynamic shared memory: {args[3]}"
+                )
+                if name.endswith("WithFlags") and len(args) >= 5:
+                    comment += f", flags: {args[4]}"
+                return [comment]
+        elif name in {
+            "cuOccupancyMaxPotentialBlockSize",
+            "cuOccupancyMaxPotentialBlockSizeWithFlags",
+        }:
+            if len(node.args) >= 6:
+                min_grid_output = self.format_runtime_pointer_target(node.args[0])
+                block_size_output = self.format_runtime_pointer_target(node.args[1])
+                flags = (
+                    args[6] if name.endswith("WithFlags") and len(args) >= 7 else "0"
+                )
+                return [
+                    "// CUDA driver occupancy potential block size: "
+                    f"min grid output: {min_grid_output}, "
+                    f"block size output: {block_size_output}, "
+                    f"function: {args[2]}, dynamic shared memory callback: {args[3]}, "
+                    f"dynamic shared memory: {args[4]}, block size limit: {args[5]}, "
+                    f"flags: {flags}"
+                ]
+        elif name == "cuFuncGetAttribute":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver function get attribute: "
+                    f"output: {output}, attribute: {args[1]}, function: {args[2]}"
+                ]
+        elif name == "cuFuncSetAttribute":
+            if len(args) >= 3:
+                return [
+                    "// CUDA driver function set attribute: "
+                    f"function: {args[0]}, attribute: {args[1]}, value: {args[2]}"
+                ]
+        elif name == "cuFuncSetCacheConfig":
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver function set cache config: "
+                    f"function: {args[0]}, config: {args[1]}"
+                ]
+        elif name == "cuFuncSetSharedMemConfig":
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver function set shared memory config: "
+                    f"function: {args[0]}, config: {args[1]}"
+                ]
+        elif name == "cuInit":
+            flags = args[0] if args else "0"
+            return [f"// CUDA driver initialize: flags: {flags}"]
+        elif name == "cuDriverGetVersion":
+            if node.args:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// CUDA driver get version: output: {output}"]
+        elif name == "cuDeviceGet":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver get device: output: {output}, "
+                    f"ordinal: {args[1]}"
+                ]
+        elif name == "cuDeviceGetCount":
+            if node.args:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// CUDA driver get device count: output: {output}"]
+        elif name == "cuDeviceGetName":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver get device name: output: {output}, "
+                    f"length: {args[1]}, device: {args[2]}"
+                ]
+        elif name == "cuDeviceGetUuid":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver get device UUID: output: {output}, "
+                    f"device: {args[1]}"
+                ]
+        elif name in {"cuDeviceTotalMem", "cuDeviceTotalMem_v2"}:
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver get device total memory: "
+                    f"output: {output}, device: {args[1]}"
+                ]
+        elif name == "cuDeviceGetAttribute":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver get device attribute: "
+                    f"output: {output}, attribute: {args[1]}, device: {args[2]}"
+                ]
+        elif name == "cuDeviceComputeCapability":
+            if len(node.args) >= 3:
+                major_output = self.format_runtime_pointer_target(node.args[0])
+                minor_output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// CUDA driver get device compute capability: "
+                    f"major output: {major_output}, minor output: {minor_output}, "
+                    f"device: {args[2]}"
+                ]
+        elif name == "cuDeviceGetProperties":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver get device properties: "
+                    f"output: {output}, device: {args[1]}"
+                ]
+        elif name == "cuDeviceGetP2PAttribute":
+            if len(node.args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver get device P2P attribute: "
+                    f"output: {output}, attribute: {args[1]}, "
+                    f"source device: {args[2]}, destination device: {args[3]}"
+                ]
+        elif name == "cuDeviceCanAccessPeer":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver device peer access query: "
+                    f"output: {output}, device: {args[1]}, peer device: {args[2]}"
+                ]
+        elif name == "cuDeviceGetLuid":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                node_mask_output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// CUDA driver get device LUID: "
+                    f"output: {output}, node mask output: {node_mask_output}, "
+                    f"device: {args[2]}"
+                ]
+        elif name == "cuDeviceGetByPCIBusId":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver get device by PCI bus ID: "
+                    f"output: {output}, bus ID: {args[1]}"
+                ]
+        elif name == "cuDeviceGetPCIBusId":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver get device PCI bus ID: "
+                    f"output: {output}, length: {args[1]}, device: {args[2]}"
+                ]
+        elif name in {"cuCtxCreate", "cuCtxCreate_v2"}:
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver context create: output: {output}, "
+                    f"flags: {args[1]}, device: {args[2]}"
+                ]
+        elif name in {"cuCtxDestroy", "cuCtxDestroy_v2"}:
+            if args:
+                return [f"// CUDA driver context destroy: {args[0]}"]
+        elif name == "cuCtxSetCurrent":
+            if args:
+                return [f"// CUDA driver context set current: {args[0]}"]
+        elif name == "cuCtxGetCurrent":
+            if node.args:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// CUDA driver context get current: output: {output}"]
+        elif name in {"cuCtxPushCurrent", "cuCtxPushCurrent_v2"}:
+            if args:
+                return [f"// CUDA driver context push current: {args[0]}"]
+        elif name in {"cuCtxPopCurrent", "cuCtxPopCurrent_v2"}:
+            if node.args:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// CUDA driver context pop current: output: {output}"]
+        elif name == "cuCtxGetDevice":
+            if node.args:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// CUDA driver context get device: output: {output}"]
+        elif name == "cuCtxGetFlags":
+            if node.args:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// CUDA driver context get flags: output: {output}"]
+        elif name == "cuCtxGetId":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// CUDA driver context get id: context: {args[0]}, "
+                    f"output: {output}"
+                ]
+        elif name == "cuCtxGetLimit":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver context get limit: output: {output}, "
+                    f"limit: {args[1]}"
+                ]
+        elif name == "cuCtxSetLimit":
+            if len(args) >= 2:
+                return [
+                    f"// CUDA driver context set limit: limit: {args[0]}, "
+                    f"value: {args[1]}"
+                ]
+        elif name == "cuCtxGetCacheConfig":
+            if node.args:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// CUDA driver context get cache config: output: {output}"]
+        elif name == "cuCtxSetCacheConfig":
+            if args:
+                return [f"// CUDA driver context set cache config: config: {args[0]}"]
+        elif name == "cuCtxGetSharedMemConfig":
+            if node.args:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver context get shared memory config: "
+                    f"output: {output}"
+                ]
+        elif name == "cuCtxSetSharedMemConfig":
+            if args:
+                return [
+                    "// CUDA driver context set shared memory config: "
+                    f"config: {args[0]}"
+                ]
+        elif name == "cuCtxEnablePeerAccess":
+            if args:
+                flags = args[1] if len(args) >= 2 else "0"
+                return [
+                    f"// CUDA driver context enable peer access: "
+                    f"peer: {args[0]}, flags: {flags}"
+                ]
+        elif name == "cuCtxDisablePeerAccess":
+            if args:
+                return [f"// CUDA driver context disable peer access: peer: {args[0]}"]
+        elif name == "cuCtxSynchronize":
+            return ["// CUDA driver context synchronize"]
+        elif name == "cuDevicePrimaryCtxRetain":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver device primary context retain: "
+                    f"output: {output}, device: {args[1]}"
+                ]
+        elif name == "cuDevicePrimaryCtxGetState":
+            if len(node.args) >= 3:
+                flags_output = self.format_runtime_pointer_target(node.args[1])
+                active_output = self.format_runtime_pointer_target(node.args[2])
+                return [
+                    "// CUDA driver device primary context get state: "
+                    f"device: {args[0]}, flags output: {flags_output}, "
+                    f"active output: {active_output}"
+                ]
+        elif name in {"cuDevicePrimaryCtxSetFlags", "cuDevicePrimaryCtxSetFlags_v2"}:
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver device primary context set flags: "
+                    f"device: {args[0]}, flags: {args[1]}"
+                ]
+        elif name in {"cuDevicePrimaryCtxRelease", "cuDevicePrimaryCtxRelease_v2"}:
+            if args:
+                return [
+                    "// CUDA driver device primary context release: "
+                    f"device: {args[0]}"
+                ]
+        elif name in {"cuDevicePrimaryCtxReset", "cuDevicePrimaryCtxReset_v2"}:
+            if args:
+                return [
+                    f"// CUDA driver device primary context reset: device: {args[0]}"
+                ]
         elif name in {"cudaDeviceSynchronize", "cudaStreamSynchronize"}:
             if args:
                 return [f"// CUDA synchronize: {args[0]}"]
@@ -682,12 +1966,221 @@ class CudaToCrossGLConverter:
         elif name == "cudaEventQuery":
             if args:
                 return [f"// CUDA event query: {args[0]}"]
+        elif name in {"cuEventCreate", "cuEventCreateWithFlags"}:
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver event create: output: {output}, "
+                    f"flags: {args[1]}"
+                ]
+        elif name in {"cuEventRecord", "cuEventRecordWithFlags"}:
+            if len(args) >= 2:
+                if name == "cuEventRecordWithFlags" and len(args) >= 3:
+                    return [
+                        "// CUDA driver event record with flags: "
+                        f"event: {args[0]}, stream: {args[1]}, flags: {args[2]}"
+                    ]
+                return [
+                    f"// CUDA driver event record: event: {args[0]}, "
+                    f"stream: {args[1]}"
+                ]
+        elif name in {"cuEventQuery", "cuEventSynchronize", "cuEventDestroy"}:
+            if args:
+                action = {
+                    "cuEventQuery": "query",
+                    "cuEventSynchronize": "synchronize",
+                    "cuEventDestroy": "destroy",
+                }[name]
+                return [f"// CUDA driver event {action}: event: {args[0]}"]
+        elif name == "cuEventElapsedTime":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver event elapsed time: {args[1]} -> {args[2]}, "
+                    f"output: {output}"
+                ]
+        elif name == "cuProfilerInitialize":
+            if len(args) >= 3:
+                return [
+                    "// CUDA driver profiler initialize: "
+                    f"config: {args[0]}, output: {args[1]}, mode: {args[2]}"
+                ]
+        elif name in {"cuProfilerStart", "cuProfilerStop"}:
+            action = "start" if name == "cuProfilerStart" else "stop"
+            return [f"// CUDA driver profiler {action}"]
         elif name == "cudaStreamWaitEvent":
             if len(args) >= 2:
                 comment = f"// CUDA stream wait event: {args[0]} waits for {args[1]}"
                 if len(args) >= 3:
                     comment += f", flags: {args[2]}"
                 return [comment]
+        elif name in {
+            "cuStreamCreate",
+            "cuStreamCreateWithFlags",
+            "cuStreamCreateWithPriority",
+        }:
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                action = (
+                    "create with priority"
+                    if name == "cuStreamCreateWithPriority"
+                    else "create"
+                )
+                comment = (
+                    f"// CUDA driver stream {action}: output: {output}, "
+                    f"flags: {args[1]}"
+                )
+                if name == "cuStreamCreateWithPriority" and len(args) >= 3:
+                    comment += f", priority: {args[2]}"
+                return [comment]
+        elif name == "cuStreamDestroy":
+            if args:
+                return [f"// CUDA driver stream destroy: stream: {args[0]}"]
+        elif name in {"cuStreamQuery", "cuStreamSynchronize"}:
+            if args:
+                action = "query" if name == "cuStreamQuery" else "synchronize"
+                return [f"// CUDA driver stream {action}: stream: {args[0]}"]
+        elif name == "cuStreamWaitEvent":
+            if len(args) >= 2:
+                flags = args[2] if len(args) >= 3 else "0"
+                return [
+                    f"// CUDA driver stream wait event: stream: {args[0]}, "
+                    f"event: {args[1]}, flags: {flags}"
+                ]
+        elif name == "cuLaunchHostFunc":
+            if len(args) >= 3:
+                return [
+                    "// CUDA driver stream launch host function: "
+                    f"stream: {args[0]}, callback: {args[1]}, user data: {args[2]}"
+                ]
+        elif name == "cuStreamAddCallback":
+            if len(args) >= 4:
+                return [
+                    "// CUDA driver stream add callback: "
+                    f"stream: {args[0]}, callback: {args[1]}, "
+                    f"user data: {args[2]}, flags: {args[3]}"
+                ]
+        elif name == "cuStreamAttachMemAsync":
+            if len(args) >= 3:
+                flags = args[3] if len(args) >= 4 else "0"
+                return [
+                    "// CUDA driver stream attach memory: "
+                    f"stream: {args[0]}, pointer: {args[1]}, bytes: {args[2]}, "
+                    f"flags: {flags}"
+                ]
+        elif name == "cuStreamBeginCapture":
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver stream begin capture: "
+                    f"stream: {args[0]}, mode: {args[1]}"
+                ]
+        elif name == "cuStreamEndCapture":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// CUDA driver stream end capture: "
+                    f"stream: {args[0]}, graph output: {output}"
+                ]
+        elif name in {
+            "cuStreamWaitValue32",
+            "cuStreamWaitValue64",
+            "cuStreamWriteValue32",
+            "cuStreamWriteValue64",
+        }:
+            if len(args) >= 4:
+                operation = "wait" if "Wait" in name else "write"
+                width = "32-bit" if name.endswith("32") else "64-bit"
+                return [
+                    f"// CUDA driver stream {operation} {width} value: "
+                    f"stream: {args[0]}, address: {args[1]}, "
+                    f"value: {args[2]}, flags: {args[3]}"
+                ]
+        elif name == "cuStreamBatchMemOp":
+            if len(args) >= 4:
+                return [
+                    "// CUDA driver stream batch memory operation: "
+                    f"stream: {args[0]}, count: {args[1]}, "
+                    f"params: {args[2]}, flags: {args[3]}"
+                ]
+        elif name in {"cuStreamGetAttribute", "cuStreamSetAttribute"}:
+            if len(node.args) >= 3:
+                action = "get" if name == "cuStreamGetAttribute" else "set"
+                target = self.format_runtime_pointer_target(node.args[2])
+                target_label = "output" if action == "get" else "value"
+                return [
+                    f"// CUDA driver stream {action} attribute: "
+                    f"stream: {args[0]}, attribute: {args[1]}, "
+                    f"{target_label}: {target}"
+                ]
+        elif name == "cuStreamCopyAttributes":
+            if len(args) >= 2:
+                return [
+                    "// CUDA driver stream copy attributes: "
+                    f"destination: {args[0]}, source: {args[1]}"
+                ]
+        elif name in {"cuStreamGetCtx", "cuStreamGetFlags", "cuStreamGetPriority"}:
+            if len(node.args) >= 2:
+                query_kind = {
+                    "cuStreamGetCtx": "context",
+                    "cuStreamGetFlags": "flags",
+                    "cuStreamGetPriority": "priority",
+                }[name]
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// CUDA driver stream {query_kind} query: "
+                    f"stream: {args[0]}, output: {output}"
+                ]
+        elif name == "cuStreamIsCapturing":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// CUDA driver stream capture status query: "
+                    f"stream: {args[0]}, output: {output}"
+                ]
+        elif name == "cuStreamGetCaptureInfo_v2":
+            if len(node.args) >= 3:
+                fields = [
+                    f"stream: {args[0]}",
+                    f"status output: {self.format_runtime_pointer_target(node.args[1])}",
+                    f"id output: {self.format_runtime_pointer_target(node.args[2])}",
+                ]
+                if len(node.args) >= 4:
+                    fields.append(
+                        "graph output: "
+                        f"{self.format_runtime_pointer_target(node.args[3])}"
+                    )
+                if len(node.args) >= 5:
+                    fields.append(
+                        "dependencies output: "
+                        f"{self.format_runtime_pointer_target(node.args[4])}"
+                    )
+                if len(node.args) >= 6:
+                    fields.append(
+                        "dependency count output: "
+                        f"{self.format_runtime_pointer_target(node.args[5])}"
+                    )
+                return [
+                    "// CUDA driver stream capture info query: " + ", ".join(fields)
+                ]
+        elif name == "cuStreamUpdateCaptureDependencies":
+            if len(args) >= 4:
+                return [
+                    "// CUDA driver stream update capture dependencies: "
+                    f"stream: {args[0]}, dependencies: {args[1]}, "
+                    f"dependency count: {args[2]}, flags: {args[3]}"
+                ]
+        elif name == "cudaStreamBeginCapture":
+            if len(args) >= 2:
+                return [
+                    f"// CUDA stream begin capture: stream: {args[0]}, mode: {args[1]}"
+                ]
+        elif name == "cudaStreamEndCapture":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// CUDA stream end capture: stream: {args[0]}, "
+                    f"graph output: {output}"
+                ]
         elif name == "cudaGetLastError":
             return ["// CUDA get last error"]
         elif name == "cudaPeekAtLastError":
@@ -764,6 +2257,1183 @@ class CudaToCrossGLConverter:
         elif name == "cudaDestroyExternalSemaphore":
             if args:
                 return [f"// CUDA external semaphore destroy: {args[0]}"]
+        elif name == "cudaUserObjectCreate":
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA user object create: output: {output}, "
+                    f"payload: {args[1]}, destroy callback: {args[2]}, "
+                    f"initial references: {args[3]}, flags: {args[4]}"
+                ]
+        elif name in {"cudaUserObjectRetain", "cudaUserObjectRelease"}:
+            if args:
+                operation = "retain" if name == "cudaUserObjectRetain" else "release"
+                count = args[1] if len(args) >= 2 else "1"
+                return [
+                    f"// CUDA user object {operation}: object: {args[0]}, "
+                    f"references: {count}"
+                ]
+        elif name in {"cudaGraphRetainUserObject", "cudaGraphReleaseUserObject"}:
+            if len(args) >= 2:
+                operation = (
+                    "retain" if name == "cudaGraphRetainUserObject" else "release"
+                )
+                count = args[2] if len(args) >= 3 else "1"
+                comment = (
+                    f"// CUDA graph {operation} user object: graph: {args[0]}, "
+                    f"object: {args[1]}, references: {count}"
+                )
+                if name == "cudaGraphRetainUserObject":
+                    flags = args[3] if len(args) >= 4 else "0"
+                    comment += f", flags: {flags}"
+                return [comment]
+        elif name in {
+            "cudaDeviceGetGraphMemAttribute",
+            "cudaDeviceSetGraphMemAttribute",
+        }:
+            if len(node.args) >= 3:
+                value = self.format_runtime_pointer_target(node.args[2])
+                action = "get" if name == "cudaDeviceGetGraphMemAttribute" else "set"
+                value_label = "output" if action == "get" else "value"
+                return [
+                    f"// CUDA device {action} graph memory attribute: "
+                    f"device: {args[0]}, attribute: {args[1]}, "
+                    f"{value_label}: {value}"
+                ]
+        elif name == "cudaDeviceGraphMemTrim":
+            if args:
+                return [f"// CUDA device graph memory trim: device: {args[0]}"]
+        elif name == "cudaGraphCreate":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// CUDA graph create: output: {output}, flags: {args[1]}"]
+        elif name == "cudaGraphClone":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [f"// CUDA graph clone: output: {output}, source: {args[1]}"]
+        elif name == "cudaGraphInstantiate":
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                error_output = self.format_runtime_pointer_target(node.args[2])
+                return [
+                    f"// CUDA graph instantiate: output: {output}, graph: {args[1]}, "
+                    f"error node output: {error_output}, log buffer: {args[3]}, "
+                    f"log bytes: {args[4]}"
+                ]
+        elif name == "cudaGraphInstantiateWithFlags":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA graph instantiate with flags: output: {output}, "
+                    f"graph: {args[1]}, flags: {args[2]}"
+                ]
+        elif name == "cudaGraphInstantiateWithParams":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA graph instantiate with params: output: {output}, "
+                    f"graph: {args[1]}, params: {args[2]}"
+                ]
+        elif name == "cudaGraphConditionalHandleCreate":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                comment = (
+                    f"// CUDA graph conditional handle create: output: {output}, "
+                    f"graph: {args[1]}"
+                )
+                if len(args) >= 3:
+                    comment += f", default launch value: {args[2]}"
+                if len(args) >= 4:
+                    comment += f", flags: {args[3]}"
+                return [comment]
+        elif name == "cudaGraphConditionalHandleCreate_v2":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                comment = (
+                    f"// CUDA graph conditional handle create v2: output: {output}, "
+                    f"graph: {args[1]}"
+                )
+                if len(args) >= 3:
+                    comment += f", context: {args[2]}"
+                if len(args) >= 4:
+                    comment += f", default launch value: {args[3]}"
+                if len(args) >= 5:
+                    comment += f", flags: {args[4]}"
+                return [comment]
+        elif name == "cudaGraphSetConditional":
+            if len(args) >= 2:
+                return [
+                    f"// CUDA graph set conditional: handle: {args[0]}, "
+                    f"value: {args[1]}"
+                ]
+        elif name in {
+            "cudaGraphKernelNodeSetEnabled",
+            "cudaGraphKernelNodeSetGridDim",
+        }:
+            if len(args) >= 2:
+                action = (
+                    "set enabled"
+                    if name == "cudaGraphKernelNodeSetEnabled"
+                    else "set grid dim"
+                )
+                value_label = (
+                    "enabled" if name == "cudaGraphKernelNodeSetEnabled" else "grid dim"
+                )
+                return [
+                    f"// CUDA device graph kernel node {action}: "
+                    f"node: {args[0]}, {value_label}: {args[1]}"
+                ]
+        elif name == "cudaGraphKernelNodeSetParam":
+            if len(args) >= 3:
+                comment = (
+                    f"// CUDA device graph kernel node set param: "
+                    f"node: {args[0]}, offset: {args[1]}, value: {args[2]}"
+                )
+                if len(args) >= 4:
+                    comment += f", bytes: {args[3]}"
+                return [comment]
+        elif name == "cudaGraphKernelNodeUpdatesApply":
+            if len(args) >= 2:
+                return [
+                    f"// CUDA device graph kernel node updates apply: "
+                    f"updates: {args[0]}, count: {args[1]}"
+                ]
+        elif name == "cudaGraphDebugDotPrint":
+            if len(args) >= 3:
+                return [
+                    f"// CUDA graph debug DOT print: graph: {args[0]}, "
+                    f"path: {args[1]}, flags: {args[2]}"
+                ]
+        elif name == "cudaGraphLaunch":
+            if len(args) >= 2:
+                device_launch_mode = self.CUDA_DEVICE_GRAPH_LAUNCH_MODES.get(args[1])
+                if device_launch_mode is not None:
+                    return [
+                        f"// CUDA graph device launch: exec: {args[0]}, "
+                        f"mode: {device_launch_mode}"
+                    ]
+                return [f"// CUDA graph launch: exec: {args[0]}, stream: {args[1]}"]
+        elif name in {"cudaGraphUpload", "cudaGraphExecUpload"}:
+            if len(args) >= 2:
+                operation = "exec upload" if name == "cudaGraphExecUpload" else "upload"
+                return [
+                    f"// CUDA graph {operation}: exec: {args[0]}, stream: {args[1]}"
+                ]
+        elif name == "cudaGraphExecDestroy":
+            if args:
+                return [f"// CUDA graph exec destroy: {args[0]}"]
+        elif name == "cuGraphCreate":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver graph create: output: {output}, "
+                    f"flags: {args[1]}"
+                ]
+        elif name == "cuGraphClone":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver graph clone: output: {output}, "
+                    f"source: {args[1]}"
+                ]
+        elif name == "cuGraphInstantiate":
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                error_output = self.format_runtime_pointer_target(node.args[2])
+                return [
+                    f"// CUDA driver graph instantiate: output: {output}, "
+                    f"graph: {args[1]}, error node output: {error_output}, "
+                    f"log buffer: {args[3]}, log bytes: {args[4]}"
+                ]
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver graph instantiate: output: {output}, "
+                    f"graph: {args[1]}, flags: {args[2]}"
+                ]
+        elif name == "cuGraphInstantiateWithFlags":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver graph instantiate with flags: "
+                    f"output: {output}, graph: {args[1]}, flags: {args[2]}"
+                ]
+        elif name == "cuGraphInstantiateWithParams":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver graph instantiate with params: "
+                    f"output: {output}, graph: {args[1]}, params: {args[2]}"
+                ]
+        elif name == "cuGraphUpload":
+            if len(args) >= 2:
+                return [
+                    f"// CUDA driver graph upload: exec: {args[0]}, "
+                    f"stream: {args[1]}"
+                ]
+        elif name == "cuGraphLaunch":
+            if len(args) >= 2:
+                return [
+                    f"// CUDA driver graph launch: exec: {args[0]}, "
+                    f"stream: {args[1]}"
+                ]
+        elif name == "cuGraphExecDestroy":
+            if args:
+                return [f"// CUDA driver graph exec destroy: {args[0]}"]
+        elif name == "cuUserObjectCreate":
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver user object create: output: {output}, "
+                    f"payload: {args[1]}, destroy callback: {args[2]}, "
+                    f"initial references: {args[3]}, flags: {args[4]}"
+                ]
+        elif name in {"cuUserObjectRetain", "cuUserObjectRelease"}:
+            if args:
+                operation = "retain" if name == "cuUserObjectRetain" else "release"
+                count = args[1] if len(args) >= 2 else "1"
+                return [
+                    f"// CUDA driver user object {operation}: object: {args[0]}, "
+                    f"references: {count}"
+                ]
+        elif name in {"cuGraphRetainUserObject", "cuGraphReleaseUserObject"}:
+            if len(args) >= 2:
+                operation = "retain" if name == "cuGraphRetainUserObject" else "release"
+                count = args[2] if len(args) >= 3 else "1"
+                comment = (
+                    f"// CUDA driver graph {operation} user object: "
+                    f"graph: {args[0]}, object: {args[1]}, references: {count}"
+                )
+                if name == "cuGraphRetainUserObject":
+                    flags = args[3] if len(args) >= 4 else "0"
+                    comment += f", flags: {flags}"
+                return [comment]
+        elif name in {
+            "cuDeviceGetGraphMemAttribute",
+            "cuDeviceSetGraphMemAttribute",
+        }:
+            if len(node.args) >= 3:
+                value = self.format_runtime_pointer_target(node.args[2])
+                action = "get" if name == "cuDeviceGetGraphMemAttribute" else "set"
+                value_label = "output" if action == "get" else "value"
+                return [
+                    f"// CUDA driver device {action} graph memory attribute: "
+                    f"device: {args[0]}, attribute: {args[1]}, "
+                    f"{value_label}: {value}"
+                ]
+        elif name == "cuDeviceGraphMemTrim":
+            if args:
+                return [f"// CUDA driver device graph memory trim: device: {args[0]}"]
+        elif name == "cuGraphConditionalHandleCreate":
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver graph conditional handle create: "
+                    f"output: {output}, graph: {args[1]}, context: {args[2]}, "
+                    f"default launch value: {args[3]}, flags: {args[4]}"
+                ]
+        elif name == "cuGraphAddNode":
+            if len(node.args) >= 6:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver graph add generic node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"edge data: {args[3]}, dependency count: {args[4]}, "
+                    f"params: {args[5]}"
+                ]
+        elif name in {
+            "cuGraphAddKernelNode",
+            "cuGraphAddMemcpyNode",
+            "cuGraphAddMemsetNode",
+            "cuGraphAddHostNode",
+        }:
+            if len(node.args) >= 5:
+                node_kind = {
+                    "cuGraphAddKernelNode": "kernel",
+                    "cuGraphAddMemcpyNode": "memcpy",
+                    "cuGraphAddMemsetNode": "memset",
+                    "cuGraphAddHostNode": "host",
+                }[name]
+                output = self.format_runtime_pointer_target(node.args[0])
+                comment = (
+                    f"// CUDA driver graph add {node_kind} node: "
+                    f"output: {output}, graph: {args[1]}, "
+                    f"dependencies: {args[2]}, dependency count: {args[3]}, "
+                    f"params: {args[4]}"
+                )
+                if name in {"cuGraphAddMemcpyNode", "cuGraphAddMemsetNode"}:
+                    if len(args) >= 6:
+                        comment += f", context: {args[5]}"
+                return [comment]
+        elif name == "cuGraphAddChildGraphNode":
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver graph add child graph node: "
+                    f"output: {output}, graph: {args[1]}, "
+                    f"dependencies: {args[2]}, dependency count: {args[3]}, "
+                    f"child graph: {args[4]}"
+                ]
+        elif name == "cuGraphAddEmptyNode":
+            if len(node.args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver graph add empty node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"dependency count: {args[3]}"
+                ]
+        elif name in {"cuGraphAddEventRecordNode", "cuGraphAddEventWaitNode"}:
+            if len(node.args) >= 5:
+                node_kind = "record" if "Record" in name else "wait"
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver graph add event {node_kind} node: "
+                    f"output: {output}, graph: {args[1]}, "
+                    f"dependencies: {args[2]}, dependency count: {args[3]}, "
+                    f"event: {args[4]}"
+                ]
+        elif name in {
+            "cuGraphAddExternalSemaphoresSignalNode",
+            "cuGraphAddExternalSemaphoresWaitNode",
+        }:
+            if len(node.args) >= 5:
+                node_kind = "signal" if "Signal" in name else "wait"
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver graph add external semaphore {node_kind} "
+                    f"node: output: {output}, graph: {args[1]}, "
+                    f"dependencies: {args[2]}, dependency count: {args[3]}, "
+                    f"params: {args[4]}"
+                ]
+        elif name == "cuGraphAddMemAllocNode":
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver graph add memory alloc node: "
+                    f"output: {output}, graph: {args[1]}, "
+                    f"dependencies: {args[2]}, dependency count: {args[3]}, "
+                    f"params: {args[4]}"
+                ]
+        elif name == "cuGraphAddMemFreeNode":
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver graph add memory free node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"dependency count: {args[3]}, pointer: {args[4]}"
+                ]
+        elif name in {"cuGraphAddDependencies", "cuGraphRemoveDependencies"}:
+            if len(args) >= 5:
+                operation = "add" if name == "cuGraphAddDependencies" else "remove"
+                return [
+                    f"// CUDA driver graph {operation} dependencies: "
+                    f"graph: {args[0]}, from: {args[1]}, to: {args[2]}, "
+                    f"edge data: {args[3]}, count: {args[4]}"
+                ]
+            if len(args) >= 4:
+                operation = "add" if name == "cuGraphAddDependencies" else "remove"
+                return [
+                    f"// CUDA driver graph {operation} dependencies: "
+                    f"graph: {args[0]}, from: {args[1]}, to: {args[2]}, "
+                    f"count: {args[3]}"
+                ]
+        elif name == "cuGraphNodeFindInClone":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA driver graph node find in clone: output: {output}, "
+                    f"original node: {args[1]}, clone graph: {args[2]}"
+                ]
+        elif name == "cuGraphNodeGetType":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// CUDA driver graph node get type: node: {args[0]}, "
+                    f"output: {output}"
+                ]
+        elif name == "cuGraphDebugDotPrint":
+            if len(args) >= 3:
+                return [
+                    f"// CUDA driver graph debug DOT print: graph: {args[0]}, "
+                    f"path: {args[1]}, flags: {args[2]}"
+                ]
+        elif name in {"cuGraphExecGetFlags", "cuGraphExecGetId"}:
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                if name == "cuGraphExecGetFlags":
+                    return [
+                        f"// CUDA driver graph exec get flags: exec: {args[0]}, "
+                        f"output: {output}"
+                    ]
+                return [
+                    f"// CUDA driver graph exec get id: exec: {args[0]}, "
+                    f"output: {output}"
+                ]
+        elif name == "cuGraphGetId":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// CUDA driver graph get id: graph: {args[0]}, "
+                    f"output: {output}"
+                ]
+        elif name == "cuGraphGetEdges":
+            if len(node.args) >= 5:
+                from_output = self.format_runtime_pointer_target(node.args[1])
+                to_output = self.format_runtime_pointer_target(node.args[2])
+                edge_data = self.format_runtime_pointer_target(node.args[3])
+                count_output = self.format_runtime_pointer_target(node.args[4])
+                return [
+                    f"// CUDA driver graph get edges: graph: {args[0]}, "
+                    f"from output: {from_output}, to output: {to_output}, "
+                    f"edge data: {edge_data}, count output: {count_output}"
+                ]
+        elif name in {"cuGraphGetNodes", "cuGraphGetRootNodes"}:
+            if len(node.args) >= 3:
+                node_output = self.format_runtime_pointer_target(node.args[1])
+                count_output = self.format_runtime_pointer_target(node.args[2])
+                node_kind = "root nodes" if name == "cuGraphGetRootNodes" else "nodes"
+                return [
+                    f"// CUDA driver graph get {node_kind}: graph: {args[0]}, "
+                    f"nodes output: {node_output}, count output: {count_output}"
+                ]
+        elif name == "cuGraphNodeGetContainingGraph":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// CUDA driver graph node get containing graph: "
+                    f"node: {args[0]}, output: {output}"
+                ]
+        elif name in {
+            "cuGraphNodeGetDependencies",
+            "cuGraphNodeGetDependentNodes",
+        }:
+            if len(node.args) >= 4:
+                nodes_output = self.format_runtime_pointer_target(node.args[1])
+                edge_data = self.format_runtime_pointer_target(node.args[2])
+                count_output = self.format_runtime_pointer_target(node.args[3])
+                if name == "cuGraphNodeGetDependencies":
+                    return [
+                        "// CUDA driver graph node get dependencies: "
+                        f"node: {args[0]}, dependencies output: {nodes_output}, "
+                        f"edge data: {edge_data}, count output: {count_output}"
+                    ]
+                return [
+                    "// CUDA driver graph node get dependent nodes: "
+                    f"node: {args[0]}, dependent nodes output: {nodes_output}, "
+                    f"edge data: {edge_data}, count output: {count_output}"
+                ]
+        elif name in {"cuGraphNodeGetEnabled", "cuGraphNodeSetEnabled"}:
+            if len(node.args) >= 3:
+                if name == "cuGraphNodeGetEnabled":
+                    output = self.format_runtime_pointer_target(node.args[2])
+                    return [
+                        f"// CUDA driver graph node get enabled: exec: {args[0]}, "
+                        f"node: {args[1]}, output: {output}"
+                    ]
+                return [
+                    f"// CUDA driver graph node set enabled: exec: {args[0]}, "
+                    f"node: {args[1]}, enabled: {args[2]}"
+                ]
+        elif name in {"cuGraphNodeGetLocalId", "cuGraphNodeGetToolsId"}:
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                id_kind = "local id" if name == "cuGraphNodeGetLocalId" else "tools id"
+                return [
+                    f"// CUDA driver graph node get {id_kind}: node: {args[0]}, "
+                    f"output: {output}"
+                ]
+        elif name == "cuGraphChildGraphNodeGetGraph":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// CUDA driver graph child graph node get graph: "
+                    f"node: {args[0]}, output: {output}"
+                ]
+        elif name == "cuGraphMemAllocNodeGetParams":
+            if len(args) >= 2:
+                return [
+                    f"// CUDA driver graph memory alloc node get params: "
+                    f"node: {args[0]}, params: {args[1]}"
+                ]
+        elif name == "cuGraphMemFreeNodeGetParams":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// CUDA driver graph memory free node get params: "
+                    f"node: {args[0]}, output: {output}"
+                ]
+        elif name in {"cuGraphNodeGetParams", "cuGraphNodeSetParams"}:
+            if len(args) >= 2:
+                action = "get" if name == "cuGraphNodeGetParams" else "set"
+                return [
+                    f"// CUDA driver graph node {action} params: "
+                    f"node: {args[0]}, params: {args[1]}"
+                ]
+        elif name == "cuGraphExecNodeSetParams":
+            if len(args) >= 3:
+                return [
+                    f"// CUDA driver graph exec set node params: "
+                    f"exec: {args[0]}, node: {args[1]}, params: {args[2]}"
+                ]
+        elif name in {
+            "cuGraphKernelNodeGetAttribute",
+            "cuGraphKernelNodeSetAttribute",
+        }:
+            if len(node.args) >= 3:
+                action = "get" if name.endswith("GetAttribute") else "set"
+                value_label = "output" if action == "get" else "value"
+                value = (
+                    self.format_runtime_pointer_target(node.args[2])
+                    if action == "get"
+                    else args[2]
+                )
+                return [
+                    f"// CUDA driver graph kernel node {action} attribute: "
+                    f"node: {args[0]}, attribute: {args[1]}, "
+                    f"{value_label}: {value}"
+                ]
+        elif name == "cuGraphKernelNodeCopyAttributes":
+            if len(args) >= 2:
+                return [
+                    f"// CUDA driver graph kernel node copy attributes: "
+                    f"source: {args[0]}, destination: {args[1]}"
+                ]
+        elif name in {
+            "cuGraphKernelNodeGetParams",
+            "cuGraphKernelNodeSetParams",
+            "cuGraphMemcpyNodeGetParams",
+            "cuGraphMemcpyNodeSetParams",
+            "cuGraphMemsetNodeGetParams",
+            "cuGraphMemsetNodeSetParams",
+            "cuGraphHostNodeGetParams",
+            "cuGraphHostNodeSetParams",
+        }:
+            if len(args) >= 2:
+                node_kind = {
+                    "cuGraphKernelNodeGetParams": "kernel",
+                    "cuGraphKernelNodeSetParams": "kernel",
+                    "cuGraphMemcpyNodeGetParams": "memcpy",
+                    "cuGraphMemcpyNodeSetParams": "memcpy",
+                    "cuGraphMemsetNodeGetParams": "memset",
+                    "cuGraphMemsetNodeSetParams": "memset",
+                    "cuGraphHostNodeGetParams": "host",
+                    "cuGraphHostNodeSetParams": "host",
+                }[name]
+                action = "get" if name.endswith("GetParams") else "set"
+                return [
+                    f"// CUDA driver graph {node_kind} node {action} params: "
+                    f"node: {args[0]}, params: {args[1]}"
+                ]
+        elif name in {
+            "cuGraphExternalSemaphoresSignalNodeGetParams",
+            "cuGraphExternalSemaphoresSignalNodeSetParams",
+            "cuGraphExternalSemaphoresWaitNodeGetParams",
+            "cuGraphExternalSemaphoresWaitNodeSetParams",
+        }:
+            if len(args) >= 2:
+                node_kind = "signal" if "Signal" in name else "wait"
+                action = "get" if name.endswith("GetParams") else "set"
+                return [
+                    f"// CUDA driver graph external semaphore {node_kind} "
+                    f"node {action} params: node: {args[0]}, params: {args[1]}"
+                ]
+        elif name in {
+            "cuGraphEventRecordNodeGetEvent",
+            "cuGraphEventWaitNodeGetEvent",
+        }:
+            if len(node.args) >= 2:
+                node_kind = "record" if "Record" in name else "wait"
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// CUDA driver graph event {node_kind} node get event: "
+                    f"node: {args[0]}, output: {output}"
+                ]
+        elif name in {
+            "cuGraphEventRecordNodeSetEvent",
+            "cuGraphEventWaitNodeSetEvent",
+        }:
+            if len(args) >= 2:
+                node_kind = "record" if "Record" in name else "wait"
+                return [
+                    f"// CUDA driver graph event {node_kind} node set event: "
+                    f"node: {args[0]}, event: {args[1]}"
+                ]
+        elif name in {"cuGraphExecUpdate", "cuGraphExecUpdate_v2"}:
+            if len(node.args) >= 4:
+                error_output = self.format_runtime_pointer_target(node.args[2])
+                result_output = self.format_runtime_pointer_target(node.args[3])
+                return [
+                    f"// CUDA driver graph exec update: exec: {args[0]}, "
+                    f"graph: {args[1]}, error node output: {error_output}, "
+                    f"result output: {result_output}"
+                ]
+            if len(node.args) >= 3:
+                result_info = self.format_runtime_pointer_target(node.args[2])
+                update_kind = " update v2" if name.endswith("_v2") else " update"
+                return [
+                    f"// CUDA driver graph exec{update_kind}: exec: {args[0]}, "
+                    f"graph: {args[1]}, result info output: {result_info}"
+                ]
+        elif name in {
+            "cuGraphExecKernelNodeSetParams",
+            "cuGraphExecMemcpyNodeSetParams",
+            "cuGraphExecMemsetNodeSetParams",
+            "cuGraphExecHostNodeSetParams",
+        }:
+            if len(args) >= 3:
+                node_kind = {
+                    "cuGraphExecKernelNodeSetParams": "kernel",
+                    "cuGraphExecMemcpyNodeSetParams": "memcpy",
+                    "cuGraphExecMemsetNodeSetParams": "memset",
+                    "cuGraphExecHostNodeSetParams": "host",
+                }[name]
+                comment = (
+                    f"// CUDA driver graph exec set {node_kind} node params: "
+                    f"exec: {args[0]}, node: {args[1]}, params: {args[2]}"
+                )
+                if (
+                    name
+                    in {
+                        "cuGraphExecMemcpyNodeSetParams",
+                        "cuGraphExecMemsetNodeSetParams",
+                    }
+                    and len(args) >= 4
+                ):
+                    comment += f", context: {args[3]}"
+                return [comment]
+        elif name in {
+            "cuGraphExecExternalSemaphoresSignalNodeSetParams",
+            "cuGraphExecExternalSemaphoresWaitNodeSetParams",
+        }:
+            if len(args) >= 3:
+                node_kind = "signal" if "Signal" in name else "wait"
+                return [
+                    f"// CUDA driver graph exec set external semaphore "
+                    f"{node_kind} node params: exec: {args[0]}, "
+                    f"node: {args[1]}, params: {args[2]}"
+                ]
+        elif name in {
+            "cuGraphExecEventRecordNodeSetEvent",
+            "cuGraphExecEventWaitNodeSetEvent",
+        }:
+            if len(args) >= 3:
+                node_kind = "record" if "Record" in name else "wait"
+                return [
+                    f"// CUDA driver graph exec set event {node_kind} "
+                    f"node event: exec: {args[0]}, node: {args[1]}, "
+                    f"event: {args[2]}"
+                ]
+        elif name == "cuGraphExecChildGraphNodeSetParams":
+            if len(args) >= 3:
+                return [
+                    "// CUDA driver graph exec set child graph node params: "
+                    f"exec: {args[0]}, node: {args[1]}, child graph: {args[2]}"
+                ]
+        elif name in {
+            "cudaGraphAddKernelNode",
+            "cudaGraphAddMemcpyNode",
+            "cudaGraphAddMemsetNode",
+            "cudaGraphAddHostNode",
+        }:
+            if len(node.args) >= 5:
+                node_kind = {
+                    "cudaGraphAddKernelNode": "kernel",
+                    "cudaGraphAddMemcpyNode": "memcpy",
+                    "cudaGraphAddMemsetNode": "memset",
+                    "cudaGraphAddHostNode": "host",
+                }[name]
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA graph add {node_kind} node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"dependency count: {args[3]}, params: {args[4]}"
+                ]
+        elif name == "cuGraphAddBatchMemOpNode":
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// CUDA driver graph add batch memory operation node: "
+                    f"output: {output}, graph: {args[1]}, "
+                    f"dependencies: {args[2]}, dependency count: {args[3]}, "
+                    f"params: {args[4]}"
+                ]
+        elif name == "cudaGraphAddMemcpyNode1D":
+            if len(node.args) >= 8:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA graph add memcpy 1D node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"dependency count: {args[3]}, dst: {args[4]}, src: {args[5]}, "
+                    f"byte count: {args[6]}, kind: {args[7]}"
+                ]
+        elif name in {
+            "cudaGraphAddMemcpyNodeFromSymbol",
+            "cudaGraphAddMemcpyNodeToSymbol",
+        }:
+            if len(node.args) >= 9:
+                output = self.format_runtime_pointer_target(node.args[0])
+                if name == "cudaGraphAddMemcpyNodeFromSymbol":
+                    return [
+                        "// CUDA graph add memcpy-from-symbol node: "
+                        f"output: {output}, graph: {args[1]}, "
+                        f"dependencies: {args[2]}, dependency count: {args[3]}, "
+                        f"dst: {args[4]}, symbol: {args[5]}, "
+                        f"byte count: {args[6]}, offset: {args[7]}, "
+                        f"kind: {args[8]}"
+                    ]
+                return [
+                    "// CUDA graph add memcpy-to-symbol node: "
+                    f"output: {output}, graph: {args[1]}, "
+                    f"dependencies: {args[2]}, dependency count: {args[3]}, "
+                    f"symbol: {args[4]}, src: {args[5]}, "
+                    f"byte count: {args[6]}, offset: {args[7]}, kind: {args[8]}"
+                ]
+        elif name == "cudaGraphAddNode":
+            if len(node.args) >= 6:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA graph add generic node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"edge data: {args[3]}, dependency count: {args[4]}, "
+                    f"params: {args[5]}"
+                ]
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA graph add generic node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"dependency count: {args[3]}, params: {args[4]}"
+                ]
+        elif name == "cudaGraphAddChildGraphNode":
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA graph add child graph node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"dependency count: {args[3]}, child graph: {args[4]}"
+                ]
+        elif name == "cudaGraphAddEmptyNode":
+            if len(node.args) >= 4:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA graph add empty node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"dependency count: {args[3]}"
+                ]
+        elif name in {"cudaGraphAddEventRecordNode", "cudaGraphAddEventWaitNode"}:
+            if len(node.args) >= 5:
+                operation = (
+                    "record" if name == "cudaGraphAddEventRecordNode" else "wait"
+                )
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA graph add event {operation} node: "
+                    f"output: {output}, graph: {args[1]}, "
+                    f"dependencies: {args[2]}, dependency count: {args[3]}, "
+                    f"event: {args[4]}"
+                ]
+        elif name in {
+            "cudaGraphAddExternalSemaphoresSignalNode",
+            "cudaGraphAddExternalSemaphoresWaitNode",
+        }:
+            if len(node.args) >= 5:
+                operation = (
+                    "signal"
+                    if name == "cudaGraphAddExternalSemaphoresSignalNode"
+                    else "wait"
+                )
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA graph add external semaphore {operation} node: "
+                    f"output: {output}, graph: {args[1]}, "
+                    f"dependencies: {args[2]}, dependency count: {args[3]}, "
+                    f"params: {args[4]}"
+                ]
+        elif name == "cudaGraphAddMemAllocNode":
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA graph add memory alloc node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"dependency count: {args[3]}, params: {args[4]}"
+                ]
+        elif name == "cudaGraphAddMemFreeNode":
+            if len(node.args) >= 5:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA graph add memory free node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"dependency count: {args[3]}, pointer: {args[4]}"
+                ]
+        elif name == "cudaGraphMemAllocNodeGetParams":
+            if len(args) >= 2:
+                return [
+                    f"// CUDA graph memory alloc node get params: "
+                    f"node: {args[0]}, params: {args[1]}"
+                ]
+        elif name == "cudaGraphMemFreeNodeGetParams":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// CUDA graph memory free node get params: "
+                    f"node: {args[0]}, output: {output}"
+                ]
+        elif name in {"cudaGraphAddDependencies", "cudaGraphRemoveDependencies"}:
+            if len(args) >= 5:
+                operation = "add" if name == "cudaGraphAddDependencies" else "remove"
+                return [
+                    f"// CUDA graph {operation} dependencies: graph: {args[0]}, "
+                    f"from: {args[1]}, to: {args[2]}, edge data: {args[3]}, "
+                    f"count: {args[4]}"
+                ]
+            if len(args) >= 4:
+                operation = "add" if name == "cudaGraphAddDependencies" else "remove"
+                return [
+                    f"// CUDA graph {operation} dependencies: graph: {args[0]}, "
+                    f"from: {args[1]}, to: {args[2]}, count: {args[3]}"
+                ]
+        elif name == "cudaGraphNodeFindInClone":
+            if len(node.args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// CUDA graph node find in clone: output: {output}, "
+                    f"original node: {args[1]}, clone graph: {args[2]}"
+                ]
+        elif name == "cudaGraphNodeGetType":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// CUDA graph node get type: node: {args[0]}, "
+                    f"output: {output}"
+                ]
+        elif name == "cudaGraphGetId":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [f"// CUDA graph get id: graph: {args[0]}, output: {output}"]
+        elif name == "cudaGraphGetEdges":
+            if len(node.args) >= 5:
+                from_output = self.format_runtime_pointer_target(node.args[1])
+                to_output = self.format_runtime_pointer_target(node.args[2])
+                edge_data = self.format_runtime_pointer_target(node.args[3])
+                count_output = self.format_runtime_pointer_target(node.args[4])
+                return [
+                    f"// CUDA graph get edges: graph: {args[0]}, "
+                    f"from output: {from_output}, to output: {to_output}, "
+                    f"edge data: {edge_data}, count output: {count_output}"
+                ]
+        elif name in {"cudaGraphGetNodes", "cudaGraphGetRootNodes"}:
+            if len(node.args) >= 3:
+                node_output = self.format_runtime_pointer_target(node.args[1])
+                count_output = self.format_runtime_pointer_target(node.args[2])
+                node_kind = "root nodes" if name == "cudaGraphGetRootNodes" else "nodes"
+                return [
+                    f"// CUDA graph get {node_kind}: graph: {args[0]}, "
+                    f"nodes output: {node_output}, count output: {count_output}"
+                ]
+        elif name == "cudaGraphNodeGetContainingGraph":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// CUDA graph node get containing graph: node: {args[0]}, "
+                    f"output: {output}"
+                ]
+        elif name in {
+            "cudaGraphNodeGetDependencies",
+            "cudaGraphNodeGetDependentNodes",
+        }:
+            if len(node.args) >= 4:
+                nodes_output = self.format_runtime_pointer_target(node.args[1])
+                edge_data = self.format_runtime_pointer_target(node.args[2])
+                count_output = self.format_runtime_pointer_target(node.args[3])
+                if name == "cudaGraphNodeGetDependencies":
+                    return [
+                        f"// CUDA graph node get dependencies: node: {args[0]}, "
+                        f"dependencies output: {nodes_output}, "
+                        f"edge data: {edge_data}, count output: {count_output}"
+                    ]
+                return [
+                    f"// CUDA graph node get dependent nodes: node: {args[0]}, "
+                    f"dependent nodes output: {nodes_output}, "
+                    f"edge data: {edge_data}, count output: {count_output}"
+                ]
+        elif name in {"cudaGraphNodeGetEnabled", "cudaGraphNodeSetEnabled"}:
+            if len(node.args) >= 3:
+                if name == "cudaGraphNodeGetEnabled":
+                    output = self.format_runtime_pointer_target(node.args[2])
+                    return [
+                        f"// CUDA graph node get enabled: exec: {args[0]}, "
+                        f"node: {args[1]}, output: {output}"
+                    ]
+                return [
+                    f"// CUDA graph node set enabled: exec: {args[0]}, "
+                    f"node: {args[1]}, enabled: {args[2]}"
+                ]
+        elif name in {"cudaGraphNodeGetLocalId", "cudaGraphNodeGetToolsId"}:
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                id_kind = (
+                    "local id" if name == "cudaGraphNodeGetLocalId" else "tools id"
+                )
+                return [
+                    f"// CUDA graph node get {id_kind}: node: {args[0]}, "
+                    f"output: {output}"
+                ]
+        elif name in {
+            "cudaGraphEventRecordNodeGetEvent",
+            "cudaGraphEventWaitNodeGetEvent",
+        }:
+            if len(node.args) >= 2:
+                node_kind = (
+                    "record" if name == "cudaGraphEventRecordNodeGetEvent" else "wait"
+                )
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// CUDA graph event {node_kind} node get event: "
+                    f"node: {args[0]}, output: {output}"
+                ]
+        elif name in {
+            "cudaGraphEventRecordNodeSetEvent",
+            "cudaGraphEventWaitNodeSetEvent",
+        }:
+            if len(args) >= 2:
+                node_kind = (
+                    "record" if name == "cudaGraphEventRecordNodeSetEvent" else "wait"
+                )
+                return [
+                    f"// CUDA graph event {node_kind} node set event: "
+                    f"node: {args[0]}, event: {args[1]}"
+                ]
+        elif name == "cudaGraphChildGraphNodeGetGraph":
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    f"// CUDA graph child graph node get graph: "
+                    f"node: {args[0]}, output: {output}"
+                ]
+        elif name in {"cudaGraphNodeGetParams", "cudaGraphNodeSetParams"}:
+            if len(args) >= 2:
+                action = "get" if name == "cudaGraphNodeGetParams" else "set"
+                return [
+                    f"// CUDA graph node {action} params: "
+                    f"node: {args[0]}, params: {args[1]}"
+                ]
+        elif name in {
+            "cuGraphBatchMemOpNodeGetParams",
+            "cuGraphBatchMemOpNodeSetParams",
+        }:
+            if len(args) >= 2:
+                action = "get" if name.endswith("GetParams") else "set"
+                return [
+                    f"// CUDA driver graph batch memory operation node {action} "
+                    f"params: node: {args[0]}, params: {args[1]}"
+                ]
+        elif name == "cuGraphExecBatchMemOpNodeSetParams":
+            if len(args) >= 3:
+                return [
+                    "// CUDA driver graph exec set batch memory operation node "
+                    f"params: exec: {args[0]}, node: {args[1]}, params: {args[2]}"
+                ]
+        elif name in {
+            "cudaGraphKernelNodeGetAttribute",
+            "cudaGraphKernelNodeSetAttribute",
+        }:
+            if len(node.args) >= 3:
+                action = "get" if name.endswith("GetAttribute") else "set"
+                value_label = "output" if action == "get" else "value"
+                value = (
+                    self.format_runtime_pointer_target(node.args[2])
+                    if action == "get"
+                    else args[2]
+                )
+                return [
+                    f"// CUDA graph kernel node {action} attribute: "
+                    f"node: {args[0]}, attribute: {args[1]}, "
+                    f"{value_label}: {value}"
+                ]
+        elif name == "cudaGraphKernelNodeCopyAttributes":
+            if len(args) >= 2:
+                return [
+                    f"// CUDA graph kernel node copy attributes: "
+                    f"source: {args[0]}, destination: {args[1]}"
+                ]
+        elif name in {
+            "cudaGraphKernelNodeGetParams",
+            "cudaGraphKernelNodeSetParams",
+            "cudaGraphMemcpyNodeGetParams",
+            "cudaGraphMemcpyNodeSetParams",
+            "cudaGraphMemsetNodeGetParams",
+            "cudaGraphMemsetNodeSetParams",
+            "cudaGraphHostNodeGetParams",
+            "cudaGraphHostNodeSetParams",
+        }:
+            if len(args) >= 2:
+                node_kind = {
+                    "cudaGraphKernelNodeGetParams": "kernel",
+                    "cudaGraphKernelNodeSetParams": "kernel",
+                    "cudaGraphMemcpyNodeGetParams": "memcpy",
+                    "cudaGraphMemcpyNodeSetParams": "memcpy",
+                    "cudaGraphMemsetNodeGetParams": "memset",
+                    "cudaGraphMemsetNodeSetParams": "memset",
+                    "cudaGraphHostNodeGetParams": "host",
+                    "cudaGraphHostNodeSetParams": "host",
+                }[name]
+                action = "get" if name.endswith("GetParams") else "set"
+                return [
+                    f"// CUDA graph {node_kind} node {action} params: "
+                    f"node: {args[0]}, params: {args[1]}"
+                ]
+        elif name == "cudaGraphMemcpyNodeSetParams1D":
+            if len(args) >= 5:
+                return [
+                    f"// CUDA graph set memcpy 1D node params: "
+                    f"node: {args[0]}, dst: {args[1]}, src: {args[2]}, "
+                    f"byte count: {args[3]}, kind: {args[4]}"
+                ]
+        elif name in {
+            "cudaGraphMemcpyNodeSetParamsFromSymbol",
+            "cudaGraphMemcpyNodeSetParamsToSymbol",
+        }:
+            if len(args) >= 6:
+                if name == "cudaGraphMemcpyNodeSetParamsFromSymbol":
+                    return [
+                        "// CUDA graph set memcpy-from-symbol node params: "
+                        f"node: {args[0]}, dst: {args[1]}, "
+                        f"symbol: {args[2]}, byte count: {args[3]}, "
+                        f"offset: {args[4]}, kind: {args[5]}"
+                    ]
+                return [
+                    "// CUDA graph set memcpy-to-symbol node params: "
+                    f"node: {args[0]}, symbol: {args[1]}, src: {args[2]}, "
+                    f"byte count: {args[3]}, offset: {args[4]}, "
+                    f"kind: {args[5]}"
+                ]
+        elif name in {
+            "cudaGraphExternalSemaphoresSignalNodeGetParams",
+            "cudaGraphExternalSemaphoresSignalNodeSetParams",
+            "cudaGraphExternalSemaphoresWaitNodeGetParams",
+            "cudaGraphExternalSemaphoresWaitNodeSetParams",
+        }:
+            if len(args) >= 2:
+                node_kind = "signal" if "Signal" in name else "wait"
+                action = "get" if name.endswith("GetParams") else "set"
+                return [
+                    f"// CUDA graph external semaphore {node_kind} "
+                    f"node {action} params: node: {args[0]}, params: {args[1]}"
+                ]
+        elif name == "cudaGraphExecUpdate":
+            if len(node.args) >= 4:
+                error_output = self.format_runtime_pointer_target(node.args[2])
+                result_output = self.format_runtime_pointer_target(node.args[3])
+                return [
+                    f"// CUDA graph exec update: exec: {args[0]}, "
+                    f"graph: {args[1]}, error node output: {error_output}, "
+                    f"result output: {result_output}"
+                ]
+            if len(args) >= 3:
+                return [
+                    f"// CUDA graph exec update: exec: {args[0]}, "
+                    f"graph: {args[1]}, result info: {args[2]}"
+                ]
+        elif name in {"cudaGraphExecGetFlags", "cudaGraphExecGetId"}:
+            if len(node.args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[1])
+                if name == "cudaGraphExecGetFlags":
+                    return [
+                        f"// CUDA graph exec get flags: exec: {args[0]}, "
+                        f"output: {output}"
+                    ]
+                return [f"// CUDA graph exec get id: exec: {args[0]}, output: {output}"]
+        elif name in {
+            "cudaGraphExecKernelNodeSetParams",
+            "cudaGraphExecMemcpyNodeSetParams",
+            "cudaGraphExecMemsetNodeSetParams",
+            "cudaGraphExecHostNodeSetParams",
+        }:
+            if len(args) >= 3:
+                node_kind = {
+                    "cudaGraphExecKernelNodeSetParams": "kernel",
+                    "cudaGraphExecMemcpyNodeSetParams": "memcpy",
+                    "cudaGraphExecMemsetNodeSetParams": "memset",
+                    "cudaGraphExecHostNodeSetParams": "host",
+                }[name]
+                return [
+                    f"// CUDA graph exec set {node_kind} node params: "
+                    f"exec: {args[0]}, node: {args[1]}, params: {args[2]}"
+                ]
+        elif name == "cudaGraphExecMemcpyNodeSetParams1D":
+            if len(args) >= 6:
+                return [
+                    f"// CUDA graph exec set memcpy 1D node params: "
+                    f"exec: {args[0]}, node: {args[1]}, dst: {args[2]}, "
+                    f"src: {args[3]}, byte count: {args[4]}, kind: {args[5]}"
+                ]
+        elif name in {
+            "cudaGraphExecMemcpyNodeSetParamsFromSymbol",
+            "cudaGraphExecMemcpyNodeSetParamsToSymbol",
+        }:
+            if len(args) >= 7:
+                if name == "cudaGraphExecMemcpyNodeSetParamsFromSymbol":
+                    return [
+                        "// CUDA graph exec set memcpy-from-symbol node params: "
+                        f"exec: {args[0]}, node: {args[1]}, dst: {args[2]}, "
+                        f"symbol: {args[3]}, byte count: {args[4]}, "
+                        f"offset: {args[5]}, kind: {args[6]}"
+                    ]
+                return [
+                    "// CUDA graph exec set memcpy-to-symbol node params: "
+                    f"exec: {args[0]}, node: {args[1]}, symbol: {args[2]}, "
+                    f"src: {args[3]}, byte count: {args[4]}, "
+                    f"offset: {args[5]}, kind: {args[6]}"
+                ]
+        elif name == "cudaGraphExecNodeSetParams":
+            if len(args) >= 3:
+                return [
+                    f"// CUDA graph exec set node params: "
+                    f"exec: {args[0]}, node: {args[1]}, params: {args[2]}"
+                ]
+        elif name in {
+            "cudaGraphExecExternalSemaphoresSignalNodeSetParams",
+            "cudaGraphExecExternalSemaphoresWaitNodeSetParams",
+        }:
+            if len(args) >= 3:
+                node_kind = "signal" if "Signal" in name else "wait"
+                return [
+                    f"// CUDA graph exec set external semaphore {node_kind} "
+                    f"node params: exec: {args[0]}, node: {args[1]}, "
+                    f"params: {args[2]}"
+                ]
+        elif name in {
+            "cudaGraphExecEventRecordNodeSetEvent",
+            "cudaGraphExecEventWaitNodeSetEvent",
+        }:
+            if len(args) >= 3:
+                node_kind = (
+                    "record"
+                    if name == "cudaGraphExecEventRecordNodeSetEvent"
+                    else "wait"
+                )
+                return [
+                    f"// CUDA graph exec set event {node_kind} node event: "
+                    f"exec: {args[0]}, node: {args[1]}, event: {args[2]}"
+                ]
+        elif name == "cudaGraphExecChildGraphNodeSetParams":
+            if len(args) >= 3:
+                return [
+                    f"// CUDA graph exec set child graph node params: "
+                    f"exec: {args[0]}, node: {args[1]}, child graph: {args[2]}"
+                ]
+        elif name == "cudaGraphDestroyNode":
+            if args:
+                return [f"// CUDA graph destroy node: {args[0]}"]
+        elif name == "cudaGraphDestroy":
+            if args:
+                return [f"// CUDA graph destroy: {args[0]}"]
+        elif name == "cuGraphDestroyNode":
+            if args:
+                return [f"// CUDA driver graph destroy node: {args[0]}"]
+        elif name == "cuGraphDestroy":
+            if args:
+                return [f"// CUDA driver graph destroy: {args[0]}"]
 
         return None
 
@@ -1013,9 +3683,9 @@ class CudaToCrossGLConverter:
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, node.vtype)
         if node.value:
-            runtime_status = self.format_cuda_runtime_status_expression(node.value)
-            if runtime_status is not None:
-                comments, value = runtime_status
+            runtime_expression = self.format_cuda_runtime_expression(node.value)
+            if runtime_expression is not None:
+                comments, value = runtime_expression
                 for comment in comments:
                     self.emit(comment)
                 self.emit(f"var {node.name}: {var_type} = {value};")
@@ -1207,13 +3877,11 @@ class CudaToCrossGLConverter:
     def visit_AssignmentNode(self, node):
         left = self.visit(node.left)
         operator = getattr(node, "operator", "=")
-        runtime_status = (
-            self.format_cuda_runtime_status_expression(node.right)
-            if operator == "="
-            else None
+        runtime_expression = (
+            self.format_cuda_runtime_expression(node.right) if operator == "=" else None
         )
-        if runtime_status is not None:
-            comments, value = runtime_status
+        if runtime_expression is not None:
+            comments, value = runtime_expression
             for comment in comments:
                 self.emit(comment)
             self.emit(f"{left} = {value};")
@@ -1247,6 +3915,10 @@ class CudaToCrossGLConverter:
             return cooperative_call
 
         raw_name = node.name if isinstance(node.name, str) else self.visit(node.name)
+        runtime_expression = self.format_cuda_runtime_inline_expression(node)
+        if runtime_expression is not None:
+            return runtime_expression
+
         if raw_name == "lambda":
             return self.format_lambda_call(node.args)
 
@@ -2097,6 +4769,14 @@ class CudaToCrossGLConverter:
 
     def visit_ReturnNode(self, node):
         if node.value:
+            runtime_expression = self.format_cuda_runtime_expression(node.value)
+            if runtime_expression is not None:
+                comments, value = runtime_expression
+                for comment in comments:
+                    self.emit(comment)
+                self.emit(f"return {value};")
+                return
+
             value = self.visit(node.value)
             self.emit(f"return {value};")
         else:

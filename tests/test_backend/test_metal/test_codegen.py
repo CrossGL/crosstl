@@ -218,6 +218,238 @@ def test_codegen_texture_sample_preserves_explicit_sampler_roundtrip():
     assert "albedo.sample(linearSampler, uv, level(lod))" in metal
 
 
+def test_codegen_texture_sample_level_option_roundtrip():
+    code = """
+    float4 sampleLevel(texture2d<float> tex, sampler samp, float2 uv, float lod) {
+        float4 mip = tex.sample(samp, uv, level(lod));
+        return mip;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "textureLod(tex, samp, uv, lod)" in crossgl
+    assert "level(lod)" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "tex.sample(samp, uv, level(lod))" in metal
+    assert "level(level(" not in metal
+
+
+def test_codegen_texture_sample_compare_level_option_roundtrip():
+    code = """
+    float sampleCompareLevel(depth2d<float> tex,
+                             sampler samp,
+                             float2 uv,
+                             float depth,
+                             float lod) {
+        return tex.sample_compare(samp, uv, depth, level(lod));
+    }
+    """
+    crossgl = convert(code)
+
+    assert "textureCompareLod(tex, samp, uv, depth, lod)" in crossgl
+    assert "level(lod)" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "tex.sample_compare(samp, uv, depth, level(lod))" in metal
+    assert "level(level(" not in metal
+
+
+def test_codegen_texture_sample_compare_offset_and_gradient_options_roundtrip():
+    code = """
+    float sampleCompareOptions(depth2d<float> tex,
+                               sampler samp,
+                               float2 uv,
+                               float depth,
+                               float lod,
+                               float2 ddx,
+                               float2 ddy,
+                               int2 offset) {
+        float mip = tex.sample_compare(samp, uv, depth, level(lod));
+        float shifted = tex.sample_compare(samp, uv, depth, offset);
+        float gradient = tex.sample_compare(samp, uv, depth, gradient2d(ddx, ddy));
+        float gradientShifted =
+            tex.sample_compare(samp, uv, depth, gradient2d(ddx, ddy), offset);
+        return mip + shifted + gradient + gradientShifted;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "textureCompareLod(tex, samp, uv, depth, lod)" in crossgl
+    assert "textureCompareOffset(tex, samp, uv, depth, offset)" in crossgl
+    assert "textureCompareGrad(tex, samp, uv, depth, ddx, ddy)" in crossgl
+    assert "textureCompareGradOffset(tex, samp, uv, depth, ddx, ddy, offset)" in crossgl
+    assert "textureCompare(tex, samp, uv, depth, gradient2d(" not in crossgl
+    assert "textureCompare(tex, samp, uv, depth, offset)" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "tex.sample_compare(samp, uv, depth, level(lod))" in metal
+    assert "tex.sample_compare(samp, uv, depth, offset)" in metal
+    assert "tex.sample_compare(samp, uv, depth, gradient2d(ddx, ddy))" in metal
+    assert "tex.sample_compare(samp, uv, depth, gradient2d(ddx, ddy), offset)" in metal
+    assert "sample_compare(samp, uv, depth, level(level(" not in metal
+
+
+def test_codegen_texture_sample_compare_array_options_roundtrip():
+    code = """
+    float sampleCompareArrayOptions(depth2d_array<float> tex,
+                                    depthcube_array<float> cube,
+                                    sampler samp,
+                                    float2 uv,
+                                    float3 dir,
+                                    uint layer,
+                                    float depth,
+                                    float lod,
+                                    float2 ddx,
+                                    float2 ddy,
+                                    float3 ddxCube,
+                                    float3 ddyCube,
+                                    int2 offset) {
+        float base = tex.sample_compare(samp, uv, layer, depth);
+        float shifted = tex.sample_compare(samp, uv, layer, depth, offset);
+        float lodShifted =
+            tex.sample_compare(samp, uv, layer, depth, level(lod), offset);
+        float gradientShifted =
+            tex.sample_compare(samp, uv, layer, depth, gradient2d(ddx, ddy), offset);
+        float cubeGradient =
+            cube.sample_compare(samp, dir, layer, depth, gradientcube(ddxCube, ddyCube));
+        return base + shifted + lodShifted + gradientShifted + cubeGradient;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "textureCompare(tex, samp, vec3(uv, layer), depth)" in crossgl
+    assert "textureCompareOffset(tex, samp, vec3(uv, layer), depth, offset)" in crossgl
+    assert (
+        "textureCompareLodOffset(tex, samp, vec3(uv, layer), depth, lod, offset)"
+        in crossgl
+    )
+    assert (
+        "textureCompareGradOffset(tex, samp, vec3(uv, layer), depth, ddx, ddy, offset)"
+        in crossgl
+    )
+    assert (
+        "textureCompareGrad(cube, samp, vec4(dir, layer), depth, ddxCube, ddyCube)"
+        in crossgl
+    )
+    assert "textureCompareOffset(tex, samp, vec3(uv, layer), depth)" not in crossgl
+    assert "textureCompare(tex, samp, vec3(uv, layer), depth, level(" not in crossgl
+    assert (
+        "textureCompare(tex, samp, vec3(uv, layer), depth, gradient2d(" not in crossgl
+    )
+    assert (
+        "textureCompare(cube, samp, vec4(dir, layer), depth, gradientcube("
+        not in crossgl
+    )
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert (
+        "tex.sample_compare(samp, (float3(uv, layer)).xy, "
+        "uint((float3(uv, layer)).z), depth)" in metal
+    )
+    assert (
+        "tex.sample_compare(samp, (float3(uv, layer)).xy, "
+        "uint((float3(uv, layer)).z), depth, offset)" in metal
+    )
+    assert (
+        "tex.sample_compare(samp, (float3(uv, layer)).xy, "
+        "uint((float3(uv, layer)).z), depth, level(lod), offset)" in metal
+    )
+    assert (
+        "tex.sample_compare(samp, (float3(uv, layer)).xy, "
+        "uint((float3(uv, layer)).z), depth, gradient2d(ddx, ddy), offset)" in metal
+    )
+    assert (
+        "cube.sample_compare(samp, (float4(dir, layer)).xyz, "
+        "uint((float4(dir, layer)).w), depth, gradientcube(ddxCube, ddyCube))" in metal
+    )
+    assert (
+        "sample_compare(samp, (float3(uv, layer)).xy, uint((float3(uv, layer)).z), depth, level(level("
+        not in metal
+    )
+
+
+def test_codegen_texture_sample_bias_and_gradient_options_roundtrip():
+    code = """
+    float4 sampleOptions(texture2d<float> tex,
+                         sampler samp,
+                         float2 uv,
+                         float biasValue,
+                         float2 ddx,
+                         float2 ddy) {
+        float4 biased = tex.sample(samp, uv, bias(biasValue));
+        float4 gradient = tex.sample(samp, uv, gradient2d(ddx, ddy));
+        return biased + gradient;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "texture(tex, samp, uv, biasValue)" in crossgl
+    assert "textureGrad(tex, samp, uv, ddx, ddy)" in crossgl
+    assert "textureLod(tex, samp, uv, bias(" not in crossgl
+    assert "textureLod(tex, samp, uv, gradient2d(" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "tex.sample(samp, uv, bias(biasValue))" in metal
+    assert "tex.sample(samp, uv, gradient2d(ddx, ddy))" in metal
+    assert "level(bias(" not in metal
+    assert "level(gradient2d(" not in metal
+
+
+def test_codegen_texture_sample_offset_options_roundtrip():
+    code = """
+    float4 sampleOffsetOptions(texture2d<float> tex,
+                               texture3d<float> volume,
+                               sampler samp,
+                               float2 uv,
+                               float3 uvw,
+                               float lod,
+                               float biasValue,
+                               float2 ddx,
+                               float2 ddy,
+                               float3 ddx3,
+                               float3 ddy3,
+                               int2 offset,
+                               int3 offset3) {
+        float4 plain = tex.sample(samp, uv, offset);
+        float4 biased = tex.sample(samp, uv, bias(biasValue), offset);
+        float4 lodShifted = tex.sample(samp, uv, level(lod), offset);
+        float4 gradShifted = tex.sample(samp, uv, gradient2d(ddx, ddy), offset);
+        float4 volumeShifted = volume.sample(samp, uvw, offset3);
+        float4 volumeGradShifted =
+            volume.sample(samp, uvw, gradient3d(ddx3, ddy3), offset3);
+        return plain + biased + lodShifted + gradShifted
+            + volumeShifted + volumeGradShifted;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "textureOffset(tex, samp, uv, offset)" in crossgl
+    assert "textureOffset(tex, samp, uv, offset, biasValue)" in crossgl
+    assert "textureLodOffset(tex, samp, uv, lod, offset)" in crossgl
+    assert "textureGradOffset(tex, samp, uv, ddx, ddy, offset)" in crossgl
+    assert "textureOffset(volume, samp, uvw, offset3)" in crossgl
+    assert "textureGradOffset(volume, samp, uvw, ddx3, ddy3, offset3)" in crossgl
+    assert "textureLod(tex, samp, uv, offset)" not in crossgl
+    assert "textureLod(tex, samp, uv, lod)" not in crossgl
+    assert "textureGrad(tex, samp, uv, ddx, ddy)" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "tex.sample(samp, uv, offset)" in metal
+    assert "tex.sample(samp, uv, bias(biasValue), offset)" in metal
+    assert "tex.sample(samp, uv, level(lod), offset)" in metal
+    assert "tex.sample(samp, uv, gradient2d(ddx, ddy), offset)" in metal
+    assert "volume.sample(samp, uvw, offset3)" in metal
+    assert "volume.sample(samp, uvw, gradient3d(ddx3, ddy3), offset3)" in metal
+    assert "level(offset)" not in metal
+
+
 def test_codegen_texture_method_descriptors():
     converter = MetalToCrossGLConverter()
 
@@ -548,12 +780,94 @@ def test_codegen_texture_read_write_and_compare():
     }
     """
     result = convert(code)
+    assert "image2D tex @texture(0) @readwrite" in result
+    assert "imageLoad(tex, uvec2(0, 0))" in result
+    assert "imageStore(tex, uvec2(0, 0), c);" in result
+    assert "unsupported Metal storage texture sampled method: sample on tex" in result
+    assert (
+        "unsupported Metal storage texture sampled method: sample_compare on tex"
+        in result
+    )
+    assert "unsupported Metal storage texture sampled method: gather on tex" in result
+    assert "textureStore" not in result
+    assert "texture(tex" not in result
+    assert "textureCompare" not in result
+    assert "textureGather" not in result
+
+
+def test_codegen_sampled_texture_write_emits_diagnostic():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    fragment void fragment_main(texture2d<float> tex [[texture(0)]]) {
+        tex.write(float4(1.0), uint2(0, 0));
+    }
+    """
+    result = convert(code)
+
     assert "sampler2D tex @texture(0)" in result
-    assert "image2D tex" not in result
-    assert "textureLoad" in result
-    assert "textureStore" in result
-    assert "textureCompare" in result
-    assert "textureGather" in result
+    assert "unsupported Metal sampled texture write: write on tex" in result
+    assert "textureStore" not in result
+    assert "imageStore" not in result
+
+
+def test_codegen_sampled_texture_reads_roundtrip_to_texel_fetch():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    fragment float4 fragment_main(texture2d<float> tex [[texture(0)]],
+                                  texture2d_array<float> layers [[texture(1)]],
+                                  texture2d_ms<float> msTex [[texture(2)]],
+                                  texture2d_ms_array<float> msLayers [[texture(3)]],
+                                  texture1d<float> line [[texture(4)]],
+                                  texture1d_array<float> lineLayers [[texture(5)]],
+                                  texture3d<float> volume [[texture(6)]],
+                                  uint x,
+                                  uint2 pixel,
+                                  uint3 voxel,
+                                  uint layer,
+                                  uint lod,
+                                  uint sample) {
+        float4 a = tex.read(pixel, lod);
+        float4 b = layers.read(pixel, layer, lod);
+        float4 c = msTex.read(pixel, sample);
+        float4 d = msLayers.read(pixel, layer, sample);
+        float4 e = line.read(x, 0);
+        float4 f = lineLayers.read(x, layer, 0);
+        float4 g = volume.read(voxel, lod);
+        return a + b + c + d + e + f + g;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "vec4 a = texelFetch(tex, pixel, lod);" in crossgl
+    assert "vec4 b = texelFetch(layers, uvec3(pixel, layer), lod);" in crossgl
+    assert "vec4 c = texelFetch(msTex, pixel, sample);" in crossgl
+    assert "vec4 d = texelFetch(msLayers, uvec3(pixel, layer), sample);" in crossgl
+    assert "vec4 e = texelFetch(line, x, 0);" in crossgl
+    assert "vec4 f = texelFetch(lineLayers, uvec2(x, layer), 0);" in crossgl
+    assert "vec4 g = texelFetch(volume, voxel, lod);" in crossgl
+    assert "textureLoad(" not in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "tex.read(pixel, lod)" in metal
+    assert (
+        "layers.read((uint3(pixel, layer)).xy, " "uint((uint3(pixel, layer)).z), lod)"
+    ) in metal
+    assert "msTex.read(pixel, uint(sample))" in metal
+    assert (
+        "msLayers.read((uint3(pixel, layer)).xy, "
+        "uint((uint3(pixel, layer)).z), uint(sample))"
+    ) in metal
+    assert "line.read(uint(x), uint(0))" in metal
+    assert (
+        "lineLayers.read(uint((uint2(x, layer)).x), "
+        "uint((uint2(x, layer)).y), uint(0))"
+    ) in metal
+    assert "volume.read(voxel, lod)" in metal
+    assert "textureLoad(" not in metal
 
 
 def test_codegen_access_qualified_1d_storage_textures():
@@ -644,6 +958,57 @@ def test_codegen_fixed_texture_arrays_lower_resource_methods():
     assert shader_ast is not None
 
 
+def test_codegen_struct_member_storage_textures_lower_resource_methods():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct ImagePack {
+        texture2d<uint, access::read_write> image;
+        array<texture2d<uint, access::read_write>, 4> images;
+        texture2d_array<float, access::read> layers;
+    };
+
+    uint touch(ImagePack pack, uint layer, uint2 pixel, float4 value) {
+        uint oldValue = pack.image.read(pixel).x;
+        pack.image.write(uint4(oldValue), pixel);
+        uint arrayOld = pack.images[layer].read(pixel).x;
+        pack.images[layer].write(uint4(arrayOld), pixel);
+        float4 layered = pack.layers.read(pixel, layer);
+        return oldValue + arrayOld + uint(layered.x);
+    }
+    """
+    result = convert(code)
+
+    assert "struct ImagePack" in result
+    assert "uimage2D image @readwrite" in result
+    assert "uimage2D[4] images @readwrite" in result
+    assert "image2DArray layers @readonly" in result
+    assert "uint oldValue = imageLoad(pack.image, pixel).x;" in result
+    assert "imageStore(pack.image, pixel, uvec4(oldValue));" in result
+    assert "uint arrayOld = imageLoad(pack.images[layer], pixel).x;" in result
+    assert "imageStore(pack.images[layer], pixel, uvec4(arrayOld));" in result
+    assert "vec4 layered = imageLoad(pack.layers, uvec3(pixel, layer));" in result
+    assert "textureLoad(pack.image" not in result
+    assert "textureLoad(pack.images" not in result
+    assert "textureLoad(pack.layers" not in result
+    assert "unsupported Metal sampled texture write" not in result
+
+    metal = MetalCodeGen().generate(parse_crossgl(result))
+    assert "texture2d<uint, access::read_write> image;" in metal
+    assert "array<texture2d<uint, access::read_write>, 4> images;" in metal
+    assert "texture2d_array<float, access::read> layers;" in metal
+    assert "uint oldValue = pack.image.read(uint2(pixel)).x;" in metal
+    assert "pack.image.write(uint4(oldValue), uint2(pixel));" in metal
+    assert "uint arrayOld = pack.images[layer].read(uint2(pixel)).x;" in metal
+    assert "pack.images[layer].write(uint4(arrayOld), uint2(pixel));" in metal
+    assert "pack.layers.read" in metal
+    assert ".x.x" not in metal
+    assert "uint4(uint4(" not in metal
+    assert "textureLoad(" not in metal
+    assert "textureStore(" not in metal
+
+
 def test_codegen_preserves_storage_texture_access_modes():
     code = """
     #include <metal_stdlib>
@@ -664,6 +1029,66 @@ def test_codegen_preserves_storage_texture_access_modes():
     assert "imageStore(outImage, pixel, vec4(value));" in result
 
     shader_ast = parse_crossgl(result)
+    assert shader_ast is not None
+
+
+def test_codegen_texture_query_methods_lower_to_crossgl_queries():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    fragment int4 fragment_main(texture2d<float> tex [[texture(0)]],
+                                texture2d_array<float> layers [[texture(1)]],
+                                texture2d_ms<float> msTex [[texture(2)]],
+                                float lod) {
+        int2 size = int2(tex.get_width(uint(lod)), tex.get_height(uint(lod)));
+        int3 layerSize = int3(layers.get_width(1),
+                              layers.get_height(1),
+                              layers.get_array_size());
+        int levels = tex.get_num_mip_levels();
+        int samples = msTex.get_num_samples();
+        return int4(size.x + layerSize.z, size.y, levels, samples);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "ivec2 size = textureSize(tex, uint(lod));" in crossgl
+    assert "ivec3 layerSize = textureSize(layers, 1);" in crossgl
+    assert "int levels = textureQueryLevels(tex);" in crossgl
+    assert "int samples = textureSamples(msTex);" in crossgl
+    assert ".get_width" not in crossgl
+    assert ".get_height" not in crossgl
+    assert ".get_array_size" not in crossgl
+    assert ".get_num_mip_levels" not in crossgl
+    assert ".get_num_samples" not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+
+def test_codegen_storage_texture_query_methods_lower_to_image_size():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void compute_main(texture2d<float, access::read_write> image [[texture(0)]],
+                             texture3d<uint, access::read> volume [[texture(1)]],
+                             uint3 tid [[thread_position_in_grid]]) {
+        int2 imageSizeValue = int2(image.get_width(), image.get_height());
+        int3 volumeSize = int3(volume.get_width(), volume.get_height(), volume.get_depth());
+    }
+    """
+    crossgl = convert(code)
+
+    assert "ivec2 imageSizeValue = imageSize(image);" in crossgl
+    assert "ivec3 volumeSize = imageSize(volume);" in crossgl
+    assert "image2D image @texture(0) @readwrite" in crossgl
+    assert "uimage3D volume @texture(1) @readonly" in crossgl
+    assert ".get_width" not in crossgl
+    assert ".get_height" not in crossgl
+    assert ".get_depth" not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
 

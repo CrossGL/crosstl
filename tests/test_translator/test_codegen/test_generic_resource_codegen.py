@@ -42,7 +42,7 @@ shader main {
             GLSLCodeGen,
             "layout(std430, binding = 0) buffer particlesBuffer { Particles particles[]; };",
         ),
-        (HipCodeGen, "RWStructuredBuffer<Particles> particles;"),
+        (HipCodeGen, "Particles* particles;"),
         (MetalCodeGen, "device Particles* particles [[buffer(0)]]"),
         (SlangCodeGen, "RWStructuredBuffer<Particles> particles : register(u0);"),
     ],

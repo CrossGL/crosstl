@@ -1409,6 +1409,5408 @@ class TestCudaCodeGen:
         assert "cudaWaitExternalSemaphoresAsync(" not in result
         assert "cudaDestroyExternalSemaphore(" not in result
 
+    def test_cuda_graph_lifecycle_runtime_conversion(self):
+        """Test CUDA graph lifecycle APIs emit metadata comments."""
+        code = """
+        void runGraph(cudaStream_t stream, unsigned long long flags) {
+            cudaGraph_t graph;
+            cudaGraph_t clone;
+            cudaGraph_t captured;
+            cudaGraphExec_t exec;
+            cudaGraphNode_t node;
+            cudaGraphNode_t errorNode;
+            void* log;
+
+            cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+            cudaStreamEndCapture(stream, &captured);
+            cudaGraphCreate(&graph, 0);
+            cudaGraphClone(&clone, graph);
+            cudaError_t err = cudaGraphInstantiate(
+                &exec,
+                clone,
+                &errorNode,
+                log,
+                128
+            );
+            err = cudaGraphInstantiateWithFlags(&exec, graph, flags);
+            err = cudaGraphLaunch(exec, stream);
+            err = cudaGraphExecDestroy(exec);
+            cudaGraphDestroyNode(node);
+            cudaGraphDestroy(clone);
+            err = cudaGraphDestroy(graph);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA stream begin capture: stream: stream, "
+            "mode: cudaStreamCaptureModeGlobal"
+        ) in result
+        assert (
+            "// CUDA stream end capture: stream: stream, graph output: captured"
+            in result
+        )
+        assert "// CUDA graph create: output: graph, flags: 0" in result
+        assert "// CUDA graph clone: output: clone, source: graph" in result
+        assert (
+            "// CUDA graph instantiate: output: exec, graph: clone, "
+            "error node output: errorNode, log buffer: log, log bytes: 128"
+        ) in result
+        assert (
+            "// CUDA graph instantiate with flags: output: exec, graph: graph, "
+            "flags: flags"
+        ) in result
+        assert "// CUDA graph launch: exec: exec, stream: stream" in result
+        assert "// CUDA graph exec destroy: exec" in result
+        assert "// CUDA graph destroy node: node" in result
+        assert "// CUDA graph destroy: clone" in result
+        assert "// CUDA graph destroy: graph" in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        for function_name in [
+            "cudaStreamBeginCapture",
+            "cudaStreamEndCapture",
+            "cudaGraphCreate",
+            "cudaGraphClone",
+            "cudaGraphInstantiate",
+            "cudaGraphInstantiateWithFlags",
+            "cudaGraphLaunch",
+            "cudaGraphExecDestroy",
+            "cudaGraphDestroyNode",
+            "cudaGraphDestroy",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_graph_lifecycle_runtime_conversion(self):
+        """Test CUDA driver graph lifecycle APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult runDriverGraph(
+            CUstream stream,
+            unsigned long long flags,
+            bool ok
+        ) {
+            CUgraph graph;
+            CUgraph clone;
+            CUgraphExec exec;
+            CUgraphNode node;
+            void* log;
+
+            CUresult status = cuGraphCreate(&graph, 0);
+            status = cuGraphClone(&clone, graph);
+            status = cuGraphInstantiate(&exec, graph, &node, log, 128);
+            status = cuGraphInstantiate(&exec, clone, flags);
+            status = cuGraphInstantiateWithFlags(&exec, clone, flags);
+            status = cuGraphUpload(exec, stream);
+            cuGraphLaunch(exec, stream);
+            status = cuGraphExecDestroy(exec);
+            cuGraphDestroyNode(node);
+            status = cuGraphDestroy(clone);
+
+            if (cuGraphInstantiateWithFlags(&exec, graph, flags) != CUDA_SUCCESS) {
+                return status;
+            }
+
+            if (cuGraphLaunch(exec, stream) != CUDA_SUCCESS) {
+                return status;
+            }
+
+            bool instantiated = checkStatus(
+                cuGraphInstantiateWithFlags(&exec, graph, flags)
+            );
+            bool launched = checkStatus(cuGraphUpload(exec, stream));
+            return launched && instantiated ? cuGraphDestroy(graph) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// CUDA driver graph create: output: graph, flags: 0" in result
+        assert "// CUDA driver graph clone: output: clone, source: graph" in result
+        assert (
+            "// CUDA driver graph instantiate: output: exec, graph: graph, "
+            "error node output: node, log buffer: log, log bytes: 128"
+        ) in result
+        assert (
+            "// CUDA driver graph instantiate: output: exec, graph: clone, "
+            "flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver graph instantiate with flags: output: exec, "
+            "graph: clone, flags: flags"
+        ) in result
+        assert "// CUDA driver graph upload: exec: exec, stream: stream" in result
+        assert "// CUDA driver graph launch: exec: exec, stream: stream" in result
+        assert "// CUDA driver graph exec destroy: exec" in result
+        assert "// CUDA driver graph destroy node: node" in result
+        assert "// CUDA driver graph destroy: clone" in result
+        assert (
+            "if (((/* CUDA driver graph instantiate with flags: "
+            "output: exec, graph: graph, flags: flags */ CUDA_SUCCESS) "
+            "!= CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "if (((/* CUDA driver graph launch: exec: exec, stream: stream */ "
+            "CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver graph instantiate with flags: "
+            "output: exec, graph: graph, flags: flags */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver graph upload: exec: exec, stream: stream */ "
+            "CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "((launched && instantiated) ? "
+            "(/* CUDA driver graph destroy: graph */ CUDA_SUCCESS) : status)"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuGraphCreate",
+            "cuGraphClone",
+            "cuGraphInstantiate",
+            "cuGraphInstantiateWithFlags",
+            "cuGraphUpload",
+            "cuGraphLaunch",
+            "cuGraphExecDestroy",
+            "cuGraphDestroyNode",
+            "cuGraphDestroy",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_graph_instantiate_update_params_runtime_conversion(self):
+        """Test modern CUDA graph instantiate/update params emit metadata."""
+        code = """
+        void refreshGraph(cudaGraph_t graph, cudaGraphExec_t exec) {
+            cudaGraphExec_t newExec;
+            cudaGraphInstantiateParams instantiateParams;
+            cudaGraphExecUpdateResultInfo resultInfo;
+
+            cudaError_t err = cudaGraphInstantiateWithParams(
+                &newExec,
+                graph,
+                &instantiateParams
+            );
+            err = cudaGraphExecUpdate(exec, graph, &resultInfo);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA graph instantiate with params: output: newExec, graph: graph, "
+            "params: (&instantiateParams)"
+        ) in result
+        assert (
+            "// CUDA graph exec update: exec: exec, graph: graph, "
+            "result info: (&resultInfo)"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        for function_name in [
+            "cudaGraphInstantiateWithParams",
+            "cudaGraphExecUpdate",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_device_graph_launch_runtime_conversion(self):
+        """Test CUDA device graph launch APIs emit typed metadata."""
+        code = """
+        __global__ void launchDeviceGraphs(cudaGraphExec_t child) {
+            cudaGraphExec_t current = cudaGetCurrentGraphExec();
+            cudaGraphExec_t tail;
+
+            cudaError_t err = cudaGraphLaunch(
+                child,
+                cudaStreamGraphFireAndForget
+            );
+            tail = cudaGetCurrentGraphExec();
+            err = cudaGraphLaunch(tail, cudaStreamGraphTailLaunch);
+            err = cudaGraphLaunch(
+                cudaGetCurrentGraphExec(),
+                cudaStreamGraphFireAndForgetAsSibling
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// CUDA device graph get current exec" in result
+        assert "var current: cudaGraphExec_t = 0;" in result
+        assert "tail = 0;" in result
+        assert (
+            "// CUDA graph device launch: exec: child, mode: fire-and-forget" in result
+        )
+        assert "// CUDA graph device launch: exec: tail, mode: tail" in result
+        assert (
+            "// CUDA graph device launch: "
+            "exec: (/* CUDA device graph get current exec */ 0), "
+            "mode: fire-and-forget sibling"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        assert "cudaGetCurrentGraphExec(" not in result
+        assert "cudaGraphLaunch(" not in result
+
+    def test_cuda_device_graph_kernel_node_update_runtime_conversion(self):
+        """Test CUDA device graph kernel-node update APIs emit metadata."""
+        code = """
+        __device__ void updateDeviceGraphKernelNode(
+            cudaGraphDeviceNode_t node,
+            cudaGraphKernelNodeUpdate* updates,
+            int value
+        ) {
+            cudaError_t err = cudaGraphKernelNodeSetEnabled(node, true);
+            err = cudaGraphKernelNodeSetGridDim(node, dim3(2, 3, 4));
+            err = cudaGraphKernelNodeSetParam(node, 16, &value, sizeof(value));
+            err = cudaGraphKernelNodeUpdatesApply(updates, 2);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA device graph kernel node set enabled: " "node: node, enabled: true"
+        ) in result
+        assert (
+            "// CUDA device graph kernel node set grid dim: "
+            "node: node, grid dim: vec3<u32>(2, 3, 4)"
+        ) in result
+        assert (
+            "// CUDA device graph kernel node set param: "
+            "node: node, offset: 16, value: (&value), bytes: sizeof(value)"
+        ) in result
+        assert (
+            "// CUDA device graph kernel node updates apply: "
+            "updates: updates, count: 2"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        for function_name in [
+            "cudaGraphKernelNodeSetEnabled",
+            "cudaGraphKernelNodeSetGridDim",
+            "cudaGraphKernelNodeSetParam",
+            "cudaGraphKernelNodeUpdatesApply",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_graph_conditional_runtime_conversion(self):
+        """Test CUDA graph conditional APIs emit metadata comments."""
+        code = """
+        __device__ void setConditional(
+            cudaGraphConditionalHandle handle,
+            unsigned int value
+        ) {
+            cudaGraphSetConditional(handle, value);
+        }
+
+        void buildConditionalGraph(
+            cudaGraph_t graph,
+            cudaGraphNode_t* deps,
+            cudaGraphEdgeData* edgeData,
+            size_t count
+        ) {
+            cudaGraphConditionalHandle handle;
+            cudaGraphConditionalHandle handleWithContext;
+            cudaExecutionContext_t context;
+            cudaGraphNode_t conditionalNode;
+            cudaGraphNode_t legacyConditionalNode;
+            cudaGraphNodeParams params;
+
+            cudaError_t err = cudaGraphConditionalHandleCreate(
+                &handle,
+                graph,
+                1u,
+                cudaGraphCondAssignDefault
+            );
+            err = cudaGraphConditionalHandleCreate_v2(
+                &handleWithContext,
+                graph,
+                context,
+                0u,
+                0
+            );
+            params.type = cudaGraphNodeTypeConditional;
+            params.conditional.handle = handle;
+            params.conditional.type = cudaGraphCondTypeIf;
+            params.conditional.size = 2;
+            err = cudaGraphAddNode(
+                &conditionalNode,
+                graph,
+                deps,
+                edgeData,
+                count,
+                &params
+            );
+            err = cudaGraphAddNode(
+                &legacyConditionalNode,
+                graph,
+                deps,
+                count,
+                &params
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// CUDA graph set conditional: handle: handle, value: value" in result
+        assert (
+            "// CUDA graph conditional handle create: output: handle, "
+            "graph: graph, default launch value: 1u, "
+            "flags: cudaGraphCondAssignDefault"
+        ) in result
+        assert (
+            "// CUDA graph conditional handle create v2: output: handleWithContext, "
+            "graph: graph, context: context, default launch value: 0u, flags: 0"
+        ) in result
+        assert (
+            "// CUDA graph add generic node: output: conditionalNode, graph: graph, "
+            "dependencies: deps, edge data: edgeData, dependency count: count, "
+            "params: (&params)"
+        ) in result
+        assert (
+            "// CUDA graph add generic node: output: legacyConditionalNode, "
+            "graph: graph, dependencies: deps, dependency count: count, "
+            "params: (&params)"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        for function_name in [
+            "cudaGraphSetConditional",
+            "cudaGraphConditionalHandleCreate",
+            "cudaGraphConditionalHandleCreate_v2",
+            "cudaGraphAddNode",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_graph_node_update_runtime_conversion(self):
+        """Test CUDA graph node parameter/update APIs emit metadata comments."""
+        code = """
+        void updateGraph(
+            cudaGraph_t graph,
+            cudaGraphExec_t exec,
+            cudaGraphNode_t kernelNode,
+            cudaGraphNode_t memcpyNode,
+            cudaGraphNode_t memsetNode,
+            cudaGraphNode_t hostNode
+        ) {
+            cudaKernelNodeParams kernelParams;
+            cudaMemcpy3DParms copyParams;
+            cudaMemsetParams memsetParams;
+            cudaHostNodeParams hostParams;
+            cudaGraphNode_t errorNode;
+            cudaGraphExecUpdateResult updateResult;
+
+            cudaGraphKernelNodeGetParams(kernelNode, &kernelParams);
+            cudaGraphKernelNodeSetParams(kernelNode, &kernelParams);
+            cudaGraphMemcpyNodeGetParams(memcpyNode, &copyParams);
+            cudaGraphMemcpyNodeSetParams(memcpyNode, &copyParams);
+            cudaGraphMemsetNodeGetParams(memsetNode, &memsetParams);
+            cudaGraphMemsetNodeSetParams(memsetNode, &memsetParams);
+            cudaGraphHostNodeGetParams(hostNode, &hostParams);
+            cudaGraphHostNodeSetParams(hostNode, &hostParams);
+            cudaError_t err = cudaGraphExecUpdate(
+                exec,
+                graph,
+                &errorNode,
+                &updateResult
+            );
+            err = cudaGraphExecKernelNodeSetParams(
+                exec,
+                kernelNode,
+                &kernelParams
+            );
+            err = cudaGraphExecMemcpyNodeSetParams(
+                exec,
+                memcpyNode,
+                &copyParams
+            );
+            err = cudaGraphExecMemsetNodeSetParams(
+                exec,
+                memsetNode,
+                &memsetParams
+            );
+            err = cudaGraphExecHostNodeSetParams(exec, hostNode, &hostParams);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA graph kernel node get params: node: kernelNode, "
+            "params: (&kernelParams)"
+        ) in result
+        assert (
+            "// CUDA graph kernel node set params: node: kernelNode, "
+            "params: (&kernelParams)"
+        ) in result
+        assert (
+            "// CUDA graph memcpy node get params: node: memcpyNode, "
+            "params: (&copyParams)"
+        ) in result
+        assert (
+            "// CUDA graph memcpy node set params: node: memcpyNode, "
+            "params: (&copyParams)"
+        ) in result
+        assert (
+            "// CUDA graph memset node get params: node: memsetNode, "
+            "params: (&memsetParams)"
+        ) in result
+        assert (
+            "// CUDA graph memset node set params: node: memsetNode, "
+            "params: (&memsetParams)"
+        ) in result
+        assert (
+            "// CUDA graph host node get params: node: hostNode, "
+            "params: (&hostParams)"
+        ) in result
+        assert (
+            "// CUDA graph host node set params: node: hostNode, "
+            "params: (&hostParams)"
+        ) in result
+        assert (
+            "// CUDA graph exec update: exec: exec, graph: graph, "
+            "error node output: errorNode, result output: updateResult"
+        ) in result
+        assert (
+            "// CUDA graph exec set kernel node params: exec: exec, "
+            "node: kernelNode, params: (&kernelParams)"
+        ) in result
+        assert (
+            "// CUDA graph exec set memcpy node params: exec: exec, "
+            "node: memcpyNode, params: (&copyParams)"
+        ) in result
+        assert (
+            "// CUDA graph exec set memset node params: exec: exec, "
+            "node: memsetNode, params: (&memsetParams)"
+        ) in result
+        assert (
+            "// CUDA graph exec set host node params: exec: exec, "
+            "node: hostNode, params: (&hostParams)"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        for function_name in [
+            "cudaGraphKernelNodeGetParams",
+            "cudaGraphKernelNodeSetParams",
+            "cudaGraphMemcpyNodeGetParams",
+            "cudaGraphMemcpyNodeSetParams",
+            "cudaGraphMemsetNodeGetParams",
+            "cudaGraphMemsetNodeSetParams",
+            "cudaGraphHostNodeGetParams",
+            "cudaGraphHostNodeSetParams",
+            "cudaGraphExecUpdate",
+            "cudaGraphExecKernelNodeSetParams",
+            "cudaGraphExecMemcpyNodeSetParams",
+            "cudaGraphExecMemsetNodeSetParams",
+            "cudaGraphExecHostNodeSetParams",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_graph_kernel_node_attribute_runtime_conversion(self):
+        """Test CUDA graph kernel node attribute APIs emit metadata."""
+        code = """
+        void updateKernelAttributes(
+            cudaGraphNode_t kernelNode,
+            cudaGraphNode_t targetNode
+        ) {
+            cudaKernelNodeAttrValue attrValue;
+            cudaError_t err = cudaGraphKernelNodeGetAttribute(
+                kernelNode,
+                cudaKernelNodeAttributeAccessPolicyWindow,
+                &attrValue
+            );
+            err = cudaGraphKernelNodeSetAttribute(
+                kernelNode,
+                cudaKernelNodeAttributeAccessPolicyWindow,
+                &attrValue
+            );
+            err = cudaGraphKernelNodeCopyAttributes(kernelNode, targetNode);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA graph kernel node get attribute: node: kernelNode, "
+            "attribute: cudaKernelNodeAttributeAccessPolicyWindow, "
+            "output: attrValue"
+        ) in result
+        assert (
+            "// CUDA graph kernel node set attribute: node: kernelNode, "
+            "attribute: cudaKernelNodeAttributeAccessPolicyWindow, "
+            "value: (&attrValue)"
+        ) in result
+        assert (
+            "// CUDA graph kernel node copy attributes: source: kernelNode, "
+            "destination: targetNode"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        for function_name in [
+            "cudaGraphKernelNodeGetAttribute",
+            "cudaGraphKernelNodeSetAttribute",
+            "cudaGraphKernelNodeCopyAttributes",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_graph_exec_memcpy_convenience_update_runtime_conversion(self):
+        """Test CUDA graph exec memcpy convenience update APIs emit metadata."""
+        code = """
+        void updateExecMemcpy(
+            cudaGraphExec_t exec,
+            cudaGraphNode_t memcpyNode,
+            void* dst,
+            void* src,
+            size_t bytes,
+            size_t offset
+        ) {
+            int symbolData;
+            cudaError_t err = cudaGraphExecMemcpyNodeSetParams1D(
+                exec,
+                memcpyNode,
+                dst,
+                src,
+                bytes,
+                cudaMemcpyDeviceToDevice
+            );
+            err = cudaGraphExecMemcpyNodeSetParamsFromSymbol(
+                exec,
+                memcpyNode,
+                dst,
+                symbolData,
+                bytes,
+                offset,
+                cudaMemcpyDeviceToDevice
+            );
+            err = cudaGraphExecMemcpyNodeSetParamsToSymbol(
+                exec,
+                memcpyNode,
+                symbolData,
+                src,
+                bytes,
+                offset,
+                cudaMemcpyDeviceToDevice
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA graph exec set memcpy 1D node params: exec: exec, "
+            "node: memcpyNode, dst: dst, src: src, byte count: bytes, "
+            "kind: cudaMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// CUDA graph exec set memcpy-from-symbol node params: exec: exec, "
+            "node: memcpyNode, dst: dst, symbol: symbolData, byte count: bytes, "
+            "offset: offset, kind: cudaMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// CUDA graph exec set memcpy-to-symbol node params: exec: exec, "
+            "node: memcpyNode, symbol: symbolData, src: src, byte count: bytes, "
+            "offset: offset, kind: cudaMemcpyDeviceToDevice"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        for function_name in [
+            "cudaGraphExecMemcpyNodeSetParams1D",
+            "cudaGraphExecMemcpyNodeSetParamsFromSymbol",
+            "cudaGraphExecMemcpyNodeSetParamsToSymbol",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_graph_memcpy_convenience_node_update_runtime_conversion(self):
+        """Test CUDA graph memcpy convenience node update APIs emit metadata."""
+        code = """
+        void updateMemcpyNode(
+            cudaGraphNode_t memcpyNode,
+            void* dst,
+            void* src,
+            size_t bytes,
+            size_t offset
+        ) {
+            int symbolData;
+            cudaError_t err = cudaGraphMemcpyNodeSetParams1D(
+                memcpyNode,
+                dst,
+                src,
+                bytes,
+                cudaMemcpyDeviceToDevice
+            );
+            err = cudaGraphMemcpyNodeSetParamsFromSymbol(
+                memcpyNode,
+                dst,
+                symbolData,
+                bytes,
+                offset,
+                cudaMemcpyDeviceToDevice
+            );
+            err = cudaGraphMemcpyNodeSetParamsToSymbol(
+                memcpyNode,
+                symbolData,
+                src,
+                bytes,
+                offset,
+                cudaMemcpyDeviceToDevice
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA graph set memcpy 1D node params: node: memcpyNode, "
+            "dst: dst, src: src, byte count: bytes, "
+            "kind: cudaMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// CUDA graph set memcpy-from-symbol node params: "
+            "node: memcpyNode, dst: dst, symbol: symbolData, byte count: bytes, "
+            "offset: offset, kind: cudaMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// CUDA graph set memcpy-to-symbol node params: "
+            "node: memcpyNode, symbol: symbolData, src: src, byte count: bytes, "
+            "offset: offset, kind: cudaMemcpyDeviceToDevice"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        for function_name in [
+            "cudaGraphMemcpyNodeSetParams1D",
+            "cudaGraphMemcpyNodeSetParamsFromSymbol",
+            "cudaGraphMemcpyNodeSetParamsToSymbol",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_graph_batch_mem_op_node_runtime_conversion(self):
+        """Test CUDA driver graph batch memory operation node APIs emit metadata."""
+        code = """
+        void updateBatchMemOpNode(
+            CUgraph graph,
+            CUgraphExec exec,
+            CUgraphNode* deps,
+            size_t count
+        ) {
+            CUgraphNode batchNode;
+            CUDA_BATCH_MEM_OP_NODE_PARAMS params;
+
+            CUresult status = cuGraphAddBatchMemOpNode(
+                &batchNode,
+                graph,
+                deps,
+                count,
+                &params
+            );
+            status = cuGraphBatchMemOpNodeGetParams(batchNode, &params);
+            status = cuGraphBatchMemOpNodeSetParams(batchNode, &params);
+            status = cuGraphExecBatchMemOpNodeSetParams(exec, batchNode, &params);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver graph add batch memory operation node: "
+            "output: batchNode, graph: graph, dependencies: deps, "
+            "dependency count: count, params: (&params)"
+        ) in result
+        assert (
+            "// CUDA driver graph batch memory operation node get params: "
+            "node: batchNode, params: (&params)"
+        ) in result
+        assert (
+            "// CUDA driver graph batch memory operation node set params: "
+            "node: batchNode, params: (&params)"
+        ) in result
+        assert (
+            "// CUDA driver graph exec set batch memory operation node params: "
+            "exec: exec, node: batchNode, params: (&params)"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuGraphAddBatchMemOpNode",
+            "cuGraphBatchMemOpNodeGetParams",
+            "cuGraphBatchMemOpNodeSetParams",
+            "cuGraphExecBatchMemOpNodeSetParams",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_stream_memory_operation_runtime_conversion(self):
+        """Test CUDA driver stream memory operation APIs emit metadata."""
+        code = """
+        void scheduleStreamMemOps(
+            CUstream stream,
+            CUdeviceptr addr32,
+            CUdeviceptr addr64,
+            CUstreamBatchMemOpParams* ops,
+            unsigned int flags
+        ) {
+            cuuint32_t value32 = 7;
+            cuuint64_t value64 = 9;
+
+            CUresult status = cuStreamWaitValue32(
+                stream,
+                addr32,
+                value32,
+                flags
+            );
+            status = cuStreamWaitValue64(stream, addr64, value64, flags);
+            status = cuStreamWriteValue32(
+                stream,
+                addr32,
+                value32,
+                CU_STREAM_WRITE_VALUE_NO_MEMORY_BARRIER
+            );
+            status = cuStreamWriteValue64(stream, addr64, value64, 0);
+            status = cuStreamBatchMemOp(stream, 2, ops, 0);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver stream wait 32-bit value: stream: stream, "
+            "address: addr32, value: value32, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver stream wait 64-bit value: stream: stream, "
+            "address: addr64, value: value64, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver stream write 32-bit value: stream: stream, "
+            "address: addr32, value: value32, "
+            "flags: CU_STREAM_WRITE_VALUE_NO_MEMORY_BARRIER"
+        ) in result
+        assert (
+            "// CUDA driver stream write 64-bit value: stream: stream, "
+            "address: addr64, value: value64, flags: 0"
+        ) in result
+        assert (
+            "// CUDA driver stream batch memory operation: stream: stream, "
+            "count: 2, params: ops, flags: 0"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuStreamWaitValue32",
+            "cuStreamWaitValue64",
+            "cuStreamWriteValue32",
+            "cuStreamWriteValue64",
+            "cuStreamBatchMemOp",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_stream_attribute_query_runtime_conversion(self):
+        """Test CUDA driver stream attribute and query APIs emit metadata."""
+        code = """
+        void inspectStreamAttributes(
+            CUstream stream,
+            CUstream source,
+            CUstreamAttrValue* attrValue,
+            CUgraphNode** dependencies,
+            size_t* dependencyCount,
+            unsigned int flags
+        ) {
+            CUcontext context;
+            CUgraph graph;
+            CUstreamCaptureStatus captureStatus;
+            cuuint64_t captureId;
+            int priority;
+            unsigned int streamFlags;
+
+            CUresult status = cuStreamGetAttribute(
+                stream,
+                CU_STREAM_ATTRIBUTE_ACCESS_POLICY_WINDOW,
+                attrValue
+            );
+            status = cuStreamSetAttribute(
+                stream,
+                CU_STREAM_ATTRIBUTE_SYNCHRONIZATION_POLICY,
+                attrValue
+            );
+            status = cuStreamCopyAttributes(stream, source);
+            status = cuStreamGetCtx(stream, &context);
+            status = cuStreamGetFlags(stream, &streamFlags);
+            status = cuStreamGetPriority(stream, &priority);
+            status = cuStreamIsCapturing(stream, &captureStatus);
+            status = cuStreamGetCaptureInfo_v2(
+                stream,
+                &captureStatus,
+                &captureId,
+                &graph,
+                dependencies,
+                dependencyCount
+            );
+            status = cuStreamUpdateCaptureDependencies(
+                stream,
+                dependencies,
+                *dependencyCount,
+                flags
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver stream get attribute: stream: stream, "
+            "attribute: CU_STREAM_ATTRIBUTE_ACCESS_POLICY_WINDOW, "
+            "output: attrValue"
+        ) in result
+        assert (
+            "// CUDA driver stream set attribute: stream: stream, "
+            "attribute: CU_STREAM_ATTRIBUTE_SYNCHRONIZATION_POLICY, "
+            "value: attrValue"
+        ) in result
+        assert (
+            "// CUDA driver stream copy attributes: destination: stream, "
+            "source: source"
+        ) in result
+        assert (
+            "// CUDA driver stream context query: stream: stream, output: context"
+            in result
+        )
+        assert (
+            "// CUDA driver stream flags query: stream: stream, output: streamFlags"
+            in result
+        )
+        assert (
+            "// CUDA driver stream priority query: stream: stream, output: priority"
+            in result
+        )
+        assert (
+            "// CUDA driver stream capture status query: stream: stream, "
+            "output: captureStatus"
+        ) in result
+        assert (
+            "// CUDA driver stream capture info query: stream: stream, "
+            "status output: captureStatus, id output: captureId, "
+            "graph output: graph, dependencies output: dependencies, "
+            "dependency count output: dependencyCount"
+        ) in result
+        assert (
+            "// CUDA driver stream update capture dependencies: stream: stream, "
+            "dependencies: dependencies, dependency count: (*dependencyCount), "
+            "flags: flags"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuStreamGetAttribute",
+            "cuStreamSetAttribute",
+            "cuStreamCopyAttributes",
+            "cuStreamGetCtx",
+            "cuStreamGetFlags",
+            "cuStreamGetPriority",
+            "cuStreamIsCapturing",
+            "cuStreamGetCaptureInfo_v2",
+            "cuStreamUpdateCaptureDependencies",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_stream_lifecycle_synchronization_runtime_conversion(self):
+        """Test CUDA driver stream lifecycle and synchronization APIs emit metadata."""
+        code = """
+        CUresult controlStream(
+            CUstream stream,
+            CUevent event,
+            CUhostFn callback,
+            void* userData,
+            CUdeviceptr devicePtr,
+            size_t length,
+            int priority
+        ) {
+            CUstream created;
+            CUstream priorityStream;
+            CUgraph graph;
+
+            CUresult status = cuStreamCreate(
+                &created,
+                CU_STREAM_NON_BLOCKING
+            );
+            status = cuStreamCreateWithPriority(
+                &priorityStream,
+                CU_STREAM_NON_BLOCKING,
+                priority
+            );
+            status = cuStreamQuery(stream);
+            status = cuStreamSynchronize(stream);
+            status = cuStreamWaitEvent(stream, event, 0);
+            status = cuLaunchHostFunc(stream, callback, userData);
+            status = cuStreamAttachMemAsync(
+                stream,
+                devicePtr,
+                length,
+                CU_MEM_ATTACH_GLOBAL
+            );
+            cuStreamBeginCapture(stream, CU_STREAM_CAPTURE_MODE_GLOBAL);
+            status = cuStreamEndCapture(stream, &graph);
+            status = cuStreamDestroy(created);
+
+            return cuStreamSynchronize(priorityStream);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver stream create: output: created, "
+            "flags: CU_STREAM_NON_BLOCKING"
+        ) in result
+        assert (
+            "// CUDA driver stream create with priority: output: priorityStream, "
+            "flags: CU_STREAM_NON_BLOCKING, priority: priority"
+        ) in result
+        assert "// CUDA driver stream query: stream: stream" in result
+        assert "// CUDA driver stream synchronize: stream: stream" in result
+        assert (
+            "// CUDA driver stream wait event: stream: stream, event: event, flags: 0"
+            in result
+        )
+        assert (
+            "// CUDA driver stream launch host function: stream: stream, "
+            "callback: callback, user data: userData"
+        ) in result
+        assert (
+            "// CUDA driver stream attach memory: stream: stream, "
+            "pointer: devicePtr, bytes: length, flags: CU_MEM_ATTACH_GLOBAL"
+        ) in result
+        assert (
+            "// CUDA driver stream begin capture: stream: stream, "
+            "mode: CU_STREAM_CAPTURE_MODE_GLOBAL"
+        ) in result
+        assert (
+            "// CUDA driver stream end capture: stream: stream, graph output: graph"
+            in result
+        )
+        assert "// CUDA driver stream destroy: stream: created" in result
+        assert "return CUDA_SUCCESS;" in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuStreamCreate",
+            "cuStreamCreateWithPriority",
+            "cuStreamQuery",
+            "cuStreamSynchronize",
+            "cuStreamWaitEvent",
+            "cuLaunchHostFunc",
+            "cuStreamAttachMemAsync",
+            "cuStreamBeginCapture",
+            "cuStreamEndCapture",
+            "cuStreamDestroy",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_profiler_stream_callback_runtime_conversion(self):
+        """Test CUDA driver profiler and stream callback APIs emit metadata."""
+        code = """
+        CUresult profileStream(
+            CUstream stream,
+            CUstreamCallback callback,
+            void* userData,
+            const char* configFile,
+            const char* outputFile,
+            CUoutput_mode outputMode,
+            unsigned int flags,
+            bool ok
+        ) {
+            CUresult status = cuProfilerInitialize(
+                configFile,
+                outputFile,
+                outputMode
+            );
+            status = cuProfilerStart();
+            status = cuStreamAddCallback(stream, callback, userData, 0);
+            cuProfilerStop();
+
+            if (cuStreamAddCallback(stream, callback, userData, flags)
+                != CUDA_SUCCESS) {
+                return status;
+            }
+
+            checkStatus(cuProfilerStart());
+            return ok ? cuProfilerStop() : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver profiler initialize: config: configFile, "
+            "output: outputFile, mode: outputMode"
+        ) in result
+        assert "// CUDA driver profiler start" in result
+        assert "// CUDA driver profiler stop" in result
+        assert (
+            "// CUDA driver stream add callback: stream: stream, "
+            "callback: callback, user data: userData, flags: 0"
+        ) in result
+        assert (
+            "/* CUDA driver stream add callback: stream: stream, "
+            "callback: callback, user data: userData, flags: flags */ "
+            "CUDA_SUCCESS) != CUDA_SUCCESS"
+        ) in result
+        assert "checkStatus((/* CUDA driver profiler start */ CUDA_SUCCESS));" in result
+        assert (
+            "return (ok ? (/* CUDA driver profiler stop */ CUDA_SUCCESS) : status);"
+            in result
+        )
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuProfilerInitialize",
+            "cuProfilerStart",
+            "cuProfilerStop",
+            "cuStreamAddCallback",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_event_lifecycle_query_runtime_conversion(self):
+        """Test CUDA driver event lifecycle and query APIs emit metadata."""
+        code = """
+        CUresult controlEvents(CUstream stream) {
+            CUevent start;
+            CUevent stop;
+            float elapsed;
+
+            CUresult status = cuEventCreate(&start, CU_EVENT_DEFAULT);
+            status = cuEventCreateWithFlags(&stop, CU_EVENT_BLOCKING_SYNC);
+            status = cuEventRecord(start, stream);
+            status = cuEventRecordWithFlags(
+                stop,
+                stream,
+                CU_EVENT_RECORD_DEFAULT
+            );
+            status = cuEventQuery(start);
+            status = cuEventSynchronize(stop);
+            status = cuEventElapsedTime(&elapsed, start, stop);
+            cuEventDestroy(start);
+
+            return cuEventDestroy(stop);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver event create: output: start, flags: CU_EVENT_DEFAULT"
+            in result
+        )
+        assert (
+            "// CUDA driver event create: output: stop, "
+            "flags: CU_EVENT_BLOCKING_SYNC"
+        ) in result
+        assert "// CUDA driver event record: event: start, stream: stream" in result
+        assert (
+            "// CUDA driver event record with flags: event: stop, stream: stream, "
+            "flags: CU_EVENT_RECORD_DEFAULT"
+        ) in result
+        assert "// CUDA driver event query: event: start" in result
+        assert "// CUDA driver event synchronize: event: stop" in result
+        assert (
+            "// CUDA driver event elapsed time: start -> stop, output: elapsed"
+            in result
+        )
+        assert "// CUDA driver event destroy: event: start" in result
+        assert "// CUDA driver event destroy: event: stop" in result
+        assert "return CUDA_SUCCESS;" in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuEventCreate",
+            "cuEventCreateWithFlags",
+            "cuEventRecord",
+            "cuEventRecordWithFlags",
+            "cuEventQuery",
+            "cuEventSynchronize",
+            "cuEventElapsedTime",
+            "cuEventDestroy",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_memory_allocation_copy_runtime_conversion(self):
+        """Test CUDA driver memory allocation/copy APIs emit metadata."""
+        code = """
+        CUresult driverMemory(
+            CUstream stream,
+            CUdeviceptr source,
+            void* host,
+            size_t bytes,
+            size_t pitch,
+            size_t width,
+            size_t height,
+            size_t elements
+        ) {
+            CUdeviceptr device;
+            CUdeviceptr managed;
+            void* pinned;
+            CUDA_MEMCPY2D copy2d;
+            CUDA_MEMCPY3D copy3d;
+
+            CUresult status = cuMemAlloc(&device, bytes);
+            status = cuMemAllocManaged(&managed, bytes, CU_MEM_ATTACH_GLOBAL);
+            status = cuMemAllocHost(&pinned, bytes);
+            status = cuMemHostAlloc(&pinned, bytes, CU_MEMHOSTALLOC_PORTABLE);
+            status = cuMemcpy(device, source, bytes);
+            status = cuMemcpyAsync(device, source, bytes, stream);
+            status = cuMemcpyHtoD(managed, host, bytes);
+            status = cuMemcpyDtoH(host, device, bytes);
+            status = cuMemcpyDtoD(device, managed, bytes);
+            status = cuMemcpyHtoDAsync(device, host, bytes, stream);
+            status = cuMemcpyDtoHAsync(host, managed, bytes, stream);
+            status = cuMemcpyDtoDAsync(managed, source, bytes, stream);
+            status = cuMemcpy2D(&copy2d);
+            status = cuMemcpy2DAsync(&copy2d, stream);
+            status = cuMemcpy3D(&copy3d);
+            status = cuMemcpy3DAsync(&copy3d, stream);
+            status = cuMemsetD8(device, 0, bytes);
+            status = cuMemsetD32(managed, 0, elements);
+            status = cuMemsetD8Async(device, 1, bytes, stream);
+            status = cuMemsetD32Async(managed, 2, elements, stream);
+            status = cuMemsetD2D8(device, pitch, 0, width, height);
+            status = cuMemsetD2D32(managed, pitch, 3, width, height);
+            status = cuMemsetD2D8Async(device, pitch, 4, width, height, stream);
+            status = cuMemsetD2D32Async(managed, pitch, 5, width, height, stream);
+            cuMemFreeHost(pinned);
+            status = cuMemFree(managed);
+
+            return cuMemFree(device);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// CUDA driver memory allocate: output: device, bytes: bytes" in result
+        assert (
+            "// CUDA driver memory allocate managed: output: managed, "
+            "bytes: bytes, flags: CU_MEM_ATTACH_GLOBAL"
+        ) in result
+        assert (
+            "// CUDA driver host memory allocate: output: pinned, bytes: bytes"
+            in result
+        )
+        assert (
+            "// CUDA driver host memory allocate: output: pinned, bytes: bytes, "
+            "flags: CU_MEMHOSTALLOC_PORTABLE"
+        ) in result
+        assert "// CUDA driver memory copy: source -> device, bytes: bytes" in result
+        assert (
+            "// CUDA driver memory copy: source -> device, bytes: bytes, "
+            "stream: stream"
+        ) in result
+        assert (
+            "// CUDA driver memory copy HtoD: host -> managed, bytes: bytes" in result
+        )
+        assert "// CUDA driver memory copy DtoH: device -> host, bytes: bytes" in result
+        assert (
+            "// CUDA driver memory copy DtoD: managed -> device, bytes: bytes" in result
+        )
+        assert (
+            "// CUDA driver memory copy HtoD: host -> device, bytes: bytes, "
+            "stream: stream"
+        ) in result
+        assert (
+            "// CUDA driver memory copy DtoH: managed -> host, bytes: bytes, "
+            "stream: stream"
+        ) in result
+        assert (
+            "// CUDA driver memory copy DtoD: source -> managed, bytes: bytes, "
+            "stream: stream"
+        ) in result
+        assert "// CUDA driver memory copy 2D: params: copy2d" in result
+        assert "// CUDA driver memory copy 2D: params: copy2d, stream: stream" in result
+        assert "// CUDA driver memory copy 3D: params: copy3d" in result
+        assert "// CUDA driver memory copy 3D: params: copy3d, stream: stream" in result
+        assert "// CUDA driver memory set D8: device, value: 0, count: bytes" in result
+        assert (
+            "// CUDA driver memory set D32: managed, value: 0, count: elements"
+            in result
+        )
+        assert (
+            "// CUDA driver memory set D8: device, value: 1, count: bytes, "
+            "stream: stream"
+        ) in result
+        assert (
+            "// CUDA driver memory set D32: managed, value: 2, count: elements, "
+            "stream: stream"
+        ) in result
+        assert (
+            "// CUDA driver memory set 2D D8: device, pitch: pitch, value: 0, "
+            "width: width, height: height"
+        ) in result
+        assert (
+            "// CUDA driver memory set 2D D32: managed, pitch: pitch, value: 3, "
+            "width: width, height: height"
+        ) in result
+        assert (
+            "// CUDA driver memory set 2D D8: device, pitch: pitch, value: 4, "
+            "width: width, height: height, stream: stream"
+        ) in result
+        assert (
+            "// CUDA driver memory set 2D D32: managed, pitch: pitch, value: 5, "
+            "width: width, height: height, stream: stream"
+        ) in result
+        assert "// CUDA driver host memory free: pinned" in result
+        assert "// CUDA driver memory free: managed" in result
+        assert "// CUDA driver memory free: device" in result
+        assert "return CUDA_SUCCESS;" in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuMemAlloc",
+            "cuMemAllocManaged",
+            "cuMemAllocHost",
+            "cuMemHostAlloc",
+            "cuMemcpy",
+            "cuMemcpyAsync",
+            "cuMemcpyHtoD",
+            "cuMemcpyDtoH",
+            "cuMemcpyDtoD",
+            "cuMemcpyHtoDAsync",
+            "cuMemcpyDtoHAsync",
+            "cuMemcpyDtoDAsync",
+            "cuMemcpy2D",
+            "cuMemcpy2DAsync",
+            "cuMemcpy3D",
+            "cuMemcpy3DAsync",
+            "cuMemsetD8",
+            "cuMemsetD32",
+            "cuMemsetD8Async",
+            "cuMemsetD32Async",
+            "cuMemsetD2D8",
+            "cuMemsetD2D32",
+            "cuMemsetD2D8Async",
+            "cuMemsetD2D32Async",
+            "cuMemFreeHost",
+            "cuMemFree",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_uva_memory_range_runtime_conversion(self):
+        """Test CUDA driver UVA and memory range APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult inspectMemory(
+            CUdeviceptr pointer,
+            CUdeviceptr alternate,
+            CUdevice device,
+            size_t bytes
+        ) {
+            void* base;
+            size_t rangeBytes;
+            size_t freeBytes;
+            size_t totalBytes;
+            int memoryType;
+            CUpointer_attribute attrs[2];
+            void* values[2];
+
+            CUresult status = cuPointerGetAttribute(
+                &memoryType,
+                CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
+                pointer
+            );
+            status = cuPointerGetAttributes(2, attrs, values, pointer);
+            status = cuMemGetAddressRange(&base, &rangeBytes, pointer);
+            status = cuMemGetInfo(&freeBytes, &totalBytes);
+            status = cuMemGetInfo_v2(&freeBytes, &totalBytes);
+            status = cuMemAdvise(
+                pointer,
+                bytes,
+                CU_MEM_ADVISE_SET_READ_MOSTLY,
+                device
+            );
+            cuMemAdvise(
+                alternate,
+                bytes,
+                CU_MEM_ADVISE_UNSET_READ_MOSTLY,
+                device
+            );
+
+            if (cuMemGetAddressRange(&base, &rangeBytes, alternate)
+                != CUDA_SUCCESS) {
+                return CUDA_ERROR_UNKNOWN;
+            }
+
+            bool ok = checkStatus(cuMemGetInfo(&freeBytes, &totalBytes));
+            return ok ? cuMemAdvise(
+                pointer,
+                rangeBytes,
+                CU_MEM_ADVISE_SET_PREFERRED_LOCATION,
+                device
+            ) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver pointer get attribute: output: memoryType, "
+            "attribute: CU_POINTER_ATTRIBUTE_MEMORY_TYPE, pointer: pointer"
+        ) in result
+        assert (
+            "// CUDA driver pointer get attributes: count: 2, attributes: attrs, "
+            "data: values, pointer: pointer"
+        ) in result
+        assert (
+            "// CUDA driver memory get address range: base output: base, "
+            "size output: rangeBytes, pointer: pointer"
+        ) in result
+        assert (
+            "// CUDA driver memory get info: free output: freeBytes, "
+            "total output: totalBytes"
+        ) in result
+        assert (
+            "// CUDA driver memory get info v2: free output: freeBytes, "
+            "total output: totalBytes"
+        ) in result
+        assert (
+            "// CUDA driver memory advise: pointer: pointer, bytes: bytes, "
+            "advice: CU_MEM_ADVISE_SET_READ_MOSTLY, device: device"
+        ) in result
+        assert (
+            "// CUDA driver memory advise: pointer: alternate, bytes: bytes, "
+            "advice: CU_MEM_ADVISE_UNSET_READ_MOSTLY, device: device"
+        ) in result
+        assert (
+            "if (((/* CUDA driver memory get address range: base output: base, "
+            "size output: rangeBytes, pointer: alternate */ CUDA_SUCCESS) "
+            "!= CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver memory get info: free output: freeBytes, "
+            "total output: totalBytes */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(ok ? (/* CUDA driver memory advise: pointer: pointer, "
+            "bytes: rangeBytes, advice: CU_MEM_ADVISE_SET_PREFERRED_LOCATION, "
+            "device: device */ CUDA_SUCCESS) : status)"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuPointerGetAttribute",
+            "cuPointerGetAttributes",
+            "cuMemGetAddressRange",
+            "cuMemGetInfo",
+            "cuMemGetInfo_v2",
+            "cuMemAdvise",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_memory_pool_async_runtime_conversion(self):
+        """Test CUDA driver memory pool and async allocation APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult managePools(
+            CUdevice device,
+            CUstream stream,
+            CUmemPoolProps* props,
+            CUmemAccessDesc* accessDesc,
+            CUmemLocation* location,
+            size_t bytes,
+            size_t trimBytes
+        ) {
+            CUdeviceptr pointer;
+            CUmemoryPool pool;
+            CUmemoryPool defaultPool;
+            CUmemoryPool currentPool;
+            cuuint64_t threshold;
+            CUmemAccess_flags flags;
+
+            CUresult status = cuMemPoolCreate(&pool, props);
+            status = cuDeviceGetDefaultMemPool(&defaultPool, device);
+            status = cuDeviceGetMemPool(&currentPool, device);
+            status = cuDeviceSetMemPool(device, pool);
+            status = cuMemPoolSetAttribute(
+                pool,
+                CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
+                &threshold
+            );
+            status = cuMemPoolGetAttribute(
+                pool,
+                CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
+                &threshold
+            );
+            status = cuMemPoolSetAccess(pool, accessDesc, 1);
+            status = cuMemPoolGetAccess(&flags, pool, location);
+            status = cuMemAllocAsync(&pointer, bytes, stream);
+            status = cuMemFreeAsync(pointer, stream);
+            status = cuMemPoolTrimTo(pool, trimBytes);
+            cuMemPoolDestroy(currentPool);
+
+            if (cuMemAllocAsync(&pointer, bytes, stream) != CUDA_SUCCESS) {
+                return CUDA_ERROR_UNKNOWN;
+            }
+
+            bool ok = checkStatus(cuMemPoolGetAccess(&flags, pool, location));
+            return ok ? cuMemPoolDestroy(pool) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver memory pool create: output: pool, props: props"
+        ) in result
+        assert (
+            "// CUDA driver device get default memory pool: output: defaultPool, "
+            "device: device"
+        ) in result
+        assert (
+            "// CUDA driver device get memory pool: output: currentPool, "
+            "device: device"
+        ) in result
+        assert (
+            "// CUDA driver device set memory pool: device: device, pool: pool"
+        ) in result
+        assert (
+            "// CUDA driver memory pool set attribute: pool: pool, "
+            "attribute: CU_MEMPOOL_ATTR_RELEASE_THRESHOLD, value: threshold"
+        ) in result
+        assert (
+            "// CUDA driver memory pool get attribute: pool: pool, "
+            "attribute: CU_MEMPOOL_ATTR_RELEASE_THRESHOLD, output: threshold"
+        ) in result
+        assert (
+            "// CUDA driver memory pool set access: pool: pool, "
+            "descriptors: accessDesc, count: 1"
+        ) in result
+        assert (
+            "// CUDA driver memory pool get access: flags output: flags, "
+            "pool: pool, location: location"
+        ) in result
+        assert (
+            "// CUDA driver memory allocate async: output: pointer, "
+            "bytes: bytes, stream: stream"
+        ) in result
+        assert (
+            "// CUDA driver memory free async: pointer: pointer, stream: stream"
+        ) in result
+        assert (
+            "// CUDA driver memory pool trim: pool: pool, bytes: trimBytes"
+        ) in result
+        assert "// CUDA driver memory pool destroy: pool: currentPool" in result
+        assert (
+            "if (((/* CUDA driver memory allocate async: output: pointer, "
+            "bytes: bytes, stream: stream */ CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver memory pool get access: "
+            "flags output: flags, pool: pool, location: location */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(ok ? (/* CUDA driver memory pool destroy: pool: pool */ CUDA_SUCCESS) "
+            ": status)"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuMemPoolCreate",
+            "cuDeviceGetDefaultMemPool",
+            "cuDeviceGetMemPool",
+            "cuDeviceSetMemPool",
+            "cuMemPoolSetAttribute",
+            "cuMemPoolGetAttribute",
+            "cuMemPoolSetAccess",
+            "cuMemPoolGetAccess",
+            "cuMemAllocAsync",
+            "cuMemFreeAsync",
+            "cuMemPoolTrimTo",
+            "cuMemPoolDestroy",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_memory_pool_ipc_runtime_conversion(self):
+        """Test CUDA driver memory pool IPC/share APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult sharePools(
+            CUmemoryPool pool,
+            CUdeviceptr pointer,
+            void* handle,
+            CUmemAllocationHandleType handleType,
+            unsigned long long flags
+        ) {
+            CUmemoryPool importedPool;
+            CUdeviceptr importedPointer;
+            CUmemPoolPtrExportData exportData;
+
+            CUresult status = cuMemPoolExportToShareableHandle(
+                handle,
+                pool,
+                handleType,
+                flags
+            );
+            status = cuMemPoolImportFromShareableHandle(
+                &importedPool,
+                handle,
+                handleType,
+                flags
+            );
+            status = cuMemPoolExportPointer(&exportData, pointer);
+            status = cuMemPoolImportPointer(
+                &importedPointer,
+                importedPool,
+                &exportData
+            );
+            cuMemPoolExportPointer(&exportData, importedPointer);
+
+            if (cuMemPoolImportPointer(
+                &importedPointer,
+                pool,
+                &exportData
+            ) != CUDA_SUCCESS) {
+                return CUDA_ERROR_UNKNOWN;
+            }
+
+            bool ok = checkStatus(
+                cuMemPoolExportToShareableHandle(
+                    handle,
+                    importedPool,
+                    handleType,
+                    flags
+                )
+            );
+            return ok ? cuMemPoolImportFromShareableHandle(
+                &importedPool,
+                handle,
+                handleType,
+                flags
+            ) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver memory pool export shareable handle: "
+            "handle output: handle, pool: pool, handle type: handleType, "
+            "flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver memory pool import shareable handle: "
+            "output: importedPool, handle: handle, handle type: handleType, "
+            "flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver memory pool export pointer: "
+            "share data output: exportData, pointer: pointer"
+        ) in result
+        assert (
+            "// CUDA driver memory pool import pointer: "
+            "pointer output: importedPointer, pool: importedPool, "
+            "share data: exportData"
+        ) in result
+        assert (
+            "// CUDA driver memory pool export pointer: "
+            "share data output: exportData, pointer: importedPointer"
+        ) in result
+        assert (
+            "if (((/* CUDA driver memory pool import pointer: "
+            "pointer output: importedPointer, pool: pool, "
+            "share data: exportData */ CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver memory pool export shareable handle: "
+            "handle output: handle, pool: importedPool, "
+            "handle type: handleType, flags: flags */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(ok ? (/* CUDA driver memory pool import shareable handle: "
+            "output: importedPool, handle: handle, "
+            "handle type: handleType, flags: flags */ CUDA_SUCCESS) : status)"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuMemPoolExportToShareableHandle",
+            "cuMemPoolImportFromShareableHandle",
+            "cuMemPoolExportPointer",
+            "cuMemPoolImportPointer",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_virtual_memory_runtime_conversion(self):
+        """Test CUDA driver virtual memory APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult manageVirtualMemory(
+            CUmemAllocationProp* props,
+            CUmemAccessDesc* accessDesc,
+            CUmemLocation* location,
+            void* osHandle,
+            size_t bytes,
+            size_t alignment,
+            CUmemAllocationHandleType handleType,
+            unsigned long long flags
+        ) {
+            CUdeviceptr address;
+            CUmemGenericAllocationHandle allocation;
+            CUmemGenericAllocationHandle importedAllocation;
+            unsigned long long accessFlags;
+
+            CUresult status = cuMemAddressReserve(
+                &address,
+                bytes,
+                alignment,
+                0,
+                flags
+            );
+            status = cuMemCreate(&allocation, bytes, props, flags);
+            status = cuMemMap(address, bytes, 0, allocation, flags);
+            status = cuMemSetAccess(address, bytes, accessDesc, 1);
+            status = cuMemGetAccess(&accessFlags, location, address);
+            status = cuMemExportToShareableHandle(
+                osHandle,
+                allocation,
+                handleType,
+                flags
+            );
+            status = cuMemImportFromShareableHandle(
+                &importedAllocation,
+                osHandle,
+                handleType
+            );
+            status = cuMemRetainAllocationHandle(&allocation, osHandle);
+            cuMemUnmap(address, bytes);
+            cuMemRelease(importedAllocation);
+
+            if (cuMemMap(address, bytes, 0, allocation, flags) != CUDA_SUCCESS) {
+                return CUDA_ERROR_UNKNOWN;
+            }
+
+            bool ok = checkStatus(cuMemGetAccess(&accessFlags, location, address));
+            status = cuMemAddressFree(address, bytes);
+            return ok ? cuMemRelease(allocation) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver virtual memory reserve: output: address, "
+            "bytes: bytes, alignment: alignment, address: 0, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver virtual memory create allocation: "
+            "output: allocation, bytes: bytes, props: props, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver virtual memory map: address: address, "
+            "bytes: bytes, offset: 0, allocation: allocation, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver virtual memory set access: address: address, "
+            "bytes: bytes, descriptors: accessDesc, count: 1"
+        ) in result
+        assert (
+            "// CUDA driver virtual memory get access: flags output: accessFlags, "
+            "location: location, address: address"
+        ) in result
+        assert (
+            "// CUDA driver virtual memory export shareable handle: "
+            "handle output: osHandle, allocation: allocation, "
+            "handle type: handleType, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver virtual memory import shareable handle: "
+            "output: importedAllocation, handle: osHandle, handle type: handleType"
+        ) in result
+        assert (
+            "// CUDA driver virtual memory retain allocation handle: "
+            "output: allocation, address: osHandle"
+        ) in result
+        assert (
+            "// CUDA driver virtual memory unmap: address: address, bytes: bytes"
+        ) in result
+        assert (
+            "// CUDA driver virtual memory release allocation: allocation: "
+            "importedAllocation"
+        ) in result
+        assert (
+            "if (((/* CUDA driver virtual memory map: address: address, "
+            "bytes: bytes, offset: 0, allocation: allocation, flags: flags */ "
+            "CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver virtual memory get access: "
+            "flags output: accessFlags, location: location, address: address */ "
+            "CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(ok ? (/* CUDA driver virtual memory release allocation: "
+            "allocation: allocation */ CUDA_SUCCESS) : status)"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuMemAddressReserve",
+            "cuMemAddressFree",
+            "cuMemCreate",
+            "cuMemRelease",
+            "cuMemMap",
+            "cuMemUnmap",
+            "cuMemSetAccess",
+            "cuMemGetAccess",
+            "cuMemRetainAllocationHandle",
+            "cuMemExportToShareableHandle",
+            "cuMemImportFromShareableHandle",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_external_memory_semaphore_runtime_conversion(self):
+        """Test CUDA driver external memory/semaphore APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult syncExternalHandles(
+            CUDA_EXTERNAL_MEMORY_HANDLE_DESC* memoryHandleDesc,
+            CUDA_EXTERNAL_MEMORY_BUFFER_DESC* bufferDesc,
+            CUDA_EXTERNAL_MEMORY_MIPMAPPED_ARRAY_DESC* mipDesc,
+            CUDA_EXTERNAL_SEMAPHORE_HANDLE_DESC* semaphoreHandleDesc,
+            CUDA_EXTERNAL_SEMAPHORE_SIGNAL_PARAMS* signalParams,
+            CUDA_EXTERNAL_SEMAPHORE_WAIT_PARAMS* waitParams,
+            CUstream stream
+        ) {
+            CUexternalMemory memory;
+            CUexternalSemaphore semaphore;
+            CUmipmappedArray mipmapped;
+            void* ptr;
+
+            CUresult status = cuImportExternalMemory(&memory, memoryHandleDesc);
+            status = cuExternalMemoryGetMappedBuffer(&ptr, memory, bufferDesc);
+            status = cuExternalMemoryGetMappedMipmappedArray(
+                &mipmapped,
+                memory,
+                mipDesc
+            );
+            status = cuImportExternalSemaphore(
+                &semaphore,
+                semaphoreHandleDesc
+            );
+            status = cuSignalExternalSemaphoresAsync(
+                &semaphore,
+                signalParams,
+                1,
+                stream
+            );
+            cuWaitExternalSemaphoresAsync(&semaphore, waitParams, 1, stream);
+
+            if (
+                cuSignalExternalSemaphoresAsync(
+                    &semaphore,
+                    signalParams,
+                    1,
+                    stream
+                ) != CUDA_SUCCESS
+            ) {
+                return CUDA_ERROR_UNKNOWN;
+            }
+
+            bool ok = checkStatus(
+                cuWaitExternalSemaphoresAsync(&semaphore, waitParams, 1, stream)
+            );
+            cuDestroyExternalSemaphore(semaphore);
+            status = cuDestroyExternalMemory(memory);
+            return ok ? cuDestroyExternalSemaphore(semaphore) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver external memory import: output: memory, "
+            "handle: memoryHandleDesc"
+        ) in result
+        assert (
+            "// CUDA driver external memory mapped buffer: memory, "
+            "desc: bufferDesc, output: ptr"
+        ) in result
+        assert (
+            "// CUDA driver external memory mapped mipmapped array: memory, "
+            "desc: mipDesc, output: mipmapped"
+        ) in result
+        assert (
+            "// CUDA driver external semaphore import: output: semaphore, "
+            "handle: semaphoreHandleDesc"
+        ) in result
+        assert (
+            "// CUDA driver external semaphore signal: semaphores: (&semaphore), "
+            "params: signalParams, count: 1, stream: stream"
+        ) in result
+        assert (
+            "// CUDA driver external semaphore wait: semaphores: (&semaphore), "
+            "params: waitParams, count: 1, stream: stream"
+        ) in result
+        assert "// CUDA driver external memory destroy: memory" in result
+        assert "// CUDA driver external semaphore destroy: semaphore" in result
+        assert (
+            "if (((/* CUDA driver external semaphore signal: "
+            "semaphores: (&semaphore), params: signalParams, count: 1, "
+            "stream: stream */ CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver external semaphore wait: "
+            "semaphores: (&semaphore), params: waitParams, count: 1, "
+            "stream: stream */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(ok ? (/* CUDA driver external semaphore destroy: semaphore */ "
+            "CUDA_SUCCESS) : status)"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuImportExternalMemory",
+            "cuExternalMemoryGetMappedBuffer",
+            "cuExternalMemoryGetMappedMipmappedArray",
+            "cuDestroyExternalMemory",
+            "cuImportExternalSemaphore",
+            "cuSignalExternalSemaphoresAsync",
+            "cuWaitExternalSemaphoresAsync",
+            "cuDestroyExternalSemaphore",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_array_mipmapped_array_runtime_conversion(self):
+        """Test CUDA driver array and mipmapped-array APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult manageArrays(
+            CUDA_ARRAY_DESCRIPTOR* desc,
+            CUDA_ARRAY3D_DESCRIPTOR* desc3d,
+            CUDA_ARRAY_MEMORY_REQUIREMENTS* memoryRequirements,
+            CUDA_ARRAY_SPARSE_PROPERTIES* sparseProperties,
+            unsigned int levels,
+            unsigned int levelIndex,
+            unsigned int planeIndex,
+            CUdevice device
+        ) {
+            CUarray array;
+            CUarray array3d;
+            CUarray levelArray;
+            CUarray planeArray;
+            CUmipmappedArray mipmapped;
+            CUDA_ARRAY_DESCRIPTOR outputDesc;
+            CUDA_ARRAY3D_DESCRIPTOR outputDesc3d;
+
+            CUresult status = cuArrayCreate(&array, desc);
+            status = cuArrayCreate_v2(&array, desc);
+            status = cuArray3DCreate(&array3d, desc3d);
+            status = cuArray3DCreate_v2(&array3d, desc3d);
+            status = cuMipmappedArrayCreate(&mipmapped, desc3d, levels);
+            status = cuMipmappedArrayGetLevel(
+                &levelArray,
+                mipmapped,
+                levelIndex
+            );
+            status = cuArrayGetDescriptor(&outputDesc, array);
+            status = cuArrayGetDescriptor_v2(&outputDesc, array);
+            status = cuArray3DGetDescriptor(&outputDesc3d, array3d);
+            status = cuArray3DGetDescriptor_v2(&outputDesc3d, array3d);
+            status = cuArrayGetMemoryRequirements(
+                memoryRequirements,
+                array,
+                device
+            );
+            status = cuMipmappedArrayGetMemoryRequirements(
+                memoryRequirements,
+                mipmapped,
+                device
+            );
+            status = cuArrayGetPlane(&planeArray, array, planeIndex);
+            status = cuArrayGetSparseProperties(sparseProperties, array);
+            status = cuMipmappedArrayGetSparseProperties(
+                sparseProperties,
+                mipmapped
+            );
+            cuArrayDestroy(planeArray);
+
+            if (cuArrayDestroy(array) != CUDA_SUCCESS) {
+                return CUDA_ERROR_UNKNOWN;
+            }
+
+            bool ok = checkStatus(cuMipmappedArrayDestroy(mipmapped));
+            return ok ? cuArrayDestroy(array3d) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// CUDA driver array create: output: array, desc: desc" in result
+        assert (
+            "// CUDA driver array 3D create: output: array3d, desc: desc3d"
+        ) in result
+        assert (
+            "// CUDA driver mipmapped array create: output: mipmapped, "
+            "desc: desc3d, levels: levels"
+        ) in result
+        assert (
+            "// CUDA driver mipmapped array get level: output: levelArray, "
+            "mipmapped array: mipmapped, level: levelIndex"
+        ) in result
+        assert (
+            "// CUDA driver array get descriptor: output: outputDesc, array: array"
+        ) in result
+        assert (
+            "// CUDA driver array 3D get descriptor: output: outputDesc3d, "
+            "array: array3d"
+        ) in result
+        assert (
+            "// CUDA driver array get memory requirements: "
+            "output: memoryRequirements, array: array, device: device"
+        ) in result
+        assert (
+            "// CUDA driver mipmapped array get memory requirements: "
+            "output: memoryRequirements, mipmapped array: mipmapped, device: device"
+        ) in result
+        assert (
+            "// CUDA driver array get plane: output: planeArray, array: array, "
+            "plane: planeIndex"
+        ) in result
+        assert (
+            "// CUDA driver array get sparse properties: "
+            "output: sparseProperties, array: array"
+        ) in result
+        assert (
+            "// CUDA driver mipmapped array get sparse properties: "
+            "output: sparseProperties, mipmapped array: mipmapped"
+        ) in result
+        assert "// CUDA driver array destroy: array: planeArray" in result
+        assert (
+            "if (((/* CUDA driver array destroy: array: array */ CUDA_SUCCESS) "
+            "!= CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver mipmapped array destroy: "
+            "mipmapped array: mipmapped */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(ok ? (/* CUDA driver array destroy: array: array3d */ "
+            "CUDA_SUCCESS) : status)"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuArrayCreate",
+            "cuArrayCreate_v2",
+            "cuArray3DCreate",
+            "cuArray3DCreate_v2",
+            "cuArrayDestroy",
+            "cuMipmappedArrayCreate",
+            "cuMipmappedArrayGetLevel",
+            "cuMipmappedArrayDestroy",
+            "cuArrayGetDescriptor",
+            "cuArrayGetDescriptor_v2",
+            "cuArray3DGetDescriptor",
+            "cuArray3DGetDescriptor_v2",
+            "cuArrayGetMemoryRequirements",
+            "cuMipmappedArrayGetMemoryRequirements",
+            "cuArrayGetPlane",
+            "cuArrayGetSparseProperties",
+            "cuMipmappedArrayGetSparseProperties",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_texture_surface_object_runtime_conversion(self):
+        """Test CUDA driver texture/surface object APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult manageTextureSurfaceObjects(
+            CUDA_RESOURCE_DESC* resourceDesc,
+            CUDA_TEXTURE_DESC* textureDesc,
+            CUDA_RESOURCE_VIEW_DESC* viewDesc,
+            CUtexObject textureObject,
+            CUsurfObject surfaceObject
+        ) {
+            CUtexObject createdTexture;
+            CUsurfObject createdSurface;
+            CUDA_RESOURCE_DESC outputResourceDesc;
+            CUDA_TEXTURE_DESC outputTextureDesc;
+            CUDA_RESOURCE_VIEW_DESC outputViewDesc;
+
+            CUresult status = cuTexObjectCreate(
+                &createdTexture,
+                resourceDesc,
+                textureDesc,
+                viewDesc
+            );
+            status = cuTexObjectGetResourceDesc(
+                &outputResourceDesc,
+                createdTexture
+            );
+            status = cuTexObjectGetTextureDesc(
+                &outputTextureDesc,
+                createdTexture
+            );
+            status = cuTexObjectGetResourceViewDesc(
+                &outputViewDesc,
+                createdTexture
+            );
+            status = cuSurfObjectCreate(&createdSurface, resourceDesc);
+            status = cuSurfObjectGetResourceDesc(
+                &outputResourceDesc,
+                createdSurface
+            );
+            cuTexObjectDestroy(textureObject);
+
+            if (cuTexObjectDestroy(createdTexture) != CUDA_SUCCESS) {
+                return CUDA_ERROR_UNKNOWN;
+            }
+
+            bool ok = checkStatus(cuSurfObjectDestroy(createdSurface));
+            return ok ? cuSurfObjectDestroy(surfaceObject) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver texture object create: output: createdTexture, "
+            "resource desc: resourceDesc, texture desc: textureDesc, "
+            "resource view desc: viewDesc"
+        ) in result
+        assert (
+            "// CUDA driver texture object get resource desc: "
+            "output: outputResourceDesc, texture object: createdTexture"
+        ) in result
+        assert (
+            "// CUDA driver texture object get texture desc: "
+            "output: outputTextureDesc, texture object: createdTexture"
+        ) in result
+        assert (
+            "// CUDA driver texture object get resource view desc: "
+            "output: outputViewDesc, texture object: createdTexture"
+        ) in result
+        assert (
+            "// CUDA driver surface object create: output: createdSurface, "
+            "resource desc: resourceDesc"
+        ) in result
+        assert (
+            "// CUDA driver surface object get resource desc: "
+            "output: outputResourceDesc, surface object: createdSurface"
+        ) in result
+        assert (
+            "// CUDA driver texture object destroy: texture object: textureObject"
+        ) in result
+        assert (
+            "if (((/* CUDA driver texture object destroy: "
+            "texture object: createdTexture */ CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver surface object destroy: "
+            "surface object: createdSurface */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(ok ? (/* CUDA driver surface object destroy: "
+            "surface object: surfaceObject */ CUDA_SUCCESS) : status)"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuTexObjectCreate",
+            "cuTexObjectDestroy",
+            "cuTexObjectGetResourceDesc",
+            "cuTexObjectGetTextureDesc",
+            "cuTexObjectGetResourceViewDesc",
+            "cuSurfObjectCreate",
+            "cuSurfObjectDestroy",
+            "cuSurfObjectGetResourceDesc",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_texture_reference_runtime_conversion(self):
+        """Test CUDA driver legacy texture-reference APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult manageTextureReference(
+            CUtexref textureRef,
+            CUarray array,
+            CUmipmappedArray mipmapped,
+            CUdeviceptr pointer,
+            CUDA_ARRAY_DESCRIPTOR* desc,
+            float* borderColor,
+            size_t bytes,
+            size_t pitch,
+            unsigned int flags,
+            int dimension,
+            CUarray_format format,
+            int components,
+            CUaddress_mode addressMode,
+            CUfilter_mode filterMode,
+            float bias,
+            float minLevel,
+            float maxLevel,
+            unsigned int anisotropy
+        ) {
+            size_t byteOffset;
+            CUdeviceptr outputPointer;
+            CUarray outputArray;
+            CUmipmappedArray outputMipmapped;
+            CUaddress_mode outputAddressMode;
+            CUfilter_mode outputFilterMode;
+            CUarray_format outputFormat;
+            int outputChannels;
+            float outputBias;
+            float outputMinLevel;
+            float outputMaxLevel;
+            int outputAnisotropy;
+            unsigned int outputFlags;
+
+            CUresult status = cuTexRefSetArray(textureRef, array, flags);
+            status = cuTexRefSetMipmappedArray(textureRef, mipmapped, flags);
+            status = cuTexRefSetAddress(
+                &byteOffset,
+                textureRef,
+                pointer,
+                bytes
+            );
+            status = cuTexRefSetAddress_v2(
+                &byteOffset,
+                textureRef,
+                pointer,
+                bytes
+            );
+            status = cuTexRefSetAddress2D(textureRef, desc, pointer, pitch);
+            status = cuTexRefSetAddress2D_v2(textureRef, desc, pointer, pitch);
+            status = cuTexRefSetFormat(textureRef, format, components);
+            status = cuTexRefSetAddressMode(textureRef, dimension, addressMode);
+            status = cuTexRefSetFilterMode(textureRef, filterMode);
+            status = cuTexRefSetMipmapFilterMode(textureRef, filterMode);
+            status = cuTexRefSetMipmapLevelBias(textureRef, bias);
+            status = cuTexRefSetMipmapLevelClamp(
+                textureRef,
+                minLevel,
+                maxLevel
+            );
+            status = cuTexRefSetMaxAnisotropy(textureRef, anisotropy);
+            status = cuTexRefSetBorderColor(textureRef, borderColor);
+            status = cuTexRefSetFlags(textureRef, flags);
+            status = cuTexRefGetAddress(&outputPointer, textureRef);
+            status = cuTexRefGetAddress_v2(&outputPointer, textureRef);
+            status = cuTexRefGetArray(&outputArray, textureRef);
+            status = cuTexRefGetMipmappedArray(&outputMipmapped, textureRef);
+            status = cuTexRefGetAddressMode(
+                &outputAddressMode,
+                textureRef,
+                dimension
+            );
+            status = cuTexRefGetFilterMode(&outputFilterMode, textureRef);
+            status = cuTexRefGetFormat(
+                &outputFormat,
+                &outputChannels,
+                textureRef
+            );
+            status = cuTexRefGetMipmapFilterMode(
+                &outputFilterMode,
+                textureRef
+            );
+            status = cuTexRefGetMipmapLevelBias(&outputBias, textureRef);
+            status = cuTexRefGetMipmapLevelClamp(
+                &outputMinLevel,
+                &outputMaxLevel,
+                textureRef
+            );
+            status = cuTexRefGetMaxAnisotropy(&outputAnisotropy, textureRef);
+            status = cuTexRefGetBorderColor(borderColor, textureRef);
+            cuTexRefGetFlags(&outputFlags, textureRef);
+
+            if (cuTexRefSetFlags(textureRef, flags) != CUDA_SUCCESS) {
+                return CUDA_ERROR_UNKNOWN;
+            }
+
+            bool ok = checkStatus(cuTexRefGetFlags(&outputFlags, textureRef));
+            return ok ? cuTexRefSetArray(textureRef, array, flags) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver texture reference set array: "
+            "texture ref: textureRef, array: array, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver texture reference set mipmapped array: "
+            "texture ref: textureRef, mipmapped array: mipmapped, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver texture reference set address: "
+            "byte offset output: byteOffset, texture ref: textureRef, "
+            "pointer: pointer, bytes: bytes"
+        ) in result
+        assert (
+            "// CUDA driver texture reference set address 2D: "
+            "texture ref: textureRef, desc: desc, pointer: pointer, pitch: pitch"
+        ) in result
+        assert (
+            "// CUDA driver texture reference set format: "
+            "texture ref: textureRef, format: format, components: components"
+        ) in result
+        assert (
+            "// CUDA driver texture reference set address mode: "
+            "texture ref: textureRef, dimension: dimension, mode: addressMode"
+        ) in result
+        assert (
+            "// CUDA driver texture reference set filter mode: "
+            "texture ref: textureRef, mode: filterMode"
+        ) in result
+        assert (
+            "// CUDA driver texture reference set mipmap filter mode: "
+            "texture ref: textureRef, mode: filterMode"
+        ) in result
+        assert (
+            "// CUDA driver texture reference set mipmap level bias: "
+            "texture ref: textureRef, bias: bias"
+        ) in result
+        assert (
+            "// CUDA driver texture reference set mipmap level clamp: "
+            "texture ref: textureRef, min level: minLevel, max level: maxLevel"
+        ) in result
+        assert (
+            "// CUDA driver texture reference set max anisotropy: "
+            "texture ref: textureRef, anisotropy: anisotropy"
+        ) in result
+        assert (
+            "// CUDA driver texture reference set border color: "
+            "texture ref: textureRef, color: borderColor"
+        ) in result
+        assert (
+            "// CUDA driver texture reference set flags: "
+            "texture ref: textureRef, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver texture reference get address: "
+            "output: outputPointer, texture ref: textureRef"
+        ) in result
+        assert (
+            "// CUDA driver texture reference get array: "
+            "output: outputArray, texture ref: textureRef"
+        ) in result
+        assert (
+            "// CUDA driver texture reference get mipmapped array: "
+            "output: outputMipmapped, texture ref: textureRef"
+        ) in result
+        assert (
+            "// CUDA driver texture reference get address mode: "
+            "output: outputAddressMode, texture ref: textureRef, "
+            "dimension: dimension"
+        ) in result
+        assert (
+            "// CUDA driver texture reference get filter mode: "
+            "output: outputFilterMode, texture ref: textureRef"
+        ) in result
+        assert (
+            "// CUDA driver texture reference get format: "
+            "format output: outputFormat, channel output: outputChannels, "
+            "texture ref: textureRef"
+        ) in result
+        assert (
+            "// CUDA driver texture reference get mipmap filter mode: "
+            "output: outputFilterMode, texture ref: textureRef"
+        ) in result
+        assert (
+            "// CUDA driver texture reference get mipmap level bias: "
+            "output: outputBias, texture ref: textureRef"
+        ) in result
+        assert (
+            "// CUDA driver texture reference get mipmap level clamp: "
+            "min output: outputMinLevel, max output: outputMaxLevel, "
+            "texture ref: textureRef"
+        ) in result
+        assert (
+            "// CUDA driver texture reference get max anisotropy: "
+            "output: outputAnisotropy, texture ref: textureRef"
+        ) in result
+        assert (
+            "// CUDA driver texture reference get border color: "
+            "output: borderColor, texture ref: textureRef"
+        ) in result
+        assert (
+            "// CUDA driver texture reference get flags: "
+            "output: outputFlags, texture ref: textureRef"
+        ) in result
+        assert (
+            "if (((/* CUDA driver texture reference set flags: "
+            "texture ref: textureRef, flags: flags */ CUDA_SUCCESS) "
+            "!= CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver texture reference get flags: "
+            "output: outputFlags, texture ref: textureRef */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(ok ? (/* CUDA driver texture reference set array: "
+            "texture ref: textureRef, array: array, flags: flags */ "
+            "CUDA_SUCCESS) : status)"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuTexRefSetArray",
+            "cuTexRefSetMipmappedArray",
+            "cuTexRefSetAddress",
+            "cuTexRefSetAddress_v2",
+            "cuTexRefSetAddress2D",
+            "cuTexRefSetAddress2D_v2",
+            "cuTexRefSetFormat",
+            "cuTexRefSetAddressMode",
+            "cuTexRefSetFilterMode",
+            "cuTexRefSetMipmapFilterMode",
+            "cuTexRefSetMipmapLevelBias",
+            "cuTexRefSetMipmapLevelClamp",
+            "cuTexRefSetMaxAnisotropy",
+            "cuTexRefSetBorderColor",
+            "cuTexRefSetFlags",
+            "cuTexRefGetAddress",
+            "cuTexRefGetAddress_v2",
+            "cuTexRefGetArray",
+            "cuTexRefGetMipmappedArray",
+            "cuTexRefGetAddressMode",
+            "cuTexRefGetFilterMode",
+            "cuTexRefGetFormat",
+            "cuTexRefGetMipmapFilterMode",
+            "cuTexRefGetMipmapLevelBias",
+            "cuTexRefGetMipmapLevelClamp",
+            "cuTexRefGetMaxAnisotropy",
+            "cuTexRefGetBorderColor",
+            "cuTexRefGetFlags",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_module_surface_reference_runtime_conversion(self):
+        """Test CUDA driver module texture/surface reference APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult manageModuleReferences(
+            CUmodule module,
+            const char* textureName,
+            const char* surfaceName,
+            CUarray array,
+            unsigned int flags
+        ) {
+            CUtexref textureRef;
+            CUsurfref surfaceRef;
+            CUarray outputArray;
+
+            CUresult status = cuModuleGetTexRef(
+                &textureRef,
+                module,
+                textureName
+            );
+            status = cuModuleGetSurfRef(&surfaceRef, module, surfaceName);
+            status = cuSurfRefSetArray(surfaceRef, array, flags);
+            status = cuSurfRefGetArray(&outputArray, surfaceRef);
+            cuSurfRefSetArray(surfaceRef, array, flags);
+
+            if (cuSurfRefGetArray(&outputArray, surfaceRef) != CUDA_SUCCESS) {
+                return CUDA_ERROR_UNKNOWN;
+            }
+
+            bool ok = checkStatus(cuSurfRefSetArray(surfaceRef, array, flags));
+            return ok ? cuModuleGetTexRef(&textureRef, module, textureName)
+                      : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver module get texture reference: "
+            "output: textureRef, module: module, name: textureName"
+        ) in result
+        assert (
+            "// CUDA driver module get surface reference: "
+            "output: surfaceRef, module: module, name: surfaceName"
+        ) in result
+        assert (
+            "// CUDA driver surface reference set array: "
+            "surface ref: surfaceRef, array: array, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver surface reference get array: "
+            "output: outputArray, surface ref: surfaceRef"
+        ) in result
+        assert (
+            "if (((/* CUDA driver surface reference get array: "
+            "output: outputArray, surface ref: surfaceRef */ CUDA_SUCCESS) "
+            "!= CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver surface reference set array: "
+            "surface ref: surfaceRef, array: array, flags: flags */ "
+            "CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(ok ? (/* CUDA driver module get texture reference: "
+            "output: textureRef, module: module, name: textureName */ "
+            "CUDA_SUCCESS) : status)"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuModuleGetTexRef",
+            "cuModuleGetSurfRef",
+            "cuSurfRefSetArray",
+            "cuSurfRefGetArray",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_graphics_resource_runtime_conversion(self):
+        """Test CUDA driver graphics resource APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult manageGraphicsResources(
+            unsigned int glBuffer,
+            unsigned int glImage,
+            unsigned int glTarget,
+            void* d3dResource,
+            CUgraphicsResource* resources,
+            unsigned int flags,
+            CUstream stream
+        ) {
+            CUgraphicsResource bufferResource;
+            CUgraphicsResource imageResource;
+            CUgraphicsResource d3dInteropResource;
+            CUgraphicsResource d3d10InteropResource;
+            CUgraphicsResource d3d9InteropResource;
+            CUdeviceptr mappedPointer;
+            size_t mappedBytes;
+            CUarray mappedArray;
+            CUmipmappedArray mappedMipmappedArray;
+
+            CUresult status = cuGraphicsGLRegisterBuffer(
+                &bufferResource,
+                glBuffer,
+                flags
+            );
+            status = cuGraphicsGLRegisterImage(
+                &imageResource,
+                glImage,
+                glTarget,
+                flags
+            );
+            status = cuGraphicsD3D11RegisterResource(
+                &d3dInteropResource,
+                d3dResource,
+                flags
+            );
+            status = cuGraphicsD3D10RegisterResource(
+                &d3d10InteropResource,
+                d3dResource,
+                flags
+            );
+            status = cuGraphicsD3D9RegisterResource(
+                &d3d9InteropResource,
+                d3dResource,
+                flags
+            );
+            status = cuGraphicsResourceSetMapFlags(bufferResource, flags);
+            status = cuGraphicsResourceSetMapFlags_v2(imageResource, flags);
+            status = cuGraphicsMapResources(2, resources, stream);
+            status = cuGraphicsResourceGetMappedPointer(
+                &mappedPointer,
+                &mappedBytes,
+                bufferResource
+            );
+            status = cuGraphicsResourceGetMappedPointer_v2(
+                &mappedPointer,
+                &mappedBytes,
+                imageResource
+            );
+            status = cuGraphicsSubResourceGetMappedArray(
+                &mappedArray,
+                imageResource,
+                0,
+                1
+            );
+            status = cuGraphicsResourceGetMappedMipmappedArray(
+                &mappedMipmappedArray,
+                imageResource
+            );
+            status = cuGraphicsUnmapResources(2, resources, stream);
+            status = cuGraphicsUnregisterResource(bufferResource);
+            cuGraphicsUnregisterResource(imageResource);
+
+            if (cuGraphicsMapResources(2, resources, stream) != CUDA_SUCCESS) {
+                return CUDA_ERROR_UNKNOWN;
+            }
+
+            bool ok = checkStatus(
+                cuGraphicsResourceSetMapFlags(bufferResource, flags)
+            );
+            return ok ? cuGraphicsUnmapResources(2, resources, stream)
+                      : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver graphics GL register buffer: "
+            "output: bufferResource, buffer: glBuffer, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver graphics GL register image: "
+            "output: imageResource, image: glImage, target: glTarget, "
+            "flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver graphics D3D11 register resource: "
+            "output: d3dInteropResource, resource: d3dResource, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver graphics D3D10 register resource: "
+            "output: d3d10InteropResource, resource: d3dResource, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver graphics D3D9 register resource: "
+            "output: d3d9InteropResource, resource: d3dResource, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver graphics resource set map flags: "
+            "resource: bufferResource, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver graphics resource set map flags: "
+            "resource: imageResource, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver graphics map resources: "
+            "count: 2, resources: resources, stream: stream"
+        ) in result
+        assert (
+            "// CUDA driver graphics mapped pointer: "
+            "pointer output: mappedPointer, size output: mappedBytes, "
+            "resource: bufferResource"
+        ) in result
+        assert (
+            "// CUDA driver graphics mapped pointer: "
+            "pointer output: mappedPointer, size output: mappedBytes, "
+            "resource: imageResource"
+        ) in result
+        assert (
+            "// CUDA driver graphics subresource mapped array: "
+            "output: mappedArray, resource: imageResource, array index: 0, "
+            "mip level: 1"
+        ) in result
+        assert (
+            "// CUDA driver graphics mapped mipmapped array: "
+            "output: mappedMipmappedArray, resource: imageResource"
+        ) in result
+        assert (
+            "// CUDA driver graphics unmap resources: "
+            "count: 2, resources: resources, stream: stream"
+        ) in result
+        assert (
+            "// CUDA driver graphics unregister resource: " "resource: bufferResource"
+        ) in result
+        assert (
+            "if (((/* CUDA driver graphics map resources: "
+            "count: 2, resources: resources, stream: stream */ "
+            "CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver graphics resource set map flags: "
+            "resource: bufferResource, flags: flags */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(ok ? (/* CUDA driver graphics unmap resources: "
+            "count: 2, resources: resources, stream: stream */ CUDA_SUCCESS) "
+            ": status)"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuGraphicsGLRegisterBuffer",
+            "cuGraphicsGLRegisterImage",
+            "cuGraphicsD3D11RegisterResource",
+            "cuGraphicsD3D10RegisterResource",
+            "cuGraphicsD3D9RegisterResource",
+            "cuGraphicsResourceSetMapFlags",
+            "cuGraphicsResourceSetMapFlags_v2",
+            "cuGraphicsMapResources",
+            "cuGraphicsResourceGetMappedPointer",
+            "cuGraphicsResourceGetMappedPointer_v2",
+            "cuGraphicsSubResourceGetMappedArray",
+            "cuGraphicsResourceGetMappedMipmappedArray",
+            "cuGraphicsUnmapResources",
+            "cuGraphicsUnregisterResource",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_legacy_opengl_interop_runtime_conversion(self):
+        """Test legacy CUDA driver OpenGL interop APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult manageLegacyOpenGLInterop(
+            CUdevice device,
+            CUdevice* devices,
+            unsigned int maxDevices,
+            unsigned int deviceList,
+            unsigned int bufferObject,
+            unsigned int flags,
+            CUstream stream
+        ) {
+            CUcontext context;
+            unsigned int deviceCount;
+            CUdeviceptr mappedPointer;
+            size_t mappedBytes;
+
+            CUresult status = cuGLInit();
+            status = cuGLCtxCreate(&context, flags, device);
+            status = cuGLCtxCreate_v2(&context, flags, device);
+            status = cuGLGetDevices(
+                &deviceCount,
+                devices,
+                maxDevices,
+                deviceList
+            );
+            status = cuGLRegisterBufferObject(bufferObject);
+            status = cuGLSetBufferObjectMapFlags(bufferObject, flags);
+            status = cuGLMapBufferObject(
+                &mappedPointer,
+                &mappedBytes,
+                bufferObject
+            );
+            status = cuGLMapBufferObject_v2(
+                &mappedPointer,
+                &mappedBytes,
+                bufferObject
+            );
+            status = cuGLMapBufferObjectAsync(
+                &mappedPointer,
+                &mappedBytes,
+                bufferObject,
+                stream
+            );
+            status = cuGLMapBufferObjectAsync_v2(
+                &mappedPointer,
+                &mappedBytes,
+                bufferObject,
+                stream
+            );
+            status = cuGLUnmapBufferObject(bufferObject);
+            status = cuGLUnmapBufferObjectAsync(bufferObject, stream);
+            status = cuGLUnregisterBufferObject(bufferObject);
+            cuGLUnregisterBufferObject(bufferObject);
+
+            if (cuGLMapBufferObject(&mappedPointer, &mappedBytes, bufferObject)
+                != CUDA_SUCCESS) {
+                return CUDA_ERROR_UNKNOWN;
+            }
+
+            bool ok = checkStatus(cuGLSetBufferObjectMapFlags(
+                bufferObject,
+                flags
+            ));
+            return ok ? cuGLUnmapBufferObjectAsync(bufferObject, stream)
+                      : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// CUDA driver OpenGL initialize" in result
+        assert (
+            "// CUDA driver OpenGL context create: "
+            "output: context, flags: flags, device: device"
+        ) in result
+        assert (
+            "// CUDA driver OpenGL get devices: count output: deviceCount, "
+            "devices: devices, max devices: maxDevices, device list: deviceList"
+        ) in result
+        assert (
+            "// CUDA driver OpenGL register buffer object: "
+            "buffer object: bufferObject"
+        ) in result
+        assert (
+            "// CUDA driver OpenGL set buffer object map flags: "
+            "buffer object: bufferObject, flags: flags"
+        ) in result
+        assert (
+            "// CUDA driver OpenGL map buffer object: "
+            "pointer output: mappedPointer, size output: mappedBytes, "
+            "buffer object: bufferObject"
+        ) in result
+        assert (
+            "// CUDA driver OpenGL map buffer object async: "
+            "pointer output: mappedPointer, size output: mappedBytes, "
+            "buffer object: bufferObject, stream: stream"
+        ) in result
+        assert (
+            "// CUDA driver OpenGL unmap buffer object: " "buffer object: bufferObject"
+        ) in result
+        assert (
+            "// CUDA driver OpenGL unmap buffer object async: "
+            "buffer object: bufferObject, stream: stream"
+        ) in result
+        assert (
+            "// CUDA driver OpenGL unregister buffer object: "
+            "buffer object: bufferObject"
+        ) in result
+        assert (
+            "if (((/* CUDA driver OpenGL map buffer object: "
+            "pointer output: mappedPointer, size output: mappedBytes, "
+            "buffer object: bufferObject */ CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver OpenGL set buffer object map flags: "
+            "buffer object: bufferObject, flags: flags */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(ok ? (/* CUDA driver OpenGL unmap buffer object async: "
+            "buffer object: bufferObject, stream: stream */ CUDA_SUCCESS) "
+            ": status)"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuGLInit",
+            "cuGLCtxCreate",
+            "cuGLCtxCreate_v2",
+            "cuGLGetDevices",
+            "cuGLRegisterBufferObject",
+            "cuGLSetBufferObjectMapFlags",
+            "cuGLMapBufferObject",
+            "cuGLMapBufferObject_v2",
+            "cuGLMapBufferObjectAsync",
+            "cuGLMapBufferObjectAsync_v2",
+            "cuGLUnmapBufferObject",
+            "cuGLUnmapBufferObjectAsync",
+            "cuGLUnregisterBufferObject",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_module_launch_runtime_conversion(self):
+        """Test CUDA driver module/function launch APIs emit metadata."""
+        code = """
+        CUresult driverLaunch(
+            const char* path,
+            void* image,
+            CUstream stream,
+            void** kernelParams,
+            void** extra,
+            unsigned int optionCount,
+            CUjit_option* options,
+            void** optionValues,
+            unsigned int gridX,
+            unsigned int gridY,
+            unsigned int gridZ,
+            unsigned int blockX,
+            unsigned int blockY,
+            unsigned int blockZ,
+            unsigned int sharedBytes,
+            int blockSize
+        ) {
+            CUmodule module;
+            CUfunction function;
+            CUdeviceptr global;
+            size_t globalBytes;
+            int activeBlocks;
+            int minGrid;
+            int suggestedBlock;
+            CUDA_LAUNCH_PARAMS launchParams;
+
+            CUresult status = cuModuleLoad(&module, path);
+            status = cuModuleLoadData(&module, image);
+            status = cuModuleLoadDataEx(
+                &module,
+                image,
+                optionCount,
+                options,
+                optionValues
+            );
+            status = cuModuleGetFunction(&function, module, "kernel");
+            status = cuModuleGetGlobal(&global, &globalBytes, module, "symbol");
+            status = cuLaunchKernel(
+                function,
+                gridX,
+                gridY,
+                gridZ,
+                blockX,
+                blockY,
+                blockZ,
+                sharedBytes,
+                stream,
+                kernelParams,
+                extra
+            );
+            status = cuLaunchCooperativeKernel(
+                function,
+                gridX,
+                gridY,
+                gridZ,
+                blockX,
+                blockY,
+                blockZ,
+                sharedBytes,
+                stream,
+                kernelParams
+            );
+            status = cuLaunchCooperativeKernelMultiDevice(&launchParams, 1, 0);
+            status = cuOccupancyMaxActiveBlocksPerMultiprocessor(
+                &activeBlocks,
+                function,
+                blockSize,
+                sharedBytes
+            );
+            status = cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
+                &activeBlocks,
+                function,
+                blockSize,
+                sharedBytes,
+                CU_OCCUPANCY_DEFAULT
+            );
+            status = cuOccupancyMaxPotentialBlockSize(
+                &minGrid,
+                &suggestedBlock,
+                function,
+                0,
+                sharedBytes,
+                blockSize
+            );
+            status = cuOccupancyMaxPotentialBlockSizeWithFlags(
+                &minGrid,
+                &suggestedBlock,
+                function,
+                0,
+                sharedBytes,
+                blockSize,
+                CU_OCCUPANCY_DEFAULT
+            );
+            cuModuleUnload(module);
+
+            return cuModuleUnload(module);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// CUDA driver module load: output: module, path: path" in result
+        assert "// CUDA driver module load data: output: module, image: image" in result
+        assert (
+            "// CUDA driver module load data with options: output: module, "
+            "image: image, option count: optionCount, options: options, "
+            "option values: optionValues"
+        ) in result
+        assert (
+            "// CUDA driver module get function: output: function, "
+            'module: module, name: "kernel"'
+        ) in result
+        assert (
+            "// CUDA driver module get global: output: global, "
+            'bytes output: globalBytes, module: module, name: "symbol"'
+        ) in result
+        assert (
+            "// CUDA driver launch kernel: function: function, "
+            "grid: gridX x gridY x gridZ, block: blockX x blockY x blockZ, "
+            "shared memory: sharedBytes, stream: stream, params: kernelParams, "
+            "extra: extra"
+        ) in result
+        assert (
+            "// CUDA driver launch cooperative kernel: function: function, "
+            "grid: gridX x gridY x gridZ, block: blockX x blockY x blockZ, "
+            "shared memory: sharedBytes, stream: stream, params: kernelParams"
+        ) in result
+        assert (
+            "// CUDA driver launch cooperative kernel multi-device: "
+            "params: launchParams, count: 1, flags: 0"
+        ) in result
+        assert (
+            "// CUDA driver occupancy active blocks: output: activeBlocks, "
+            "function: function, block size: blockSize, "
+            "dynamic shared memory: sharedBytes"
+        ) in result
+        assert (
+            "// CUDA driver occupancy active blocks: output: activeBlocks, "
+            "function: function, block size: blockSize, "
+            "dynamic shared memory: sharedBytes, flags: CU_OCCUPANCY_DEFAULT"
+        ) in result
+        assert (
+            "// CUDA driver occupancy potential block size: min grid output: minGrid, "
+            "block size output: suggestedBlock, function: function, "
+            "dynamic shared memory callback: 0, dynamic shared memory: sharedBytes, "
+            "block size limit: blockSize, flags: 0"
+        ) in result
+        assert (
+            "// CUDA driver occupancy potential block size: min grid output: minGrid, "
+            "block size output: suggestedBlock, function: function, "
+            "dynamic shared memory callback: 0, dynamic shared memory: sharedBytes, "
+            "block size limit: blockSize, flags: CU_OCCUPANCY_DEFAULT"
+        ) in result
+        assert "// CUDA driver module unload: module" in result
+        assert "return CUDA_SUCCESS;" in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuModuleLoad",
+            "cuModuleLoadData",
+            "cuModuleLoadDataEx",
+            "cuModuleGetFunction",
+            "cuModuleGetGlobal",
+            "cuLaunchKernel",
+            "cuLaunchCooperativeKernel",
+            "cuLaunchCooperativeKernelMultiDevice",
+            "cuOccupancyMaxActiveBlocksPerMultiprocessor",
+            "cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags",
+            "cuOccupancyMaxPotentialBlockSize",
+            "cuOccupancyMaxPotentialBlockSizeWithFlags",
+            "cuModuleUnload",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_linker_runtime_conversion(self):
+        """Test CUDA driver linker APIs emit metadata."""
+        code = """
+        CUresult linkModule(
+            const char* path,
+            void* image,
+            size_t imageBytes,
+            unsigned int optionCount,
+            CUjit_option* options,
+            void** optionValues,
+            bool ok
+        ) {
+            CUlinkState linkState;
+            void* cubin;
+            size_t cubinSize;
+
+            CUresult status = cuLinkCreate(
+                optionCount,
+                options,
+                optionValues,
+                &linkState
+            );
+            status = cuLinkAddData(
+                linkState,
+                CU_JIT_INPUT_PTX,
+                image,
+                imageBytes,
+                "kernel.ptx",
+                optionCount,
+                options,
+                optionValues
+            );
+            status = cuLinkAddFile(
+                linkState,
+                CU_JIT_INPUT_PTX,
+                path,
+                optionCount,
+                options,
+                optionValues
+            );
+            status = cuLinkComplete(linkState, &cubin, &cubinSize);
+            cuLinkDestroy(linkState);
+
+            if (cuLinkAddFile(
+                    linkState,
+                    CU_JIT_INPUT_CUBIN,
+                    path,
+                    0,
+                    options,
+                    optionValues
+                ) != CUDA_SUCCESS) {
+                return status;
+            }
+
+            checkStatus(cuLinkComplete(linkState, &cubin, &cubinSize));
+            return ok ? cuLinkDestroy(linkState) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver linker create: output: linkState, "
+            "option count: optionCount, options: options, option values: optionValues"
+        ) in result
+        assert (
+            "// CUDA driver linker add data: state: linkState, type: CU_JIT_INPUT_PTX, "
+            'data: image, bytes: imageBytes, name: "kernel.ptx", '
+            "option count: optionCount, options: options, option values: optionValues"
+        ) in result
+        assert (
+            "// CUDA driver linker add file: state: linkState, type: CU_JIT_INPUT_PTX, "
+            "path: path, option count: optionCount, options: options, "
+            "option values: optionValues"
+        ) in result
+        assert (
+            "// CUDA driver linker complete: state: linkState, cubin output: cubin, "
+            "size output: cubinSize"
+        ) in result
+        assert "// CUDA driver linker destroy: state: linkState" in result
+        assert (
+            "/* CUDA driver linker add file: state: linkState, "
+            "type: CU_JIT_INPUT_CUBIN, path: path, option count: 0, "
+            "options: options, option values: optionValues */ CUDA_SUCCESS) "
+            "!= CUDA_SUCCESS"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver linker complete: state: linkState, "
+            "cubin output: cubin, size output: cubinSize */ CUDA_SUCCESS));" in result
+        )
+        assert (
+            "return (ok ? (/* CUDA driver linker destroy: state: linkState */ "
+            "CUDA_SUCCESS) : status);"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuLinkCreate",
+            "cuLinkAddData",
+            "cuLinkAddFile",
+            "cuLinkComplete",
+            "cuLinkDestroy",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_function_configuration_runtime_conversion(self):
+        """Test CUDA driver function configuration APIs emit metadata."""
+        code = """
+        CUresult configureFunction(CUfunction function) {
+            int maxThreads;
+            CUresult status = cuFuncGetAttribute(
+                &maxThreads,
+                CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
+                function
+            );
+            status = cuFuncSetAttribute(
+                function,
+                CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                49152
+            );
+            status = cuFuncSetCacheConfig(
+                function,
+                CU_FUNC_CACHE_PREFER_SHARED
+            );
+            cuFuncSetCacheConfig(function, CU_FUNC_CACHE_PREFER_L1);
+            status = cuFuncSetSharedMemConfig(
+                function,
+                CU_SHARED_MEM_CONFIG_EIGHT_BYTE_BANK_SIZE
+            );
+
+            return cuFuncSetSharedMemConfig(
+                function,
+                CU_SHARED_MEM_CONFIG_DEFAULT_BANK_SIZE
+            );
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver function get attribute: output: maxThreads, "
+            "attribute: CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, "
+            "function: function"
+        ) in result
+        assert (
+            "// CUDA driver function set attribute: function: function, "
+            "attribute: CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, "
+            "value: 49152"
+        ) in result
+        assert (
+            "// CUDA driver function set cache config: function: function, "
+            "config: CU_FUNC_CACHE_PREFER_SHARED"
+        ) in result
+        assert (
+            "// CUDA driver function set cache config: function: function, "
+            "config: CU_FUNC_CACHE_PREFER_L1"
+        ) in result
+        assert (
+            "// CUDA driver function set shared memory config: function: function, "
+            "config: CU_SHARED_MEM_CONFIG_EIGHT_BYTE_BANK_SIZE"
+        ) in result
+        assert (
+            "// CUDA driver function set shared memory config: function: function, "
+            "config: CU_SHARED_MEM_CONFIG_DEFAULT_BANK_SIZE"
+        ) in result
+        assert "return CUDA_SUCCESS;" in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuFuncGetAttribute",
+            "cuFuncSetAttribute",
+            "cuFuncSetCacheConfig",
+            "cuFuncSetSharedMemConfig",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_context_lifecycle_runtime_conversion(self):
+        """Test CUDA driver context lifecycle APIs emit metadata."""
+        code = """
+        CUresult manageContext(CUdevice device, CUcontext peer) {
+            CUcontext context;
+            CUcontext current;
+            CUdevice activeDevice;
+            unsigned int flags;
+            unsigned int primaryFlags;
+            int active;
+            unsigned long long contextId;
+            size_t limitBytes;
+            CUfunc_cache cacheConfig;
+            CUsharedconfig sharedConfig;
+
+            CUresult status = cuCtxCreate(
+                &context,
+                CU_CTX_SCHED_AUTO,
+                device
+            );
+            status = cuCtxCreate_v2(
+                &current,
+                CU_CTX_SCHED_BLOCKING_SYNC,
+                device
+            );
+            status = cuCtxSetCurrent(context);
+            status = cuCtxGetCurrent(&current);
+            status = cuCtxPushCurrent(context);
+            status = cuCtxPopCurrent(&current);
+            status = cuCtxGetDevice(&activeDevice);
+            status = cuCtxGetFlags(&flags);
+            status = cuCtxGetId(context, &contextId);
+            status = cuCtxGetLimit(&limitBytes, CU_LIMIT_STACK_SIZE);
+            status = cuCtxSetLimit(CU_LIMIT_STACK_SIZE, limitBytes);
+            status = cuCtxGetCacheConfig(&cacheConfig);
+            status = cuCtxSetCacheConfig(CU_FUNC_CACHE_PREFER_L1);
+            status = cuCtxGetSharedMemConfig(&sharedConfig);
+            status = cuCtxSetSharedMemConfig(
+                CU_SHARED_MEM_CONFIG_FOUR_BYTE_BANK_SIZE
+            );
+            status = cuCtxEnablePeerAccess(peer, 0);
+            status = cuCtxDisablePeerAccess(peer);
+            status = cuCtxSynchronize();
+            status = cuDevicePrimaryCtxRetain(&context, device);
+            status = cuDevicePrimaryCtxGetState(
+                device,
+                &primaryFlags,
+                &active
+            );
+            status = cuDevicePrimaryCtxSetFlags(device, CU_CTX_SCHED_SPIN);
+            status = cuDevicePrimaryCtxSetFlags_v2(
+                device,
+                CU_CTX_SCHED_BLOCKING_SYNC
+            );
+            status = cuDevicePrimaryCtxRelease(device);
+            cuDevicePrimaryCtxReset_v2(device);
+            cuCtxDestroy(context);
+            status = cuCtxDestroy_v2(current);
+
+            return cuDevicePrimaryCtxRelease_v2(device);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver context create: output: context, "
+            "flags: CU_CTX_SCHED_AUTO, device: device"
+        ) in result
+        assert (
+            "// CUDA driver context create: output: current, "
+            "flags: CU_CTX_SCHED_BLOCKING_SYNC, device: device"
+        ) in result
+        assert "// CUDA driver context set current: context" in result
+        assert "// CUDA driver context get current: output: current" in result
+        assert "// CUDA driver context push current: context" in result
+        assert "// CUDA driver context pop current: output: current" in result
+        assert "// CUDA driver context get device: output: activeDevice" in result
+        assert "// CUDA driver context get flags: output: flags" in result
+        assert (
+            "// CUDA driver context get id: context: context, " "output: contextId"
+        ) in result
+        assert (
+            "// CUDA driver context get limit: output: limitBytes, "
+            "limit: CU_LIMIT_STACK_SIZE"
+        ) in result
+        assert (
+            "// CUDA driver context set limit: limit: CU_LIMIT_STACK_SIZE, "
+            "value: limitBytes"
+        ) in result
+        assert (
+            "// CUDA driver context get cache config: output: cacheConfig"
+        ) in result
+        assert (
+            "// CUDA driver context set cache config: "
+            "config: CU_FUNC_CACHE_PREFER_L1"
+        ) in result
+        assert (
+            "// CUDA driver context get shared memory config: " "output: sharedConfig"
+        ) in result
+        assert (
+            "// CUDA driver context set shared memory config: "
+            "config: CU_SHARED_MEM_CONFIG_FOUR_BYTE_BANK_SIZE"
+        ) in result
+        assert (
+            "// CUDA driver context enable peer access: peer: peer, flags: 0"
+        ) in result
+        assert "// CUDA driver context disable peer access: peer: peer" in result
+        assert "// CUDA driver context synchronize" in result
+        assert (
+            "// CUDA driver device primary context retain: output: context, "
+            "device: device"
+        ) in result
+        assert (
+            "// CUDA driver device primary context get state: device: device, "
+            "flags output: primaryFlags, active output: active"
+        ) in result
+        assert (
+            "// CUDA driver device primary context set flags: device: device, "
+            "flags: CU_CTX_SCHED_SPIN"
+        ) in result
+        assert (
+            "// CUDA driver device primary context set flags: device: device, "
+            "flags: CU_CTX_SCHED_BLOCKING_SYNC"
+        ) in result
+        assert "// CUDA driver device primary context release: device: device" in result
+        assert "// CUDA driver device primary context reset: device: device" in result
+        assert "// CUDA driver context destroy: context" in result
+        assert "// CUDA driver context destroy: current" in result
+        assert "return CUDA_SUCCESS;" in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuCtxCreate",
+            "cuCtxCreate_v2",
+            "cuCtxSetCurrent",
+            "cuCtxGetCurrent",
+            "cuCtxPushCurrent",
+            "cuCtxPopCurrent",
+            "cuCtxGetDevice",
+            "cuCtxGetFlags",
+            "cuCtxGetId",
+            "cuCtxGetLimit",
+            "cuCtxSetLimit",
+            "cuCtxGetCacheConfig",
+            "cuCtxSetCacheConfig",
+            "cuCtxGetSharedMemConfig",
+            "cuCtxSetSharedMemConfig",
+            "cuCtxEnablePeerAccess",
+            "cuCtxDisablePeerAccess",
+            "cuCtxSynchronize",
+            "cuDevicePrimaryCtxRetain",
+            "cuDevicePrimaryCtxGetState",
+            "cuDevicePrimaryCtxSetFlags",
+            "cuDevicePrimaryCtxSetFlags_v2",
+            "cuDevicePrimaryCtxRelease",
+            "cuDevicePrimaryCtxRelease_v2",
+            "cuDevicePrimaryCtxReset_v2",
+            "cuCtxDestroy",
+            "cuCtxDestroy_v2",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_device_inventory_runtime_conversion(self):
+        """Test CUDA driver initialization/device inventory APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult inspectDevices(int ordinal) {
+            CUdevice device;
+            CUdevice alternate;
+            int driverVersion;
+            int count;
+            char name[256];
+            CUuuid uuid;
+            size_t bytes;
+            size_t bytesV2;
+            int major;
+            int minor;
+            int multiprocessors;
+
+            CUresult status = cuInit(0);
+            status = cuDriverGetVersion(&driverVersion);
+            status = cuDeviceGet(&device, ordinal);
+            status = cuDeviceGetCount(&count);
+            cuDeviceGet(&alternate, 0);
+            status = cuDeviceGetName(name, 256, device);
+            status = cuDeviceGetUuid(&uuid, device);
+            status = cuDeviceTotalMem(&bytes, device);
+            status = cuDeviceTotalMem_v2(&bytesV2, device);
+            status = cuDeviceGetAttribute(
+                &multiprocessors,
+                CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
+                device
+            );
+            status = cuDeviceComputeCapability(&major, &minor, device);
+
+            if (cuDeviceGetCount(&count) != CUDA_SUCCESS) {
+                return CUDA_ERROR_UNKNOWN;
+            }
+
+            bool ok = checkStatus(cuDriverGetVersion(&driverVersion));
+            return ok ? cuDeviceGetAttribute(
+                &major,
+                CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+                device
+            ) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// CUDA driver initialize: flags: 0" in result
+        assert ("// CUDA driver get version: output: driverVersion") in result
+        assert ("// CUDA driver get device: output: device, ordinal: ordinal") in result
+        assert "// CUDA driver get device count: output: count" in result
+        assert ("// CUDA driver get device: output: alternate, ordinal: 0") in result
+        assert (
+            "// CUDA driver get device name: output: name, "
+            "length: 256, device: device"
+        ) in result
+        assert (
+            "// CUDA driver get device UUID: output: uuid, device: device"
+        ) in result
+        assert (
+            "// CUDA driver get device total memory: output: bytes, " "device: device"
+        ) in result
+        assert (
+            "// CUDA driver get device total memory: output: bytesV2, " "device: device"
+        ) in result
+        assert (
+            "// CUDA driver get device attribute: output: multiprocessors, "
+            "attribute: CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, device: device"
+        ) in result
+        assert (
+            "// CUDA driver get device compute capability: "
+            "major output: major, minor output: minor, device: device"
+        ) in result
+        assert (
+            "if (((/* CUDA driver get device count: output: count */ "
+            "CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver get version: output: driverVersion */ "
+            "CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(ok ? (/* CUDA driver get device attribute: output: major, "
+            "attribute: CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, "
+            "device: device */ CUDA_SUCCESS) : status)"
+        ) in result
+        assert "return CUDA_SUCCESS;" not in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuInit",
+            "cuDriverGetVersion",
+            "cuDeviceGet",
+            "cuDeviceGetCount",
+            "cuDeviceGetName",
+            "cuDeviceGetUuid",
+            "cuDeviceTotalMem",
+            "cuDeviceTotalMem_v2",
+            "cuDeviceGetAttribute",
+            "cuDeviceComputeCapability",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_device_property_query_runtime_conversion(self):
+        """Test CUDA driver device property/peer/PCI queries emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult queryDeviceProperties(CUdevice device, CUdevice peer) {
+            CUdevprop props;
+            int peerValue;
+            char luid[8];
+            unsigned int nodeMask;
+            CUdevice busDevice;
+            char pciBusId[32];
+
+            CUresult status = cuDeviceGetProperties(&props, device);
+            status = cuDeviceGetP2PAttribute(
+                &peerValue,
+                CU_DEVICE_P2P_ATTRIBUTE_PERFORMANCE_RANK,
+                device,
+                peer
+            );
+            status = cuDeviceCanAccessPeer(&peerValue, device, peer);
+            status = cuDeviceGetLuid(luid, &nodeMask, device);
+            status = cuDeviceGetByPCIBusId(&busDevice, "0000:65:00.0");
+            cuDeviceGetPCIBusId(pciBusId, 32, device);
+
+            if (cuDeviceCanAccessPeer(&peerValue, device, peer) != CUDA_SUCCESS) {
+                return CUDA_ERROR_UNKNOWN;
+            }
+
+            bool ok = checkStatus(cuDeviceGetPCIBusId(pciBusId, 32, device));
+            return ok ? status : cuDeviceGetProperties(&props, peer);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver get device properties: output: props, device: device"
+        ) in result
+        assert (
+            "// CUDA driver get device P2P attribute: output: peerValue, "
+            "attribute: CU_DEVICE_P2P_ATTRIBUTE_PERFORMANCE_RANK, "
+            "source device: device, destination device: peer"
+        ) in result
+        assert (
+            "// CUDA driver device peer access query: output: peerValue, "
+            "device: device, peer device: peer"
+        ) in result
+        assert (
+            "// CUDA driver get device LUID: output: luid, node mask output: nodeMask, "
+            "device: device"
+        ) in result
+        assert (
+            '// CUDA driver get device by PCI bus ID: output: busDevice, bus ID: "0000:65:00.0"'
+        ) in result
+        assert (
+            "// CUDA driver get device PCI bus ID: output: pciBusId, "
+            "length: 32, device: device"
+        ) in result
+        assert (
+            "if (((/* CUDA driver device peer access query: output: peerValue, "
+            "device: device, peer device: peer */ CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver get device PCI bus ID: output: pciBusId, "
+            "length: 32, device: device */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(ok ? status : (/* CUDA driver get device properties: output: props, "
+            "device: peer */ CUDA_SUCCESS))"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuDeviceGetProperties",
+            "cuDeviceGetP2PAttribute",
+            "cuDeviceCanAccessPeer",
+            "cuDeviceGetLuid",
+            "cuDeviceGetByPCIBusId",
+            "cuDeviceGetPCIBusId",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_graph_node_creation_dependency_runtime_conversion(self):
+        """Test CUDA graph node creation/dependency APIs emit metadata comments."""
+        code = """
+        void buildGraph(
+            cudaGraph_t graph,
+            cudaGraph_t child,
+            cudaGraphNode_t* deps,
+            size_t count,
+            cudaEvent_t event
+        ) {
+            cudaGraphNode_t kernelNode;
+            cudaGraphNode_t memcpyNode;
+            cudaGraphNode_t memsetNode;
+            cudaGraphNode_t hostNode;
+            cudaGraphNode_t childNode;
+            cudaGraphNode_t emptyNode;
+            cudaGraphNode_t eventRecordNode;
+            cudaGraphNode_t eventWaitNode;
+            cudaGraphNode_t foundNode;
+            cudaKernelNodeParams kernelParams;
+            cudaMemcpy3DParms copyParams;
+            cudaMemsetParams memsetParams;
+            cudaHostNodeParams hostParams;
+            cudaGraphNodeType nodeType;
+
+            cudaError_t err = cudaGraphAddKernelNode(
+                &kernelNode,
+                graph,
+                deps,
+                count,
+                &kernelParams
+            );
+            err = cudaGraphAddMemcpyNode(&memcpyNode, graph, deps, count, &copyParams);
+            err = cudaGraphAddMemsetNode(
+                &memsetNode,
+                graph,
+                deps,
+                count,
+                &memsetParams
+            );
+            err = cudaGraphAddHostNode(&hostNode, graph, deps, count, &hostParams);
+            err = cudaGraphAddChildGraphNode(&childNode, graph, deps, count, child);
+            err = cudaGraphAddEmptyNode(&emptyNode, graph, deps, count);
+            err = cudaGraphAddEventRecordNode(
+                &eventRecordNode,
+                graph,
+                deps,
+                count,
+                event
+            );
+            err = cudaGraphAddEventWaitNode(&eventWaitNode, graph, deps, count, event);
+            err = cudaGraphAddDependencies(graph, deps, &kernelNode, count);
+            err = cudaGraphRemoveDependencies(graph, deps, &kernelNode, count);
+            err = cudaGraphNodeFindInClone(&foundNode, kernelNode, graph);
+            err = cudaGraphNodeGetType(kernelNode, &nodeType);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA graph add kernel node: output: kernelNode, graph: graph, "
+            "dependencies: deps, dependency count: count, params: (&kernelParams)"
+        ) in result
+        assert (
+            "// CUDA graph add memcpy node: output: memcpyNode, graph: graph, "
+            "dependencies: deps, dependency count: count, params: (&copyParams)"
+        ) in result
+        assert (
+            "// CUDA graph add memset node: output: memsetNode, graph: graph, "
+            "dependencies: deps, dependency count: count, params: (&memsetParams)"
+        ) in result
+        assert (
+            "// CUDA graph add host node: output: hostNode, graph: graph, "
+            "dependencies: deps, dependency count: count, params: (&hostParams)"
+        ) in result
+        assert (
+            "// CUDA graph add child graph node: output: childNode, graph: graph, "
+            "dependencies: deps, dependency count: count, child graph: child"
+        ) in result
+        assert (
+            "// CUDA graph add empty node: output: emptyNode, graph: graph, "
+            "dependencies: deps, dependency count: count"
+        ) in result
+        assert (
+            "// CUDA graph add event record node: output: eventRecordNode, "
+            "graph: graph, dependencies: deps, dependency count: count, event: event"
+        ) in result
+        assert (
+            "// CUDA graph add event wait node: output: eventWaitNode, "
+            "graph: graph, dependencies: deps, dependency count: count, event: event"
+        ) in result
+        assert (
+            "// CUDA graph add dependencies: graph: graph, from: deps, "
+            "to: (&kernelNode), count: count"
+        ) in result
+        assert (
+            "// CUDA graph remove dependencies: graph: graph, from: deps, "
+            "to: (&kernelNode), count: count"
+        ) in result
+        assert (
+            "// CUDA graph node find in clone: output: foundNode, "
+            "original node: kernelNode, clone graph: graph"
+        ) in result
+        assert (
+            "// CUDA graph node get type: node: kernelNode, output: nodeType" in result
+        )
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        for function_name in [
+            "cudaGraphAddKernelNode",
+            "cudaGraphAddMemcpyNode",
+            "cudaGraphAddMemsetNode",
+            "cudaGraphAddHostNode",
+            "cudaGraphAddChildGraphNode",
+            "cudaGraphAddEmptyNode",
+            "cudaGraphAddEventRecordNode",
+            "cudaGraphAddEventWaitNode",
+            "cudaGraphAddDependencies",
+            "cudaGraphRemoveDependencies",
+            "cudaGraphNodeFindInClone",
+            "cudaGraphNodeGetType",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_graph_node_creation_dependency_runtime_conversion(self):
+        """Test CUDA driver graph node creation/dependency APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult buildDriverGraph(
+            CUgraph graph,
+            CUgraph child,
+            CUgraphNode* deps,
+            size_t count,
+            CUcontext context,
+            bool ok
+        ) {
+            CUgraphNode kernelNode;
+            CUgraphNode memcpyNode;
+            CUgraphNode memsetNode;
+            CUgraphNode hostNode;
+            CUgraphNode childNode;
+            CUgraphNode emptyNode;
+            CUgraphNode foundNode;
+            CUDA_KERNEL_NODE_PARAMS kernelParams;
+            CUDA_MEMCPY3D copyParams;
+            CUDA_MEMSET_NODE_PARAMS memsetParams;
+            CUDA_HOST_NODE_PARAMS hostParams;
+            CUgraphNodeType nodeType;
+
+            CUresult status = cuGraphAddKernelNode(
+                &kernelNode,
+                graph,
+                deps,
+                count,
+                &kernelParams
+            );
+            status = cuGraphAddMemcpyNode(
+                &memcpyNode,
+                graph,
+                deps,
+                count,
+                &copyParams,
+                context
+            );
+            status = cuGraphAddMemsetNode(
+                &memsetNode,
+                graph,
+                deps,
+                count,
+                &memsetParams,
+                context
+            );
+            status = cuGraphAddHostNode(&hostNode, graph, deps, count, &hostParams);
+            status = cuGraphAddChildGraphNode(&childNode, graph, deps, count, child);
+            cuGraphAddEmptyNode(&emptyNode, graph, deps, count);
+            status = cuGraphRemoveDependencies(graph, deps, &kernelNode, count);
+
+            if (cuGraphAddDependencies(graph, deps, &kernelNode, count) != CUDA_SUCCESS) {
+                return status;
+            }
+
+            bool found = checkStatus(
+                cuGraphNodeFindInClone(&foundNode, kernelNode, graph)
+            );
+            return found && ok ? cuGraphNodeGetType(kernelNode, &nodeType) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver graph add kernel node: output: kernelNode, "
+            "graph: graph, dependencies: deps, dependency count: count, "
+            "params: (&kernelParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph add memcpy node: output: memcpyNode, "
+            "graph: graph, dependencies: deps, dependency count: count, "
+            "params: (&copyParams), context: context"
+        ) in result
+        assert (
+            "// CUDA driver graph add memset node: output: memsetNode, "
+            "graph: graph, dependencies: deps, dependency count: count, "
+            "params: (&memsetParams), context: context"
+        ) in result
+        assert (
+            "// CUDA driver graph add host node: output: hostNode, graph: graph, "
+            "dependencies: deps, dependency count: count, params: (&hostParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph add child graph node: output: childNode, "
+            "graph: graph, dependencies: deps, dependency count: count, "
+            "child graph: child"
+        ) in result
+        assert (
+            "// CUDA driver graph add empty node: output: emptyNode, graph: graph, "
+            "dependencies: deps, dependency count: count"
+        ) in result
+        assert (
+            "// CUDA driver graph remove dependencies: graph: graph, from: deps, "
+            "to: (&kernelNode), count: count"
+        ) in result
+        assert (
+            "if (((/* CUDA driver graph add dependencies: graph: graph, "
+            "from: deps, to: (&kernelNode), count: count */ CUDA_SUCCESS) "
+            "!= CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver graph node find in clone: "
+            "output: foundNode, original node: kernelNode, clone graph: graph */ "
+            "CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(found && ok) ? (/* CUDA driver graph node get type: "
+            "node: kernelNode, output: nodeType */ CUDA_SUCCESS) : status"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuGraphAddKernelNode",
+            "cuGraphAddMemcpyNode",
+            "cuGraphAddMemsetNode",
+            "cuGraphAddHostNode",
+            "cuGraphAddChildGraphNode",
+            "cuGraphAddEmptyNode",
+            "cuGraphAddDependencies",
+            "cuGraphRemoveDependencies",
+            "cuGraphNodeFindInClone",
+            "cuGraphNodeGetType",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_graph_external_event_child_runtime_conversion(self):
+        """Test CUDA driver graph external semaphore/event/child APIs."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult configureDriverInteropGraph(
+            CUgraph graph,
+            CUgraphExec exec,
+            CUgraph child,
+            CUgraphNode* deps,
+            size_t count,
+            CUevent event,
+            bool ok
+        ) {
+            CUgraphNode signalNode;
+            CUgraphNode waitNode;
+            CUgraphNode eventRecordNode;
+            CUgraphNode eventWaitNode;
+            CUgraphNode childNode;
+            CUDA_EXT_SEM_SIGNAL_NODE_PARAMS signalParams;
+            CUDA_EXT_SEM_WAIT_NODE_PARAMS waitParams;
+            CUevent eventOut;
+            CUgraph childOut;
+
+            CUresult status = cuGraphAddEventRecordNode(
+                &eventRecordNode,
+                graph,
+                deps,
+                count,
+                event
+            );
+            status = cuGraphAddEventWaitNode(
+                &eventWaitNode,
+                graph,
+                deps,
+                count,
+                event
+            );
+            status = cuGraphAddExternalSemaphoresSignalNode(
+                &signalNode,
+                graph,
+                deps,
+                count,
+                &signalParams
+            );
+            status = cuGraphAddExternalSemaphoresWaitNode(
+                &waitNode,
+                graph,
+                deps,
+                count,
+                &waitParams
+            );
+            status = cuGraphExternalSemaphoresSignalNodeGetParams(
+                signalNode,
+                &signalParams
+            );
+            status = cuGraphExternalSemaphoresSignalNodeSetParams(
+                signalNode,
+                &signalParams
+            );
+            status = cuGraphExternalSemaphoresWaitNodeGetParams(
+                waitNode,
+                &waitParams
+            );
+            status = cuGraphExternalSemaphoresWaitNodeSetParams(
+                waitNode,
+                &waitParams
+            );
+            status = cuGraphEventRecordNodeGetEvent(eventRecordNode, &eventOut);
+            status = cuGraphEventRecordNodeSetEvent(eventRecordNode, event);
+            status = cuGraphEventWaitNodeGetEvent(eventWaitNode, &eventOut);
+            cuGraphEventWaitNodeSetEvent(eventWaitNode, event);
+            status = cuGraphChildGraphNodeGetGraph(childNode, &childOut);
+            status = cuGraphExecExternalSemaphoresWaitNodeSetParams(
+                exec,
+                waitNode,
+                &waitParams
+            );
+            status = cuGraphExecEventRecordNodeSetEvent(
+                exec,
+                eventRecordNode,
+                event
+            );
+
+            if (
+                cuGraphExecChildGraphNodeSetParams(exec, childNode, child)
+                != CUDA_SUCCESS
+            ) {
+                return status;
+            }
+
+            bool eventSet = checkStatus(
+                cuGraphExecEventWaitNodeSetEvent(exec, eventWaitNode, event)
+            );
+            return eventSet && ok
+                ? cuGraphExecExternalSemaphoresSignalNodeSetParams(
+                    exec,
+                    signalNode,
+                    &signalParams
+                )
+                : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver graph add event record node: output: eventRecordNode, "
+            "graph: graph, dependencies: deps, dependency count: count, event: event"
+        ) in result
+        assert (
+            "// CUDA driver graph add event wait node: output: eventWaitNode, "
+            "graph: graph, dependencies: deps, dependency count: count, event: event"
+        ) in result
+        assert (
+            "// CUDA driver graph add external semaphore signal node: "
+            "output: signalNode, graph: graph, dependencies: deps, "
+            "dependency count: count, params: (&signalParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph add external semaphore wait node: "
+            "output: waitNode, graph: graph, dependencies: deps, "
+            "dependency count: count, params: (&waitParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph external semaphore signal node get params: "
+            "node: signalNode, params: (&signalParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph external semaphore signal node set params: "
+            "node: signalNode, params: (&signalParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph external semaphore wait node get params: "
+            "node: waitNode, params: (&waitParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph external semaphore wait node set params: "
+            "node: waitNode, params: (&waitParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph event record node get event: "
+            "node: eventRecordNode, output: eventOut"
+        ) in result
+        assert (
+            "// CUDA driver graph event record node set event: "
+            "node: eventRecordNode, event: event"
+        ) in result
+        assert (
+            "// CUDA driver graph event wait node get event: "
+            "node: eventWaitNode, output: eventOut"
+        ) in result
+        assert (
+            "// CUDA driver graph event wait node set event: "
+            "node: eventWaitNode, event: event"
+        ) in result
+        assert (
+            "// CUDA driver graph child graph node get graph: "
+            "node: childNode, output: childOut"
+        ) in result
+        assert (
+            "// CUDA driver graph exec set external semaphore wait node params: "
+            "exec: exec, node: waitNode, params: (&waitParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph exec set event record node event: "
+            "exec: exec, node: eventRecordNode, event: event"
+        ) in result
+        assert (
+            "if (((/* CUDA driver graph exec set child graph node params: "
+            "exec: exec, node: childNode, child graph: child */ CUDA_SUCCESS) "
+            "!= CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver graph exec set event wait node event: "
+            "exec: exec, node: eventWaitNode, event: event */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(eventSet && ok) ? (/* CUDA driver graph exec set external "
+            "semaphore signal node params: exec: exec, node: signalNode, "
+            "params: (&signalParams) */ CUDA_SUCCESS) : status"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuGraphAddEventRecordNode",
+            "cuGraphAddEventWaitNode",
+            "cuGraphAddExternalSemaphoresSignalNode",
+            "cuGraphAddExternalSemaphoresWaitNode",
+            "cuGraphExternalSemaphoresSignalNodeGetParams",
+            "cuGraphExternalSemaphoresSignalNodeSetParams",
+            "cuGraphExternalSemaphoresWaitNodeGetParams",
+            "cuGraphExternalSemaphoresWaitNodeSetParams",
+            "cuGraphEventRecordNodeGetEvent",
+            "cuGraphEventRecordNodeSetEvent",
+            "cuGraphEventWaitNodeGetEvent",
+            "cuGraphEventWaitNodeSetEvent",
+            "cuGraphChildGraphNodeGetGraph",
+            "cuGraphExecExternalSemaphoresWaitNodeSetParams",
+            "cuGraphExecEventRecordNodeSetEvent",
+            "cuGraphExecChildGraphNodeSetParams",
+            "cuGraphExecEventWaitNodeSetEvent",
+            "cuGraphExecExternalSemaphoresSignalNodeSetParams",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_graph_memory_user_object_runtime_conversion(self):
+        """Test CUDA driver graph memory/user-object APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult manageDriverGraphResources(
+            CUdevice device,
+            CUgraph graph,
+            CUgraphNode* deps,
+            size_t count,
+            CUdeviceptr pointer,
+            void* payload,
+            CUhostFn destroy,
+            bool ok
+        ) {
+            CUgraphNode allocNode;
+            CUgraphNode freeNode;
+            CUDA_MEM_ALLOC_NODE_PARAMS allocParams;
+            CUdeviceptr freedPtr;
+            CUuserObject object;
+            CUuserObject created;
+            size_t usedBytes;
+            size_t highWatermark;
+
+            CUresult status = cuGraphAddMemAllocNode(
+                &allocNode,
+                graph,
+                deps,
+                count,
+                &allocParams
+            );
+            status = cuGraphAddMemFreeNode(&freeNode, graph, deps, count, pointer);
+            status = cuGraphMemAllocNodeGetParams(allocNode, &allocParams);
+            status = cuGraphMemFreeNodeGetParams(freeNode, &freedPtr);
+            status = cuUserObjectCreate(
+                &created,
+                payload,
+                destroy,
+                2u,
+                CU_USER_OBJECT_NO_DESTRUCTOR_SYNC
+            );
+            status = cuUserObjectRetain(created, 3u);
+            status = cuGraphRetainUserObject(
+                graph,
+                created,
+                1u,
+                CU_GRAPH_USER_OBJECT_MOVE
+            );
+            status = cuGraphRetainUserObject(graph, object, 1u, 0);
+            status = cuGraphReleaseUserObject(graph, created, 1u);
+            status = cuDeviceGetGraphMemAttribute(
+                device,
+                CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT,
+                &usedBytes
+            );
+            status = cuDeviceSetGraphMemAttribute(
+                device,
+                CU_GRAPH_MEM_ATTR_USED_MEM_HIGH,
+                &highWatermark
+            );
+            cuDeviceGraphMemTrim(device);
+
+            if (cuGraphMemFreeNodeGetParams(freeNode, &freedPtr) != CUDA_SUCCESS) {
+                return status;
+            }
+
+            bool released = checkStatus(
+                cuGraphReleaseUserObject(graph, object, 1u)
+            );
+            return released && ok ? cuUserObjectRelease(object, 2u) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver graph add memory alloc node: output: allocNode, "
+            "graph: graph, dependencies: deps, dependency count: count, "
+            "params: (&allocParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph add memory free node: output: freeNode, "
+            "graph: graph, dependencies: deps, dependency count: count, "
+            "pointer: pointer"
+        ) in result
+        assert (
+            "// CUDA driver graph memory alloc node get params: node: allocNode, "
+            "params: (&allocParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph memory free node get params: node: freeNode, "
+            "output: freedPtr"
+        ) in result
+        assert (
+            "// CUDA driver user object create: output: created, payload: payload, "
+            "destroy callback: destroy, initial references: 2u, "
+            "flags: CU_USER_OBJECT_NO_DESTRUCTOR_SYNC"
+        ) in result
+        assert (
+            "// CUDA driver user object retain: object: created, references: 3u"
+            in result
+        )
+        assert (
+            "// CUDA driver graph retain user object: graph: graph, "
+            "object: created, references: 1u, flags: CU_GRAPH_USER_OBJECT_MOVE"
+        ) in result
+        assert (
+            "// CUDA driver graph retain user object: graph: graph, "
+            "object: object, references: 1u, flags: 0"
+        ) in result
+        assert (
+            "// CUDA driver graph release user object: graph: graph, "
+            "object: created, references: 1u"
+        ) in result
+        assert (
+            "// CUDA driver device get graph memory attribute: device: device, "
+            "attribute: CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT, output: usedBytes"
+        ) in result
+        assert (
+            "// CUDA driver device set graph memory attribute: device: device, "
+            "attribute: CU_GRAPH_MEM_ATTR_USED_MEM_HIGH, value: highWatermark"
+        ) in result
+        assert "// CUDA driver device graph memory trim: device: device" in result
+        assert (
+            "if (((/* CUDA driver graph memory free node get params: "
+            "node: freeNode, output: freedPtr */ CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver graph release user object: "
+            "graph: graph, object: object, references: 1u */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(released && ok) ? (/* CUDA driver user object release: "
+            "object: object, references: 2u */ CUDA_SUCCESS) : status"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuGraphAddMemAllocNode",
+            "cuGraphAddMemFreeNode",
+            "cuGraphMemAllocNodeGetParams",
+            "cuGraphMemFreeNodeGetParams",
+            "cuUserObjectCreate",
+            "cuUserObjectRetain",
+            "cuGraphRetainUserObject",
+            "cuGraphReleaseUserObject",
+            "cuDeviceGetGraphMemAttribute",
+            "cuDeviceSetGraphMemAttribute",
+            "cuDeviceGraphMemTrim",
+            "cuUserObjectRelease",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_graph_memcpy_upload_memory_runtime_conversion(self):
+        """Test CUDA graph memcpy/upload/memory APIs emit metadata comments."""
+        code = """
+        void configureGraph(
+            cudaGraph_t graph,
+            cudaGraphExec_t exec,
+            cudaGraphNode_t* deps,
+            size_t count,
+            cudaStream_t stream,
+            void* dst,
+            void* src,
+            size_t bytes,
+            size_t offset
+        ) {
+            cudaGraphNode_t memcpy1DNode;
+            cudaGraphNode_t fromSymbolNode;
+            cudaGraphNode_t toSymbolNode;
+            cudaGraphNode_t allocNode;
+            cudaGraphNode_t freeNode;
+            cudaMemAllocNodeParams allocParams;
+            void* dptr;
+            void* freedPtr;
+            int symbolData;
+
+            cudaError_t err = cudaGraphAddMemcpyNode1D(
+                &memcpy1DNode,
+                graph,
+                deps,
+                count,
+                dst,
+                src,
+                bytes,
+                cudaMemcpyDeviceToDevice
+            );
+            err = cudaGraphAddMemcpyNodeFromSymbol(
+                &fromSymbolNode,
+                graph,
+                deps,
+                count,
+                dst,
+                symbolData,
+                bytes,
+                offset,
+                cudaMemcpyDeviceToDevice
+            );
+            err = cudaGraphAddMemcpyNodeToSymbol(
+                &toSymbolNode,
+                graph,
+                deps,
+                count,
+                symbolData,
+                src,
+                bytes,
+                offset,
+                cudaMemcpyDeviceToDevice
+            );
+            err = cudaGraphUpload(exec, stream);
+            err = cudaGraphExecUpload(exec, stream);
+            err = cudaGraphAddMemAllocNode(&allocNode, graph, deps, count, &allocParams);
+            err = cudaGraphAddMemFreeNode(&freeNode, graph, deps, count, dptr);
+            err = cudaGraphMemAllocNodeGetParams(allocNode, &allocParams);
+            err = cudaGraphMemFreeNodeGetParams(freeNode, &freedPtr);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA graph add memcpy 1D node: output: memcpy1DNode, "
+            "graph: graph, dependencies: deps, dependency count: count, "
+            "dst: dst, src: src, byte count: bytes, kind: cudaMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// CUDA graph add memcpy-from-symbol node: output: fromSymbolNode, "
+            "graph: graph, dependencies: deps, dependency count: count, dst: dst, "
+            "symbol: symbolData, byte count: bytes, offset: offset, "
+            "kind: cudaMemcpyDeviceToDevice"
+        ) in result
+        assert (
+            "// CUDA graph add memcpy-to-symbol node: output: toSymbolNode, "
+            "graph: graph, dependencies: deps, dependency count: count, "
+            "symbol: symbolData, src: src, byte count: bytes, offset: offset, "
+            "kind: cudaMemcpyDeviceToDevice"
+        ) in result
+        assert "// CUDA graph upload: exec: exec, stream: stream" in result
+        assert "// CUDA graph exec upload: exec: exec, stream: stream" in result
+        assert (
+            "// CUDA graph add memory alloc node: output: allocNode, "
+            "graph: graph, dependencies: deps, dependency count: count, "
+            "params: (&allocParams)"
+        ) in result
+        assert (
+            "// CUDA graph add memory free node: output: freeNode, graph: graph, "
+            "dependencies: deps, dependency count: count, pointer: dptr"
+        ) in result
+        assert (
+            "// CUDA graph memory alloc node get params: node: allocNode, "
+            "params: (&allocParams)"
+        ) in result
+        assert (
+            "// CUDA graph memory free node get params: node: freeNode, "
+            "output: freedPtr"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        for function_name in [
+            "cudaGraphAddMemcpyNode1D",
+            "cudaGraphAddMemcpyNodeFromSymbol",
+            "cudaGraphAddMemcpyNodeToSymbol",
+            "cudaGraphUpload",
+            "cudaGraphExecUpload",
+            "cudaGraphAddMemAllocNode",
+            "cudaGraphAddMemFreeNode",
+            "cudaGraphMemAllocNodeGetParams",
+            "cudaGraphMemFreeNodeGetParams",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_graph_user_object_memory_attribute_runtime_conversion(self):
+        """Test CUDA graph user-object and memory attributes emit metadata."""
+        code = """
+        void manageGraphResources(
+            cudaGraph_t graph,
+            cudaUserObject_t object,
+            void* payload,
+            cudaHostFn_t destroy
+        ) {
+            cudaUserObject_t created;
+            size_t graphBytes;
+            size_t highWatermark;
+
+            cudaError_t err = cudaUserObjectCreate(
+                &created,
+                payload,
+                destroy,
+                2u,
+                cudaUserObjectNoDestructorSync
+            );
+            err = cudaUserObjectRetain(created, 3u);
+            err = cudaUserObjectRetain(created);
+            err = cudaGraphRetainUserObject(
+                graph,
+                created,
+                1u,
+                cudaGraphUserObjectMove
+            );
+            err = cudaGraphRetainUserObject(graph, object);
+            err = cudaGraphReleaseUserObject(graph, created, 1u);
+            err = cudaGraphReleaseUserObject(graph, object);
+            err = cudaUserObjectRelease(created, 2u);
+            err = cudaUserObjectRelease(object);
+            err = cudaDeviceGetGraphMemAttribute(
+                0,
+                cudaGraphMemAttrUsedMemCurrent,
+                &graphBytes
+            );
+            err = cudaDeviceSetGraphMemAttribute(
+                0,
+                cudaGraphMemAttrUsedMemHigh,
+                &highWatermark
+            );
+            err = cudaDeviceGraphMemTrim(0);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA user object create: output: created, payload: payload, "
+            "destroy callback: destroy, initial references: 2u, "
+            "flags: cudaUserObjectNoDestructorSync"
+        ) in result
+        assert "// CUDA user object retain: object: created, references: 3u" in result
+        assert "// CUDA user object retain: object: created, references: 1" in result
+        assert (
+            "// CUDA graph retain user object: graph: graph, object: created, "
+            "references: 1u, flags: cudaGraphUserObjectMove"
+        ) in result
+        assert (
+            "// CUDA graph retain user object: graph: graph, object: object, "
+            "references: 1, flags: 0"
+        ) in result
+        assert (
+            "// CUDA graph release user object: graph: graph, object: created, "
+            "references: 1u"
+        ) in result
+        assert (
+            "// CUDA graph release user object: graph: graph, object: object, "
+            "references: 1"
+        ) in result
+        assert "// CUDA user object release: object: created, references: 2u" in result
+        assert "// CUDA user object release: object: object, references: 1" in result
+        assert (
+            "// CUDA device get graph memory attribute: device: 0, "
+            "attribute: cudaGraphMemAttrUsedMemCurrent, output: graphBytes"
+        ) in result
+        assert (
+            "// CUDA device set graph memory attribute: device: 0, "
+            "attribute: cudaGraphMemAttrUsedMemHigh, value: highWatermark"
+        ) in result
+        assert "// CUDA device graph memory trim: device: 0" in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        for function_name in [
+            "cudaUserObjectCreate",
+            "cudaUserObjectRetain",
+            "cudaGraphRetainUserObject",
+            "cudaGraphReleaseUserObject",
+            "cudaUserObjectRelease",
+            "cudaDeviceGetGraphMemAttribute",
+            "cudaDeviceSetGraphMemAttribute",
+            "cudaDeviceGraphMemTrim",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_graph_external_semaphore_event_node_runtime_conversion(self):
+        """Test CUDA graph external semaphore/event node APIs emit metadata."""
+        code = """
+        void configureInteropGraph(
+            cudaGraph_t graph,
+            cudaGraphExec_t exec,
+            cudaGraph_t child,
+            cudaGraphNode_t* deps,
+            size_t count,
+            cudaEvent_t event
+        ) {
+            cudaGraphNode_t signalNode;
+            cudaGraphNode_t waitNode;
+            cudaGraphNode_t eventRecordNode;
+            cudaGraphNode_t eventWaitNode;
+            cudaGraphNode_t childNode;
+            cudaExternalSemaphoreSignalNodeParams signalParams;
+            cudaExternalSemaphoreWaitNodeParams waitParams;
+            cudaEvent_t eventOut;
+            cudaGraph_t childOut;
+
+            cudaError_t err = cudaGraphAddExternalSemaphoresSignalNode(
+                &signalNode,
+                graph,
+                deps,
+                count,
+                &signalParams
+            );
+            err = cudaGraphAddExternalSemaphoresWaitNode(
+                &waitNode,
+                graph,
+                deps,
+                count,
+                &waitParams
+            );
+            err = cudaGraphExternalSemaphoresSignalNodeGetParams(
+                signalNode,
+                &signalParams
+            );
+            err = cudaGraphExternalSemaphoresSignalNodeSetParams(
+                signalNode,
+                &signalParams
+            );
+            err = cudaGraphExternalSemaphoresWaitNodeGetParams(waitNode, &waitParams);
+            err = cudaGraphExternalSemaphoresWaitNodeSetParams(waitNode, &waitParams);
+            err = cudaGraphExecExternalSemaphoresSignalNodeSetParams(
+                exec,
+                signalNode,
+                &signalParams
+            );
+            err = cudaGraphExecExternalSemaphoresWaitNodeSetParams(
+                exec,
+                waitNode,
+                &waitParams
+            );
+            err = cudaGraphEventRecordNodeGetEvent(eventRecordNode, &eventOut);
+            err = cudaGraphEventRecordNodeSetEvent(eventRecordNode, event);
+            err = cudaGraphEventWaitNodeGetEvent(eventWaitNode, &eventOut);
+            err = cudaGraphEventWaitNodeSetEvent(eventWaitNode, event);
+            err = cudaGraphExecEventRecordNodeSetEvent(exec, eventRecordNode, event);
+            err = cudaGraphExecEventWaitNodeSetEvent(exec, eventWaitNode, event);
+            err = cudaGraphChildGraphNodeGetGraph(childNode, &childOut);
+            err = cudaGraphExecChildGraphNodeSetParams(exec, childNode, child);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA graph add external semaphore signal node: "
+            "output: signalNode, graph: graph, dependencies: deps, "
+            "dependency count: count, params: (&signalParams)"
+        ) in result
+        assert (
+            "// CUDA graph add external semaphore wait node: output: waitNode, "
+            "graph: graph, dependencies: deps, dependency count: count, "
+            "params: (&waitParams)"
+        ) in result
+        assert (
+            "// CUDA graph external semaphore signal node get params: "
+            "node: signalNode, params: (&signalParams)"
+        ) in result
+        assert (
+            "// CUDA graph external semaphore signal node set params: "
+            "node: signalNode, params: (&signalParams)"
+        ) in result
+        assert (
+            "// CUDA graph external semaphore wait node get params: "
+            "node: waitNode, params: (&waitParams)"
+        ) in result
+        assert (
+            "// CUDA graph external semaphore wait node set params: "
+            "node: waitNode, params: (&waitParams)"
+        ) in result
+        assert (
+            "// CUDA graph exec set external semaphore signal node params: "
+            "exec: exec, node: signalNode, params: (&signalParams)"
+        ) in result
+        assert (
+            "// CUDA graph exec set external semaphore wait node params: "
+            "exec: exec, node: waitNode, params: (&waitParams)"
+        ) in result
+        assert (
+            "// CUDA graph event record node get event: "
+            "node: eventRecordNode, output: eventOut"
+        ) in result
+        assert (
+            "// CUDA graph event record node set event: "
+            "node: eventRecordNode, event: event"
+        ) in result
+        assert (
+            "// CUDA graph event wait node get event: "
+            "node: eventWaitNode, output: eventOut"
+        ) in result
+        assert (
+            "// CUDA graph event wait node set event: "
+            "node: eventWaitNode, event: event"
+        ) in result
+        assert (
+            "// CUDA graph exec set event record node event: "
+            "exec: exec, node: eventRecordNode, event: event"
+        ) in result
+        assert (
+            "// CUDA graph exec set event wait node event: "
+            "exec: exec, node: eventWaitNode, event: event"
+        ) in result
+        assert (
+            "// CUDA graph child graph node get graph: "
+            "node: childNode, output: childOut"
+        ) in result
+        assert (
+            "// CUDA graph exec set child graph node params: "
+            "exec: exec, node: childNode, child graph: child"
+        ) in result
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        for function_name in [
+            "cudaGraphAddExternalSemaphoresSignalNode",
+            "cudaGraphAddExternalSemaphoresWaitNode",
+            "cudaGraphExternalSemaphoresSignalNodeGetParams",
+            "cudaGraphExternalSemaphoresSignalNodeSetParams",
+            "cudaGraphExternalSemaphoresWaitNodeGetParams",
+            "cudaGraphExternalSemaphoresWaitNodeSetParams",
+            "cudaGraphExecExternalSemaphoresSignalNodeSetParams",
+            "cudaGraphExecExternalSemaphoresWaitNodeSetParams",
+            "cudaGraphEventRecordNodeGetEvent",
+            "cudaGraphEventRecordNodeSetEvent",
+            "cudaGraphEventWaitNodeGetEvent",
+            "cudaGraphEventWaitNodeSetEvent",
+            "cudaGraphExecEventRecordNodeSetEvent",
+            "cudaGraphExecEventWaitNodeSetEvent",
+            "cudaGraphChildGraphNodeGetGraph",
+            "cudaGraphExecChildGraphNodeSetParams",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_graph_generic_node_query_runtime_conversion(self):
+        """Test generic CUDA graph node/query APIs emit metadata comments."""
+        code = """
+        void inspectGraph(
+            cudaGraph_t graph,
+            cudaGraphExec_t exec,
+            cudaGraphNode_t node,
+            cudaGraphNode_t* deps,
+            cudaGraphEdgeData* edgeData,
+            size_t count,
+            char* path
+        ) {
+            cudaGraphNode_t genericNode;
+            cudaGraphNode_t* nodes;
+            cudaGraphNode_t* rootNodes;
+            cudaGraphNode_t* fromNodes;
+            cudaGraphNode_t* toNodes;
+            cudaGraphNodeParams params;
+            cudaGraph_t containingGraph;
+            unsigned long long execFlags;
+            unsigned long long toolsNodeId;
+            unsigned int graphId;
+            unsigned int execId;
+            unsigned int nodeId;
+            unsigned int enabled;
+            size_t nodeCount;
+            size_t rootCount;
+            size_t edgeCount;
+            size_t dependencyCount;
+            size_t dependentCount;
+
+            cudaError_t err = cudaGraphAddNode(
+                &genericNode,
+                graph,
+                deps,
+                edgeData,
+                count,
+                &params
+            );
+            err = cudaGraphAddDependencies(
+                graph,
+                deps,
+                &genericNode,
+                edgeData,
+                count
+            );
+            err = cudaGraphRemoveDependencies(
+                graph,
+                deps,
+                &genericNode,
+                edgeData,
+                count
+            );
+            err = cudaGraphNodeGetParams(node, &params);
+            err = cudaGraphNodeSetParams(node, &params);
+            err = cudaGraphExecNodeSetParams(exec, node, &params);
+            err = cudaGraphDebugDotPrint(
+                graph,
+                path,
+                cudaGraphDebugDotFlagsVerbose
+            );
+            err = cudaGraphExecGetFlags(exec, &execFlags);
+            err = cudaGraphExecGetId(exec, &execId);
+            err = cudaGraphGetId(graph, &graphId);
+            err = cudaGraphGetEdges(
+                graph,
+                fromNodes,
+                toNodes,
+                edgeData,
+                &edgeCount
+            );
+            err = cudaGraphGetNodes(graph, nodes, &nodeCount);
+            err = cudaGraphGetRootNodes(graph, rootNodes, &rootCount);
+            err = cudaGraphNodeGetContainingGraph(node, &containingGraph);
+            err = cudaGraphNodeGetDependencies(
+                node,
+                deps,
+                edgeData,
+                &dependencyCount
+            );
+            err = cudaGraphNodeGetDependentNodes(
+                node,
+                deps,
+                edgeData,
+                &dependentCount
+            );
+            err = cudaGraphNodeGetEnabled(exec, node, &enabled);
+            err = cudaGraphNodeSetEnabled(exec, node, enabled);
+            err = cudaGraphNodeGetLocalId(node, &nodeId);
+            err = cudaGraphNodeGetToolsId(node, &toolsNodeId);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA graph add generic node: output: genericNode, graph: graph, "
+            "dependencies: deps, edge data: edgeData, dependency count: count, "
+            "params: (&params)"
+        ) in result
+        assert (
+            "// CUDA graph add dependencies: graph: graph, from: deps, "
+            "to: (&genericNode), edge data: edgeData, count: count"
+        ) in result
+        assert (
+            "// CUDA graph remove dependencies: graph: graph, from: deps, "
+            "to: (&genericNode), edge data: edgeData, count: count"
+        ) in result
+        assert "// CUDA graph node get params: node: node, params: (&params)" in result
+        assert "// CUDA graph node set params: node: node, params: (&params)" in result
+        assert (
+            "// CUDA graph exec set node params: exec: exec, node: node, "
+            "params: (&params)"
+        ) in result
+        assert (
+            "// CUDA graph debug DOT print: graph: graph, path: path, "
+            "flags: cudaGraphDebugDotFlagsVerbose"
+        ) in result
+        assert "// CUDA graph exec get flags: exec: exec, output: execFlags" in result
+        assert "// CUDA graph exec get id: exec: exec, output: execId" in result
+        assert "// CUDA graph get id: graph: graph, output: graphId" in result
+        assert (
+            "// CUDA graph get edges: graph: graph, from output: fromNodes, "
+            "to output: toNodes, edge data: edgeData, count output: edgeCount"
+        ) in result
+        assert (
+            "// CUDA graph get nodes: graph: graph, nodes output: nodes, "
+            "count output: nodeCount"
+        ) in result
+        assert (
+            "// CUDA graph get root nodes: graph: graph, nodes output: rootNodes, "
+            "count output: rootCount"
+        ) in result
+        assert (
+            "// CUDA graph node get containing graph: node: node, "
+            "output: containingGraph"
+        ) in result
+        assert (
+            "// CUDA graph node get dependencies: node: node, "
+            "dependencies output: deps, edge data: edgeData, "
+            "count output: dependencyCount"
+        ) in result
+        assert (
+            "// CUDA graph node get dependent nodes: node: node, "
+            "dependent nodes output: deps, edge data: edgeData, "
+            "count output: dependentCount"
+        ) in result
+        assert (
+            "// CUDA graph node get enabled: exec: exec, node: node, " "output: enabled"
+        ) in result
+        assert (
+            "// CUDA graph node set enabled: exec: exec, node: node, "
+            "enabled: enabled"
+        ) in result
+        assert "// CUDA graph node get local id: node: node, output: nodeId" in result
+        assert (
+            "// CUDA graph node get tools id: node: node, output: toolsNodeId" in result
+        )
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "err = cudaSuccess;" in result
+        for function_name in [
+            "cudaGraphAddNode",
+            "cudaGraphAddDependencies",
+            "cudaGraphRemoveDependencies",
+            "cudaGraphNodeGetParams",
+            "cudaGraphNodeSetParams",
+            "cudaGraphExecNodeSetParams",
+            "cudaGraphDebugDotPrint",
+            "cudaGraphExecGetFlags",
+            "cudaGraphExecGetId",
+            "cudaGraphGetId",
+            "cudaGraphGetEdges",
+            "cudaGraphGetNodes",
+            "cudaGraphGetRootNodes",
+            "cudaGraphNodeGetContainingGraph",
+            "cudaGraphNodeGetDependencies",
+            "cudaGraphNodeGetDependentNodes",
+            "cudaGraphNodeGetEnabled",
+            "cudaGraphNodeSetEnabled",
+            "cudaGraphNodeGetLocalId",
+            "cudaGraphNodeGetToolsId",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_graph_query_update_runtime_conversion(self):
+        """Test CUDA driver graph query/update APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult inspectDriverGraph(
+            CUgraph graph,
+            CUgraphExec exec,
+            CUgraphNode node,
+            CUgraphNode* deps,
+            CUDA_GRAPH_EDGE_DATA* edgeData,
+            char* path,
+            bool ok
+        ) {
+            CUgraphNode* nodes;
+            CUgraphNode* rootNodes;
+            CUgraphNode* fromNodes;
+            CUgraphNode* toNodes;
+            CUDA_GRAPH_NODE_PARAMS params;
+            CUgraph containingGraph;
+            unsigned long long execFlags;
+            unsigned long long toolsNodeId;
+            unsigned int graphId;
+            unsigned int execId;
+            unsigned int nodeId;
+            unsigned int enabled;
+            size_t nodeCount;
+            size_t rootCount;
+            size_t edgeCount;
+            size_t dependencyCount;
+            size_t dependentCount;
+
+            CUresult status = cuGraphNodeGetParams(node, &params);
+            status = cuGraphNodeSetParams(node, &params);
+            status = cuGraphExecNodeSetParams(exec, node, &params);
+            status = cuGraphDebugDotPrint(graph, path, CU_GRAPH_DEBUG_DOT_FLAGS_VERBOSE);
+            status = cuGraphExecGetFlags(exec, &execFlags);
+            status = cuGraphExecGetId(exec, &execId);
+            status = cuGraphGetId(graph, &graphId);
+            status = cuGraphGetEdges(graph, fromNodes, toNodes, edgeData, &edgeCount);
+            status = cuGraphGetNodes(graph, nodes, &nodeCount);
+            status = cuGraphGetRootNodes(graph, rootNodes, &rootCount);
+            status = cuGraphNodeGetContainingGraph(node, &containingGraph);
+            status = cuGraphNodeGetDependencies(
+                node,
+                deps,
+                edgeData,
+                &dependencyCount
+            );
+            status = cuGraphNodeGetDependentNodes(
+                node,
+                deps,
+                edgeData,
+                &dependentCount
+            );
+            status = cuGraphNodeGetEnabled(exec, node, &enabled);
+            cuGraphNodeSetEnabled(exec, node, enabled);
+
+            if (cuGraphNodeGetLocalId(node, &nodeId) != CUDA_SUCCESS) {
+                return status;
+            }
+
+            bool tools = checkStatus(cuGraphNodeGetToolsId(node, &toolsNodeId));
+            return tools && ok ? cuGraphExecNodeSetParams(exec, node, &params) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver graph node get params: node: node, params: (&params)"
+            in result
+        )
+        assert (
+            "// CUDA driver graph node set params: node: node, params: (&params)"
+            in result
+        )
+        assert (
+            "// CUDA driver graph exec set node params: exec: exec, node: node, "
+            "params: (&params)"
+        ) in result
+        assert (
+            "// CUDA driver graph debug DOT print: graph: graph, path: path, "
+            "flags: CU_GRAPH_DEBUG_DOT_FLAGS_VERBOSE"
+        ) in result
+        assert (
+            "// CUDA driver graph exec get flags: exec: exec, output: execFlags"
+            in result
+        )
+        assert "// CUDA driver graph exec get id: exec: exec, output: execId" in result
+        assert "// CUDA driver graph get id: graph: graph, output: graphId" in result
+        assert (
+            "// CUDA driver graph get edges: graph: graph, from output: fromNodes, "
+            "to output: toNodes, edge data: edgeData, count output: edgeCount"
+        ) in result
+        assert (
+            "// CUDA driver graph get nodes: graph: graph, nodes output: nodes, "
+            "count output: nodeCount"
+        ) in result
+        assert (
+            "// CUDA driver graph get root nodes: graph: graph, "
+            "nodes output: rootNodes, count output: rootCount"
+        ) in result
+        assert (
+            "// CUDA driver graph node get containing graph: node: node, "
+            "output: containingGraph"
+        ) in result
+        assert (
+            "// CUDA driver graph node get dependencies: node: node, "
+            "dependencies output: deps, edge data: edgeData, "
+            "count output: dependencyCount"
+        ) in result
+        assert (
+            "// CUDA driver graph node get dependent nodes: node: node, "
+            "dependent nodes output: deps, edge data: edgeData, "
+            "count output: dependentCount"
+        ) in result
+        assert (
+            "// CUDA driver graph node get enabled: exec: exec, node: node, "
+            "output: enabled"
+        ) in result
+        assert (
+            "// CUDA driver graph node set enabled: exec: exec, node: node, "
+            "enabled: enabled"
+        ) in result
+        assert (
+            "if (((/* CUDA driver graph node get local id: "
+            "node: node, output: nodeId */ CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver graph node get tools id: "
+            "node: node, output: toolsNodeId */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "(tools && ok) ? (/* CUDA driver graph exec set node params: "
+            "exec: exec, node: node, params: (&params) */ CUDA_SUCCESS) : status"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuGraphNodeGetParams",
+            "cuGraphNodeSetParams",
+            "cuGraphExecNodeSetParams",
+            "cuGraphDebugDotPrint",
+            "cuGraphExecGetFlags",
+            "cuGraphExecGetId",
+            "cuGraphGetId",
+            "cuGraphGetEdges",
+            "cuGraphGetNodes",
+            "cuGraphGetRootNodes",
+            "cuGraphNodeGetContainingGraph",
+            "cuGraphNodeGetDependencies",
+            "cuGraphNodeGetDependentNodes",
+            "cuGraphNodeGetEnabled",
+            "cuGraphNodeSetEnabled",
+            "cuGraphNodeGetLocalId",
+            "cuGraphNodeGetToolsId",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_graph_conditional_instantiate_runtime_conversion(self):
+        """Test CUDA driver graph conditional and instantiate APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult buildDriverConditionalGraph(
+            CUgraph graph,
+            CUgraphExec exec,
+            const CUgraphNode* deps,
+            const CUgraphEdgeData* edgeData,
+            size_t count,
+            CUcontext context
+        ) {
+            CUgraphConditionalHandle handle;
+            CUgraphNode conditionalNode;
+            CUgraphNodeParams params;
+            CUDA_GRAPH_INSTANTIATE_PARAMS instantiateParams;
+
+            CUresult status = cuGraphConditionalHandleCreate(
+                &handle,
+                graph,
+                context,
+                1u,
+                CU_GRAPH_COND_ASSIGN_DEFAULT
+            );
+            status = cuGraphInstantiateWithParams(
+                &exec,
+                graph,
+                &instantiateParams
+            );
+            status = cuGraphAddNode(
+                &conditionalNode,
+                graph,
+                deps,
+                edgeData,
+                count,
+                &params
+            );
+
+            if (cuGraphConditionalHandleCreate(&handle, graph, context, 0u, 0) != CUDA_SUCCESS) {
+                return status;
+            }
+
+            bool ok = checkStatus(cuGraphInstantiateWithParams(
+                &exec,
+                graph,
+                &instantiateParams
+            ));
+            return ok ? cuGraphAddNode(
+                &conditionalNode,
+                graph,
+                deps,
+                edgeData,
+                count,
+                &params
+            ) : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver graph conditional handle create: output: handle, "
+            "graph: graph, context: context, default launch value: 1u, "
+            "flags: CU_GRAPH_COND_ASSIGN_DEFAULT"
+        ) in result
+        assert (
+            "// CUDA driver graph instantiate with params: output: exec, "
+            "graph: graph, params: (&instantiateParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph add generic node: output: conditionalNode, "
+            "graph: graph, dependencies: deps, edge data: edgeData, "
+            "dependency count: count, params: (&params)"
+        ) in result
+        assert (
+            "if (((/* CUDA driver graph conditional handle create: "
+            "output: handle, graph: graph, context: context, "
+            "default launch value: 0u, flags: 0 */ CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver graph instantiate with params: "
+            "output: exec, graph: graph, params: (&instantiateParams) */ "
+            "CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "ok ? (/* CUDA driver graph add generic node: output: conditionalNode, "
+            "graph: graph, dependencies: deps, edge data: edgeData, "
+            "dependency count: count, params: (&params) */ CUDA_SUCCESS) : status"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuGraphConditionalHandleCreate",
+            "cuGraphInstantiateWithParams",
+            "cuGraphAddNode",
+        ]:
+            assert f"{function_name}(" not in result
+
+    def test_cuda_driver_graph_specialized_node_params_runtime_conversion(self):
+        """Test CUDA driver graph specialized node param APIs emit metadata."""
+        code = """
+        bool checkStatus(CUresult status) {
+            return status == CUDA_SUCCESS;
+        }
+
+        CUresult updateDriverGraphNodes(
+            CUgraph graph,
+            CUgraphExec exec,
+            CUgraphNode kernelNode,
+            CUgraphNode memcpyNode,
+            CUgraphNode memsetNode,
+            CUgraphNode hostNode,
+            CUgraphNode targetNode,
+            CUcontext context,
+            bool ok
+        ) {
+            CUDA_KERNEL_NODE_PARAMS kernelParams;
+            CUDA_MEMCPY3D copyParams;
+            CUDA_MEMSET_NODE_PARAMS memsetParams;
+            CUDA_HOST_NODE_PARAMS hostParams;
+            CUkernelNodeAttrValue attrValue;
+            CUgraphNode errorNode;
+            CUgraphExecUpdateResult updateResult;
+            CUgraphExecUpdateResultInfo resultInfo;
+
+            CUresult status = cuGraphKernelNodeGetParams(kernelNode, &kernelParams);
+            status = cuGraphKernelNodeSetParams(kernelNode, &kernelParams);
+            status = cuGraphMemcpyNodeGetParams(memcpyNode, &copyParams);
+            status = cuGraphMemcpyNodeSetParams(memcpyNode, &copyParams);
+            status = cuGraphMemsetNodeGetParams(memsetNode, &memsetParams);
+            status = cuGraphMemsetNodeSetParams(memsetNode, &memsetParams);
+            status = cuGraphHostNodeGetParams(hostNode, &hostParams);
+            cuGraphHostNodeSetParams(hostNode, &hostParams);
+            status = cuGraphExecUpdate(exec, graph, &errorNode, &updateResult);
+            status = cuGraphExecUpdate_v2(exec, graph, &resultInfo);
+            status = cuGraphExecKernelNodeSetParams(
+                exec,
+                kernelNode,
+                &kernelParams
+            );
+            status = cuGraphExecMemcpyNodeSetParams(
+                exec,
+                memcpyNode,
+                &copyParams,
+                context
+            );
+            status = cuGraphExecMemsetNodeSetParams(
+                exec,
+                memsetNode,
+                &memsetParams,
+                context
+            );
+            status = cuGraphExecHostNodeSetParams(exec, hostNode, &hostParams);
+            status = cuGraphKernelNodeSetAttribute(
+                kernelNode,
+                CU_KERNEL_NODE_ATTRIBUTE_ACCESS_POLICY_WINDOW,
+                &attrValue
+            );
+
+            if (
+                cuGraphKernelNodeGetAttribute(
+                    kernelNode,
+                    CU_KERNEL_NODE_ATTRIBUTE_ACCESS_POLICY_WINDOW,
+                    &attrValue
+                ) != CUDA_SUCCESS
+            ) {
+                return status;
+            }
+
+            if (
+                cuGraphExecMemcpyNodeSetParams(
+                    exec,
+                    memcpyNode,
+                    &copyParams,
+                    context
+                ) != CUDA_SUCCESS
+            ) {
+                return status;
+            }
+
+            bool memsetUpdated = checkStatus(
+                cuGraphExecMemsetNodeSetParams(
+                    exec,
+                    memsetNode,
+                    &memsetParams,
+                    context
+                )
+            );
+            bool copied = checkStatus(
+                cuGraphKernelNodeCopyAttributes(kernelNode, targetNode)
+            );
+            return copied && memsetUpdated && ok
+                ? cuGraphExecMemcpyNodeSetParams(
+                    exec,
+                    memcpyNode,
+                    &copyParams,
+                    context
+                )
+                : status;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA driver graph kernel node get params: node: kernelNode, "
+            "params: (&kernelParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph kernel node set params: node: kernelNode, "
+            "params: (&kernelParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph memcpy node get params: node: memcpyNode, "
+            "params: (&copyParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph memcpy node set params: node: memcpyNode, "
+            "params: (&copyParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph memset node get params: node: memsetNode, "
+            "params: (&memsetParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph memset node set params: node: memsetNode, "
+            "params: (&memsetParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph host node get params: node: hostNode, "
+            "params: (&hostParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph host node set params: node: hostNode, "
+            "params: (&hostParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph exec update: exec: exec, graph: graph, "
+            "error node output: errorNode, result output: updateResult"
+        ) in result
+        assert (
+            "// CUDA driver graph exec update v2: exec: exec, graph: graph, "
+            "result info output: resultInfo"
+        ) in result
+        assert (
+            "// CUDA driver graph exec set kernel node params: exec: exec, "
+            "node: kernelNode, params: (&kernelParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph exec set memcpy node params: exec: exec, "
+            "node: memcpyNode, params: (&copyParams), context: context"
+        ) in result
+        assert (
+            "// CUDA driver graph exec set memset node params: exec: exec, "
+            "node: memsetNode, params: (&memsetParams), context: context"
+        ) in result
+        assert (
+            "// CUDA driver graph exec set host node params: exec: exec, "
+            "node: hostNode, params: (&hostParams)"
+        ) in result
+        assert (
+            "// CUDA driver graph kernel node set attribute: node: kernelNode, "
+            "attribute: CU_KERNEL_NODE_ATTRIBUTE_ACCESS_POLICY_WINDOW, "
+            "value: (&attrValue)"
+        ) in result
+        assert (
+            "if (((/* CUDA driver graph kernel node get attribute: "
+            "node: kernelNode, "
+            "attribute: CU_KERNEL_NODE_ATTRIBUTE_ACCESS_POLICY_WINDOW, "
+            "output: attrValue */ CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver graph kernel node copy attributes: "
+            "source: kernelNode, destination: targetNode */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "if (((/* CUDA driver graph exec set memcpy node params: "
+            "exec: exec, node: memcpyNode, params: (&copyParams), "
+            "context: context */ CUDA_SUCCESS) != CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "checkStatus((/* CUDA driver graph exec set memset node params: "
+            "exec: exec, node: memsetNode, params: (&memsetParams), "
+            "context: context */ CUDA_SUCCESS))"
+        ) in result
+        assert (
+            "((copied && memsetUpdated) && ok) ? "
+            "(/* CUDA driver graph exec set memcpy node params: exec: exec, "
+            "node: memcpyNode, params: (&copyParams), context: context */ "
+            "CUDA_SUCCESS) : status"
+        ) in result
+        assert "var status: CUresult = CUDA_SUCCESS;" in result
+        assert "status = CUDA_SUCCESS;" in result
+        for function_name in [
+            "cuGraphKernelNodeGetParams",
+            "cuGraphKernelNodeSetParams",
+            "cuGraphMemcpyNodeGetParams",
+            "cuGraphMemcpyNodeSetParams",
+            "cuGraphMemsetNodeGetParams",
+            "cuGraphMemsetNodeSetParams",
+            "cuGraphHostNodeGetParams",
+            "cuGraphHostNodeSetParams",
+            "cuGraphExecUpdate",
+            "cuGraphExecUpdate_v2",
+            "cuGraphExecKernelNodeSetParams",
+            "cuGraphExecMemcpyNodeSetParams",
+            "cuGraphExecMemsetNodeSetParams",
+            "cuGraphExecHostNodeSetParams",
+            "cuGraphKernelNodeGetAttribute",
+            "cuGraphKernelNodeSetAttribute",
+            "cuGraphKernelNodeCopyAttributes",
+        ]:
+            assert f"{function_name}(" not in result
+
     def test_cuda_runtime_event_api_conversion(self):
         """Test CUDA stream and event API calls emit metadata comments"""
         code = """

@@ -169,6 +169,7 @@ class HipToCrossGLConverter:
         self.user_function_names = set()
         self.global_resource_object_type_hints = {}
         self.resource_object_hint_scopes = []
+        self.variable_type_scopes = [{}]
 
     def generate(self, ast_node):
         """Generate complete CrossGL source from a parsed HIP AST."""
@@ -182,6 +183,7 @@ class HipToCrossGLConverter:
             self.collect_global_resource_object_type_hints(ast_node)
         )
         self.resource_object_hint_scopes = []
+        self.variable_type_scopes = [{}]
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -423,6 +425,26 @@ class HipToCrossGLConverter:
                 return scope[name]
         return self.global_resource_object_type_hints.get(name)
 
+    def push_variable_type_scope(self):
+        self.variable_type_scopes.append({})
+
+    def pop_variable_type_scope(self):
+        if len(self.variable_type_scopes) > 1:
+            self.variable_type_scopes.pop()
+
+    def register_variable_type(self, name, type_name):
+        if not name or not type_name:
+            return
+        if not self.variable_type_scopes:
+            self.variable_type_scopes.append({})
+        self.variable_type_scopes[-1][name] = type_name
+
+    def lookup_variable_type(self, name):
+        for scope in reversed(self.variable_type_scopes):
+            if name in scope:
+                return scope[name]
+        return None
+
     def emit_statement(self, stmt):
         """Render and append one converted statement."""
         if isinstance(stmt, list):
@@ -460,6 +482,9 @@ class HipToCrossGLConverter:
         comments = self.format_hip_runtime_call(value)
         if comments is None:
             return None
+
+        if value.name == "hipGetSurfaceObjectResourceDesc":
+            return comments, "hipErrorNotSupported"
 
         success_value = (
             "HIPRTC_SUCCESS" if value.name.startswith("hiprtc") else "hipSuccess"
@@ -1227,6 +1252,25 @@ class HipToCrossGLConverter:
                     f"// HIP IPC open event handle: output: {output}, "
                     f"handle: {args[1]}"
                 ]
+        elif name in {
+            "hipStreamWaitValue32",
+            "hipStreamWaitValue64",
+            "hipStreamWriteValue32",
+            "hipStreamWriteValue64",
+        }:
+            if len(args) >= 4:
+                operation = "wait" if "Wait" in name else "write"
+                width = "32" if name.endswith("32") else "64"
+                return [
+                    f"// HIP stream {operation} value{width}: stream: {args[0]}, "
+                    f"address: {args[1]}, value: {args[2]}, flags: {args[3]}"
+                ]
+        elif name == "hipStreamBatchMemOp":
+            if len(args) >= 4:
+                return [
+                    f"// HIP stream batch memory op: stream: {args[0]}, "
+                    f"count: {args[1]}, params: {args[2]}, flags: {args[3]}"
+                ]
         elif name in {"hipStreamSynchronize"}:
             if args:
                 return [f"// HIP synchronize: {args[0]}"]
@@ -1724,6 +1768,199 @@ class HipToCrossGLConverter:
                     f"// HIP module get texture reference: output: {output}, "
                     f"module: {args[1]}, name: {args[2]}"
                 ]
+        elif name == "hipBindTexture":
+            if len(args) >= 5:
+                offset = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// HIP texture reference bind: "
+                    f"offset output: {offset}, texture: {args[1]}, "
+                    f"pointer: {args[2]}, desc: {args[3]}, bytes: {args[4]}"
+                ]
+        elif name == "hipBindTexture2D":
+            if len(args) >= 7:
+                offset = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// HIP texture reference bind 2D: "
+                    f"offset output: {offset}, texture: {args[1]}, "
+                    f"pointer: {args[2]}, desc: {args[3]}, width: {args[4]}, "
+                    f"height: {args[5]}, pitch: {args[6]}"
+                ]
+        elif name == "hipBindTextureToArray":
+            if len(args) >= 3:
+                return [
+                    "// HIP texture reference bind array: "
+                    f"texture: {args[0]}, array: {args[1]}, desc: {args[2]}"
+                ]
+        elif name == "hipBindTextureToMipmappedArray":
+            if len(args) >= 3:
+                return [
+                    "// HIP texture reference bind mipmapped array: "
+                    f"texture: {args[0]}, mipmapped array: {args[1]}, "
+                    f"desc: {args[2]}"
+                ]
+        elif name == "hipGetTextureReference":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    f"// HIP get texture reference: output: {output}, "
+                    f"symbol: {args[1]}"
+                ]
+        elif name == "hipGetTextureAlignmentOffset":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// HIP texture alignment offset query: "
+                    f"output: {output}, texture: {args[1]}"
+                ]
+        elif name == "hipUnbindTexture":
+            if args:
+                return [f"// HIP texture reference unbind: {args[0]}"]
+        elif name == "hipTexRefGetAddress":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// HIP texture reference get address: "
+                    f"output: {output}, texture: {args[1]}"
+                ]
+        elif name == "hipTexRefGetAddressMode":
+            if len(args) >= 3:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// HIP texture reference get address mode: "
+                    f"output: {output}, texture: {args[1]}, dim: {args[2]}"
+                ]
+        elif name in {
+            "hipTexRefGetArray",
+            "hipTexRefGetBorderColor",
+            "hipTexRefGetFilterMode",
+            "hipTexRefGetFlags",
+            "hipTexRefGetMaxAnisotropy",
+            "hipTexRefGetMipmapFilterMode",
+            "hipTexRefGetMipmapLevelBias",
+            "hipTexRefGetMipMappedArray",
+            "hipTexRefGetMipmappedArray",
+        }:
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                labels = {
+                    "hipTexRefGetArray": "array",
+                    "hipTexRefGetBorderColor": "border color",
+                    "hipTexRefGetFilterMode": "filter mode",
+                    "hipTexRefGetFlags": "flags",
+                    "hipTexRefGetMaxAnisotropy": "max anisotropy",
+                    "hipTexRefGetMipmapFilterMode": "mipmap filter mode",
+                    "hipTexRefGetMipmapLevelBias": "mipmap level bias",
+                    "hipTexRefGetMipMappedArray": "mipmapped array",
+                    "hipTexRefGetMipmappedArray": "mipmapped array",
+                }
+                return [
+                    f"// HIP texture reference get {labels[name]}: "
+                    f"output: {output}, texture: {args[1]}"
+                ]
+        elif name == "hipTexRefGetFormat":
+            if len(args) >= 3:
+                format_output = self.format_runtime_pointer_target(node.args[0])
+                channels_output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// HIP texture reference get format: "
+                    f"format output: {format_output}, "
+                    f"channels output: {channels_output}, texture: {args[2]}"
+                ]
+        elif name == "hipTexRefGetMipmapLevelClamp":
+            if len(args) >= 3:
+                min_output = self.format_runtime_pointer_target(node.args[0])
+                max_output = self.format_runtime_pointer_target(node.args[1])
+                return [
+                    "// HIP texture reference get mipmap level clamp: "
+                    f"min output: {min_output}, max output: {max_output}, "
+                    f"texture: {args[2]}"
+                ]
+        elif name == "hipTexRefSetAddress":
+            if len(args) >= 4:
+                offset = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// HIP texture reference set address: "
+                    f"offset output: {offset}, texture: {args[1]}, "
+                    f"pointer: {args[2]}, bytes: {args[3]}"
+                ]
+        elif name == "hipTexRefSetAddress2D":
+            if len(args) >= 4:
+                return [
+                    "// HIP texture reference set address 2D: "
+                    f"texture: {args[0]}, desc: {args[1]}, pointer: {args[2]}, "
+                    f"pitch: {args[3]}"
+                ]
+        elif name in {
+            "hipTexRefSetAddressMode",
+            "hipTexRefSetArray",
+            "hipTexRefSetBorderColor",
+            "hipTexRefSetFilterMode",
+            "hipTexRefSetFlags",
+            "hipTexRefSetFormat",
+            "hipTexRefSetMaxAnisotropy",
+            "hipTexRefSetMipmapFilterMode",
+            "hipTexRefSetMipmapLevelBias",
+            "hipTexRefSetMipmapLevelClamp",
+            "hipTexRefSetMipmappedArray",
+        }:
+            texture = args[0] if args else "<missing>"
+            if name == "hipTexRefSetAddressMode" and len(args) >= 3:
+                return [
+                    "// HIP texture reference set address mode: "
+                    f"texture: {texture}, dim: {args[1]}, mode: {args[2]}"
+                ]
+            if name == "hipTexRefSetArray" and len(args) >= 3:
+                return [
+                    "// HIP texture reference set array: "
+                    f"texture: {texture}, array: {args[1]}, flags: {args[2]}"
+                ]
+            if name == "hipTexRefSetBorderColor" and len(args) >= 2:
+                return [
+                    "// HIP texture reference set border color: "
+                    f"texture: {texture}, color: {args[1]}"
+                ]
+            if name == "hipTexRefSetFilterMode" and len(args) >= 2:
+                return [
+                    "// HIP texture reference set filter mode: "
+                    f"texture: {texture}, mode: {args[1]}"
+                ]
+            if name == "hipTexRefSetFlags" and len(args) >= 2:
+                return [
+                    "// HIP texture reference set flags: "
+                    f"texture: {texture}, flags: {args[1]}"
+                ]
+            if name == "hipTexRefSetFormat" and len(args) >= 3:
+                return [
+                    "// HIP texture reference set format: "
+                    f"texture: {texture}, format: {args[1]}, "
+                    f"components: {args[2]}"
+                ]
+            if name == "hipTexRefSetMaxAnisotropy" and len(args) >= 2:
+                return [
+                    "// HIP texture reference set max anisotropy: "
+                    f"texture: {texture}, value: {args[1]}"
+                ]
+            if name == "hipTexRefSetMipmapFilterMode" and len(args) >= 2:
+                return [
+                    "// HIP texture reference set mipmap filter mode: "
+                    f"texture: {texture}, mode: {args[1]}"
+                ]
+            if name == "hipTexRefSetMipmapLevelBias" and len(args) >= 2:
+                return [
+                    "// HIP texture reference set mipmap level bias: "
+                    f"texture: {texture}, bias: {args[1]}"
+                ]
+            if name == "hipTexRefSetMipmapLevelClamp" and len(args) >= 3:
+                return [
+                    "// HIP texture reference set mipmap level clamp: "
+                    f"texture: {texture}, min: {args[1]}, max: {args[2]}"
+                ]
+            if name == "hipTexRefSetMipmappedArray" and len(args) >= 3:
+                return [
+                    "// HIP texture reference set mipmapped array: "
+                    f"texture: {texture}, mipmapped array: {args[1]}, "
+                    f"flags: {args[2]}"
+                ]
         elif name == "hipGetDriverEntryPoint":
             if len(args) >= 4:
                 output = self.format_runtime_pointer_target(node.args[1])
@@ -1964,6 +2201,13 @@ class HipToCrossGLConverter:
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
                 return [f"// HIP surface object create: {output}, resource: {args[1]}"]
+        elif name == "hipGetSurfaceObjectResourceDesc":
+            if len(args) >= 2:
+                output = self.format_runtime_pointer_target(node.args[0])
+                return [
+                    "// HIP surface object resource descriptor query not supported "
+                    f"by HIP runtime: surface: {args[1]}, output: {output}"
+                ]
         elif name == "hipDestroySurfaceObject":
             if args:
                 return [f"// HIP surface object destroy: {args[0]}"]
@@ -2310,6 +2554,54 @@ class HipToCrossGLConverter:
                     f"// HIP graph add generic node: output: {output}, "
                     f"graph: {args[1]}, dependencies: {args[2]}, "
                     f"count: {args[3]}, params: {args[4]}"
+                ]
+        if name == "hipDrvGraphAddMemcpyNode":
+            if len(args) >= 6:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP driver graph add memcpy node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"count: {args[3]}, params: {args[4]}, context: {args[5]}"
+                ]
+        if name == "hipDrvGraphAddMemsetNode":
+            if len(args) >= 6:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP driver graph add memset node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"count: {args[3]}, params: {args[4]}, context: {args[5]}"
+                ]
+        if name == "hipDrvGraphAddMemFreeNode":
+            if len(args) >= 5:
+                output = self.format_runtime_pointer_target(raw_args[0])
+                return [
+                    f"// HIP driver graph add memory free node: output: {output}, "
+                    f"graph: {args[1]}, dependencies: {args[2]}, "
+                    f"count: {args[3]}, pointer: {args[4]}"
+                ]
+        if name in {"hipDrvGraphMemcpyNodeGetParams", "hipDrvGraphMemcpyNodeSetParams"}:
+            if len(args) >= 2:
+                action = "get" if "GetParams" in name else "set"
+                params = (
+                    self.format_runtime_pointer_target(raw_args[1])
+                    if action == "get"
+                    else args[1]
+                )
+                label = "params output" if action == "get" else "params"
+                return [
+                    f"// HIP driver graph memcpy node {action} params: "
+                    f"node: {args[0]}, {label}: {params}"
+                ]
+        if name in {
+            "hipDrvGraphExecMemcpyNodeSetParams",
+            "hipDrvGraphExecMemsetNodeSetParams",
+        }:
+            if len(args) >= 4:
+                node_kind = "memcpy" if "Memcpy" in name else "memset"
+                return [
+                    f"// HIP driver graph exec {node_kind} node set params: "
+                    f"exec: {args[0]}, node: {args[1]}, params: {args[2]}, "
+                    f"context: {args[3]}"
                 ]
         if name in {
             "hipGraphAddEmptyNode",
@@ -2757,6 +3049,8 @@ class HipToCrossGLConverter:
 
     def format_hip_runtime_expression_call(self, node, args):
         name = node.name
+        if name in {"hipGetLastError", "hipPeekAtLastError"}:
+            return self.format_hip_runtime_status_inline_expression(node)
         if name == "hipGetErrorString" and args:
             return f'/* HIP error string: {args[0]} */ ""'
         if name == "hipGetErrorName" and args:
@@ -2774,7 +3068,542 @@ class HipToCrossGLConverter:
             )
         if name == "hipGetStreamDeviceId" and args:
             return f"/* HIP stream device id: {args[0]} */ 0"
+
+        object_runtime_status = self.format_hip_object_runtime_status_expression(node)
+        if object_runtime_status is not None:
+            return object_runtime_status
+        texture_reference_status = (
+            self.format_hip_texture_reference_runtime_status_expression(node)
+        )
+        if texture_reference_status is not None:
+            return texture_reference_status
+        stream_event_graph_status = (
+            self.format_hip_stream_event_graph_runtime_status_expression(node)
+        )
+        if stream_event_graph_status is not None:
+            return stream_event_graph_status
+        driver_device_context_status = (
+            self.format_hip_driver_device_context_runtime_status_expression(node)
+        )
+        if driver_device_context_status is not None:
+            return driver_device_context_status
+        memory_pointer_occupancy_status = (
+            self.format_hip_memory_pointer_occupancy_runtime_status_expression(node)
+        )
+        if memory_pointer_occupancy_status is not None:
+            return memory_pointer_occupancy_status
+        copy_memset_symbol_status = (
+            self.format_hip_copy_memset_symbol_runtime_status_expression(node)
+        )
+        if copy_memset_symbol_status is not None:
+            return copy_memset_symbol_status
+        module_library_link_rtc_status = (
+            self.format_hip_module_library_link_rtc_runtime_status_expression(node)
+        )
+        if module_library_link_rtc_status is not None:
+            return module_library_link_rtc_status
+        external_interop_status = (
+            self.format_hip_external_interop_runtime_status_expression(node)
+        )
+        if external_interop_status is not None:
+            return external_interop_status
+        interop_ipc_launch_status = (
+            self.format_hip_interop_ipc_launch_runtime_status_expression(node)
+        )
+        if interop_ipc_launch_status is not None:
+            return interop_ipc_launch_status
         return None
+
+    def format_hip_object_runtime_status_expression(self, node):
+        name = node.name
+        if not isinstance(name, str) or name not in {
+            "hipCreateTextureObject",
+            "hipTexObjectCreate",
+            "hipDestroyTextureObject",
+            "hipTexObjectDestroy",
+            "hipGetTextureObjectResourceDesc",
+            "hipTexObjectGetResourceDesc",
+            "hipGetTextureObjectTextureDesc",
+            "hipTexObjectGetTextureDesc",
+            "hipGetTextureObjectResourceViewDesc",
+            "hipTexObjectGetResourceViewDesc",
+            "hipGetChannelDesc",
+            "hipCreateSurfaceObject",
+            "hipGetSurfaceObjectResourceDesc",
+            "hipDestroySurfaceObject",
+        }:
+            return None
+        return self.format_hip_runtime_status_inline_expression(node)
+
+    def format_hip_texture_reference_runtime_status_expression(self, node):
+        name = node.name
+        if not isinstance(name, str) or name not in {
+            "hipBindTexture",
+            "hipBindTexture2D",
+            "hipBindTextureToArray",
+            "hipBindTextureToMipmappedArray",
+            "hipGetTextureReference",
+            "hipGetTextureAlignmentOffset",
+            "hipUnbindTexture",
+            "hipTexRefGetAddress",
+            "hipTexRefGetAddressMode",
+            "hipTexRefGetArray",
+            "hipTexRefGetBorderColor",
+            "hipTexRefGetFilterMode",
+            "hipTexRefGetFlags",
+            "hipTexRefGetFormat",
+            "hipTexRefGetMaxAnisotropy",
+            "hipTexRefGetMipmapFilterMode",
+            "hipTexRefGetMipmapLevelBias",
+            "hipTexRefGetMipmapLevelClamp",
+            "hipTexRefGetMipMappedArray",
+            "hipTexRefGetMipmappedArray",
+            "hipTexRefSetAddress",
+            "hipTexRefSetAddress2D",
+            "hipTexRefSetAddressMode",
+            "hipTexRefSetArray",
+            "hipTexRefSetBorderColor",
+            "hipTexRefSetFilterMode",
+            "hipTexRefSetFlags",
+            "hipTexRefSetFormat",
+            "hipTexRefSetMaxAnisotropy",
+            "hipTexRefSetMipmapFilterMode",
+            "hipTexRefSetMipmapLevelBias",
+            "hipTexRefSetMipmapLevelClamp",
+            "hipTexRefSetMipmappedArray",
+        }:
+            return None
+        return self.format_hip_runtime_status_inline_expression(node)
+
+    def format_hip_stream_event_graph_runtime_status_expression(self, node):
+        name = node.name
+        if not isinstance(name, str):
+            return None
+        is_graph_runtime = name.startswith("hipGraph") and not name.startswith(
+            "hipGraphics"
+        )
+        if not (
+            is_graph_runtime
+            or name
+            in {
+                "hipDeviceGetStreamPriorityRange",
+                "hipDeviceGetGraphMemAttribute",
+                "hipDeviceSetGraphMemAttribute",
+                "hipDeviceGraphMemTrim",
+                "hipDeviceSynchronize",
+                "hipDrvGraphAddMemcpyNode",
+                "hipDrvGraphAddMemFreeNode",
+                "hipDrvGraphAddMemsetNode",
+                "hipDrvGraphExecMemcpyNodeSetParams",
+                "hipDrvGraphExecMemsetNodeSetParams",
+                "hipDrvGraphMemcpyNodeGetParams",
+                "hipDrvGraphMemcpyNodeSetParams",
+                "hipEventCreate",
+                "hipEventCreateWithFlags",
+                "hipEventDestroy",
+                "hipEventElapsedTime",
+                "hipEventQuery",
+                "hipEventRecord",
+                "hipEventSynchronize",
+                "hipLaunchHostFunc",
+                "hipStreamAddCallback",
+                "hipStreamBeginCapture",
+                "hipStreamBeginCaptureToGraph",
+                "hipStreamBatchMemOp",
+                "hipStreamCreate",
+                "hipStreamCreateWithFlags",
+                "hipStreamCreateWithPriority",
+                "hipStreamDestroy",
+                "hipStreamEndCapture",
+                "hipStreamGetCaptureInfo",
+                "hipStreamGetCaptureInfo_v2",
+                "hipStreamGetFlags",
+                "hipStreamGetPriority",
+                "hipStreamIsCapturing",
+                "hipStreamSynchronize",
+                "hipStreamUpdateCaptureDependencies",
+                "hipStreamWaitEvent",
+                "hipStreamWaitValue32",
+                "hipStreamWaitValue64",
+                "hipStreamWriteValue32",
+                "hipStreamWriteValue64",
+                "hipThreadExchangeStreamCaptureMode",
+                "hipUserObjectCreate",
+                "hipUserObjectRelease",
+                "hipUserObjectRetain",
+            }
+        ):
+            return None
+        return self.format_hip_runtime_status_inline_expression(node)
+
+    def format_hip_driver_device_context_runtime_status_expression(self, node):
+        name = node.name
+        if not isinstance(name, str):
+            return None
+        if name not in {
+            "hipInit",
+            "hipDriverGetVersion",
+            "hipRuntimeGetVersion",
+            "hipGetDevice",
+            "hipGetDeviceCount",
+            "hipSetDevice",
+            "hipSetValidDevices",
+            "hipGetDeviceProperties",
+            "hipDeviceGet",
+            "hipDeviceCanAccessPeer",
+            "hipDeviceGetP2PAttribute",
+            "hipDeviceEnablePeerAccess",
+            "hipDeviceDisablePeerAccess",
+            "hipExtGetLinkTypeAndHopCount",
+            "hipDeviceGetAttribute",
+            "hipDeviceGetName",
+            "hipDeviceGetUuid",
+            "hipDeviceTotalMem",
+            "hipDeviceComputeCapability",
+            "hipChooseDevice",
+            "hipDeviceGetPCIBusId",
+            "hipDeviceGetByPCIBusId",
+            "hipDeviceGetCacheConfig",
+            "hipDeviceSetCacheConfig",
+            "hipDeviceGetSharedMemConfig",
+            "hipDeviceSetSharedMemConfig",
+            "hipDeviceGetLimit",
+            "hipDeviceSetLimit",
+            "hipDeviceReset",
+            "hipGetDeviceFlags",
+            "hipSetDeviceFlags",
+            "hipGetProcAddress",
+            "hipCtxCreate",
+            "hipCtxDestroy",
+            "hipCtxPopCurrent",
+            "hipCtxPushCurrent",
+            "hipCtxSetCurrent",
+            "hipCtxGetCurrent",
+            "hipCtxGetDevice",
+            "hipCtxGetApiVersion",
+            "hipCtxGetCacheConfig",
+            "hipCtxSetCacheConfig",
+            "hipCtxGetSharedMemConfig",
+            "hipCtxSetSharedMemConfig",
+            "hipCtxGetFlags",
+            "hipCtxSynchronize",
+            "hipDevicePrimaryCtxRetain",
+            "hipDevicePrimaryCtxRelease",
+            "hipDevicePrimaryCtxReset",
+            "hipDevicePrimaryCtxSetFlags",
+            "hipDevicePrimaryCtxGetState",
+        }:
+            return None
+        return self.format_hip_runtime_status_inline_expression(node)
+
+    def format_hip_memory_pointer_occupancy_runtime_status_expression(self, node):
+        name = node.name
+        if not isinstance(name, str):
+            return None
+        if name not in {
+            "hipMalloc",
+            "hipMallocManaged",
+            "hipExtMallocWithFlags",
+            "hipMallocAsync",
+            "hipMallocFromPoolAsync",
+            "hipHostMalloc",
+            "hipHostAlloc",
+            "hipHostRegister",
+            "hipHostUnregister",
+            "hipHostGetDevicePointer",
+            "hipHostGetFlags",
+            "hipMallocPitch",
+            "hipMalloc3D",
+            "hipMallocArray",
+            "hipMalloc3DArray",
+            "hipMallocMipmappedArray",
+            "hipMipmappedArrayCreate",
+            "hipGetMipmappedArrayLevel",
+            "hipMipmappedArrayGetLevel",
+            "hipMipmappedArrayDestroy",
+            "hipFree",
+            "hipHostFree",
+            "hipFreeHost",
+            "hipFreeAsync",
+            "hipFreeArray",
+            "hipArrayDestroy",
+            "hipArrayCreate",
+            "hipArray3DCreate",
+            "hipArrayGetDescriptor",
+            "hipArray3DGetDescriptor",
+            "hipArrayGetInfo",
+            "hipMemPoolCreate",
+            "hipMemPoolDestroy",
+            "hipMemPoolTrimTo",
+            "hipMemPoolSetAttribute",
+            "hipMemPoolGetAttribute",
+            "hipMemPoolSetAccess",
+            "hipMemPoolGetAccess",
+            "hipMemPoolExportToShareableHandle",
+            "hipMemPoolImportFromShareableHandle",
+            "hipMemPoolExportPointer",
+            "hipMemPoolImportPointer",
+            "hipDeviceGetDefaultMemPool",
+            "hipDeviceSetMemPool",
+            "hipDeviceGetMemPool",
+            "hipMemPrefetchAsync",
+            "hipMemPrefetchAsync_v2",
+            "hipMemAdvise",
+            "hipMemAdvise_v2",
+            "hipMemRangeGetAttribute",
+            "hipMemRangeGetAttributes",
+            "hipStreamAttachMemAsync",
+            "hipMemGetAllocationGranularity",
+            "hipMemCreate",
+            "hipMemRelease",
+            "hipMemAddressReserve",
+            "hipMemAddressFree",
+            "hipMemMap",
+            "hipMemUnmap",
+            "hipMemSetAccess",
+            "hipMemGetAccess",
+            "hipMemGetAllocationPropertiesFromHandle",
+            "hipMemRetainAllocationHandle",
+            "hipMemExportToShareableHandle",
+            "hipMemImportFromShareableHandle",
+            "hipMemAlloc",
+            "hipMemAllocPitch",
+            "hipMemFree",
+            "hipMemAllocHost",
+            "hipMemHostAlloc",
+            "hipMemFreeHost",
+            "hipMemHostGetDevicePointer",
+            "hipMemGetAddressRange",
+            "hipMemGetInfo",
+            "hipPointerGetAttributes",
+            "hipDrvPointerGetAttributes",
+            "hipPointerGetAttribute",
+            "hipPointerSetAttribute",
+            "hipMemPtrGetInfo",
+            "hipOccupancyMaxPotentialBlockSize",
+            "hipOccupancyMaxPotentialBlockSizeVariableSMem",
+            "hipOccupancyMaxPotentialBlockSizeVariableSMemWithFlags",
+            "hipOccupancyMaxActiveBlocksPerMultiprocessor",
+            "hipOccupancyMaxActiveBlocksPerMultiprocessorWithFlags",
+        }:
+            return None
+        return self.format_hip_runtime_status_inline_expression(node)
+
+    def format_hip_copy_memset_symbol_runtime_status_expression(self, node):
+        name = node.name
+        if not isinstance(name, str):
+            return None
+        if name not in {
+            "hipMemcpy",
+            "hipMemcpyAsync",
+            "hipMemcpyWithStream",
+            "hipMemcpyPeer",
+            "hipMemcpyPeerAsync",
+            "hipMemcpy2D",
+            "hipMemcpy2DAsync",
+            "hipMemcpyToArray",
+            "hipMemcpyToArrayAsync",
+            "hipMemcpyFromArray",
+            "hipMemcpyFromArrayAsync",
+            "hipMemcpy2DToArray",
+            "hipMemcpy2DToArrayAsync",
+            "hipMemcpy2DFromArray",
+            "hipMemcpy2DFromArrayAsync",
+            "hipMemcpyArrayToArray",
+            "hipMemcpy2DArrayToArray",
+            "hipMemcpy3D",
+            "hipMemcpy3DAsync",
+            "hipMemcpy3DPeer",
+            "hipMemcpy3DPeerAsync",
+            "hipMemcpyParam2D",
+            "hipMemcpyParam2DAsync",
+            "hipDrvMemcpy3D",
+            "hipDrvMemcpy3DAsync",
+            "hipMemcpyBatchAsync",
+            "hipMemcpy3DBatchAsync",
+            "hipGetSymbolAddress",
+            "hipGetSymbolSize",
+            "hipMemcpyToSymbol",
+            "hipMemcpyToSymbolAsync",
+            "hipMemcpyFromSymbol",
+            "hipMemcpyFromSymbolAsync",
+            "hipMemset",
+            "hipMemsetAsync",
+            "hipMemset2D",
+            "hipMemset2DAsync",
+            "hipMemset3D",
+            "hipMemset3DAsync",
+            "hipMemcpyHtoD",
+            "hipMemcpyHtoDAsync",
+            "hipMemcpyDtoH",
+            "hipMemcpyDtoHAsync",
+            "hipMemcpyDtoD",
+            "hipMemcpyDtoDAsync",
+            "hipMemcpyAtoH",
+            "hipMemcpyAtoHAsync",
+            "hipMemcpyHtoA",
+            "hipMemcpyHtoAAsync",
+            "hipMemcpyAtoD",
+            "hipMemcpyDtoA",
+            "hipMemcpyAtoA",
+            "hipMemsetD8",
+            "hipMemsetD8Async",
+            "hipMemsetD16",
+            "hipMemsetD16Async",
+            "hipMemsetD32",
+            "hipMemsetD32Async",
+            "hipMemsetD2D8",
+            "hipMemsetD2D8Async",
+            "hipMemsetD2D16",
+            "hipMemsetD2D16Async",
+            "hipMemsetD2D32",
+            "hipMemsetD2D32Async",
+        }:
+            return None
+        return self.format_hip_runtime_status_inline_expression(node)
+
+    def format_hip_module_library_link_rtc_runtime_status_expression(self, node):
+        name = node.name
+        if not isinstance(name, str):
+            return None
+        if name not in {
+            "hipGetFuncBySymbol",
+            "hipFuncGetAttribute",
+            "hipFuncGetAttributes",
+            "hipFuncSetAttribute",
+            "hipFuncSetCacheConfig",
+            "hipFuncSetSharedMemConfig",
+            "hipModuleLoad",
+            "hipModuleLoadData",
+            "hipModuleLoadDataEx",
+            "hipModuleLoadFatBinary",
+            "hipModuleUnload",
+            "hipModuleGetFunction",
+            "hipModuleGetFunctionCount",
+            "hipModuleGetGlobal",
+            "hipModuleGetTexRef",
+            "hipGetDriverEntryPoint",
+            "hipLibraryLoadData",
+            "hipLibraryLoadFromFile",
+            "hipLibraryUnload",
+            "hipLibraryGetKernel",
+            "hipLibraryGetKernelCount",
+            "hipLibraryEnumerateKernels",
+            "hipKernelGetLibrary",
+            "hipKernelGetName",
+            "hipKernelGetParamInfo",
+            "hipKernelGetFunction",
+            "hipKernelGetAttribute",
+            "hipKernelSetAttribute",
+            "hipLinkCreate",
+            "hipLinkAddFile",
+            "hipLinkAddData",
+            "hipLinkComplete",
+            "hipLinkDestroy",
+            "hipMemGetHandleForAddressRange",
+            "hipModuleLaunchKernel",
+            "hipExtModuleLaunchKernel",
+            "hipHccModuleLaunchKernel",
+            "hipLaunchCooperativeKernel",
+            "hipLaunchCooperativeKernelMultiDevice",
+            "hipModuleLaunchCooperativeKernel",
+            "hipModuleLaunchCooperativeKernelMultiDevice",
+            "hiprtcVersion",
+            "hiprtcCreateProgram",
+            "hiprtcDestroyProgram",
+            "hiprtcCompileProgram",
+            "hiprtcGetProgramLogSize",
+            "hiprtcGetProgramLog",
+            "hiprtcGetCodeSize",
+            "hiprtcGetCode",
+            "hiprtcGetBitcodeSize",
+            "hiprtcGetBitcode",
+            "hiprtcAddNameExpression",
+            "hiprtcGetLoweredName",
+            "hiprtcLinkCreate",
+            "hiprtcLinkAddFile",
+            "hiprtcLinkAddData",
+            "hiprtcLinkComplete",
+            "hiprtcLinkDestroy",
+        }:
+            return None
+        return self.format_hip_runtime_status_inline_expression(node)
+
+    def format_hip_external_interop_runtime_status_expression(self, node):
+        name = node.name
+        if not isinstance(name, str):
+            return None
+        if name not in {
+            "hipImportExternalMemory",
+            "hipDestroyExternalMemory",
+            "hipExternalMemoryGetMappedBuffer",
+            "hipExternalMemoryGetMappedMipmappedArray",
+            "hipFreeMipmappedArray",
+            "hipImportExternalSemaphore",
+            "hipDestroyExternalSemaphore",
+            "hipSignalExternalSemaphoresAsync",
+            "hipWaitExternalSemaphoresAsync",
+        }:
+            return None
+        return self.format_hip_runtime_status_inline_expression(node)
+
+    def format_hip_interop_ipc_launch_runtime_status_expression(self, node):
+        name = node.name
+        if not isinstance(name, str):
+            return None
+        if name not in {
+            "hipConfigureCall",
+            "__hipPushCallConfiguration",
+            "__hipPopCallConfiguration",
+            "hipSetupArgument",
+            "hipLaunchByPtr",
+            "hipLaunchKernelExC",
+            "hipDrvLaunchKernelEx",
+            "hipExtLaunchKernel",
+            "hipExtLaunchKernelGGL",
+            "hipExtLaunchMultiKernelMultiDevice",
+            "hipExtModuleLaunchKernel",
+            "hipHccModuleLaunchKernel",
+            "hipLaunchCooperativeKernel",
+            "hipLaunchCooperativeKernelMultiDevice",
+            "hipModuleLaunchCooperativeKernel",
+            "hipModuleLaunchCooperativeKernelMultiDevice",
+            "hipProfilerStart",
+            "hipProfilerStop",
+            "hipIpcGetMemHandle",
+            "hipIpcOpenMemHandle",
+            "hipIpcCloseMemHandle",
+            "hipIpcGetEventHandle",
+            "hipIpcOpenEventHandle",
+            "hipGraphicsGLRegisterBuffer",
+            "hipGraphicsGLRegisterImage",
+            "hipGraphicsUnregisterResource",
+            "hipGraphicsMapResources",
+            "hipGraphicsUnmapResources",
+            "hipGraphicsResourceGetMappedPointer",
+            "hipGraphicsSubResourceGetMappedArray",
+        }:
+            return None
+        return self.format_hip_runtime_status_inline_expression(node)
+
+    def format_hip_runtime_status_inline_expression(self, node):
+        runtime_status = self.format_hip_runtime_status_expression(node)
+        if runtime_status is None:
+            return None
+
+        comments, value = runtime_status
+        detail = "; ".join(
+            self.format_runtime_expression_comment_text(comment) for comment in comments
+        )
+        return f"(/* {detail} */ {value})"
+
+    def format_runtime_expression_comment_text(self, comment):
+        text = str(comment).strip()
+        if text.startswith("// "):
+            text = text[3:]
+        elif text.startswith("//"):
+            text = text[2:].lstrip()
+        return text.replace("*/", "* /")
 
     def format_runtime_pointer_target(self, arg):
         if isinstance(arg, CastNode):
@@ -2792,6 +3621,7 @@ class HipToCrossGLConverter:
             var_type = self.convert_hip_variable_type_to_crossgl(
                 getattr(stmt, "vtype", "int"), stmt.name
             )
+            self.register_variable_type(stmt.name, var_type)
             if hasattr(stmt, "value") and stmt.value:
                 value = self.visit(stmt.value)
                 return f"var {stmt.name}: {var_type} = {value}"
@@ -2864,6 +3694,7 @@ class HipToCrossGLConverter:
                 node, self.collect_declared_variable_names(node)
             )
         )
+        self.push_variable_type_scope()
         try:
             params = []
 
@@ -2882,6 +3713,7 @@ class HipToCrossGLConverter:
                     param_type = self.convert_hip_variable_type_to_crossgl(
                         raw_type, param_name
                     )
+                    self.register_variable_type(param_name, param_type)
                     params.append(f"{param_type} {param_name}")
 
             param_str = ", ".join(params)
@@ -2912,6 +3744,7 @@ class HipToCrossGLConverter:
                 self.pop_packed_argument_scope()
                 self.indent_level -= 1
         finally:
+            self.pop_variable_type_scope()
             self.pop_resource_object_hint_scope()
 
         self.emit("}")
@@ -2933,6 +3766,7 @@ class HipToCrossGLConverter:
                 kernel, self.collect_declared_variable_names(kernel)
             )
         )
+        self.push_variable_type_scope()
         try:
             if hasattr(kernel, "params") and kernel.params:
                 for param in kernel.params:
@@ -2945,6 +3779,9 @@ class HipToCrossGLConverter:
 
                     if "*" in raw_type:
                         element_type = self.convert_hip_pointer_element_type(raw_type)
+                        self.register_variable_type(
+                            param_name, f"array<{element_type}>"
+                        )
                         params.append(
                             f"@group(0) @binding({len(params)}) var<storage, read_write> {param_name}: array<{element_type}>"
                         )
@@ -2952,6 +3789,7 @@ class HipToCrossGLConverter:
                         param_type = self.convert_hip_variable_type_to_crossgl(
                             raw_type, param_name
                         )
+                        self.register_variable_type(param_name, param_type)
                         params.append(f"{param_type} {param_name}")
 
             self.emit(f"fn {kernel.name}(")
@@ -2993,6 +3831,7 @@ class HipToCrossGLConverter:
             self.indent_level -= 1
             self.emit("}")
         finally:
+            self.pop_variable_type_scope()
             self.pop_resource_object_hint_scope()
 
     def visit_StructNode(self, node):
@@ -3018,6 +3857,7 @@ class HipToCrossGLConverter:
 
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, getattr(node, "vtype", "int"))
+        self.register_variable_type(node.name, var_type)
         if "__shared__" in qualifiers:
             self.emit(f"var<workgroup> {node.name}: {var_type};")
             return
@@ -3225,12 +4065,13 @@ class HipToCrossGLConverter:
         if func_name == "lambda":
             return self.format_lambda_call(getattr(node, "args", []))
 
-        args = []
+        raw_args = []
         if hasattr(node, "args") and node.args:
-            args = [self.visit(arg) for arg in node.args]
+            raw_args = node.args
         elif hasattr(node, "arguments") and node.arguments:
-            args = [self.visit(arg) for arg in node.arguments]
+            raw_args = node.arguments
 
+        args = [self.visit(arg) for arg in raw_args]
         args_str = ", ".join(args)
 
         make_unique = self.format_make_unique_call(func_name, args)
@@ -3248,7 +4089,7 @@ class HipToCrossGLConverter:
         if runtime_expression is not None:
             return runtime_expression
 
-        resource_call = self.format_hip_resource_call(func_name, args)
+        resource_call = self.format_hip_resource_call(func_name, args, raw_args)
         if resource_call is not None:
             return resource_call
 
@@ -3256,7 +4097,7 @@ class HipToCrossGLConverter:
         crossgl_func = self.convert_hip_builtin_function(func_name)
         return f"{crossgl_func}({args_str})"
 
-    def format_hip_resource_call(self, function_name, args):
+    def format_hip_resource_call(self, function_name, args, raw_args=None):
         base_name, template_args = self.parse_cpp_template(function_name)
         if self.is_user_defined_function(base_name):
             return None
@@ -3265,23 +4106,23 @@ class HipToCrossGLConverter:
         if base_name == "tex1Dfetch":
             return self.format_hip_texture_fetch_call(args)
         if base_name in {"tex1D", "tex1DLod", "tex1DGrad"}:
-            return self.format_hip_texture_call(base_name, args, "vec1", 1)
+            return self.format_hip_texture_call(base_name, args, "vec1", 1, raw_args)
         if base_name in {"tex2D", "tex2DLod", "tex2DGrad"}:
-            return self.format_hip_texture_call(base_name, args, "vec2", 2)
+            return self.format_hip_texture_call(base_name, args, "vec2", 2, raw_args)
         if base_name in {"tex3D", "tex3DLod", "tex3DGrad"}:
-            return self.format_hip_texture_call(base_name, args, "vec3", 3)
+            return self.format_hip_texture_call(base_name, args, "vec3", 3, raw_args)
         if base_name in {"texCubemap", "texCubemapLod", "texCubemapGrad"}:
-            return self.format_hip_texture_call(base_name, args, "vec3", 3)
+            return self.format_hip_texture_call(base_name, args, "vec3", 3, raw_args)
         if base_name in {"tex1DLayered", "tex1DLayeredLod", "tex1DLayeredGrad"}:
-            return self.format_hip_texture_call(base_name, args, "vec2", 2)
+            return self.format_hip_texture_call(base_name, args, "vec2", 2, raw_args)
         if base_name in {"tex2DLayered", "tex2DLayeredLod", "tex2DLayeredGrad"}:
-            return self.format_hip_texture_call(base_name, args, "vec3", 3)
+            return self.format_hip_texture_call(base_name, args, "vec3", 3, raw_args)
         if base_name in {
             "texCubemapLayered",
             "texCubemapLayeredLod",
             "texCubemapLayeredGrad",
         }:
-            return self.format_hip_texture_call(base_name, args, "vec4", 4)
+            return self.format_hip_texture_call(base_name, args, "vec4", 4, raw_args)
 
         if base_name in {
             "surf1Dread",
@@ -3301,7 +4142,7 @@ class HipToCrossGLConverter:
                 "surfCubemapread": 3,
                 "surfCubemapLayeredread": 4,
             }[base_name]
-            return self.format_hip_surface_read(args, dimensions, value_type)
+            return self.format_hip_surface_read(base_name, args, dimensions, value_type)
 
         if base_name in {
             "surf1Dwrite",
@@ -3322,6 +4163,7 @@ class HipToCrossGLConverter:
                 "surfCubemapLayeredwrite": 4,
             }[base_name]
             return self.format_hip_surface_write(
+                base_name,
                 args,
                 dimensions,
                 value_type,
@@ -3330,9 +4172,16 @@ class HipToCrossGLConverter:
 
         return None
 
-    def format_hip_texture_call(self, function_name, args, vector_name, dimensions):
+    def format_hip_texture_call(
+        self, function_name, args, vector_name, dimensions, raw_args=None
+    ):
         if len(args) < 2:
             return None
+
+        if self.is_sparse_hip_texture_call(function_name, args):
+            return self.format_unsupported_hip_texture_sparse_residency_call(
+                function_name
+            )
 
         extra_count = (
             2 if "Grad" in function_name else 1 if "Lod" in function_name else 0
@@ -3343,7 +4192,14 @@ class HipToCrossGLConverter:
 
         texture_name = args[0]
         coordinate_args = args[1 : 1 + coordinate_count]
+        raw_coordinate_args = (raw_args or [])[1 : 1 + coordinate_count]
         if coordinate_count == 1:
+            rank = self.infer_texture_coordinate_rank(
+                coordinate_args[0],
+                raw_coordinate_args[0] if raw_coordinate_args else None,
+            )
+            if dimensions > 1 and rank is not None and rank != dimensions:
+                return self.format_hip_texture_coordinate_rank_diagnostic(function_name)
             coordinate = coordinate_args[0]
             consumed = 2
         elif coordinate_count == dimensions:
@@ -3366,26 +4222,207 @@ class HipToCrossGLConverter:
             return f"textureLod({texture_name}, {coordinate}, {remaining[0]})"
         return f"texture({texture_name}, {coordinate})"
 
+    def infer_texture_coordinate_rank(self, coordinate, raw_coordinate=None):
+        expression_type = self.lookup_texture_coordinate_expression_type(
+            coordinate, raw_coordinate
+        )
+        rank = self.vector_type_rank(expression_type)
+        if rank is not None:
+            return rank
+        if self.is_scalar_type_name(expression_type):
+            return 1
+
+        text = self.strip_wrapping_parentheses(str(coordinate).strip())
+        rank = self.vector_constructor_rank(text)
+        if rank is not None:
+            return rank
+        if self.is_swizzle_expression(text):
+            return len(text.rsplit(".", 1)[1])
+        if self.is_scalar_literal(text):
+            return 1
+        return None
+
+    def lookup_texture_coordinate_expression_type(self, coordinate, raw_coordinate):
+        name = self.get_resource_object_expression_name(raw_coordinate)
+        if name is None:
+            name = self.strip_wrapping_parentheses(str(coordinate).strip())
+        if self.is_simple_identifier(name):
+            return self.lookup_variable_type(name)
+        return None
+
+    def vector_type_rank(self, type_name):
+        if not type_name:
+            return None
+        text = str(type_name).strip()
+        if text.startswith("vec") and len(text) >= 4 and text[3].isdigit():
+            return int(text[3])
+        mapped_type = self.VECTOR_TYPE_MAPPING.get(text)
+        if mapped_type is not None:
+            return self.vector_type_rank(mapped_type)
+        return None
+
+    def vector_constructor_rank(self, text):
+        if text.startswith("vec") and len(text) >= 4 and text[3].isdigit():
+            return int(text[3])
+        return None
+
+    def is_scalar_type_name(self, type_name):
+        return type_name in {
+            "bool",
+            "f32",
+            "f64",
+            "i8",
+            "u8",
+            "i16",
+            "u16",
+            "i32",
+            "u32",
+            "i64",
+            "u64",
+        }
+
+    def is_simple_identifier(self, text):
+        if not isinstance(text, str) or not text:
+            return False
+        return text.replace("_", "").isalnum() and not text[0].isdigit()
+
+    def is_swizzle_expression(self, text):
+        if "." not in text:
+            return False
+        suffix = text.rsplit(".", 1)[1]
+        return bool(suffix) and all(char in "xyzwrgba" for char in suffix)
+
+    def is_scalar_literal(self, text):
+        if not text:
+            return False
+        literal = text.lower()
+        while literal.endswith(("f", "u", "l")):
+            literal = literal[:-1]
+        try:
+            float(literal)
+        except ValueError:
+            return False
+        return True
+
+    def strip_wrapping_parentheses(self, text):
+        while self.has_wrapping_parentheses(text):
+            inner = text[1:-1].strip()
+            if not inner:
+                break
+            text = inner
+        return text
+
+    def has_wrapping_parentheses(self, text):
+        if not text.startswith("(") or not text.endswith(")"):
+            return False
+        depth = 0
+        for index, char in enumerate(text):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0 and index != len(text) - 1:
+                    return False
+            if depth < 0:
+                return False
+        return depth == 0
+
+    def is_sparse_hip_texture_call(self, function_name, args):
+        sparse_arg_counts = {
+            "tex1D": 3,
+            "tex1DLod": 4,
+            "tex1DGrad": 5,
+            "tex2D": 4,
+            "tex2DLod": 5,
+            "tex2DGrad": 6,
+            "tex3D": 5,
+            "tex3DLod": 6,
+            "tex3DGrad": 7,
+            "texCubemap": 5,
+            "texCubemapLod": 6,
+            "texCubemapGrad": 7,
+            "tex1DLayered": 4,
+            "tex1DLayeredLod": 5,
+            "tex1DLayeredGrad": 6,
+            "tex2DLayered": 5,
+            "tex2DLayeredLod": 6,
+            "tex2DLayeredGrad": 7,
+            "texCubemapLayered": 6,
+            "texCubemapLayeredLod": 7,
+            "texCubemapLayeredGrad": 8,
+        }
+        return len(args) == sparse_arg_counts.get(function_name)
+
+    def format_unsupported_hip_texture_sparse_residency_call(self, function_name):
+        return self.format_unsupported_hip_resource_expression(
+            "texture",
+            f"{function_name} sparse residency",
+            "vec4<f32>(0.0, 0.0, 0.0, 0.0)",
+        )
+
+    def format_hip_texture_coordinate_rank_diagnostic(self, function_name):
+        return self.format_unsupported_hip_resource_expression(
+            "texture",
+            f"{function_name} coordinate rank mismatch",
+            "vec4<f32>(0.0, 0.0, 0.0, 0.0)",
+        )
+
     def format_hip_texture_fetch_call(self, args):
+        if len(args) == 3:
+            return self.format_unsupported_hip_resource_expression(
+                "texture",
+                "tex1Dfetch sparse residency",
+                "vec4<f32>(0.0, 0.0, 0.0, 0.0)",
+            )
         if len(args) != 2:
             return None
         texture_name, coordinate = args
         return f"texelFetch({texture_name}, {coordinate}, 0)"
 
-    def format_hip_surface_read(self, args, dimensions, value_type):
-        if len(args) >= dimensions + 2 and self.is_surface_output_target(args[0]):
+    def format_unsupported_hip_resource_expression(self, kind, member, fallback):
+        return (
+            f"(/* hip {kind}.{member} not directly supported in CrossGL */ "
+            f"{fallback})"
+        )
+
+    def format_hip_surface_read(self, function_name, args, dimensions, value_type):
+        if not args:
+            return None
+
+        if self.is_surface_output_target(args[0]):
+            if len(args) < 2:
+                return None
             output_target = self.strip_surface_output_target(args[0])
             surface_name = args[1]
             coord_start = 2
-        elif len(args) >= dimensions + 1:
+            expected_arg_count = dimensions + 2
+        else:
             output_target = None
             surface_name = args[0]
             coord_start = 1
-        else:
+            expected_arg_count = dimensions + 1
+
+        if len(args) < expected_arg_count:
+            if len(args) > coord_start:
+                diagnostic = self.format_hip_surface_coordinate_shape_diagnostic(
+                    function_name, value_type
+                )
+                if output_target is not None:
+                    return f"{output_target} = {diagnostic}"
+                return diagnostic
             return None
 
-        coord_args = [self.strip_surface_byte_offset(args[coord_start], value_type)]
-        coord_args.extend(args[coord_start + 1 : coord_start + dimensions])
+        coord_args = self.format_hip_surface_coordinate_args(
+            args, coord_start, dimensions, value_type
+        )
+        if self.has_hip_surface_coordinate_shape_mismatch(coord_args):
+            diagnostic = self.format_hip_surface_coordinate_shape_diagnostic(
+                function_name, value_type
+            )
+            if output_target is not None:
+                return f"{output_target} = {diagnostic}"
+            return diagnostic
+
         coord = self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
         image_load = f"imageLoad({surface_name}, {coord})"
         if output_target is not None:
@@ -3394,21 +4431,80 @@ class HipToCrossGLConverter:
 
     def format_hip_surface_write(
         self,
+        function_name,
         args,
         dimensions,
         value_type,
         value_is_pointer=False,
     ):
         if len(args) < dimensions + 2:
+            if len(args) > 2:
+                return self.format_hip_surface_coordinate_shape_diagnostic(
+                    function_name, None
+                )
             return None
         value = args[0]
         if value_is_pointer:
             value = self.strip_surface_output_target(value)
         surface_name = args[1]
-        coord_args = [self.strip_surface_byte_offset(args[2], value_type)]
-        coord_args.extend(args[3 : dimensions + 2])
+        coord_args = self.format_hip_surface_coordinate_args(
+            args, 2, dimensions, value_type
+        )
+        if self.has_hip_surface_coordinate_shape_mismatch(coord_args):
+            return self.format_hip_surface_coordinate_shape_diagnostic(
+                function_name, None
+            )
         coord = self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
         return f"imageStore({surface_name}, {coord}, {value})"
+
+    def format_hip_surface_coordinate_args(
+        self, args, coord_start, dimensions, value_type
+    ):
+        coord_args = [self.strip_surface_byte_offset(args[coord_start], value_type)]
+        coord_args.extend(args[coord_start + 1 : coord_start + dimensions])
+        return coord_args
+
+    def has_hip_surface_coordinate_shape_mismatch(self, coord_args):
+        for coordinate in coord_args:
+            rank = self.infer_texture_coordinate_rank(coordinate)
+            if rank is not None and rank != 1:
+                return True
+        return False
+
+    def format_hip_surface_coordinate_shape_diagnostic(
+        self, function_name, value_type=None
+    ):
+        fallback = self.format_hip_zero_value(value_type) if value_type else "0"
+        return self.format_unsupported_hip_resource_expression(
+            "surface",
+            f"{function_name} coordinate shape mismatch",
+            fallback,
+        )
+
+    def format_hip_zero_value(self, type_name):
+        if not type_name:
+            return "0"
+
+        crossgl_type = self.convert_hip_type_to_crossgl(type_name)
+        if (
+            crossgl_type.startswith("vec")
+            and len(crossgl_type) >= 4
+            and crossgl_type[3].isdigit()
+            and "<" in crossgl_type
+            and crossgl_type.endswith(">")
+        ):
+            rank = int(crossgl_type[3])
+            element_type = crossgl_type.split("<", 1)[1][:-1]
+            zero = self.format_hip_zero_scalar(element_type)
+            return f"{crossgl_type}({', '.join([zero] * rank)})"
+        return self.format_hip_zero_scalar(crossgl_type)
+
+    def format_hip_zero_scalar(self, type_name):
+        if type_name == "bool":
+            return "false"
+        if type_name in {"f32", "f64"}:
+            return "0.0"
+        return "0"
 
     def is_surface_output_target(self, expression):
         text = str(expression).strip()
@@ -3556,7 +4652,8 @@ class HipToCrossGLConverter:
         elif node.sync_type == "hipDeviceSynchronize":
             self.emit("// HIP device synchronize")
         elif node.sync_type == "__syncwarp":
-            self.emit("// Warp sync not directly supported in CrossGL")
+            args = ", ".join(self.visit(arg) for arg in node.args)
+            self.emit(f"// __syncwarp({args}) not directly supported in CrossGL")
         else:
             self.emit(f"// {node.sync_type}();")
 

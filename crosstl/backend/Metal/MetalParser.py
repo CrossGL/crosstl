@@ -1223,9 +1223,11 @@ class MetalParser:
     def build_texture_sample(self, texture, args):
         sampler = args[0] if len(args) > 0 else None
         coords = args[1] if len(args) > 1 else None
-        lod = args[2] if len(args) > 2 else None
-        if lod is not None:
-            return TextureSampleNode(texture, sampler, coords, lod)
+        options = args[2:]
+        if options:
+            node = TextureSampleNode(texture, sampler, coords, options[0])
+            node.options = options
+            return node
         return TextureSampleNode(texture, sampler, coords)
 
     def parse_texture_sample_args(self, texture):
@@ -1234,16 +1236,19 @@ class MetalParser:
         self.eat("COMMA")
         coordinates = self.parse_expression()
 
-        # Support for optional LOD parameter
-        lod = None
+        # Preserve optional sample modifiers such as level(), bias(), gradients, and offsets.
+        options = []
         if self.current_token[0] == "COMMA":
-            self.eat("COMMA")
-            lod = self.parse_expression()
+            while self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                options.append(self.parse_expression())
 
         self.eat("RPAREN")
 
-        if lod is not None:
-            return TextureSampleNode(texture, sampler, coordinates, lod)
+        if options:
+            node = TextureSampleNode(texture, sampler, coordinates, options[0])
+            node.options = options
+            return node
         return TextureSampleNode(texture, sampler, coordinates)
 
     def parse_texture_sample(self):
@@ -1254,7 +1259,15 @@ class MetalParser:
         sampler = self.parse_expression()
         self.eat("COMMA")
         coordinates = self.parse_expression()
+        options = []
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            options.append(self.parse_expression())
         self.eat("RPAREN")
+        if options:
+            node = TextureSampleNode(texture, sampler, coordinates, options[0])
+            node.options = options
+            return node
         return TextureSampleNode(texture, sampler, coordinates)
 
     def parse_switch_statement(self):
