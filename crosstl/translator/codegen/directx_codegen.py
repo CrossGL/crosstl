@@ -334,6 +334,54 @@ class HLSLCodeGen:
         "QuadReadAcrossDiagonal": 1,
         "QuadReadLaneAt": 2,
     }
+    HLSL_WAVE_BOOL_ARGUMENT_INTRINSICS = {
+        "WaveActiveAllTrue",
+        "WaveActiveAnyTrue",
+        "WaveActiveBallot",
+        "WaveActiveCountBits",
+        "WavePrefixCountBits",
+    }
+    HLSL_WAVE_NUMERIC_VALUE_INTRINSICS = {
+        "WaveActiveSum",
+        "WaveActiveProduct",
+        "WaveActiveMin",
+        "WaveActiveMax",
+        "WavePrefixSum",
+        "WavePrefixProduct",
+        "WaveMultiPrefixSum",
+        "WaveMultiPrefixProduct",
+    }
+    HLSL_WAVE_INTEGER_VALUE_INTRINSICS = {
+        "WaveActiveBitAnd",
+        "WaveActiveBitOr",
+        "WaveActiveBitXor",
+        "WaveMultiPrefixBitAnd",
+        "WaveMultiPrefixBitOr",
+        "WaveMultiPrefixBitXor",
+    }
+    HLSL_WAVE_NUMERIC_COMPONENT_TYPES = {
+        "float",
+        "half",
+        "min16float",
+        "min10float",
+        "double",
+        "int",
+        "min16int",
+        "min12int",
+        "int64_t",
+        "uint",
+        "min16uint",
+        "uint64_t",
+    }
+    HLSL_WAVE_INTEGER_COMPONENT_TYPES = {
+        "int",
+        "min16int",
+        "min12int",
+        "int64_t",
+        "uint",
+        "min16uint",
+        "uint64_t",
+    }
 
     def __init__(self):
         """Initialize DirectX type maps and per-generation resource state."""
@@ -2513,6 +2561,8 @@ class HLSLCodeGen:
             return None
         if isinstance(expr, VariableNode):
             return self.variable_type_by_name(getattr(expr, "name", None))
+        if isinstance(expr, bool):
+            return "bool"
         if isinstance(expr, (int, float)):
             return "float" if isinstance(expr, float) else "int"
         if isinstance(expr, BinaryOpNode):
@@ -3248,6 +3298,9 @@ class HLSLCodeGen:
             if interpolation_call is not None:
                 return interpolation_call
 
+            if func_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
+                return self.generate_hlsl_wave_intrinsic_call(func_name, args)
+
             texture_call = self.generate_texture_call(func_name, args)
             if texture_call is not None:
                 return texture_call
@@ -3512,19 +3565,128 @@ class HLSLCodeGen:
 
     def generate_wave_op_expression(self, expr):
         operation = getattr(expr, "operation", "")
+        return self.generate_hlsl_wave_intrinsic_call(operation, expr.arguments)
+
+    def generate_hlsl_wave_intrinsic_call(self, operation, args):
         expected_args = self.HLSL_WAVE_INTRINSIC_ARITIES.get(operation)
         if expected_args is None:
             raise ValueError(f"DirectX wave intrinsic '{operation}' is not recognized")
 
-        actual_args = len(getattr(expr, "arguments", []))
+        actual_args = len(args)
         if actual_args != expected_args:
             raise ValueError(
                 f"DirectX wave intrinsic '{operation}' requires "
                 f"{expected_args} argument(s), got {actual_args}"
             )
 
-        args_str = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
+        self.validate_hlsl_wave_intrinsic_arguments(operation, args)
+        args_str = ", ".join(self.generate_expression(arg) for arg in args)
         return f"{operation}({args_str})"
+
+    def hlsl_wave_argument_base_type(self, argument):
+        argument_type = self.expression_result_type(argument)
+        if argument_type is None:
+            return None, "", None
+
+        mapped_type = self.map_type(argument_type)
+        base_type, array_suffix = split_array_type_suffix(mapped_type)
+        return base_type, array_suffix, mapped_type
+
+    def hlsl_wave_value_component_type(self, argument):
+        base_type, array_suffix, mapped_type = self.hlsl_wave_argument_base_type(
+            argument
+        )
+        if mapped_type is None:
+            return None, None
+        if array_suffix:
+            return None, mapped_type
+        if base_type in self.HLSL_WAVE_NUMERIC_COMPONENT_TYPES or base_type == "bool":
+            return base_type, mapped_type
+        if self.is_vector_value_type(base_type):
+            return self.vector_component_type(base_type), mapped_type
+        return None, mapped_type
+
+    def validate_hlsl_wave_scalar_bool_argument(self, operation, argument, role):
+        base_type, array_suffix, mapped_type = self.hlsl_wave_argument_base_type(
+            argument
+        )
+        if mapped_type is None:
+            return
+        if array_suffix or base_type != "bool":
+            raise ValueError(
+                f"DirectX wave intrinsic '{operation}' {role} argument must be "
+                f"scalar bool, got {mapped_type}"
+            )
+
+    def validate_hlsl_wave_scalar_int_uint_argument(self, operation, argument, role):
+        base_type, array_suffix, mapped_type = self.hlsl_wave_argument_base_type(
+            argument
+        )
+        if mapped_type is None:
+            return
+        if array_suffix or base_type not in {"int", "uint"}:
+            raise ValueError(
+                f"DirectX wave intrinsic '{operation}' {role} argument must be "
+                f"scalar int or uint, got {mapped_type}"
+            )
+
+    def validate_hlsl_wave_uint4_argument(self, operation, argument, role):
+        base_type, array_suffix, mapped_type = self.hlsl_wave_argument_base_type(
+            argument
+        )
+        if mapped_type is None:
+            return
+        if array_suffix or base_type != "uint4":
+            raise ValueError(
+                f"DirectX wave intrinsic '{operation}' {role} argument must be "
+                f"uint4, got {mapped_type}"
+            )
+
+    def validate_hlsl_wave_value_argument(
+        self, operation, argument, role, allowed_components, description
+    ):
+        component_type, mapped_type = self.hlsl_wave_value_component_type(argument)
+        if mapped_type is None:
+            return
+        if component_type not in allowed_components:
+            raise ValueError(
+                f"DirectX wave intrinsic '{operation}' {role} argument must be "
+                f"{description}, got {mapped_type}"
+            )
+
+    def validate_hlsl_wave_intrinsic_arguments(self, operation, args):
+        if operation in self.HLSL_WAVE_BOOL_ARGUMENT_INTRINSICS:
+            self.validate_hlsl_wave_scalar_bool_argument(
+                operation, args[0], "predicate"
+            )
+        elif operation in self.HLSL_WAVE_NUMERIC_VALUE_INTRINSICS:
+            self.validate_hlsl_wave_value_argument(
+                operation,
+                args[0],
+                "value",
+                self.HLSL_WAVE_NUMERIC_COMPONENT_TYPES,
+                "numeric scalar or vector",
+            )
+        elif operation in self.HLSL_WAVE_INTEGER_VALUE_INTRINSICS:
+            self.validate_hlsl_wave_value_argument(
+                operation,
+                args[0],
+                "value",
+                self.HLSL_WAVE_INTEGER_COMPONENT_TYPES,
+                "integer scalar or vector",
+            )
+
+        if operation == "WaveReadLaneAt":
+            self.validate_hlsl_wave_scalar_int_uint_argument(
+                operation, args[1], "lane index"
+            )
+        elif operation == "QuadReadLaneAt":
+            self.validate_hlsl_wave_scalar_int_uint_argument(
+                operation, args[1], "quad lane index"
+            )
+
+        if operation.startswith("WaveMultiPrefix"):
+            self.validate_hlsl_wave_uint4_argument(operation, args[1], "partition mask")
 
     def hlsl_buffer_helper_resource_type(self, expr):
         vtype = self.type_name_string(self.expression_result_type(expr))

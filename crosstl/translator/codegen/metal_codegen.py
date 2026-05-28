@@ -8725,6 +8725,11 @@ class MetalCodeGen:
             entry_point = getattr(stage, "entry_point", None)
             if entry_point is not None:
                 mesh_payload_entry_stages_by_id[id(entry_point)] = stage_name
+                for parameter in getattr(entry_point, "parameters", []) or []:
+                    if self.is_metal_mesh_payload_parameter(stage_name, parameter):
+                        self.validate_metal_mesh_payload_parameter_address_space(
+                            stage_name, parameter
+                        )
 
         for func in functions:
             if id(func) in mesh_payload_entry_stages_by_id:
@@ -8742,6 +8747,22 @@ class MetalCodeGen:
                     f"function '{func_name}' parameter '{param_name}' declares "
                     "mesh payload semantics"
                 )
+
+    def validate_metal_mesh_payload_parameter_address_space(
+        self, stage_name, parameter
+    ):
+        address_space = self.normalized_address_space(
+            self.parameter_address_space(parameter)
+        )
+        if address_space in {None, "object_data"}:
+            return
+
+        param_name = getattr(parameter, "name", "<anonymous>")
+        raise ValueError(
+            f"Metal mesh payload parameter '{param_name}' on {stage_name} stage "
+            f"uses {address_space} address space; mesh payload parameters "
+            "require object_data"
+        )
 
     def generated_metal_mesh_payload_parameter(
         self, shader_type, func, reserved_parameter_names

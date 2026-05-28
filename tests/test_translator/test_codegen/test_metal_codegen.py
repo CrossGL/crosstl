@@ -6589,6 +6589,111 @@ def test_metal_mesh_payload_semantic_on_helper_is_rejected():
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_metal_mesh_payload_parameter_accepts_explicit_object_data_address_space():
+    code = """
+    shader meshpipe {
+        struct Payload {
+            vec4 color;
+        };
+
+        object {
+            void main(Payload& payload @object_data @payload)
+                @max_total_threads_per_threadgroup(32)
+            {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            void main(Payload& payload @object_data @mesh_payload)
+                @numthreads(1, 1, 1)
+                @max_vertices(1)
+                @max_primitives(1)
+                @outputtopology(point)
+            {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "object_data Payload& payload [[payload]]" in generated
+    assert "const object_data Payload& payload [[payload]]" in generated
+    assert "DispatchMesh" not in generated
+
+
+@pytest.mark.parametrize(
+    ("stage_block", "expected_stage", "expected_address_space"),
+    [
+        (
+            """
+            object {
+                void main(device Payload& payload @payload)
+                    @max_total_threads_per_threadgroup(32)
+                {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+            """,
+            "object",
+            "device",
+        ),
+        (
+            """
+            task {
+                void main(Payload& payload @ray_data @payload)
+                    @numthreads(1, 1, 1)
+                {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+            """,
+            "task",
+            "ray_data",
+        ),
+        (
+            """
+            mesh {
+                void main(thread Payload& payload @mesh_payload)
+                    @numthreads(1, 1, 1)
+                    @max_vertices(1)
+                    @max_primitives(1)
+                    @outputtopology(point)
+                {
+                    SetMeshOutputCounts(1, 1);
+                }
+            }
+            """,
+            "mesh",
+            "thread",
+        ),
+    ],
+)
+def test_metal_mesh_payload_parameter_rejects_non_object_data_address_space(
+    stage_block, expected_stage, expected_address_space
+):
+    code = f"""
+    shader meshpipe {{
+        struct Payload {{
+            vec4 color;
+        }};
+
+        {stage_block}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Metal mesh payload parameter 'payload' on "
+            f"{expected_stage} stage uses {expected_address_space} address space; "
+            "mesh payload parameters require object_data"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_metal_mesh_payload_dispatch_multiple_argument_types_are_rejected():
     code = """
     shader meshpipe {

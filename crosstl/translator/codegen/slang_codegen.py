@@ -5405,6 +5405,63 @@ class SlangCodeGen:
             "double",
         }
 
+    def binary_expression_result_type(self, expr):
+        left_type = self.expression_result_type(expr.left)
+        right_type = self.expression_result_type(expr.right)
+        if expr.op in {"==", "!=", "<", ">", "<=", ">="}:
+            return self.comparison_expression_result_type(left_type, right_type)
+        if expr.op in {"&&", "||"}:
+            return self.logical_expression_result_type(left_type, right_type)
+        if self.is_vector_value_type(left_type):
+            return left_type
+        if self.is_vector_value_type(right_type):
+            return right_type
+        if left_type == "float" or right_type == "float":
+            return "float"
+        return left_type or right_type
+
+    def comparison_expression_result_type(self, left_type, right_type):
+        left_info = self.vector_value_info(left_type)
+        right_info = self.vector_value_info(right_type)
+        if left_info is not None and right_info is not None:
+            if left_info["size"] == right_info["size"]:
+                return f"bool{left_info['size']}"
+            return None
+        if left_info is not None and self.is_scalar_value_type(right_type):
+            return f"bool{left_info['size']}"
+        if right_info is not None and self.is_scalar_value_type(left_type):
+            return f"bool{right_info['size']}"
+        if left_type is not None or right_type is not None:
+            return "bool"
+        return None
+
+    def logical_expression_result_type(self, left_type, right_type):
+        left_info = self.vector_value_info(left_type)
+        right_info = self.vector_value_info(right_type)
+        if (
+            left_info is not None
+            and left_info["component_type"] == "bool"
+            and right_type == "bool"
+        ):
+            return f"bool{left_info['size']}"
+        if (
+            right_info is not None
+            and right_info["component_type"] == "bool"
+            and left_type == "bool"
+        ):
+            return f"bool{right_info['size']}"
+        if (
+            left_info is not None
+            and right_info is not None
+            and left_info["component_type"] == "bool"
+            and right_info["component_type"] == "bool"
+            and left_info["size"] == right_info["size"]
+        ):
+            return f"bool{left_info['size']}"
+        if left_type == "bool" and right_type == "bool":
+            return "bool"
+        return None
+
     def expression_result_type(self, expr):
         if expr is None:
             return None
@@ -5423,15 +5480,7 @@ class SlangCodeGen:
             if isinstance(expr.value, bool):
                 return "bool"
         if isinstance(expr, BinaryOpNode):
-            left_type = self.expression_result_type(expr.left)
-            right_type = self.expression_result_type(expr.right)
-            if self.is_vector_value_type(left_type):
-                return left_type
-            if self.is_vector_value_type(right_type):
-                return right_type
-            if left_type == "float" or right_type == "float":
-                return "float"
-            return left_type or right_type
+            return self.binary_expression_result_type(expr)
         if isinstance(expr, UnaryOpNode):
             operand_type = self.expression_result_type(expr.operand)
             if expr.op == "&" and operand_type is not None:
@@ -5902,6 +5951,15 @@ class SlangCodeGen:
                 return (
                     "value must be scalar or vector int or uint, " f"got {value_type}"
                 )
+
+        if operation in {
+            "WaveActiveAllTrue",
+            "WaveActiveAnyTrue",
+            "WaveActiveBallot",
+        }:
+            predicate_type = self.slang_wave_argument_mapped_type(args[0])
+            if predicate_type is not None and predicate_type != "bool":
+                return f"predicate must be scalar bool, got {predicate_type}"
 
         if operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
             lane_type = self.slang_wave_argument_mapped_type(args[1])

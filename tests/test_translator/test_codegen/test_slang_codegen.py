@@ -2490,6 +2490,7 @@ def test_wave_intrinsics_lower_to_native_slang_calls():
                 bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
                 bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
                 uvec4 ballot = WaveActiveBallot(anyLane);
+                uvec4 comparisonBallot = WaveActiveBallot(lane != 0u);
                 uint broadcast = WaveReadLaneAt(prefixSum, 0u);
                 uint firstValue = WaveReadLaneFirst(broadcast);
                 uint quadX = QuadReadAcrossX(firstValue);
@@ -2524,6 +2525,7 @@ def test_wave_intrinsics_lower_to_native_slang_calls():
     assert "bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);" in generated_code
     assert "bool allLane = WaveActiveAllTrue(prefixProduct > 0u);" in generated_code
     assert "uint4 ballot = WaveActiveBallot(anyLane);" in generated_code
+    assert "uint4 comparisonBallot = WaveActiveBallot(lane != 0u);" in generated_code
     assert "uint broadcast = WaveReadLaneAt(prefixSum, 0u);" in generated_code
     assert "uint firstValue = WaveReadLaneFirst(broadcast);" in generated_code
     assert "uint quadX = QuadReadAcrossX(firstValue);" in generated_code
@@ -2607,6 +2609,53 @@ def test_wave_intrinsic_invalid_arities_emit_slang_diagnostics():
         "uint quad = /* unsupported Slang wave intrinsic: QuadReadLaneAt "
         "expects 2 arguments, got 1 */ 0;" in generated_code
     )
+    assert "WaveOpNode" not in generated_code
+
+
+def test_wave_vote_intrinsics_validate_predicate_types():
+    code = """
+    shader InvalidSlangWaveVotePredicates {
+        compute {
+            void main() {
+                uint value = 1u;
+                bvec2 vectorMask = bvec2(true, false);
+                uvec2 lanes = uvec2(value, value);
+                bool badAnyValue = WaveActiveAnyTrue(value);
+                bool badAllVector = WaveActiveAllTrue(vectorMask);
+                uvec4 badBallotVectorComparison =
+                    WaveActiveBallot(lanes == uvec2(1u, 2u));
+                uvec4 badBallotNumeric = WaveActiveBallot(WaveActiveSum(value));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "bool badAnyValue = /* unsupported Slang wave intrinsic: "
+        "WaveActiveAnyTrue predicate must be scalar bool, got uint */ false;"
+        in generated_code
+    )
+    assert (
+        "bool badAllVector = /* unsupported Slang wave intrinsic: "
+        "WaveActiveAllTrue predicate must be scalar bool, got bool2 */ false;"
+        in generated_code
+    )
+    assert (
+        "uint4 badBallotVectorComparison = /* unsupported Slang wave intrinsic: "
+        "WaveActiveBallot predicate must be scalar bool, got bool2 */ uint4(0);"
+        in generated_code
+    )
+    assert (
+        "uint4 badBallotNumeric = /* unsupported Slang wave intrinsic: "
+        "WaveActiveBallot predicate must be scalar bool, got uint */ uint4(0);"
+        in generated_code
+    )
+    assert "WaveActiveAnyTrue(value)" not in generated_code
+    assert "WaveActiveAllTrue(vectorMask)" not in generated_code
+    assert "WaveActiveBallot(lanes == uint2(1u, 2u))" not in generated_code
+    assert "WaveActiveBallot(WaveActiveSum(value))" not in generated_code
     assert "WaveOpNode" not in generated_code
 
 

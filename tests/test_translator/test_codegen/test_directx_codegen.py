@@ -9619,6 +9619,88 @@ def test_directx_wave_intrinsics_reject_wrong_arity():
         generate_code(parse_code(tokenize_code(no_arg_code)))
 
 
+def test_directx_wave_intrinsics_validate_argument_types():
+    bad_vote_predicate_code = """
+    shader BadWaveVotePredicate {
+        compute {
+            uint main(uint value) {
+                return WaveActiveCountBits(value);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveActiveCountBits.*predicate.*scalar bool",
+    ):
+        generate_code(parse_code(tokenize_code(bad_vote_predicate_code)))
+
+    bad_lane_index_code = """
+    shader BadWaveLaneIndex {
+        compute {
+            uint main(uint value, float lane) {
+                return WaveReadLaneAt(value, lane);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveReadLaneAt.*lane index.*scalar int or uint",
+    ):
+        generate_code(parse_code(tokenize_code(bad_lane_index_code)))
+
+    bad_multi_prefix_mask_code = """
+    shader BadWaveMultiPrefixMask {
+        compute {
+            uint main(uint value, uint mask) {
+                return WaveMultiPrefixSum(value, mask);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveMultiPrefixSum.*partition mask.*uint4",
+    ):
+        generate_code(parse_code(tokenize_code(bad_multi_prefix_mask_code)))
+
+    bad_bitwise_value_code = """
+    shader BadWaveBitwiseValue {
+        compute {
+            float main(float value) {
+                return WaveActiveBitAnd(value);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveActiveBitAnd.*value.*integer scalar or vector",
+    ):
+        generate_code(parse_code(tokenize_code(bad_bitwise_value_code)))
+
+    valid_code = """
+    shader ValidWaveTypeArguments {
+        compute {
+            uint main(bool predicate, uint value, uint lane, uvec4 mask) {
+                uint count = WaveActiveCountBits(predicate);
+                uint prefix = WavePrefixCountBits(true);
+                uint laneValue = WaveReadLaneAt(value, lane);
+                uint multi = WaveMultiPrefixSum(value, mask);
+                return count + prefix + laneValue + multi;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(valid_code)))
+
+    assert "WaveActiveCountBits(predicate)" in generated
+    assert "WavePrefixCountBits(true)" in generated
+    assert "WaveReadLaneAt(value, lane)" in generated
+    assert "WaveMultiPrefixSum(value, mask)" in generated
+
+
 def test_directx_ray_query_methods_validate_trace_and_infer_results():
     code = """
     shader RayQueryInlineTrace {
