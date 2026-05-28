@@ -1985,6 +1985,13 @@ class RustCodeGen:
         saved_function_generic_constraints = self.current_function_generic_constraints
         saved_mutated_names = self.current_mutated_names
         self.current_generic_param_names = set(self.generic_param_names(func))
+        param_list = getattr(func, "parameters", getattr(func, "params", []))
+        for p in param_list:
+            self.register_variable_type(
+                p.name,
+                self.function_parameter_type(p),
+                scope="local",
+            )
         self.current_mutated_names = self.collect_mutated_binding_names(
             getattr(func, "body", None)
         )
@@ -1992,7 +1999,6 @@ class RustCodeGen:
         inferred_constraints = self.combined_function_generic_constraints(func)
         self.current_function_generic_constraints = inferred_constraints
 
-        param_list = getattr(func, "parameters", getattr(func, "params", []))
         params = []
         for p in param_list:
             param_type = self.function_parameter_type(p)
@@ -2134,7 +2140,18 @@ class RustCodeGen:
                 return
 
             if isinstance(current, VariableNode):
-                collect(getattr(current, "initial_value", None))
+                initial_value = getattr(current, "initial_value", None)
+                declared_type = self.get_variable_type(current)
+                reference_parts = self.reference_type_parts_for_type(declared_type)
+                if reference_parts is not None and reference_parts[0]:
+                    source_reference = self.reference_type_parts_for_type(
+                        self.expression_result_type(initial_value)
+                    )
+                    if source_reference is None:
+                        root_name = self.assignment_target_root_name(initial_value)
+                        if root_name:
+                            names.add(root_name)
+                collect(initial_value)
                 return
 
             if isinstance(current, ExpressionStatementNode):
@@ -3818,15 +3835,12 @@ class RustCodeGen:
 
         if self.is_inferred_declaration_type(vtype):
             return None
-        return vtype
+        return self.type_name_string(vtype)
 
     def is_inferred_declaration_type(self, type_name):
         if type_name is None:
             return True
-        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
-            type_name = self.convert_type_node_to_string(type_name)
-        else:
-            type_name = str(type_name)
+        type_name = self.type_name_string(type_name)
         return type_name.strip() in {"", "None", "auto"}
 
     def variable_declaration_type(self, node, initial_value=None):
@@ -6121,9 +6135,17 @@ class RustCodeGen:
     def type_name_string(self, type_name):
         if type_name is None:
             return None
-        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+        if self.is_type_node(type_name):
             return self.convert_type_node_to_string(type_name)
         return str(type_name)
+
+    def is_type_node(self, value):
+        return (
+            value.__class__.__name__
+            in {"ReferenceType", "PointerType", "FunctionType", "ArrayType"}
+            or hasattr(value, "name")
+            or hasattr(value, "element_type")
+        )
 
     def source_type_from_rust_type(self, type_name):
         type_name = self.type_name_string(type_name)
@@ -8552,10 +8574,7 @@ class RustCodeGen:
         if vtype is None:
             return "f32"
 
-        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
-            vtype_str = self.convert_type_node_to_string(vtype)
-        else:
-            vtype_str = str(vtype)
+        vtype_str = self.type_name_string(vtype)
 
         reference_parts = self.reference_type_parts(vtype_str)
         if reference_parts is not None:

@@ -3720,6 +3720,114 @@ def test_reference_parameter_calls_auto_borrow_and_mark_mut_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_reference_locals_and_returns_borrow_without_clones_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    int_type = PrimitiveType("int")
+
+    ast = ShaderNode(
+        "RustReferenceLocalSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "forward_ref",
+                ReferenceType(payload_type),
+                [ParameterNode("value", ReferenceType(payload_type))],
+                [
+                    VariableNode(
+                        "alias",
+                        ReferenceType(payload_type),
+                        IdentifierNode("value"),
+                    ),
+                    ReturnNode(IdentifierNode("alias")),
+                ],
+            ),
+            FunctionNode(
+                "forward_mut_ref",
+                ReferenceType(payload_type, is_mutable=True),
+                [ParameterNode("value", ReferenceType(payload_type, is_mutable=True))],
+                [
+                    VariableNode(
+                        "alias",
+                        ReferenceType(payload_type, is_mutable=True),
+                        IdentifierNode("value"),
+                    ),
+                    AssignmentNode(
+                        MemberAccessNode(IdentifierNode("alias"), "count"),
+                        BinaryOpNode(
+                            MemberAccessNode(IdentifierNode("alias"), "count"),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                    ),
+                    ReturnNode(IdentifierNode("alias")),
+                ],
+            ),
+            FunctionNode(
+                "borrow_locals",
+                int_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    VariableNode(
+                        "read",
+                        ReferenceType(payload_type),
+                        IdentifierNode("payload"),
+                    ),
+                    VariableNode(
+                        "before",
+                        int_type,
+                        MemberAccessNode(IdentifierNode("read"), "count"),
+                    ),
+                    VariableNode(
+                        "editable",
+                        ReferenceType(payload_type, is_mutable=True),
+                        IdentifierNode("payload"),
+                    ),
+                    AssignmentNode(
+                        MemberAccessNode(IdentifierNode("editable"), "count"),
+                        BinaryOpNode(
+                            IdentifierNode("before"),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                    ),
+                    ReturnNode(MemberAccessNode(IdentifierNode("editable"), "count")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "pub fn forward_ref(value: &Payload) -> &Payload" in generated_code
+    assert "let alias: &Payload = value;" in generated_code
+    assert "return alias;" in generated_code
+    assert "pub fn forward_mut_ref(value: &mut Payload) -> &mut Payload" in (
+        generated_code
+    )
+    assert "let mut alias: &mut Payload = value;" in generated_code
+    assert "return alias;" in generated_code
+    assert "pub fn borrow_locals(mut payload: Payload) -> i32" in generated_code
+    assert "let read: &Payload = &payload;" in generated_code
+    assert "let before: i32 = read.count;" in generated_code
+    assert "let mut editable: &mut Payload = &mut payload;" in generated_code
+    assert "ReferenceType(" not in generated_code
+    assert "&payload.clone()" not in generated_code
+    assert "&mut payload.clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_direct_callable_trait_parameters_emit_impl_trait_and_compile(tmp_path):
     int_type = PrimitiveType("int")
 

@@ -974,6 +974,34 @@ shader ImplicitSamplerArrayValidation {
 """
 
 
+TEXTURE_LOCAL_ALIAS_FRAGMENT_SHADER = """
+shader TextureLocalAliasValidation {
+    sampler2D colorMap;
+    sampler colorMapSampler;
+    sampler2D textures[4];
+    sampler texturesSampler[4];
+    sampler linearSampler;
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+        int layer @ TEXCOORD1;
+    };
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            let alias = colorMap;
+            let sampleState = linearSampler;
+            vec4 implicitSample = texture(alias, input.uv);
+            vec4 explicitSample = texture(alias, sampleState, input.uv);
+            let layerAlias = textures[input.layer];
+            vec4 arraySample = texture(layerAlias, input.uv);
+            return implicitSample + explicitSample + arraySample;
+        }
+    }
+}
+"""
+
+
 SAMPLED_TEXTURE_ARRAY_CONST_INDEX_FRAGMENT_SHADER = """
 shader SampledTextureArrayConstIndexValidation {
     const int COUNT = 4;
@@ -5498,6 +5526,27 @@ def test_generated_metal_fragment_implicit_sampler_array_compiles_with_metal(tmp
     )
     assert "textures[index].sample(texturesSampler[index], uv)" in code
     assert "textures[index].sample(texturesSampler, uv)" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_fragment_texture_local_alias_compiles_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_texture_local_alias.metal"
+    output = tmp_path / "fragment_texture_local_alias.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(TEXTURE_LOCAL_ALIAS_FRAGMENT_SHADER),
+        "fragment",
+    )
+    assert "alias.sample(colorMapSampler, input.uv)" in code
+    assert "alias.sample(sampleState, input.uv)" in code
+    assert "layerAlias.sample(texturesSampler[input.layer], input.uv)" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

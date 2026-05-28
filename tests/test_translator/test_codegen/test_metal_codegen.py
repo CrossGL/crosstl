@@ -22745,6 +22745,47 @@ def test_metal_implicit_sampler_for_texture_parameter():
     assert "sampleColor(colorMap, input.uv)" in generated_code
 
 
+def test_metal_sampled_texture_inferred_local_aliases_preserve_sampler_metadata():
+    shader = """
+    shader TextureLocalAliases {
+        sampler2D colorMap;
+        sampler colorMapSampler;
+        sampler2D textures[4];
+        sampler texturesSampler[4];
+        sampler linearSampler;
+
+        struct VSOutput {
+            vec2 uv;
+            int layer;
+        };
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                let alias = colorMap;
+                let sampleState = linearSampler;
+                vec4 implicitSample = texture(alias, input.uv);
+                vec4 explicitSample = texture(alias, sampleState, input.uv);
+                let layerAlias = textures[input.layer];
+                vec4 arraySample = texture(layerAlias, input.uv);
+                return implicitSample + explicitSample + arraySample;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "texture2d<float> alias = colorMap;" in generated_code
+    assert "sampler sampleState = linearSampler;" in generated_code
+    assert "sampler colorMapSampler [[sampler(0)]]" in generated_code
+    assert "array<sampler, 4> texturesSampler [[sampler(1)]]" in generated_code
+    assert "alias.sample(colorMapSampler, input.uv)" in generated_code
+    assert "alias.sample(sampleState, input.uv)" in generated_code
+    assert "texture2d<float> layerAlias = textures[input.layer];" in generated_code
+    assert "layerAlias.sample(texturesSampler[input.layer], input.uv)" in generated_code
+    assert "sampler(mag_filter::linear, min_filter::linear)" not in generated_code
+
+
 def test_metal_implicit_sampler_array_indexes_match_texture_array_elements():
     shader = """
     shader ImplicitSamplerArrayElements {

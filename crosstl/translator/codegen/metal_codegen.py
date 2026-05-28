@@ -356,6 +356,7 @@ class MetalCodeGen:
         self.current_sampler_parameter_array_sizes = {}
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
+        self.current_texture_alias_sources = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
         self.current_structured_buffer_length_parameters = {}
@@ -793,6 +794,7 @@ class MetalCodeGen:
         self.current_sampler_parameter_array_sizes = {}
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
+        self.current_texture_alias_sources = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
         self.current_structured_buffer_length_parameters = {}
@@ -2219,10 +2221,12 @@ class MetalCodeGen:
             self.current_sampler_parameter_array_sizes
         )
         previous_texture_parameters = self.current_texture_parameters
+        previous_texture_alias_sources = self.current_texture_alias_sources
         previous_image_format_parameters = self.current_image_format_parameters
         self.current_sampler_parameters = sampler_parameters
         self.current_sampler_parameter_array_sizes = sampler_parameter_array_sizes
         self.current_texture_parameters = texture_parameters
+        self.current_texture_alias_sources = {}
         self.current_image_format_parameters = image_format_parameters
         if shader_type == "mesh" and self.current_metal_mesh_output_config is not None:
             self.current_metal_mesh_output_accumulators = (
@@ -2245,6 +2249,7 @@ class MetalCodeGen:
             previous_sampler_parameter_array_sizes
         )
         self.current_texture_parameters = previous_texture_parameters
+        self.current_texture_alias_sources = previous_texture_alias_sources
         self.current_image_format_parameters = previous_image_format_parameters
         self.current_structured_buffer_length_parameters = (
             previous_structured_buffer_length_parameters
@@ -2952,7 +2957,14 @@ class MetalCodeGen:
             if texture_alias_type is not None:
                 var_type = texture_alias_type
                 self.current_texture_parameters[stmt.name] = texture_alias_type
+                self.record_local_texture_alias_sampler_source(stmt)
                 self.record_local_image_alias_metadata(stmt)
+            sampler_alias_type = self.local_variable_sampler_alias_resource_type(
+                stmt, var_type
+            )
+            if sampler_alias_type is not None:
+                var_type = sampler_alias_type
+                self.current_sampler_parameters.add(stmt.name)
             self.local_variable_types[stmt.name] = var_type
             self.current_address_space_variables[stmt.name] = (
                 self.local_variable_address_space(stmt)
@@ -3125,7 +3137,7 @@ class MetalCodeGen:
             return None
 
         initial_type = self.texture_argument_resource_type(initial_value)
-        if initial_type is None or not self.is_storage_image_resource(initial_type):
+        if initial_type is None:
             return None
 
         declared_type_name = self.type_name_string(declared_type)
@@ -3144,6 +3156,31 @@ class MetalCodeGen:
         ):
             return initial_type
         return self.map_resource_type_with_format(declared_type_name, node)
+
+    def local_variable_sampler_alias_resource_type(self, node, declared_type):
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is None:
+            return None
+
+        initial_name = self.expression_name(initial_value)
+        initial_type = self.expression_result_type(initial_value)
+        if not (
+            self.is_sampler_type(initial_type)
+            or initial_name in self.sampler_variable_names()
+        ):
+            return None
+
+        declared_type_name = self.type_name_string(declared_type)
+        if self.local_variable_type_node(node) is None:
+            return "sampler"
+        if self.is_sampler_type(declared_type_name):
+            return "sampler"
+        return None
+
+    def record_local_texture_alias_sampler_source(self, node):
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is not None:
+            self.current_texture_alias_sources[node.name] = initial_value
 
     def record_local_image_alias_metadata(self, node):
         image_format = explicit_image_format(node, self.attribute_value_to_string)
@@ -9371,6 +9408,7 @@ class MetalCodeGen:
             | self.global_glsl_buffer_block_names()
         )
         sampler_names = self.global_sampler_names()
+        texture_alias_sources = self.local_texture_alias_sources(func, texture_names)
         dependencies = set()
 
         for node in self.iter_ast_nodes(getattr(func, "body", [])):
@@ -9392,7 +9430,12 @@ class MetalCodeGen:
 
             if isinstance(node, FunctionCallNode):
                 self.add_texture_call_resource_dependencies(
-                    node, local_names, texture_names, sampler_names, dependencies
+                    node,
+                    local_names,
+                    texture_names,
+                    sampler_names,
+                    dependencies,
+                    texture_alias_sources,
                 )
                 self.add_buffer_call_resource_dependencies(
                     node, local_names, buffer_names, dependencies
@@ -9407,6 +9450,36 @@ class MetalCodeGen:
                 )
 
         return dependencies
+
+    def local_texture_alias_sources(self, func, texture_names):
+        aliases = {}
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            name = getattr(node, "name", None)
+            initial_value = getattr(node, "initial_value", None)
+            source_name = self.expression_name(initial_value)
+            if (
+                name
+                and source_name
+                and (source_name in texture_names or source_name in aliases)
+            ):
+                aliases[name] = initial_value
+        return aliases
+
+    def texture_alias_dependency_source(self, texture_name, texture_alias_sources):
+        source_arg = texture_alias_sources.get(texture_name)
+        seen = {texture_name}
+        while source_arg is not None:
+            source_name = self.expression_name(source_arg)
+            if not source_name or source_name in seen:
+                return source_arg
+            next_source_arg = texture_alias_sources.get(source_name)
+            if next_source_arg is None:
+                return source_arg
+            seen.add(source_name)
+            source_arg = next_source_arg
+        return None
 
     def add_ray_tracing_resource_dependencies(
         self,
@@ -9451,7 +9524,13 @@ class MetalCodeGen:
                 dependencies.add(table_name)
 
     def add_texture_call_resource_dependencies(
-        self, call, local_names, texture_names, sampler_names, dependencies
+        self,
+        call,
+        local_names,
+        texture_names,
+        sampler_names,
+        dependencies,
+        texture_alias_sources=None,
     ):
         func_name = self.function_call_name(call)
         if not func_name or not str(func_name).startswith(("texture", "image")):
@@ -9478,6 +9557,18 @@ class MetalCodeGen:
             and implicit_sampler_name not in local_names
         ):
             dependencies.add(implicit_sampler_name)
+            return
+
+        source_arg = self.texture_alias_dependency_source(
+            texture_name, texture_alias_sources or {}
+        )
+        source_name = self.expression_name(source_arg)
+        source_sampler_name = f"{source_name}Sampler" if source_name else None
+        if (
+            source_sampler_name in sampler_names
+            and source_sampler_name not in local_names
+        ):
+            dependencies.add(source_sampler_name)
 
     def add_buffer_call_resource_dependencies(
         self, call, local_names, buffer_names, dependencies
@@ -11200,7 +11291,34 @@ class MetalCodeGen:
             if index is not None and self.sampler_array_size(sampler_name) is not None:
                 return f"{sampler_name}[{index}]"
             return sampler_name
+
+        source_arg = self.texture_alias_sampler_source(texture_name)
+        if source_arg is not None:
+            source_name = self.expression_name(source_arg)
+            source_sampler_name = f"{source_name}Sampler" if source_name else None
+            if source_sampler_name in self.sampler_variable_names():
+                index = self.array_access_index_expression(source_arg)
+                if (
+                    index is not None
+                    and self.sampler_array_size(source_sampler_name) is not None
+                ):
+                    return f"{source_sampler_name}[{index}]"
+                return source_sampler_name
         return self.default_sampler_expression()
+
+    def texture_alias_sampler_source(self, texture_name):
+        source_arg = self.current_texture_alias_sources.get(texture_name)
+        seen = {texture_name}
+        while source_arg is not None:
+            source_name = self.expression_name(source_arg)
+            if not source_name or source_name in seen:
+                return source_arg
+            next_source_arg = self.current_texture_alias_sources.get(source_name)
+            if next_source_arg is None:
+                return source_arg
+            seen.add(source_name)
+            source_arg = next_source_arg
+        return None
 
     def array_access_index_expression(self, expr):
         if not isinstance(expr, ArrayAccessNode):

@@ -9980,7 +9980,7 @@ class TestVulkanSPIRVCodeGen:
         assert "imageStore" not in spv_code
         assert "WARNING" not in spv_code
 
-    def test_texture_lod_and_grad_emit_explicit_lod_sampling(self):
+    def test_texture_lod_and_grad_emit_explicit_lod_sampling(self, tmp_path):
         source_code = """
         shader Resources {
             sampler2d colorMap;
@@ -10042,6 +10042,7 @@ class TestVulkanSPIRVCodeGen:
         assert "textureGrad" not in spv_code
         assert "textureGradOffset" not in spv_code
         assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_texture_offset_gather_and_fetch_emit_image_operations(self):
         source_code = """
@@ -15919,11 +15920,12 @@ class TestVulkanSPIRVCodeGen:
         assert (
             len(
                 re.findall(
-                    r"\bOpImageSampleImplicitLod\b.*\bConstOffset\|Bias\b", spv_code
+                    r"\bOpImageSampleImplicitLod\b.*\bBias\|ConstOffset\b", spv_code
                 )
             )
             == 2
         )
+        assert "ConstOffset|Bias" not in spv_code
         assert "OpImageSampleExplicitLod" not in spv_code
         assert "OpFDiv" in spv_code
         for function_name in [

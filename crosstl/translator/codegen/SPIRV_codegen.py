@@ -597,16 +597,30 @@ class VulkanSPIRVCodeGen:
         return f"Offset %{offset_id.id}"
 
     def image_operands(self, *operands: str) -> str:
-        masks = []
-        values = []
+        operand_order = {
+            "Bias": 0,
+            "Lod": 1,
+            "Grad": 2,
+            "ConstOffset": 3,
+            "Offset": 4,
+            "ConstOffsets": 5,
+            "Sample": 6,
+            "MinLod": 7,
+        }
+        entries = []
         for operand in operands:
             if not operand:
                 continue
             parts = operand.split()
-            masks.append(parts[0])
-            values.extend(parts[1:])
-        if not masks:
+            if not parts:
+                continue
+            entries.append((parts[0], parts[1:]))
+        if not entries:
             return ""
+
+        entries.sort(key=lambda entry: operand_order.get(entry[0], len(operand_order)))
+        masks = [mask for mask, _ in entries]
+        values = [value for _, entry_values in entries for value in entry_values]
         return " ".join(["|".join(masks)] + values)
 
     def create_variable(
