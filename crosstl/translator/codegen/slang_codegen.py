@@ -5483,6 +5483,8 @@ class SlangCodeGen:
             return None
         if isinstance(expr, RayQueryOpNode):
             return self.slang_ray_query_method_return_type(expr.operation)
+        if isinstance(expr, WaveOpNode):
+            return self.slang_wave_result_type(expr)
         if isinstance(expr, AtomicOpNode):
             operation = self.image_atomic_operation_from_atomic_op(expr.operation)
             if operation is None:
@@ -5834,14 +5836,102 @@ class SlangCodeGen:
             )
 
         actual_arity = len(node.arguments)
+        rejection_reason = None
         if actual_arity != expected_arity:
+            rejection_reason = f"expects {expected_arity} arguments, got {actual_arity}"
+        else:
+            rejection_reason = self.slang_wave_argument_rejection_reason(
+                node.operation, node.arguments
+            )
+        if rejection_reason is not None:
             return self.unsupported_slang_wave_op_expression(
-                node.operation,
-                f"expects {expected_arity} arguments, got {actual_arity}",
+                node.operation, rejection_reason
             )
 
         args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
         return f"{node.operation}({args})"
+
+    def slang_wave_result_type(self, node):
+        operation = getattr(node, "operation", None)
+        args = getattr(node, "arguments", []) or []
+        if operation in {"WaveGetLaneCount", "WaveGetLaneIndex"}:
+            return "uint"
+        if operation in {"WaveIsFirstLane", "WaveActiveAllTrue", "WaveActiveAnyTrue"}:
+            return "bool"
+        if operation in {"WaveActiveBallot", "WaveMatch"}:
+            return "uint4"
+        if operation in {
+            "WaveActiveSum",
+            "WaveActiveProduct",
+            "WaveActiveBitAnd",
+            "WaveActiveBitOr",
+            "WaveActiveBitXor",
+            "WaveActiveMin",
+            "WaveActiveMax",
+            "WaveReadLaneAt",
+            "WaveReadLaneFirst",
+            "WavePrefixSum",
+            "WavePrefixProduct",
+            "QuadReadAcrossX",
+            "QuadReadAcrossY",
+            "QuadReadAcrossDiagonal",
+            "QuadReadLaneAt",
+            "WaveMultiPrefixSum",
+            "WaveMultiPrefixProduct",
+            "WaveMultiPrefixBitAnd",
+            "WaveMultiPrefixBitOr",
+            "WaveMultiPrefixBitXor",
+        }:
+            return self.expression_result_type(args[0]) if args else None
+        return None
+
+    def slang_wave_argument_rejection_reason(self, operation, args):
+        integer_bit_ops = {
+            "WaveActiveBitAnd",
+            "WaveActiveBitOr",
+            "WaveActiveBitXor",
+            "WaveMultiPrefixBitAnd",
+            "WaveMultiPrefixBitOr",
+            "WaveMultiPrefixBitXor",
+        }
+        if operation in integer_bit_ops:
+            value_type = self.slang_wave_argument_mapped_type(args[0])
+            if value_type is not None and not self.is_slang_wave_integer_value_type(
+                value_type
+            ):
+                return (
+                    "value must be scalar or vector int or uint, " f"got {value_type}"
+                )
+
+        if operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
+            lane_type = self.slang_wave_argument_mapped_type(args[1])
+            if lane_type is not None and lane_type not in {"int", "uint"}:
+                return f"lane index must be scalar int or uint, got {lane_type}"
+
+        if operation.startswith("WaveMultiPrefix"):
+            mask_type = self.slang_wave_argument_mapped_type(args[1])
+            if mask_type is not None and mask_type != "uint4":
+                return f"partition mask must be uint4, got {mask_type}"
+
+        return None
+
+    def slang_wave_argument_mapped_type(self, arg):
+        arg_type = self.expression_result_type(arg)
+        if arg_type is None:
+            return None
+        return self.convert_type(arg_type)
+
+    def is_slang_wave_integer_value_type(self, type_name):
+        return type_name in {
+            "int",
+            "uint",
+            "int2",
+            "int3",
+            "int4",
+            "uint2",
+            "uint3",
+            "uint4",
+        }
 
     def unsupported_slang_wave_op_expression(self, operation, reason):
         return (

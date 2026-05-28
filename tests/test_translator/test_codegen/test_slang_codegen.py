@@ -2610,6 +2610,54 @@ def test_wave_intrinsic_invalid_arities_emit_slang_diagnostics():
     assert "WaveOpNode" not in generated_code
 
 
+def test_wave_intrinsic_invalid_argument_types_emit_slang_diagnostics():
+    code = """
+    shader InvalidSlangWaveArgumentTypes {
+        compute {
+            void main() {
+                uint value = 1u;
+                uvec4 mask = uvec4(1u, 0u, 0u, 0u);
+                uint badLane = WaveReadLaneAt(value, vec2(0.0, 1.0));
+                uint badQuadLane = QuadReadLaneAt(value, false);
+                uint badPartition = WaveMultiPrefixSum(value, vec3(1.0, 0.0, 0.0));
+                uint badPartitionCall = WaveMultiPrefixSum(value, WaveActiveSum(value));
+                uint badBitValue = WaveMultiPrefixBitAnd(false, mask);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "uint badLane = /* unsupported Slang wave intrinsic: WaveReadLaneAt "
+        "lane index must be scalar int or uint, got float2 */ 0;" in generated_code
+    )
+    assert (
+        "uint badQuadLane = /* unsupported Slang wave intrinsic: QuadReadLaneAt "
+        "lane index must be scalar int or uint, got bool */ 0;" in generated_code
+    )
+    assert (
+        "uint badPartition = /* unsupported Slang wave intrinsic: "
+        "WaveMultiPrefixSum partition mask must be uint4, got float3 */ 0;"
+        in generated_code
+    )
+    assert (
+        "uint badPartitionCall = /* unsupported Slang wave intrinsic: "
+        "WaveMultiPrefixSum partition mask must be uint4, got uint */ 0;"
+        in generated_code
+    )
+    assert (
+        "uint badBitValue = /* unsupported Slang wave intrinsic: "
+        "WaveMultiPrefixBitAnd value must be scalar or vector int or uint, "
+        "got bool */ 0;" in generated_code
+    )
+    assert "WaveReadLaneAt(value, float2(0.0, 1.0))" not in generated_code
+    assert "QuadReadLaneAt(value, false)" not in generated_code
+    assert "WaveMultiPrefixSum(value, float3(1.0, 0.0, 0.0))" not in generated_code
+    assert "WaveOpNode" not in generated_code
+
+
 def test_floating_binary_modulo_lowers_to_slang_fmod():
     code = """
     shader BinaryModuloGap {

@@ -3255,12 +3255,32 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
         return None
 
+    def unsupported_scalar_resource_query_call(self, func_name, resource_type):
+        resource_type = resource_type or "unknown resource"
+        return (
+            f"/* unsupported {self.resource_backend_name()} resource query: "
+            f"{func_name} on {resource_type} */ 0"
+        )
+
     def generate_resource_call(self, func_name, raw_args, args):
         if func_name in {"textureSize", "imageSize"}:
             return self.generate_dimension_query(func_name, raw_args, args)
 
         if func_name in {"textureSamples", "imageSamples"}:
-            return self.generate_sample_count_query(func_name, raw_args, args)
+            sample_count_query = self.generate_sample_count_query(
+                func_name, raw_args, args
+            )
+            if sample_count_query is not None:
+                return sample_count_query
+            if raw_args:
+                resource_type = self.resource_base_type(
+                    self.get_expression_type(raw_args[0])
+                )
+                if resource_type is not None:
+                    return self.unsupported_scalar_resource_query_call(
+                        func_name, resource_type
+                    )
+            return None
 
         if func_name == "textureQueryLevels":
             return self.generate_texture_query_levels(raw_args)

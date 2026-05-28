@@ -753,6 +753,7 @@ class MetalCodeGen:
             if getattr(cbuffer, "name", None)
         }
         all_functions = self.all_functions(ast)
+        self.validate_metal_mesh_payload_parameter_placement(ast, all_functions)
         self.user_function_names = {
             func.name for func in all_functions if getattr(func, "name", None)
         }
@@ -7368,6 +7369,19 @@ class MetalCodeGen:
             "taskpayloadsharedext",
         }
 
+    def is_explicit_metal_mesh_payload_semantic(self, semantic):
+        if semantic is None:
+            return False
+        normalized = str(semantic).strip().lower().replace("-", "_")
+        if normalized.startswith("metal_") or normalized.startswith("msl_"):
+            normalized = normalized.split("_", 1)[1]
+        return normalized in {
+            "mesh_payload",
+            "hlsl_mesh_payload",
+            "task_payload",
+            "taskpayloadsharedext",
+        }
+
     def metal_ray_payload_parameter_declaration(
         self, mapped_type, name, node=None, shader_type=None
     ):
@@ -8701,6 +8715,33 @@ class MetalCodeGen:
                 f"got {expected}"
             )
         return next(iter(payload_types), None)
+
+    def validate_metal_mesh_payload_parameter_placement(self, ast, functions):
+        mesh_payload_entry_stages_by_id = {}
+        for stage_type, stage in (getattr(ast, "stages", {}) or {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if stage_name not in {"object", "task", "amplification", "mesh"}:
+                continue
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                mesh_payload_entry_stages_by_id[id(entry_point)] = stage_name
+
+        for func in functions:
+            if id(func) in mesh_payload_entry_stages_by_id:
+                continue
+            for parameter in getattr(func, "parameters", []) or []:
+                if not self.is_explicit_metal_mesh_payload_semantic(
+                    self.semantic_from_node(parameter)
+                ):
+                    continue
+                func_name = getattr(func, "name", "<anonymous>")
+                param_name = getattr(parameter, "name", "<anonymous>")
+                raise ValueError(
+                    "Metal mesh payload parameters are only supported on "
+                    "object, task, amplification, or mesh stage entry points; "
+                    f"function '{func_name}' parameter '{param_name}' declares "
+                    "mesh payload semantics"
+                )
 
     def generated_metal_mesh_payload_parameter(
         self, shader_type, func, reserved_parameter_names

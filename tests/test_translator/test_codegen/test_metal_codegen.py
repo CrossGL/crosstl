@@ -6555,6 +6555,80 @@ def test_metal_mesh_payload_dispatch_generated_name_avoids_local_collision():
     assert "const object_data MeshPayload& payload [[payload]]" in generated
 
 
+def test_metal_mesh_payload_semantic_on_helper_is_rejected():
+    code = """
+    shader meshpipe {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        mesh {
+            void issue(MeshPayload payload @mesh_payload) {
+                SetMeshOutputCounts(1, 1);
+            }
+
+            void main(MeshPayload payload @mesh_payload)
+                @numthreads(1, 1, 1)
+                @max_vertices(1)
+                @max_primitives(1)
+                @outputtopology(point)
+            {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Metal mesh payload parameters are only supported on object, task, "
+            "amplification, or mesh stage entry points.*issue.*payload"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_metal_mesh_payload_dispatch_multiple_argument_types_are_rejected():
+    code = """
+    shader meshpipe {
+        struct PayloadA {
+            uint meshlet;
+        };
+
+        struct PayloadB {
+            uint meshlet;
+        };
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                groupshared PayloadA first;
+                groupshared PayloadB second;
+                DispatchMesh(1, 1, 1, first);
+                DispatchMesh(1, 1, 1, second);
+            }
+        }
+
+        mesh {
+            void main(PayloadA payload @mesh_payload)
+                @numthreads(1, 1, 1)
+                @max_vertices(1)
+                @max_primitives(1)
+                @outputtopology(point)
+            {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Metal DispatchMesh payload arguments must use one type.*PayloadA.*PayloadB",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_metal_mesh_payload_dispatch_type_mismatch_is_rejected():
     code = """
     shader meshpipe {

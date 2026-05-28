@@ -2183,6 +2183,15 @@ class TestVulkanSPIRVCodeGen:
                         vec3(0.0, 1.0, 0.0),
                         vec2(0.5, 0.5)
                     );
+                    ivec3 refractInt = refract(
+                        ivec3(1, 2, 3),
+                        ivec3(0, 1, 0),
+                        0.5
+                    );
+
+                    mat2 ma = mat2(1.0);
+                    mat2 mb = mat2(1.0);
+                    mat2 refractMatrix = refract(ma, mb, 0.5);
                 }
             }
         }
@@ -2217,7 +2226,7 @@ class TestVulkanSPIRVCodeGen:
                 "; WARNING: refract requires matching floating-point incident "
                 "and normal operands plus scalar eta"
             )
-            == 2
+            == 4
         )
         assert "OpDot" not in spv_code
         assert " Cross " not in spv_code
@@ -2283,6 +2292,72 @@ class TestVulkanSPIRVCodeGen:
             r"Cross %\d+ %\d+",
             spv_code,
         )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_refract_eta_converts_to_result_component_type(self, tmp_path):
+        source_code = """
+        shader RefractEtaConversion {
+            compute {
+                void main() {
+                    dvec3 da = dvec3(1.0, 0.0, 0.0);
+                    dvec3 db = dvec3(0.0, 1.0, 0.0);
+                    dvec3 dt = refract(da, db, 0.5);
+
+                    vec3 fa = vec3(1.0, 0.0, 0.0);
+                    vec3 fb = vec3(0.0, 1.0, 0.0);
+                    double eta;
+                    vec3 ft = refract(fa, fb, eta);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        dvec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(double_type.group(1))} 3",
+            spv_code,
+        )
+        assert vec3_type is not None
+        assert dvec3_type is not None
+
+        double_eta_conversions = re.findall(
+            rf"(%\d+) = OpFConvert {re.escape(double_type.group(1))} %\d+",
+            spv_code,
+        )
+        assert any(
+            re.search(
+                rf"OpExtInst {re.escape(dvec3_type.group(1))} %\d+ "
+                rf"Refract %\d+ %\d+ {re.escape(conversion)}(?:\s|$)",
+                spv_code,
+            )
+            for conversion in double_eta_conversions
+        )
+
+        float_eta_conversions = re.findall(
+            rf"(%\d+) = OpFConvert {re.escape(float_type.group(1))} %\d+",
+            spv_code,
+        )
+        assert any(
+            re.search(
+                rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ "
+                rf"Refract %\d+ %\d+ {re.escape(conversion)}(?:\s|$)",
+                spv_code,
+            )
+            for conversion in float_eta_conversions
+        )
+
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 

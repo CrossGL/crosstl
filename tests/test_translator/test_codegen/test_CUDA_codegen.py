@@ -9282,6 +9282,52 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo" not in cuda_code
         assert "textureQueryLod(" not in cuda_code
 
+    def test_invalid_sample_count_queries_emit_cuda_diagnostics(self):
+        """Test CUDA diagnoses sample-count queries on non-MS resources."""
+        source_code = """
+        shader Resources {
+            sampler2d colorMap;
+            image2D colorImage;
+            sampler2dms msTex;
+            image2DMS msImage;
+
+            compute {
+                void main() {
+                    int badTextureSamples = textureSamples(colorMap);
+                    int badImageSamples = imageSamples(colorImage);
+                    int validTextureSamples = textureSamples(msTex);
+                    int validImageSamples = imageSamples(msImage);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert (
+            "int badTextureSamples = /* unsupported CUDA resource query: "
+            "textureSamples on sampler2D */ 0;" in cuda_code
+        )
+        assert (
+            "int badImageSamples = /* unsupported CUDA resource query: "
+            "imageSamples on image2D */ 0;" in cuda_code
+        )
+        assert (
+            "int validTextureSamples = cgl_textureSamples_sampler2DMS"
+            "(msTex_metadata);" in cuda_code
+        )
+        assert (
+            "int validImageSamples = cgl_imageSamples_image2DMS"
+            "(msImage_metadata);" in cuda_code
+        )
+        assert "textureSamples(" not in cuda_code
+        assert "imageSamples(" not in cuda_code
+
     def test_resource_query_arrays_emit_indexed_cuda_metadata(self):
         """Test CUDA resource queries preserve resource-array metadata indexing."""
         source_code = """

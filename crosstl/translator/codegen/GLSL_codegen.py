@@ -414,6 +414,52 @@ class GLSLCodeGen:
         "CandidateTriangleVertexPositions",
         "CommittedTriangleVertexPositions",
     }
+    RAY_QUERY_METHOD_ARITIES = {
+        "Initialize": (4, 7),
+        "TraceRayInline": (4, 7),
+        "Proceed": (0,),
+        "Abort": (0,),
+        "Terminate": (0,),
+        "GenerateIntersection": (1,),
+        "ConfirmIntersection": (0,),
+        "RayTMin": (0,),
+        "RayFlags": (0,),
+        "WorldRayOrigin": (0,),
+        "WorldRayDirection": (0,),
+        "CandidateType": (0,),
+        "CommittedType": (0,),
+        "CandidatePrimitiveIndex": (0,),
+        "CommittedPrimitiveIndex": (0,),
+        "CandidateInstanceID": (0,),
+        "CommittedInstanceID": (0,),
+        "CandidateGeometryIndex": (0,),
+        "CommittedGeometryIndex": (0,),
+        "CandidateInstanceCustomIndex": (0,),
+        "CommittedInstanceCustomIndex": (0,),
+        "CandidateInstanceShaderBindingTableRecordOffset": (0,),
+        "CommittedInstanceShaderBindingTableRecordOffset": (0,),
+        "CandidateObjectRayOrigin": (0,),
+        "CandidateObjectRayDirection": (0,),
+        "CommittedObjectRayOrigin": (0,),
+        "CommittedObjectRayDirection": (0,),
+        "CandidateRayT": (0,),
+        "CommittedRayT": (0,),
+        "CandidateTriangleBarycentrics": (0,),
+        "CommittedTriangleBarycentrics": (0,),
+        "CandidateTriangleFrontFace": (0,),
+        "CommittedTriangleFrontFace": (0,),
+        "CandidateTriangleVertexPositions": (1,),
+        "CommittedTriangleVertexPositions": (1,),
+        "CandidateAABBOpaque": (0,),
+        "CandidateObjectToWorld": (0,),
+        "CommittedObjectToWorld": (0,),
+        "CandidateObjectToWorld3x4": (0,),
+        "CommittedObjectToWorld3x4": (0,),
+        "CandidateWorldToObject": (0,),
+        "CommittedWorldToObject": (0,),
+        "CandidateWorldToObject3x4": (0,),
+        "CommittedWorldToObject3x4": (0,),
+    }
     RAY_QUERY_RAY_DESC_FIELDS = (
         ("Origin", "origin", "rayOrigin", "RayOrigin"),
         ("TMin", "tMin", "Tmin", "tmin"),
@@ -3431,6 +3477,7 @@ class GLSLCodeGen:
             generated_args = [self.generate_expression(arg) for arg in args]
             return f"{query_expr}.{operation}({', '.join(generated_args)})"
 
+        self.validate_ray_query_intrinsic_arguments(operation, args)
         function_name, committed = mapping
         call_args = [query_expr]
         if committed is not None:
@@ -3439,6 +3486,30 @@ class GLSLCodeGen:
         args = [self.generate_expression(arg) for arg in args]
         call_args.extend(args)
         return f"{function_name}({', '.join(call_args)})"
+
+    def validate_ray_query_intrinsic_arguments(self, operation, args):
+        allowed_arities = self.RAY_QUERY_METHOD_ARITIES.get(operation)
+        if allowed_arities is None:
+            return
+        actual_arity = len(args)
+        if actual_arity in allowed_arities:
+            return
+        if operation in self.RAY_QUERY_POSITION_FETCH_METHODS:
+            raise ValueError(
+                f"GLSL ray query {operation} requires exactly one "
+                f"output-array argument, got {actual_arity}"
+            )
+        raise ValueError(
+            f"GLSL ray query {operation} expects "
+            f"{self.ray_query_arity_label(allowed_arities)}, got {actual_arity}"
+        )
+
+    def ray_query_arity_label(self, allowed_arities):
+        if len(allowed_arities) == 1:
+            arity = allowed_arities[0]
+            plural = "" if arity == 1 else "s"
+            return f"{arity} argument{plural}"
+        return f"{' or '.join(str(arity) for arity in allowed_arities)} arguments"
 
     def ray_query_initialize_arguments(self, operation, args):
         if operation not in {"Initialize", "TraceRayInline"} or len(args) != 4:

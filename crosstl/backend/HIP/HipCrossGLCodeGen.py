@@ -3375,6 +3375,23 @@ class HipToCrossGLConverter:
         else:
             self.emit(f"var {node.name}: {var_type};")
 
+    def visit_TextureAccessNode(self, node):
+        texture_name = self.visit(node.texture_name)
+        coordinates = node.coordinates
+        if isinstance(coordinates, (list, tuple)):
+            rendered_coordinates = [
+                self.visit(coordinate) for coordinate in coordinates
+            ]
+            if len(rendered_coordinates) == 1:
+                coordinate = rendered_coordinates[0]
+            else:
+                coordinate = self.format_vector_constructor(
+                    f"vec{len(rendered_coordinates)}", rendered_coordinates
+                )
+        else:
+            coordinate = self.visit(coordinates)
+        return f"texture({texture_name}, {coordinate})"
+
     def visit_SharedMemoryNode(self, node):
         var_type = self.convert_hip_variable_type_to_crossgl(node.vtype, node.name)
         self.register_variable_type(node.name, var_type)

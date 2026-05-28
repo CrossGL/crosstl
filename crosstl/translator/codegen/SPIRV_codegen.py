@@ -6496,6 +6496,7 @@ class VulkanSPIRVCodeGen:
             "pow": 2,
             "fma": 3,
             "faceforward": 3,
+            "refract": 3,
             "step": 2,
             "smoothstep": 3,
         }
@@ -6573,6 +6574,18 @@ class VulkanSPIRVCodeGen:
             self.emit(
                 "; WARNING: faceforward requires compatible floating-point "
                 "scalar or vector operands"
+            )
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
+
+        if function_name == "refract" and len(args) == 3:
+            refracted = self.call_refract_function(args)
+            if refracted is not None:
+                return refracted
+            self.emit(
+                "; WARNING: refract requires matching floating-point incident "
+                "and normal operands plus scalar eta"
             )
             return self.default_value_for_type(
                 self.ensure_registered_type(args[0].type)
@@ -7270,6 +7283,42 @@ class VulkanSPIRVCodeGen:
         self.emit(
             f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
             f"FaceForward {arg_list}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_refract_function(self, args: List[SpirvId]) -> Optional[SpirvId]:
+        """Lower refract to GLSL.std.450 with result-typed scalar eta."""
+        result_type = self.ensure_registered_type(args[0].type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        if component_type not in {"float", "double"}:
+            return None
+
+        operand_shape = self.matching_floating_scalar_or_vector_operands(
+            args[0], args[1]
+        )
+        if operand_shape is None:
+            return None
+        operand_component, _ = operand_shape
+        if operand_component != component_type:
+            return None
+
+        eta_vector = self.vector_component_type_and_count(args[2].type.base_type)
+        eta_component = self.scalar_or_vector_component_type(args[2].type)
+        if eta_vector is not None or eta_component not in {"float", "double"}:
+            return None
+
+        eta_type = self.register_primitive_type(component_type)
+        eta = self.convert_scalar_to_type(args[2], eta_type)
+        if self.normalize_primitive_name(eta.type.base_type) != component_type:
+            return None
+
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"Refract %{args[0].id} %{args[1].id} %{eta.id}"
         )
 
         spirv_id = SpirvId(id_value, result_type.type)

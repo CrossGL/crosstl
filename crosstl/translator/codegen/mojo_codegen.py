@@ -3057,8 +3057,8 @@ class MojoCodeGen:
                 return f"{indent_str}break\n"
             context = self.active_for_context()
             if context:
-                update = context["update"]
-                return f"{indent_str}{update}\n{indent_str}continue\n"
+                update = self.generate_for_update_statement(context["update"], indent)
+                return f"{update}{indent_str}continue\n"
             return f"{indent_str}continue\n"
         elif isinstance(stmt, SyncNode):
             return self.generate_sync_node(stmt, indent)
@@ -3511,13 +3511,12 @@ class MojoCodeGen:
 
         init = self.generate_statement(node.init, 0).strip()
         condition = self.generate_expression(node.condition)
-        update = self.generate_expression(node.update)
 
         code = f"{indent_str}{init}\n"
         code += f"{indent_str}while {condition}:\n"
 
         self.loop_depth += 1
-        self.for_contexts.append({"loop_depth": self.loop_depth, "update": update})
+        self.for_contexts.append({"loop_depth": self.loop_depth, "update": node.update})
         try:
             for stmt in self.statement_list(node.body):
                 code += self.generate_statement(stmt, indent + 1)
@@ -3525,10 +3524,25 @@ class MojoCodeGen:
             self.for_contexts.pop()
             self.loop_depth -= 1
 
-        # Add update at the end of the loop
-        code += f"{indent_str}    {update}\n"
+        code += self.generate_for_update_statement(node.update, indent + 1)
 
         return code
+
+    def generate_for_update_statement(self, update, indent):
+        if update is None:
+            return ""
+
+        if isinstance(update, ExpressionStatementNode):
+            update = update.expression
+
+        if isinstance(update, AssignmentNode):
+            return self.generate_assignment_statement(update, indent)
+
+        indent_str = "    " * indent
+        prelude, expression = self.generate_expression_with_prelude(update, indent)
+        if expression.strip():
+            return f"{prelude}{indent_str}{expression}\n"
+        return prelude
 
     def generate_for_in(self, node, indent):
         indent_str = "    " * indent

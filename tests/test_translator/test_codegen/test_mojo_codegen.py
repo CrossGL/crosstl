@@ -7846,6 +7846,103 @@ def test_for_continue_emits_update_before_continue_in_mojo():
     assert "DoWhileNode" not in generated_code
 
 
+def _for_update_assignment_prelude_source():
+    return """
+    int updateArrayLoop(int mode) {
+        int values[2] = {0, 0};
+        for (int step = 0; step < 2; values = {
+            match mode {
+                0 => 1,
+                _ => 2
+            },
+            step
+        }) {
+            step++;
+            if (step == 1) {
+                continue;
+            }
+        }
+        return values[0] + values[1];
+    }
+    """
+
+
+def test_for_update_assignment_uses_expression_preludes_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_for_update_assignment_prelude_source()))
+    )
+
+    assert "while (step < 2):" in generated_code
+    assert "if (step == 1):\n            var __cgl_match_value_0: Int32 = 0" in (
+        generated_code
+    )
+    assert "__cgl_match_value_0 = 1" in generated_code
+    assert "__cgl_match_value_0 = 2" in generated_code
+    assert "values = InlineArray[Int32, 2](__cgl_match_value_0, step)" in (
+        generated_code
+    )
+    assert (
+        "values = InlineArray[Int32, 2](__cgl_match_value_0, step)\n"
+        "            continue"
+    ) in generated_code
+    assert "var __cgl_match_value_1: Int32 = 0" in generated_code
+    assert "values = InlineArray[Int32, 2](__cgl_match_value_1, step)" in (
+        generated_code
+    )
+    assert "values = match mode" not in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_for_update_assignment_contexts_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_for_update_assignment_prelude_source()))
+    )
+    generated_code += """
+fn main():
+    print(updateArrayLoop(0))
+"""
+
+    source_path = tmp_path / "for_update_assignment_contexts.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "3" in result.stdout
+
+
+def test_for_update_match_assignment_diagnostics_preserve_target_context():
+    code = """
+    Texture2D<float4> tex;
+
+    float invalidForUpdate(int mode) {
+        float scalar = 0.0;
+        for (int i = 0; i < 1; scalar = match mode {
+            0 => textureSize(tex, 0),
+            _ => 1.0
+        }) {
+            i++;
+        }
+        return scalar;
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"texture_size target.*assignment target match arm 1"
+            r".*expects ivec2.*got float"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_for_in_statement_lowers_to_mojo_ranges_and_scopes_loop_contexts():
     code = """
     shader main {

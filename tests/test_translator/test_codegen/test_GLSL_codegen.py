@@ -6808,6 +6808,48 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
     assert ".ConfirmIntersection(" not in generated_code
 
 
+def test_glsl_ray_query_member_calls_reject_invalid_arities():
+    cases = [
+        (
+            "rq.Proceed(1u);",
+            r"GLSL ray query Proceed expects 0 arguments, got 1",
+        ),
+        (
+            "rq.Initialize(topLevelAS, gl_RayFlagsNoneEXT);",
+            r"GLSL ray query Initialize expects 4 or 7 arguments, got 2",
+        ),
+        (
+            "vec3 position = rq.CandidateTriangleVertexPositions();",
+            r"GLSL ray query CandidateTriangleVertexPositions requires exactly "
+            r"one output-array argument, got 0",
+        ),
+        (
+            "rq.CommittedTriangleVertexPositions("
+            "trianglePositions, trianglePositions);",
+            r"GLSL ray query CommittedTriangleVertexPositions requires exactly "
+            r"one output-array argument, got 2",
+        ),
+    ]
+
+    for statement, expected_error in cases:
+        shader = f"""
+        shader RayQueryInvalidArity {{
+            accelerationStructureEXT topLevelAS @binding(0);
+
+            compute {{
+                void main() {{
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    vec3 trianglePositions[3];
+                    {statement}
+                }}
+            }}
+        }}
+        """
+
+        with pytest.raises(ValueError, match=expected_error):
+            GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
+
+
 def test_glsl_shader_record_buffer_rejects_binding_layout():
     shader = """
     shader InvalidShaderRecordBinding {
