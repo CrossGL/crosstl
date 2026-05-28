@@ -8298,6 +8298,46 @@ def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose():
     assert "WavePrefixCountBits(" not in generated
 
 
+def test_glsl_wave_multiprefix_forms_emit_partition_diagnostics():
+    code = """
+    shader GLSLWaveMultiPrefixDiagnostics {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uvec4 mask = WaveActiveBallot(lane > 0u);
+                uint sumValue = WaveMultiPrefixSum(lane, mask);
+                uint productValue = WaveMultiPrefixProduct(lane + 1u, mask);
+                uint andValue = WaveMultiPrefixBitAnd(lane, mask);
+                uint orValue = WaveMultiPrefixBitOr(lane, mask);
+                uint xorValue = WaveMultiPrefixBitXor(lane, mask);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "#extension GL_KHR_shader_subgroup_ballot : require" in generated
+    assert "uvec4 mask = subgroupBallot((lane > 0u));" in generated
+    for operation in [
+        "WaveMultiPrefixSum",
+        "WaveMultiPrefixProduct",
+        "WaveMultiPrefixBitAnd",
+        "WaveMultiPrefixBitOr",
+        "WaveMultiPrefixBitXor",
+    ]:
+        assert (
+            f"{operation} requires partition-mask prefix semantics with no "
+            "GL_KHR_shader_subgroup equivalent"
+        ) in generated
+
+    assert "subgroupClustered" not in generated
+    assert "subgroupInclusive" not in generated
+    assert "subgroupExclusive" not in generated
+    assert "WaveOpNode" not in generated
+
+
 def test_else_if_statement():
     code = """
     shader main {

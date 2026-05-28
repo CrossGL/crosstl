@@ -604,6 +604,29 @@ class GLSLCodeGen:
         "WaveMultiPrefixBitOr",
         "WaveMultiPrefixBitXor",
     }
+    GLSL_WAVE_DIAGNOSTIC_REASONS = {
+        "WaveMatch": "has no GL_KHR_shader_subgroup equivalent",
+        "WaveMultiPrefixSum": (
+            "requires partition-mask prefix semantics with no "
+            "GL_KHR_shader_subgroup equivalent"
+        ),
+        "WaveMultiPrefixProduct": (
+            "requires partition-mask prefix semantics with no "
+            "GL_KHR_shader_subgroup equivalent"
+        ),
+        "WaveMultiPrefixBitAnd": (
+            "requires partition-mask prefix semantics with no "
+            "GL_KHR_shader_subgroup equivalent"
+        ),
+        "WaveMultiPrefixBitOr": (
+            "requires partition-mask prefix semantics with no "
+            "GL_KHR_shader_subgroup equivalent"
+        ),
+        "WaveMultiPrefixBitXor": (
+            "requires partition-mask prefix semantics with no "
+            "GL_KHR_shader_subgroup equivalent"
+        ),
+    }
     GLSL_WAVE_NUMERIC_OPERATIONS = {
         "WaveActiveSum",
         "WaveActiveProduct",
@@ -6746,7 +6769,10 @@ class GLSLCodeGen:
 
         if operation in self.GLSL_WAVE_DIAGNOSTIC_OPERATIONS:
             return self.glsl_wave_diagnostic_expression(
-                operation, "has no GL_KHR_shader_subgroup equivalent"
+                operation,
+                self.GLSL_WAVE_DIAGNOSTIC_REASONS.get(
+                    operation, "has no GL_KHR_shader_subgroup equivalent"
+                ),
             )
 
         type_diagnostic = self.glsl_wave_type_diagnostic(operation, arguments)
