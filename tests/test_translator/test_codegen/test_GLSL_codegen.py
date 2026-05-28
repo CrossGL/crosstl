@@ -2176,6 +2176,106 @@ def test_glsl_stage_bare_layout_attributes_reject_arguments(stage, metadata, mes
 
 
 @pytest.mark.parametrize(
+    ("stage", "metadata", "message"),
+    [
+        (
+            "geometry",
+            "@inputtopology(line)\n"
+            "                @triangles\n"
+            "                @outputtopology(line)\n"
+            "                @maxvertexcount(2)",
+            "Conflicting GLSL geometry input topology layout "
+            "inputtopology line with triangles",
+        ),
+        (
+            "geometry",
+            "@inputtopology(line)\n"
+            "                @outputtopology(line)\n"
+            "                @triangle_strip\n"
+            "                @maxvertexcount(2)",
+            "Conflicting GLSL geometry output topology layout "
+            "outputtopology line with triangle_strip",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n"
+            "                @quads\n"
+            "                @partitioning(equal)",
+            "Conflicting GLSL tessellation domain layout domain triangle with quads",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n"
+            "                @partitioning(equal)\n"
+            "                @fractional_even_spacing",
+            "Conflicting GLSL tessellation partitioning layout "
+            "partitioning equal with fractional_even_spacing",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n" "                @cw\n" "                @ccw",
+            "Conflicting GLSL tessellation winding layout cw with ccw",
+        ),
+    ],
+)
+def test_glsl_stage_layout_attributes_reject_conflicting_aliases(
+    stage, metadata, message
+):
+    code = f"""
+    shader ConflictingStageLayoutAliases {{
+        {stage} {{
+            void main()
+                {metadata}
+            {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+def test_glsl_stage_layout_attributes_accept_equivalent_aliases():
+    geometry_code = """
+    shader EquivalentGeometryStageLayoutAliases {
+        geometry {
+            void main()
+                @inputtopology(line)
+                @lines
+                @outputtopology(line)
+                @line_strip
+                @maxvertexcount(2)
+            { }
+        }
+    }
+    """
+    tessellation_code = """
+    shader EquivalentTessellationStageLayoutAliases {
+        tessellation_evaluation {
+            void main()
+                @domain(triangle)
+                @triangles
+                @partitioning(equal)
+                @equal_spacing
+                @outputtopology(triangle_cw)
+            { }
+        }
+    }
+    """
+
+    geometry = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(geometry_code), "geometry"
+    )
+    tessellation = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(tessellation_code), "tessellation_evaluation"
+    )
+
+    assert "layout(lines) in;" in geometry
+    assert "layout(line_strip, max_vertices = 2) out;" in geometry
+    assert "layout(triangles, equal_spacing, cw) in;" in tessellation
+
+
+@pytest.mark.parametrize(
     ("topology", "expected_layout"),
     [
         ("triangle_cw", "layout(triangles, equal_spacing, cw) in;"),

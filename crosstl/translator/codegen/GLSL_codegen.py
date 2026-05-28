@@ -2800,32 +2800,53 @@ class GLSLCodeGen:
         return parts
 
     def generate_geometry_stage_layout(self, func, stage_layout_qualifiers=None):
-        input_primitive = self.glsl_single_stage_attribute_argument(
+        input_bare_names = {
+            "points",
+            "lines",
+            "lines_adjacency",
+            "triangles",
+            "triangles_adjacency",
+        }
+        output_bare_names = {"points", "line_strip", "triangle_strip"}
+        if self.glsl_stage_has_attribute(
             func, "inputtopology", stage_layout_qualifiers, "in"
-        )
-        if input_primitive is None:
-            input_primitive = self.glsl_stage_bare_attribute(
-                func,
-                {
-                    "points",
-                    "lines",
-                    "lines_adjacency",
-                    "triangles",
-                    "triangles_adjacency",
-                },
-                stage_layout_qualifiers,
-                "in",
-            )
-        output_primitive = self.glsl_single_stage_attribute_argument(
+        ) or self.glsl_stage_has_bare_attribute(
+            func,
+            input_bare_names - {"points"},
+            stage_layout_qualifiers,
+            "in",
+        ):
+            input_bare_names.remove("points")
+        if self.glsl_stage_has_attribute(
             func, "outputtopology", stage_layout_qualifiers, "out"
+        ) or self.glsl_stage_has_bare_attribute(
+            func,
+            output_bare_names - {"points"},
+            stage_layout_qualifiers,
+            "out",
+        ):
+            output_bare_names.remove("points")
+
+        input_primitive = self.glsl_stage_consistent_layout_value(
+            "geometry",
+            "input topology",
+            func,
+            explicit_attribute_name="inputtopology",
+            bare_names=input_bare_names,
+            value_mapper=self.glsl_geometry_input_topology,
+            stage_layout_qualifiers=stage_layout_qualifiers,
+            direction="in",
         )
-        if output_primitive is None:
-            output_primitive = self.glsl_stage_bare_attribute(
-                func,
-                {"points", "line_strip", "triangle_strip"},
-                stage_layout_qualifiers,
-                "out",
-            )
+        output_primitive = self.glsl_stage_consistent_layout_value(
+            "geometry",
+            "output topology",
+            func,
+            explicit_attribute_name="outputtopology",
+            bare_names=output_bare_names,
+            value_mapper=self.glsl_geometry_output_topology,
+            stage_layout_qualifiers=stage_layout_qualifiers,
+            direction="out",
+        )
         max_vertices = self.glsl_stage_positive_int_layout_argument(
             "geometry", func, "max_vertices", stage_layout_qualifiers, "out"
         )
@@ -2845,7 +2866,7 @@ class GLSLCodeGen:
         code = ""
         input_layout = []
         if input_primitive:
-            input_layout.append(self.glsl_geometry_input_topology(input_primitive))
+            input_layout.append(input_primitive)
         if invocations is not None:
             input_layout.append(f"invocations = {invocations}")
         if input_layout:
@@ -2853,7 +2874,7 @@ class GLSLCodeGen:
 
         output_layout = []
         if output_primitive:
-            output_layout.append(self.glsl_geometry_output_topology(output_primitive))
+            output_layout.append(output_primitive)
         if max_vertices is not None:
             output_layout.append(f"max_vertices = {max_vertices}")
         if output_layout:
@@ -2942,37 +2963,43 @@ class GLSLCodeGen:
         self, func, stage_layout_qualifiers=None
     ):
         layout_parts = []
-        mapped_domain = None
-        domain = self.glsl_single_stage_attribute_argument(
-            func, "domain", stage_layout_qualifiers, "in"
+        mapped_domain = self.glsl_stage_consistent_layout_value(
+            "tessellation",
+            "domain",
+            func,
+            explicit_attribute_name="domain",
+            bare_names={"triangles", "quads", "isolines"},
+            value_mapper=self.glsl_tessellation_domain,
+            stage_layout_qualifiers=stage_layout_qualifiers,
+            direction="in",
         )
-        if domain is None:
-            domain = self.glsl_stage_bare_attribute(
-                func, {"triangles", "quads", "isolines"}, stage_layout_qualifiers, "in"
-            )
-        if domain:
-            mapped_domain = self.glsl_tessellation_domain(domain)
+        if mapped_domain:
             layout_parts.append(mapped_domain)
 
-        partitioning = self.glsl_single_stage_attribute_argument(
-            func, "partitioning", stage_layout_qualifiers, "in"
+        partitioning = self.glsl_stage_consistent_layout_value(
+            "tessellation",
+            "partitioning",
+            func,
+            explicit_attribute_name="partitioning",
+            bare_names={
+                "equal_spacing",
+                "fractional_even_spacing",
+                "fractional_odd_spacing",
+            },
+            value_mapper=self.glsl_tessellation_partitioning,
+            stage_layout_qualifiers=stage_layout_qualifiers,
+            direction="in",
         )
-        if partitioning is None:
-            partitioning = self.glsl_stage_bare_attribute(
-                func,
-                {
-                    "equal_spacing",
-                    "fractional_even_spacing",
-                    "fractional_odd_spacing",
-                },
-                stage_layout_qualifiers,
-                "in",
-            )
         if partitioning:
-            layout_parts.append(self.glsl_tessellation_partitioning(partitioning))
+            layout_parts.append(partitioning)
 
-        winding = self.glsl_stage_bare_attribute(
-            func, {"cw", "ccw"}, stage_layout_qualifiers, "in"
+        winding = self.glsl_stage_consistent_layout_value(
+            "tessellation",
+            "winding",
+            func,
+            bare_names={"cw", "ccw"},
+            stage_layout_qualifiers=stage_layout_qualifiers,
+            direction="in",
         )
         output_topology = self.glsl_single_stage_attribute_argument(
             func, "outputtopology", stage_layout_qualifiers
@@ -3078,6 +3105,87 @@ class GLSLCodeGen:
                     )
                 return attr_name
         return None
+
+    def glsl_stage_consistent_layout_value(
+        self,
+        stage_name,
+        layout_name,
+        func,
+        explicit_attribute_name=None,
+        bare_names=None,
+        value_mapper=None,
+        stage_layout_qualifiers=None,
+        direction=None,
+    ):
+        bare_names = set(bare_names or ())
+        choices = []
+        for attr in self.glsl_stage_control_attributes(
+            func, stage_layout_qualifiers, direction
+        ):
+            attr_name = self.glsl_stage_control_attribute_name(attr)
+            if explicit_attribute_name is not None and (
+                attr_name == explicit_attribute_name
+            ):
+                arguments = getattr(attr, "arguments", []) or []
+                if len(arguments) != 1:
+                    raise ValueError(
+                        "GLSL stage attribute "
+                        f"{explicit_attribute_name} requires exactly one argument"
+                    )
+                value = self.attribute_value_to_string(arguments[0])
+                source = f"{attr_name} {value}"
+            elif attr_name in bare_names:
+                if getattr(attr, "arguments", []):
+                    raise ValueError(
+                        f"GLSL stage attribute {attr_name} does not accept arguments"
+                    )
+                value = attr_name
+                source = attr_name
+            else:
+                continue
+
+            mapped_value = value_mapper(value) if value_mapper else value
+            choices.append((source, mapped_value))
+
+        if not choices:
+            return None
+
+        first_source, first_mapped = choices[0]
+        for source, mapped_value in choices[1:]:
+            if mapped_value != first_mapped:
+                raise ValueError(
+                    f"Conflicting GLSL {stage_name} {layout_name} layout "
+                    f"{first_source} with {source}"
+                )
+        return first_mapped
+
+    def glsl_stage_control_attributes(
+        self, func, stage_layout_qualifiers=None, direction=None
+    ):
+        yield from getattr(func, "attributes", []) or []
+        yield from self.glsl_stage_layout_entries(stage_layout_qualifiers, direction)
+
+    def glsl_stage_has_attribute(
+        self, func, attribute_name, stage_layout_qualifiers=None, direction=None
+    ):
+        return any(
+            True
+            for _ in self.glsl_stage_attributes(
+                func, attribute_name, stage_layout_qualifiers, direction
+            )
+        )
+
+    def glsl_stage_has_bare_attribute(
+        self, func, names, stage_layout_qualifiers=None, direction=None
+    ):
+        names = set(names)
+        for attr in self.glsl_stage_control_attributes(
+            func, stage_layout_qualifiers, direction
+        ):
+            attr_name = self.glsl_stage_control_attribute_name(attr)
+            if attr_name in names and not getattr(attr, "arguments", []):
+                return True
+        return False
 
     def glsl_single_stage_attribute_argument(
         self, func, attribute_name, stage_layout_qualifiers=None, direction=None

@@ -3602,6 +3602,124 @@ def test_reference_pointer_and_function_type_nodes_smoke_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_reference_parameter_calls_auto_borrow_and_mark_mut_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    int_type = PrimitiveType("int")
+
+    ast = ShaderNode(
+        "RustReferenceCallBorrowSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "read_payload",
+                int_type,
+                [ParameterNode("value", ReferenceType(payload_type))],
+                [ReturnNode(MemberAccessNode(IdentifierNode("value"), "count"))],
+            ),
+            FunctionNode(
+                "bump_payload",
+                int_type,
+                [ParameterNode("value", ReferenceType(payload_type, is_mutable=True))],
+                [
+                    AssignmentNode(
+                        MemberAccessNode(IdentifierNode("value"), "count"),
+                        BinaryOpNode(
+                            MemberAccessNode(IdentifierNode("value"), "count"),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                    ),
+                    ReturnNode(MemberAccessNode(IdentifierNode("value"), "count")),
+                ],
+            ),
+            FunctionNode(
+                "forward_read",
+                int_type,
+                [ParameterNode("value", ReferenceType(payload_type))],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("read_payload"),
+                            [IdentifierNode("value")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "forward_bump",
+                int_type,
+                [ParameterNode("value", ReferenceType(payload_type, is_mutable=True))],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("bump_payload"),
+                            [IdentifierNode("value")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "call_refs",
+                int_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    VariableNode("editable", payload_type, IdentifierNode("payload")),
+                    VariableNode(
+                        "before",
+                        int_type,
+                        FunctionCallNode(
+                            IdentifierNode("read_payload"),
+                            [IdentifierNode("editable")],
+                        ),
+                    ),
+                    VariableNode(
+                        "after",
+                        int_type,
+                        FunctionCallNode(
+                            IdentifierNode("bump_payload"),
+                            [IdentifierNode("editable")],
+                        ),
+                    ),
+                    ReturnNode(
+                        BinaryOpNode(
+                            IdentifierNode("before"),
+                            "+",
+                            IdentifierNode("after"),
+                        )
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "let mut editable: Payload =" in generated_code
+    assert "let before: i32 = read_payload(&editable);" in generated_code
+    assert "let after: i32 = bump_payload(&mut editable);" in generated_code
+    assert "return read_payload(value);" in generated_code
+    assert "return bump_payload(value);" in generated_code
+    assert "read_payload(editable)" not in generated_code
+    assert "bump_payload(editable)" not in generated_code
+    assert "read_payload(&value)" not in generated_code
+    assert "bump_payload(&mut value)" not in generated_code
+    assert "read_payload(&editable.clone())" not in generated_code
+    assert "bump_payload(&mut editable.clone())" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_direct_callable_trait_parameters_emit_impl_trait_and_compile(tmp_path):
     int_type = PrimitiveType("int")
 

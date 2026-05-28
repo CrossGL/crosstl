@@ -2042,7 +2042,13 @@ class TestVulkanSPIRVCodeGen:
             compute {
                 void main() {
                     float missingUnary = sin();
+                    vec2 missingAtan2 = atan2(vec2(1.0, 2.0));
                     float missingBinary = distance(vec2(0.0, 1.0));
+                    vec3 extraCross = cross(
+                        vec3(1.0, 0.0, 0.0),
+                        vec3(0.0, 1.0, 0.0),
+                        vec3(0.0, 0.0, 1.0)
+                    );
                     vec3 missingTernary = refract(vec3(0.0), vec3(1.0));
                 }
             }
@@ -2054,11 +2060,16 @@ class TestVulkanSPIRVCodeGen:
         )
 
         assert "; WARNING: sin requires 1 operand" in spv_code
+        assert "; WARNING: atan2 requires 2 operands" in spv_code
         assert "; WARNING: distance requires 2 operands" in spv_code
+        assert "; WARNING: cross requires 2 operands" in spv_code
         assert "; WARNING: refract requires 3 operands" in spv_code
         assert " Sin " not in spv_code
+        assert " Atan2 " not in spv_code
         assert " Distance " not in spv_code
+        assert " Cross " not in spv_code
         assert " Refract " not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_unknown_std450_fallback_emits_diagnostics(self, tmp_path):
@@ -2676,16 +2687,35 @@ class TestVulkanSPIRVCodeGen:
         generator = VulkanSPIRVCodeGen()
         float_type = generator.register_primitive_type("float")
         vec2_type = generator.register_vector_type(float_type, 2)
+        vec3_type = generator.register_vector_type(float_type, 3)
         zero = generator.register_constant(0.0, float_type)
-        vector = generator.composite_construct(vec2_type, [zero, zero])
+        vector2 = generator.composite_construct(vec2_type, [zero, zero])
+        vector3 = generator.composite_construct(vec3_type, [zero, zero, zero])
 
-        result = generator.call_builtin_function("sin", [vector])
+        sin_result = generator.call_builtin_function("sin", [vector2])
+        atan2_result = generator.call_builtin_function("atan2", [vector2, vector2])
+        cross_result = generator.call_builtin_function("cross", [vector3, vector3])
+        code = "\n".join(generator.code_lines)
 
-        assert result is not None
-        assert generator.value_types[result.id] == vec2_type
+        assert sin_result is not None
+        assert generator.value_types[sin_result.id] == vec2_type
         assert re.search(
-            rf"%{result.id} = OpExtInst %{vec2_type.id} %\d+ Sin %{vector.id}",
-            "\n".join(generator.code_lines),
+            rf"%{sin_result.id} = OpExtInst %{vec2_type.id} %\d+ Sin %{vector2.id}",
+            code,
+        )
+        assert atan2_result is not None
+        assert generator.value_types[atan2_result.id] == vec2_type
+        assert re.search(
+            rf"%{atan2_result.id} = OpExtInst %{vec2_type.id} %\d+ "
+            rf"Atan2 %{vector2.id} %{vector2.id}",
+            code,
+        )
+        assert cross_result is not None
+        assert generator.value_types[cross_result.id] == vec3_type
+        assert re.search(
+            rf"%{cross_result.id} = OpExtInst %{vec3_type.id} %\d+ "
+            rf"Cross %{vector3.id} %{vector3.id}",
+            code,
         )
 
     def test_vector_saturate_builtins_lower_to_vector_fclamp(self):

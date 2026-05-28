@@ -2210,8 +2210,19 @@ class RustCodeGen:
                 return
 
             if isinstance(current, FunctionCallNode):
+                func_expr = getattr(current, "function", getattr(current, "name", None))
+                func_name = self.function_call_name(func_expr)
+                args = getattr(current, "arguments", getattr(current, "args", []))
+                for index, argument in enumerate(args or []):
+                    param_type = self.user_function_param_type(func_name, index)
+                    reference_parts = self.reference_type_parts_for_type(param_type)
+                    if reference_parts is None or not reference_parts[0]:
+                        continue
+                    root_name = self.assignment_target_root_name(argument)
+                    if root_name:
+                        names.add(root_name)
                 collect(current.function)
-                collect(getattr(current, "arguments", getattr(current, "args", [])))
+                collect(args)
                 return
 
             if isinstance(current, MemberAccessNode):
@@ -2253,6 +2264,14 @@ class RustCodeGen:
         if isinstance(target, ArrayAccessNode):
             return self.assignment_target_root_name(target.array_expr)
         return None
+
+    def generate_borrow_operand_expression(self, expr):
+        """Render a borrow operand without value-context clones."""
+        self.assignment_lhs_depth += 1
+        try:
+            return self.generate_expression(expr)
+        finally:
+            self.assignment_lhs_depth -= 1
 
     def collect_generic_operator_constraints(self, node, generic_names, constraints):
         if node is None:
@@ -3847,6 +3866,13 @@ class RustCodeGen:
         )
 
     def generate_expression_with_type(self, expr, target_type, static_context=False):
+        if self.reference_type_parts_for_type(target_type) is not None:
+            generated = self.generate_borrow_operand_expression(expr)
+            return self.normalize_reference_typed_expression(
+                expr,
+                generated,
+                target_type,
+            )
         if isinstance(expr, LambdaNode):
             return self.generate_lambda_node_expression(expr, target_type=target_type)
         if isinstance(expr, BlockNode):
@@ -5314,6 +5340,14 @@ class RustCodeGen:
         if self.generated_binary_expression_matches_target(expr, target_type):
             return generated_expr
 
+        reference_expr = self.normalize_reference_typed_expression(
+            expr,
+            generated_expr,
+            target_type,
+        )
+        if reference_expr is not None:
+            return reference_expr
+
         vector_expr = self.normalize_vector_typed_expression(expr, target_type)
         if vector_expr is not None:
             return vector_expr
@@ -5323,6 +5357,32 @@ class RustCodeGen:
         return self.normalize_scalar_assignment_value(
             expr, generated_expr, self.expression_result_type(expr), target_type
         )
+
+    def normalize_reference_typed_expression(self, expr, generated_expr, target_type):
+        target_reference = self.reference_type_parts_for_type(target_type)
+        if target_reference is None:
+            return None
+
+        generated_text = str(generated_expr).strip()
+        if not generated_text:
+            return generated_expr
+
+        target_is_mutable, _ = target_reference
+        source_reference = self.reference_type_parts_for_type(
+            self.expression_result_type(expr)
+        )
+        if source_reference is not None:
+            source_is_mutable, _ = source_reference
+            if not target_is_mutable or source_is_mutable:
+                return generated_expr
+
+        if generated_text.startswith("&mut "):
+            return generated_expr
+        if not target_is_mutable and generated_text.startswith("&"):
+            return generated_expr
+
+        borrow_prefix = "&mut " if target_is_mutable else "&"
+        return f"{borrow_prefix}{generated_expr}"
 
     def generated_binary_expression_matches_target(self, expr, target_type):
         if not isinstance(expr, BinaryOpNode) or target_type is None:
@@ -6485,12 +6545,11 @@ class RustCodeGen:
         return type_name.replace("::<", "<", 1)
 
     def generate_user_function_call_args(self, func_name, args):
-        param_types = self.user_function_param_types.get(func_name, [])
         later_roots = self.return_call_arg_later_roots(args)
         lambda_conflict_roots = self.return_call_arg_lambda_conflict_roots(args)
         generated_args = []
         for index, arg in enumerate(args):
-            param_type = param_types[index] if index < len(param_types) else None
+            param_type = self.user_function_param_type(func_name, index)
             target_type = self.user_function_argument_target_type(
                 func_name,
                 arg,
@@ -6548,6 +6607,10 @@ class RustCodeGen:
 
     def normalize_user_function_call_arg(self, arg, generated_arg, param_type):
         return self.normalize_typed_expression_value(arg, generated_arg, param_type)
+
+    def user_function_param_type(self, func_name, index):
+        param_types = self.user_function_param_types.get(func_name, [])
+        return param_types[index] if index < len(param_types) else None
 
     def normalize_vector_typed_expression(self, expr, target_type):
         target_info = self.vector_type_info(target_type)
@@ -8541,6 +8604,12 @@ class RustCodeGen:
         if type_name.startswith("&") and not type_name.startswith("&'"):
             return False, type_name[1:].strip()
         return None
+
+    def reference_type_parts_for_type(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if type_name is None:
+            return None
+        return self.reference_type_parts(type_name)
 
     def pointer_type_parts(self, type_name):
         type_name = str(type_name).strip()

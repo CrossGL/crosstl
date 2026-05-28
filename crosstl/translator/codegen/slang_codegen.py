@@ -6060,9 +6060,18 @@ class SlangCodeGen:
                 "@mesh_payload parameter"
             )
 
-        payload_type = self.slang_dispatch_mesh_payload_argument_type(node.arguments[3])
-        if payload_type is None or payload_type in payload_types:
+        payload_argument = node.arguments[3]
+        payload_type = self.slang_dispatch_mesh_payload_argument_type(payload_argument)
+        if payload_type is None:
             return
+
+        if payload_type in payload_types:
+            if self.slang_expression_is_lvalue(payload_argument):
+                return
+            raise ValueError(
+                "Slang DispatchMesh payload argument must be an lvalue, "
+                f"got {payload_type}"
+            )
 
         expected_label = self.slang_dispatch_mesh_payload_type_label(payload_types)
         raise ValueError(

@@ -3513,6 +3513,86 @@ def test_dispatch_mesh_payload_argument_matches_mesh_payload_parameter(
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_dispatch_mesh_payload_argument_accepts_array_element_lvalue():
+    code = """
+    shader SlangDispatchMeshPayloadArrayLvalue {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        groupshared MeshPayload payloads[2];
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                uint slot = 1u;
+                payloads[slot].meshlet = 7u;
+                DispatchMesh(1, 1, 1, payloads[slot]);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                uint meshlet = payload.meshlet;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "groupshared MeshPayload payloads[2];" in generated_code
+    assert "DispatchMesh(1, 1, 1, payloads[slot]);" in generated_code
+    assert "void MSMain(in payload MeshPayload payload)" in generated_code
+
+
+@pytest.mark.parametrize(
+    "payload_expression",
+    [
+        "MeshPayload(7u)",
+        "makePayload()",
+    ],
+)
+def test_dispatch_mesh_payload_argument_rejects_non_lvalue_payload_expressions(
+    payload_expression,
+):
+    code = f"""
+    shader InvalidSlangDispatchMeshPayloadLvalue {{
+        struct MeshPayload {{
+            uint meshlet;
+        }};
+
+        MeshPayload makePayload() {{
+            MeshPayload payload;
+            payload.meshlet = 7u;
+            return payload;
+        }}
+
+        task {{
+            void main() @numthreads(1, 1, 1) {{
+                DispatchMesh(1, 1, 1, {payload_expression});
+            }}
+        }}
+
+        mesh {{
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {{
+                SetMeshOutputCounts(3, 1);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="DispatchMesh payload argument must be an lvalue, got MeshPayload",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_mesh_intrinsic_invalid_arities_emit_slang_diagnostics():
     code = """
     shader InvalidSlangMeshIntrinsics {

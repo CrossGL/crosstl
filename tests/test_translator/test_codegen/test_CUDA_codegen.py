@@ -5726,6 +5726,125 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
         assert "imageStore(" not in cuda_code
 
+    def test_image_access_qualifiers_emit_cuda_diagnostics(self):
+        """Test CUDA rejects storage-image operations that violate access metadata."""
+        source_code = """
+        shader ImageAccessQualifiers {
+            readonly image2D readOnlyImage @rgba16f;
+            writeonly image2D writeOnlyImage @rgba16f;
+            image2D attrReadImage @access(read);
+            image2D attrWriteImage @access(write);
+            image2D attrReadWriteImage @access(read_write);
+            readonly uimage2D readOnlyCounters @r32ui;
+            writeonly uimage2D writeOnlyCounters @r32ui;
+
+            void accessParams(
+                readonly image2D paramRead @rgba16f,
+                writeonly image2D paramWrite @rgba16f,
+                readonly uimage2D paramReadCounter @r32ui,
+                writeonly uimage2D paramWriteCounter @r32ui,
+                ivec2 pixel
+            ) {
+                vec4 blockedParamRead = imageLoad(paramWrite, pixel);
+                imageStore(paramRead, pixel, blockedParamRead);
+                uint blockedParamAtomicRead =
+                    imageAtomicAdd(paramReadCounter, pixel, 1);
+                uint blockedParamAtomicWrite =
+                    imageAtomicAdd(paramWriteCounter, pixel, 1);
+            }
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(2, 4);
+                    vec4 blockedGlobalRead = imageLoad(writeOnlyImage, pixel);
+                    imageStore(readOnlyImage, pixel, blockedGlobalRead);
+                    vec4 allowedRead = imageLoad(readOnlyImage, pixel);
+                    imageStore(writeOnlyImage, pixel, allowedRead);
+                    vec4 blockedAttrRead = imageLoad(attrWriteImage, pixel);
+                    imageStore(attrReadImage, pixel, blockedAttrRead);
+                    vec4 attrReadWriteValue = imageLoad(attrReadWriteImage, pixel);
+                    imageStore(attrReadWriteImage, pixel, attrReadWriteValue);
+                    uint blockedGlobalAtomicRead =
+                        imageAtomicAdd(readOnlyCounters, pixel, 1);
+                    uint blockedGlobalAtomicWrite =
+                        imageAtomicAdd(writeOnlyCounters, pixel, 1);
+                    accessParams(
+                        readOnlyImage,
+                        writeOnlyImage,
+                        readOnlyCounters,
+                        writeOnlyCounters,
+                        pixel
+                    );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "float4 blockedParamRead = /* unsupported CUDA image access: "
+            "imageLoad requires readable image resource on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 blockedGlobalRead = /* unsupported CUDA image access: "
+            "imageLoad requires readable image resource on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 blockedAttrRead = /* unsupported CUDA image access: "
+            "imageLoad requires readable image resource on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "/* unsupported CUDA image access: imageStore requires writable "
+            "image resource on image2D */ ((void)0);" in cuda_code
+        )
+        assert (
+            "uint blockedParamAtomicRead = /* unsupported CUDA image atomic "
+            "resource call: imageAtomicAdd requires readwrite image resource "
+            "on uimage2D */ 0u;" in cuda_code
+        )
+        assert (
+            "uint blockedParamAtomicWrite = /* unsupported CUDA image atomic "
+            "resource call: imageAtomicAdd requires readwrite image resource "
+            "on uimage2D */ 0u;" in cuda_code
+        )
+        assert (
+            "uint blockedGlobalAtomicRead = /* unsupported CUDA image atomic "
+            "resource call: imageAtomicAdd requires readwrite image resource "
+            "on uimage2D */ 0u;" in cuda_code
+        )
+        assert (
+            "uint blockedGlobalAtomicWrite = /* unsupported CUDA image atomic "
+            "resource call: imageAtomicAdd requires readwrite image resource "
+            "on uimage2D */ 0u;" in cuda_code
+        )
+        assert (
+            "float4 allowedRead = surf2Dread<float4>"
+            "(readOnlyImage, pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(allowedRead, writeOnlyImage, "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "float4 attrReadWriteValue = surf2Dread<float4>"
+            "(attrReadWriteImage, pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(attrReadWriteValue, attrReadWriteImage, "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+        assert "imageAtomicAdd(" not in cuda_code
+
     def test_texture_coordinate_shapes_emit_cuda_helpers_or_diagnostics(self):
         """Test CUDA texture sampling rejects known invalid coordinate ranks."""
         source_code = """

@@ -64,6 +64,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.indent_level = 0
         self.output = []
         self.variable_types = {}
+        self.image_resource_accesses = {}
         self.struct_member_types = {}
         self.function_return_types = {}
         self.helper_functions = {}
@@ -98,6 +99,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.output = []
         self.indent_level = 0
         self.variable_types = {}
+        self.image_resource_accesses = {}
         self.struct_member_types = {}
         self.function_return_types = self.collect_function_return_types(ast_node)
         self.helper_functions = {}
@@ -247,6 +249,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def visit_FunctionNode(self, node):
         """Render a CrossGL function or compute entry point as CUDA code."""
         saved_variable_types = self.variable_types.copy()
+        saved_image_resource_accesses = self.image_resource_accesses.copy()
         saved_current_function_name = self.current_function_name
         saved_structured_buffer_length_parameters = (
             self.current_structured_buffer_length_parameters
@@ -291,7 +294,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             else:
                 param_type = "void"
 
-            self.register_variable_type(param.name, param_type)
+            self.register_variable_type(param.name, param_type, param)
             params.append(self.format_typed_declarator(param_type, param.name))
             metadata_param = self.query_metadata_parameter(param.name, param_type)
             if metadata_param:
@@ -321,6 +324,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.indent_level -= 1
         self.emit("}")
         self.variable_types = saved_variable_types
+        self.image_resource_accesses = saved_image_resource_accesses
         self.current_function_name = saved_current_function_name
         self.current_structured_buffer_length_parameters = (
             saved_structured_buffer_length_parameters
@@ -378,7 +382,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return f"auto {node.name} = {self.visit(initial_value)}"
 
         if var_type:
-            self.register_variable_type(node.name, var_type)
+            self.register_variable_type(node.name, var_type, node)
             # Check for special memory qualifiers
             qualifiers = []
             if hasattr(node, "qualifiers"):
@@ -3016,12 +3020,87 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         return function_mapping.get(func_name, func_name)
 
-    def register_variable_type(self, name, type_name):
+    def attribute_value_to_string(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if hasattr(value, "name") and value.name is not None:
+            return str(value.name)
+        if hasattr(value, "value") and value.value is not None:
+            return str(value.value).strip('"')
+        return str(value)
+
+    def explicit_resource_access(self, node):
+        if node is None:
+            return None
+
+        access_names = {
+            "read": "readonly",
+            "readonly": "readonly",
+            "write": "writeonly",
+            "writeonly": "writeonly",
+            "read_write": "readwrite",
+            "readwrite": "readwrite",
+            "access::read": "readonly",
+            "access::write": "writeonly",
+            "access::read_write": "readwrite",
+        }
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            access = access_names.get(str(qualifier).lower())
+            if access is not None:
+                return access
+
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name == "access":
+                arguments = getattr(attr, "arguments", []) or []
+                if not arguments:
+                    continue
+                raw_access = self.attribute_value_to_string(arguments[0])
+                access = access_names.get(str(raw_access).lower())
+            else:
+                access = access_names.get(attr_name)
+            if access is not None:
+                return access
+        return None
+
+    def is_storage_image_type(self, type_name):
+        base_type = self.resource_base_type(type_name)
+        if not isinstance(base_type, str):
+            return False
+        image_shapes = {
+            "image1D",
+            "image1DArray",
+            "image2D",
+            "image2DArray",
+            "image3D",
+            "imageCube",
+            "imageCubeArray",
+            "image2DMS",
+            "image2DMSArray",
+        }
+        return base_type in image_shapes or any(
+            base_type == f"{prefix}{shape}"
+            for prefix in ("i", "u")
+            for shape in image_shapes
+        )
+
+    def register_variable_type(self, name, type_name, node=None):
         if not name or type_name is None:
             return
         if not isinstance(type_name, str):
             type_name = self.convert_type_node_to_string(type_name)
         self.variable_types[name] = type_name
+        if not self.is_storage_image_type(type_name):
+            self.image_resource_accesses.pop(name, None)
+            return
+
+        access = self.explicit_resource_access(node)
+        if access is None:
+            self.image_resource_accesses.pop(name, None)
+        else:
+            self.image_resource_accesses[name] = access
 
     def get_expression_name(self, node):
         if isinstance(node, IdentifierNode):
@@ -3260,6 +3339,38 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             f"{func_name} coordinate rank on {image_type} */ {fallback}"
         )
 
+    def image_resource_access(self, image_arg):
+        image_name = self.get_expression_name(image_arg)
+        if not image_name:
+            return None
+        return self.image_resource_accesses.get(image_name)
+
+    def unsupported_image_access_call(self, func_name, image_type, reason):
+        image_type = image_type or "unknown resource"
+        fallback = "((void)0)"
+        if func_name == "imageLoad":
+            fallback = self.zero_value_for_type(self.image_value_type(image_type))
+        return (
+            f"/* unsupported CUDA image access: "
+            f"{func_name} {reason} on {image_type} */ {fallback}"
+        )
+
+    def image_access_diagnostic(self, func_name, image_type, raw_image):
+        access = self.image_resource_access(raw_image)
+        if func_name == "imageLoad" and access == "writeonly":
+            return self.unsupported_image_access_call(
+                func_name,
+                image_type,
+                "requires readable image resource",
+            )
+        if func_name == "imageStore" and access == "readonly":
+            return self.unsupported_image_access_call(
+                func_name,
+                image_type,
+                "requires writable image resource",
+            )
+        return None
+
     def image_coordinate_rank_diagnostic(self, func_name, image_type, raw_coord):
         expected_coord_count = self.expected_image_coordinate_count(image_type)
         actual_coord_count = self.texel_fetch_coordinate_count(raw_coord)
@@ -3278,6 +3389,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             f"{func_name} coordinate rank on {image_type} */ "
             f"{self.image_atomic_zero_value(image_type)}"
         )
+
+    def unsupported_image_atomic_access_call(self, func_name, image_type):
+        image_type = image_type or "unknown resource"
+        return (
+            f"/* unsupported CUDA image atomic resource call: "
+            f"{func_name} requires readwrite image resource on {image_type} */ "
+            f"{self.image_atomic_zero_value(image_type)}"
+        )
+
+    def image_atomic_access_diagnostic(self, func_name, image_type, raw_image):
+        if self.image_resource_access(raw_image) in {"readonly", "writeonly"}:
+            return self.unsupported_image_atomic_access_call(func_name, image_type)
+        return None
 
     def image_atomic_coordinate_rank_diagnostic(self, func_name, image_type, raw_coord):
         expected_coord_count = self.expected_image_coordinate_count(image_type)
@@ -3441,6 +3565,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 image_type = self.resource_base_type(
                     self.get_expression_type(raw_args[0])
                 )
+                access_diagnostic = self.image_atomic_access_diagnostic(
+                    func_name, image_type, raw_args[0]
+                )
+                if access_diagnostic is not None:
+                    return access_diagnostic
             if len(raw_args) >= 2:
                 coordinate_diagnostic = self.image_atomic_coordinate_rank_diagnostic(
                     func_name, image_type, raw_args[1]
@@ -3653,6 +3782,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return self.unsupported_multisample_resource_call(
                     func_name, image_type, args
                 )
+            access_diagnostic = self.image_access_diagnostic(
+                func_name, image_type, raw_args[0]
+            )
+            if access_diagnostic is not None:
+                return access_diagnostic
 
             image_name = args[0]
             coord = args[1]
@@ -3700,6 +3834,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return self.unsupported_multisample_resource_call(
                     func_name, image_type, args
                 )
+            access_diagnostic = self.image_access_diagnostic(
+                func_name, image_type, raw_args[0]
+            )
+            if access_diagnostic is not None:
+                return access_diagnostic
 
             image_name = args[0]
             coord = args[1]
