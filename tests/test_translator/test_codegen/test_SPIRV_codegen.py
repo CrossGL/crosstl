@@ -3266,6 +3266,160 @@ class TestVulkanSPIRVCodeGen:
         assert " Fma " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_faceforward_builtin_uses_typed_spirv_extinsts(self, tmp_path):
+        source_code = """
+        shader FaceForwardBuiltins {
+            compute {
+                void main() {
+                    float n;
+                    float incident;
+                    float reference;
+                    float sf = faceforward(n, incident, reference);
+                    vec3 vn = vec3(0.0, 1.0, 0.0);
+                    vec3 vi = vec3(0.0, -1.0, 0.0);
+                    vec3 vr = vec3(0.0, 1.0, 0.0);
+                    vec3 vv = faceforward(vn, vi, vr);
+                    vec3 vs = faceforward(vn, -1.0, 1.0);
+
+                    double dn;
+                    double di;
+                    double dr;
+                    double ds = faceforward(dn, di, dr);
+                    dvec2 dvn;
+                    dvec2 dvi;
+                    dvec2 dvr;
+                    dvec2 dvv = faceforward(dvn, dvi, dvr);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        dvec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(double_type.group(1))} 2",
+            spv_code,
+        )
+        assert vec3_type is not None
+        assert dvec2_type is not None
+
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ "
+            r"FaceForward %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(double_type.group(1))} %\d+ "
+            r"FaceForward %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ " r"FaceForward",
+                    spv_code,
+                )
+            )
+            == 2
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(dvec2_type.group(1))} %\d+ "
+            r"FaceForward %\d+ %\d+ %\d+",
+            spv_code,
+        )
+
+        scalar_splats = re.findall(
+            rf"(%\d+) = OpCompositeConstruct {re.escape(vec3_type.group(1))} "
+            r"(%\d+) \2 \2",
+            spv_code,
+        )
+        assert len(scalar_splats) >= 2
+        assert re.search(
+            rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ FaceForward "
+            rf"%\d+ {re.escape(scalar_splats[0][0])} "
+            rf"{re.escape(scalar_splats[1][0])}",
+            spv_code,
+        )
+        assert " Faceforward " not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_invalid_faceforward_operand_shapes_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidFaceForwardBuiltins {
+            compute {
+                void main() {
+                    int i;
+                    int j;
+                    int k;
+                    int intFace = faceforward(i, j, k);
+                    bool flag;
+                    bool boolFace = faceforward(flag, false, true);
+                    vec2 widthFace = faceforward(
+                        vec2(1.0, 2.0),
+                        vec3(2.0, 3.0, 4.0),
+                        vec2(3.0, 4.0)
+                    );
+                    float scalarVectorFace = faceforward(
+                        1.0,
+                        vec2(2.0, 3.0),
+                        4.0
+                    );
+                    mat2 a = mat2(1.0, 0.0, 0.0, 1.0);
+                    mat2 b = mat2(2.0, 0.0, 0.0, 2.0);
+                    mat2 c = mat2(3.0, 0.0, 0.0, 3.0);
+                    mat2 matrixFace = faceforward(a, b, c);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count(
+                "; WARNING: faceforward requires compatible floating-point "
+                "scalar or vector operands"
+            )
+            == 5
+        )
+        assert " FaceForward " not in spv_code
+        assert " Faceforward " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_malformed_faceforward_builtin_emits_diagnostics(self, tmp_path):
+        source_code = """
+        shader MalformedFaceForwardBuiltins {
+            compute {
+                void main() {
+                    float missingFace = faceforward(1.0, 2.0);
+                    float extraFace = faceforward(1.0, 2.0, 3.0, 4.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("; WARNING: faceforward requires 3 operands") == 2
+        assert " FaceForward " not in spv_code
+        assert " Faceforward " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_step_smoothstep_builtins_use_typed_spirv_extinsts(self, tmp_path):
         source_code = """
         shader StepSmoothstepBuiltins {

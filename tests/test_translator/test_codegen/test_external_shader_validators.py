@@ -1725,6 +1725,39 @@ def test_generated_glsl_compute_synchronization_validates_with_glslangvalidator(
     _run_validator([glslang, "-S", "comp", str(shader_path)])
 
 
+def test_generated_glsl_wave_subgroups_validate_with_glslangvalidator(tmp_path):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "wave_subgroups.comp"
+    shader = """
+    shader ExternalValidatorWaveSubgroups {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint count = WaveGetLaneCount();
+                uint sumValue = WaveActiveSum(lane);
+                uint prefixValue = WavePrefixSum(sumValue);
+                bool first = WaveIsFirstLane();
+                bool anyLane = WaveActiveAnyTrue(prefixValue > 0u);
+                bool allLane = WaveActiveAllTrue(count > 0u);
+                uvec4 ballot = WaveActiveBallot(anyLane || allLane || first);
+                uint broadcast = WaveReadLaneAt(prefixValue, 0u);
+                uint firstValue = WaveReadLaneFirst(broadcast + ballot.x);
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in code
+    assert "#extension GL_KHR_shader_subgroup_arithmetic : require" in code
+    assert "#extension GL_KHR_shader_subgroup_ballot : require" in code
+    assert "#extension GL_KHR_shader_subgroup_shuffle : require" in code
+    assert "Wave" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
 def test_generated_glsl_geometry_tessellation_layouts_validate_with_glslangvalidator(
     tmp_path,
 ):

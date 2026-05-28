@@ -369,6 +369,30 @@ class TestHipLexer:
         token_values = [token.value for token in tokens if token.type == "IDENTIFIER"]
         assert "x" in token_values
 
+    def test_multiline_comments_advance_token_locations(self):
+        """Test skipped block comments preserve following token locations."""
+        code = "int a;\n/* line 2\n   line 3 */\nfloat b;"
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+
+        float_token = next(token for token in tokens if token.value == "float")
+        name_token = next(token for token in tokens if token.value == "b")
+
+        assert (float_token.line, float_token.column) == (4, 1)
+        assert (name_token.line, name_token.column) == (4, 7)
+
+    def test_inline_multiline_comments_advance_token_columns(self):
+        """Test skipped inline block comments preserve following columns."""
+        code = "int a; /* gap */ float b;"
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+
+        float_token = next(token for token in tokens if token.value == "float")
+        name_token = next(token for token in tokens if token.value == "b")
+
+        assert (float_token.line, float_token.column) == (1, 18)
+        assert (name_token.line, name_token.column) == (1, 24)
+
     def test_whitespace_handling(self):
         """Test whitespace and newline handling"""
         code = """

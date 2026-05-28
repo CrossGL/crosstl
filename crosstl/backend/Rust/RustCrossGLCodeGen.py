@@ -903,6 +903,13 @@ class RustToCrossGLConverter:
         )
         if function_name is None:
             return None
+        associated_return_type = self.infer_impl_associated_function_call_return_type(
+            function_name,
+            expression.args,
+        )
+        if associated_return_type is not None:
+            return associated_return_type
+
         signature = self.lookup_user_function_signature(function_name)
         if signature is not None:
             return self.infer_user_function_call_return_type(
@@ -911,6 +918,13 @@ class RustToCrossGLConverter:
                 explicit_type_args,
             )
         return self.lookup_user_function_return_type(function_name)
+
+    def infer_impl_associated_function_call_return_type(self, function_name, args):
+        match = self.lookup_impl_associated_function_match(function_name)
+        if match is None:
+            return None
+
+        return self.infer_impl_associated_function_return_type(match, args)
 
     def infer_impl_method_call_return_type(self, expression):
         member_access = expression.name
@@ -965,8 +979,46 @@ class RustToCrossGLConverter:
             if not self.is_self_parameter(name, param_type)
         ]
 
+    def method_has_self_parameter(self, method):
+        return any(
+            self.is_self_parameter(name, param_type)
+            for name, param_type in method.get("params", [])
+        )
+
     def is_self_parameter(self, name, param_type):
         return name == "self"
+
+    def infer_impl_associated_function_return_type(self, match, arg_values):
+        method = match["method"]
+        return_type = method.get("return_type")
+        return_type = self.normalize_receiver_type(return_type, match["receiver_type"])
+        substitutions = dict(match.get("substitutions") or {})
+        generic_names = list(match.get("generic_names") or [])
+        for generic_name in method.get("generic_names") or []:
+            if generic_name not in generic_names:
+                generic_names.append(generic_name)
+
+        conflicts = set()
+        for (_, param_type), arg in zip(
+            self.method_value_params(method),
+            arg_values,
+        ):
+            arg_type = self.infer_call_argument_type(arg)
+            if arg_type is None:
+                continue
+            self.match_generic_type_parameters(
+                param_type,
+                arg_type,
+                generic_names,
+                substitutions,
+                conflicts,
+            )
+
+        for generic_name in conflicts:
+            substitutions.pop(generic_name, None)
+        if substitutions:
+            return_type = self.apply_type_substitutions(return_type, substitutions)
+        return return_type
 
     def function_call_name(self, name):
         if isinstance(name, str):
@@ -1227,6 +1279,13 @@ class RustToCrossGLConverter:
         if return_type is not None:
             return return_type
 
+        return_type = self.infer_generated_impl_associated_function_return_type(
+            function_name,
+            args,
+        )
+        if return_type is not None:
+            return return_type
+
         function_name, explicit_type_args = self.split_function_type_arguments(
             function_name
         )
@@ -1280,6 +1339,26 @@ class RustToCrossGLConverter:
                 if match is None:
                     return None
                 return self.infer_impl_method_return_type(match, args[1:])
+
+        return None
+
+    def infer_generated_impl_associated_function_return_type(self, function_name, args):
+        for signature in self.impl_method_signatures.values():
+            for method_name, method in signature["methods"].items():
+                if function_name != f"{signature['call_prefix']}_{method_name}":
+                    continue
+                if self.method_has_self_parameter(method):
+                    continue
+
+                match = {
+                    "receiver_type": signature["struct_name"],
+                    "call_prefix": signature["call_prefix"],
+                    "method_name": method_name,
+                    "generic_names": signature["generic_names"],
+                    "method": method,
+                    "substitutions": {},
+                }
+                return self.infer_impl_associated_function_return_type(match, args)
 
         return None
 
@@ -3199,6 +3278,12 @@ class RustToCrossGLConverter:
             )
             if constructor is not None:
                 return args_code, constructor
+            associated_call = self.format_associated_impl_function_call(
+                expression.name,
+                args,
+            )
+            if associated_call is not None:
+                return args_code, associated_call
             return args_code, f"{self.map_function(expression.name)}({', '.join(args)})"
 
         name_code, name = self.generate_try_expression(
@@ -3325,6 +3410,13 @@ class RustToCrossGLConverter:
         call_args = [obj] + args
         return f"{match['call_prefix']}_{method_name}({', '.join(call_args)})"
 
+    def format_associated_impl_function_call(self, function_name, args):
+        match = self.lookup_impl_associated_function_match(function_name)
+        if match is None:
+            return None
+
+        return f"{match['call_prefix']}_{match['method_name']}({', '.join(args)})"
+
     def lookup_impl_method_receiver_match(self, obj, method_name):
         receiver_type = self.lookup_value_type(obj)
         if receiver_type is None:
@@ -3333,6 +3425,8 @@ class RustToCrossGLConverter:
         for signature in self.impl_method_signatures.values():
             method = signature["methods"].get(method_name)
             if method is None:
+                continue
+            if not self.method_has_self_parameter(method):
                 continue
 
             substitutions = self.match_impl_receiver_type(
@@ -3352,6 +3446,98 @@ class RustToCrossGLConverter:
             }
 
         return None
+
+    def lookup_impl_associated_function_match(self, function_name):
+        parsed = self.parse_associated_function_path(function_name)
+        if parsed is None:
+            return None
+
+        type_name, method_name = parsed
+        for signature in self.impl_method_signatures.values():
+            method = signature["methods"].get(method_name)
+            if method is None:
+                continue
+            if self.method_has_self_parameter(method):
+                continue
+
+            receiver_type, substitutions = self.match_associated_impl_type(
+                signature["struct_name"],
+                type_name,
+                signature["generic_names"],
+            )
+            if receiver_type is None:
+                continue
+
+            return {
+                "receiver_type": receiver_type,
+                "call_prefix": signature["call_prefix"],
+                "method_name": method_name,
+                "generic_names": signature["generic_names"],
+                "method": method,
+                "substitutions": substitutions,
+            }
+
+        return None
+
+    def parse_associated_function_path(self, function_name):
+        if not isinstance(function_name, str) or "::" not in function_name:
+            return None
+
+        type_name, method_name = function_name.rsplit("::", 1)
+        type_name = self.normalize_associated_type_path(type_name)
+        if not type_name or not method_name:
+            return None
+        return type_name, method_name
+
+    def normalize_associated_type_path(self, type_name):
+        if not isinstance(type_name, str):
+            return type_name
+        return type_name.replace("::<", "<")
+
+    def match_associated_impl_type(self, pattern_type, call_type, generic_names):
+        call_type = self.resolve_imported_module_path(call_type)
+        for pattern_candidate in self.generic_type_match_candidates(pattern_type):
+            pattern_generic = self.parse_generic_type(pattern_candidate)
+            for call_candidate in self.generic_type_match_candidates(call_type):
+                if self.impl_type_names_match(pattern_candidate, call_candidate):
+                    return call_candidate, {}
+
+                call_generic = self.parse_generic_type(call_candidate)
+                if pattern_generic is None:
+                    if call_generic is None:
+                        continue
+                    call_base, _ = call_generic
+                    if self.generic_type_bases_match(pattern_candidate, call_base):
+                        return pattern_candidate, {}
+                    continue
+
+                pattern_base, pattern_args = pattern_generic
+                if call_generic is None:
+                    if self.generic_type_bases_match(pattern_base, call_candidate):
+                        return pattern_candidate, {}
+                    continue
+
+                call_base, call_args = call_generic
+                if not self.generic_type_bases_match(pattern_base, call_base):
+                    continue
+                if len(pattern_args) != len(call_args):
+                    continue
+
+                substitutions = {}
+                conflicts = set()
+                for pattern_arg, call_arg in zip(pattern_args, call_args):
+                    self.match_generic_type_parameters(
+                        pattern_arg,
+                        call_arg,
+                        generic_names,
+                        substitutions,
+                        conflicts,
+                    )
+                if conflicts:
+                    continue
+                return call_candidate, substitutions
+
+        return None, {}
 
     def match_impl_receiver_type(self, pattern_type, receiver_type, generic_names):
         for pattern_candidate in self.generic_type_match_candidates(pattern_type):
@@ -6950,6 +7136,12 @@ class RustToCrossGLConverter:
             )
             if constructor is not None:
                 return args_code, constructor
+            associated_call = self.format_associated_impl_function_call(
+                expression.name,
+                args,
+            )
+            if associated_call is not None:
+                return args_code, associated_call
             func_name = self.map_function(expression.name)
             return args_code, f"{func_name}({', '.join(args)})"
 
@@ -6983,6 +7175,12 @@ class RustToCrossGLConverter:
                 constructor = self.format_path_constructor_call(expr.name, expr.args)
                 if constructor is not None:
                     return constructor
+                associated_call = self.format_associated_impl_function_call(
+                    expr.name,
+                    [self.generate_expression(arg) for arg in expr.args],
+                )
+                if associated_call is not None:
+                    return associated_call
                 func_name = self.map_function(expr.name)
             else:
                 func_name = self.generate_expression(expr.name)

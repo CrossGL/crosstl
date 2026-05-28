@@ -8131,6 +8131,14 @@ class MetalCodeGen:
             )
             return current
 
+        if isinstance(expr, FunctionCallNode):
+            self.validate_metal_mesh_output_helper_call_usage(
+                expr,
+                current.get("counts_seen", False),
+                current.get("counts"),
+            )
+            return current
+
         nested_statements = self.metal_mesh_nested_statements(stmt)
         for nested in nested_statements:
             self.validate_metal_mesh_output_statement_sequence(nested, current)
@@ -8337,6 +8345,55 @@ class MetalCodeGen:
                 f"Metal mesh {role} output array '{name}' index ({index_value}) "
                 f"must be less than SetMeshOutputCounts "
                 f"{'numVertices' if role == 'vertices' else 'numPrimitives'} "
+                f"({active_bound})"
+            )
+
+    def validate_metal_mesh_output_helper_call_usage(
+        self, call, set_counts_seen, set_counts
+    ):
+        func_name = self.function_call_name(call)
+        helper_roles = {
+            "SetVertex": ("vertices", "max_vertices", "numVertices"),
+            "SetPrimitive": ("primitives", "max_primitives", "numPrimitives"),
+        }
+        role_info = helper_roles.get(func_name)
+        if role_info is None:
+            return
+
+        args = getattr(call, "arguments", getattr(call, "args", []))
+        if len(args) != 2:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' requires exactly 2 arguments"
+            )
+
+        if not set_counts_seen:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' must be called only after "
+                "SetMeshOutputCounts"
+            )
+
+        index_value = self.literal_int_value(args[0], self.literal_int_constants)
+        if index_value is None:
+            return
+
+        role, declared_key, active_label = role_info
+        mesh_output = self.current_metal_mesh_output_config or {}
+        declared_bound = self.metal_literal_int_text_value(
+            mesh_output.get(declared_key)
+        )
+        if declared_bound is not None and index_value >= declared_bound:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' index ({index_value}) "
+                f"must be less than declared output count ({declared_bound})"
+            )
+
+        active_bound = None
+        if set_counts is not None:
+            active_bound = set_counts.get(role)
+        if active_bound is not None and index_value >= active_bound:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' index ({index_value}) "
+                f"must be less than SetMeshOutputCounts {active_label} "
                 f"({active_bound})"
             )
 

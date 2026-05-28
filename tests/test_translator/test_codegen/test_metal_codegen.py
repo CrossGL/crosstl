@@ -7104,6 +7104,91 @@ def test_metal_mesh_output_writes_validate_order_and_literal_bounds():
         )
 
 
+def test_metal_mesh_output_helper_calls_validate_order_and_literal_bounds():
+    write_before_count_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(3)
+                @max_primitives(1)
+                @outputtopology(triangle)
+            {
+                vec3 position = vec3(0.0, 0.0, 0.0);
+                SetVertex(0, position);
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetVertex.*after SetMeshOutputCounts"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(write_before_count_code)), "mesh"
+        )
+
+    declared_bound_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(3)
+                @max_primitives(1)
+                @outputtopology(triangle)
+            {
+                vec3 position = vec3(0.0, 0.0, 0.0);
+                SetMeshOutputCounts(3, 1);
+                SetVertex(3, position);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetVertex.*declared output count"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(declared_bound_code)), "mesh"
+        )
+
+    active_count_bound_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(3)
+                @max_primitives(1)
+                @outputtopology(triangle)
+            {
+                vec3 position = vec3(0.0, 0.0, 0.0);
+                SetMeshOutputCounts(2, 1);
+                SetVertex(2, position);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetVertex.*numVertices"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(active_count_bound_code)), "mesh"
+        )
+
+    primitive_active_count_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(3)
+                @max_primitives(2)
+                @outputtopology(triangle)
+            {
+                SetMeshOutputCounts(3, 1);
+                SetPrimitive(1, uvec3(0u, 1u, 2u));
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetPrimitive.*numPrimitives"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(primitive_active_count_code)), "mesh"
+        )
+
+
 def test_metal_mesh_set_output_counts_validates_literal_bounds():
     code = """
     shader meshpipe {

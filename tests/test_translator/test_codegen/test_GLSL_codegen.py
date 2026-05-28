@@ -8091,9 +8091,118 @@ def test_glsl_wave_and_mesh_intrinsics():
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
     generated = generate_code(ast)
-    assert "WaveActiveSum" in generated
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_arithmetic : require" in generated
+    assert "uint sum = subgroupAdd(v);" in generated
+    assert "WaveActiveSum" not in generated
     assert "SetMeshOutputsEXT" in generated
     assert "SetMeshOutputCounts" not in generated
+
+
+def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins():
+    code = """
+    shader GLSLWaveIntrinsics {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint count = WaveGetLaneCount();
+                bool firstLane = WaveIsFirstLane();
+                uint sumValue = WaveActiveSum(lane);
+                uint productValue = WaveActiveProduct(lane + 1u);
+                uint minValue = WaveActiveMin(sumValue);
+                uint maxValue = WaveActiveMax(productValue);
+                uint andValue = WaveActiveBitAnd(maxValue);
+                uint orValue = WaveActiveBitOr(andValue);
+                uint xorValue = WaveActiveBitXor(orValue);
+                uint prefixSum = WavePrefixSum(xorValue);
+                uint prefixProduct = WavePrefixProduct(lane + 1u);
+                bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
+                bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
+                uvec4 ballot = WaveActiveBallot(anyLane);
+                uint broadcast = WaveReadLaneAt(prefixSum, 0u);
+                uint firstValue = WaveReadLaneFirst(broadcast);
+                uint quadX = QuadReadAcrossX(firstValue);
+                uint quadY = QuadReadAcrossY(quadX);
+                uint quadDiagonal = QuadReadAcrossDiagonal(quadY);
+                uint quadLane = QuadReadLaneAt(quadDiagonal, 0u);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    for extension in [
+        "#extension GL_KHR_shader_subgroup_basic : require",
+        "#extension GL_KHR_shader_subgroup_vote : require",
+        "#extension GL_KHR_shader_subgroup_arithmetic : require",
+        "#extension GL_KHR_shader_subgroup_ballot : require",
+        "#extension GL_KHR_shader_subgroup_shuffle : require",
+        "#extension GL_KHR_shader_subgroup_quad : require",
+    ]:
+        assert extension in generated
+
+    for expected in [
+        "uint lane = gl_SubgroupInvocationID;",
+        "uint count = gl_SubgroupSize;",
+        "bool firstLane = subgroupElect();",
+        "uint sumValue = subgroupAdd(lane);",
+        "uint productValue = subgroupMul((lane + 1u));",
+        "uint minValue = subgroupMin(sumValue);",
+        "uint maxValue = subgroupMax(productValue);",
+        "uint andValue = subgroupAnd(maxValue);",
+        "uint orValue = subgroupOr(andValue);",
+        "uint xorValue = subgroupXor(orValue);",
+        "uint prefixSum = subgroupExclusiveAdd(xorValue);",
+        "uint prefixProduct = subgroupExclusiveMul((lane + 1u));",
+        "bool anyLane = subgroupAny((prefixSum > 0u));",
+        "bool allLane = subgroupAll((prefixProduct > 0u));",
+        "uvec4 ballot = subgroupBallot(anyLane);",
+        "uint broadcast = subgroupBroadcast(prefixSum, 0u);",
+        "uint firstValue = subgroupBroadcastFirst(broadcast);",
+        "uint quadX = subgroupQuadSwapHorizontal(firstValue);",
+        "uint quadY = subgroupQuadSwapVertical(quadX);",
+        "uint quadDiagonal = subgroupQuadSwapDiagonal(quadY);",
+        "uint quadLane = subgroupQuadBroadcast(quadDiagonal, 0u);",
+    ]:
+        assert expected in generated
+
+    assert "WaveActive" not in generated
+    assert "WavePrefix" not in generated
+    assert "WaveReadLane" not in generated
+    assert "QuadRead" not in generated
+
+
+def test_glsl_wave_intrinsic_invalid_or_unsupported_forms_emit_diagnostics():
+    code = """
+    shader GLSLWaveDiagnostics {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex(1u);
+                uint missing = WaveReadLaneAt(lane);
+                uvec4 matchMask = WaveMatch(lane);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert (
+        "uint lane = /* GLSL wave intrinsic diagnostic: WaveGetLaneIndex "
+        "expects 0 arguments, got 1 */ 0u;" in generated
+    )
+    assert (
+        "uint missing = /* GLSL wave intrinsic diagnostic: WaveReadLaneAt "
+        "expects 2 arguments, got 1 */ 0u;" in generated
+    )
+    assert (
+        "uvec4 matchMask = /* GLSL wave intrinsic diagnostic: WaveMatch "
+        "has no GL_KHR_shader_subgroup equivalent */ uvec4(0u);" in generated
+    )
+    assert "WaveOpNode" not in generated
 
 
 def test_else_if_statement():

@@ -274,15 +274,21 @@ class HipLexer:
             if token_type not in SKIP_TOKENS:
                 tokens.append(Token(token_type, text, self.line, self.column))
 
-            if token_type == "NEWLINE":
-                self.line += 1
-                self.column = 1
-            else:
-                self.column += len(text)
+            self._advance_position(text)
 
             pos = new_pos
 
         return tokens
+
+    def _advance_position(self, text: str):
+        """Advance source location after consuming ``text``."""
+        newline_count = text.count("\n")
+        if newline_count == 0:
+            self.column += len(text)
+            return
+
+        self.line += newline_count
+        self.column = len(text.rsplit("\n", 1)[1]) + 1
 
     def _next_token(self, pos: int):
         """Match the next token at ``pos`` and return its end offset."""

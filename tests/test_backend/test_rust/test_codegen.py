@@ -4032,6 +4032,144 @@ def test_gpu_resource_method_calls_convert_on_method_generic_impl_returns():
     assert ".buffer_store" not in result
 
 
+def test_gpu_resource_method_calls_convert_on_indexed_impl_return_arrays():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Holder<T> {
+        resources: T[2],
+    }
+
+    impl<T> Holder<T> {
+        fn get_resources(&self) -> T[2] {
+            return self.resources;
+        }
+    }
+
+    fn indexed_impl_returned_resource_methods(
+        holder: Holder<ColorTexture>,
+        values_holder: Holder<RwBuffer<i32>>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let local_tex = holder.get_resources()[index];
+        let base = local_tex.sample_sampler(sampler_state, uv);
+        let direct = holder.get_resources()[index].sample_sampler(sampler_state, uv);
+        let value = values_holder.get_resources()[index].buffer_load(index);
+        values_holder.get_resources()[index].buffer_store(index, value);
+        return base + direct;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "T[2] Holder_get_resources(Holder<T> self)" in result
+    assert "let local_tex = Holder_get_resources(holder)[index];" in result
+    assert "base = texture(local_tex, sampler_state, uv);" in result
+    assert (
+        "direct = texture(Holder_get_resources(holder)[index], sampler_state, uv);"
+        in result
+    )
+    assert (
+        "value = buffer_load(Holder_get_resources(values_holder)[index], index);"
+        in result
+    )
+    assert (
+        "buffer_store(Holder_get_resources(values_holder)[index], index, value);"
+        in result
+    )
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_associated_constructor_returns():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Holder<T> {
+        resource: T,
+    }
+
+    impl<T> Holder<T> {
+        fn new(resource: T) -> Self {
+            return Holder { resource: resource };
+        }
+    }
+
+    fn associated_constructor_resource_methods(
+        tex: ColorTexture,
+        values: RwBuffer<i32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let holder = Holder::new(tex);
+        let base = holder.resource.sample_sampler(sampler_state, uv);
+        let direct = Holder::new(tex).resource.sample_sampler(sampler_state, uv);
+        let value = Holder::new(values).resource.buffer_load(index);
+        return base + direct + Vec4::<f32>::new(value as f32, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Holder<T> Holder_new(T resource)" in result
+    assert "let holder = Holder_new(tex);" in result
+    assert "base = texture(holder.resource, sampler_state, uv);" in result
+    assert "direct = texture(Holder_new(tex).resource, sampler_state, uv);" in result
+    assert "value = buffer_load(Holder_new(values).resource, index);" in result
+    assert "Holder::new" not in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_static_method_generic_returns():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Provider {
+    }
+
+    impl Provider {
+        fn pick<T>(value: T) -> T {
+            return value;
+        }
+    }
+
+    fn static_method_generic_resource_methods(
+        tex: ColorTexture,
+        values: RwBuffer<i32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let local_tex = Provider::pick(tex);
+        let local_values = Provider::pick(values);
+        let base = local_tex.sample_sampler(sampler_state, uv);
+        let direct = Provider::pick(tex).sample_sampler(sampler_state, uv);
+        let value = local_values.buffer_load(index);
+        local_values.buffer_store(index, value);
+        return base + direct;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "T Provider_pick(T value)" in result
+    assert "let local_tex = Provider_pick(tex);" in result
+    assert "let local_values = Provider_pick(values);" in result
+    assert "base = texture(local_tex, sampler_state, uv);" in result
+    assert "direct = texture(Provider_pick(tex), sampler_state, uv);" in result
+    assert "value = buffer_load(local_values, index);" in result
+    assert "buffer_store(local_values, index, value);" in result
+    assert "Provider::pick" not in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
 def test_unresolved_method_generic_impl_returns_stay_unlowered():
     code = """
     struct Provider {
