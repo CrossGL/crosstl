@@ -4128,6 +4128,15 @@ class MojoCodeGen:
         fields = self.struct_types.get(struct_type, {})
         field_items = list(fields.items())
         base_context = target_context or f"constructor {type_name}"
+        named_arguments = getattr(expr, "named_arguments", {}) or {}
+        if struct_type in self.struct_types:
+            self.validate_struct_constructor_field_bindings(
+                struct_type,
+                field_items,
+                len(expr.arguments),
+                named_arguments,
+                base_context,
+            )
         positional_args = []
         for index, argument in enumerate(expr.arguments):
             field_type = None
@@ -4141,7 +4150,7 @@ class MojoCodeGen:
                 self.generate_expression(argument, field_type, field_context)
             )
         named_args = []
-        for name, value in expr.named_arguments.items():
+        for name, value in named_arguments.items():
             field_type = fields.get(name)
             field_context = (
                 f"{base_context} field {struct_type}.{name}"
@@ -4153,6 +4162,36 @@ class MojoCodeGen:
                 f"{name}={self.generate_expression(value, field_type, field_context)}"
             )
         return f"{mapped_type}({', '.join([*positional_args, *named_args])})"
+
+    def validate_struct_constructor_field_bindings(
+        self, struct_type, field_items, positional_count, named_arguments, base_context
+    ):
+        fields = dict(field_items)
+        expected = ", ".join(fields) or "no fields"
+        initialized_fields = set()
+        for index in range(positional_count):
+            if index >= len(field_items):
+                raise ValueError(
+                    "Invalid braced struct constructor for Mojo codegen; "
+                    f"too many positional fields in {base_context}: field "
+                    f"{index + 1} has no matching field in {struct_type}"
+                )
+            field_name, _ = field_items[index]
+            initialized_fields.add(field_name)
+
+        for field_name in named_arguments:
+            if field_name not in fields:
+                raise ValueError(
+                    "Invalid braced struct constructor for Mojo codegen; "
+                    f"unknown field {struct_type}.{field_name} in {base_context}; "
+                    f"expected one of: {expected}"
+                )
+            if field_name in initialized_fields:
+                raise ValueError(
+                    "Invalid braced struct constructor for Mojo codegen; "
+                    f"duplicate field {struct_type}.{field_name} in {base_context}"
+                )
+            initialized_fields.add(field_name)
 
     def generate_struct_function_constructor_call(self, expr, type_name, context):
         mapped_type = self.map_type(type_name)

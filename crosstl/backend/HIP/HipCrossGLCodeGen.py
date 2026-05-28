@@ -173,8 +173,10 @@ class HipToCrossGLConverter:
         self.variable_type_scopes = [{}]
         self.device_property_source_scopes = [{}]
         self.device_attribute_source_scopes = [{}]
+        self.device_query_source_scopes = [{}]
         self.suppress_device_property_member_access = 0
         self.suppress_device_attribute_value_access = 0
+        self.suppress_device_query_value_access = 0
 
     def generate(self, ast_node):
         """Generate complete CrossGL source from a parsed HIP AST."""
@@ -191,8 +193,10 @@ class HipToCrossGLConverter:
         self.variable_type_scopes = [{}]
         self.device_property_source_scopes = [{}]
         self.device_attribute_source_scopes = [{}]
+        self.device_query_source_scopes = [{}]
         self.suppress_device_property_member_access = 0
         self.suppress_device_attribute_value_access = 0
+        self.suppress_device_query_value_access = 0
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -208,6 +212,9 @@ class HipToCrossGLConverter:
             attribute_expression = self.format_hip_device_attribute_read(node)
             if attribute_expression is not None:
                 return attribute_expression
+            query_expression = self.format_hip_device_query_read(node)
+            if query_expression is not None:
+                return query_expression
             return node
         elif isinstance(node, list):
             return [self.visit(item) for item in node]
@@ -441,6 +448,7 @@ class HipToCrossGLConverter:
         self.variable_type_scopes.append({})
         self.device_property_source_scopes.append({})
         self.device_attribute_source_scopes.append({})
+        self.device_query_source_scopes.append({})
 
     def pop_variable_type_scope(self):
         if len(self.variable_type_scopes) > 1:
@@ -449,6 +457,8 @@ class HipToCrossGLConverter:
             self.device_property_source_scopes.pop()
         if len(self.device_attribute_source_scopes) > 1:
             self.device_attribute_source_scopes.pop()
+        if len(self.device_query_source_scopes) > 1:
+            self.device_query_source_scopes.pop()
 
     def register_variable_type(self, name, type_name):
         if not name or not type_name:
@@ -458,6 +468,7 @@ class HipToCrossGLConverter:
         self.variable_type_scopes[-1][name] = type_name
         self.clear_device_property_source(name)
         self.clear_device_attribute_source(name)
+        self.clear_device_query_source(name)
 
     def lookup_variable_type(self, name):
         for scope in reversed(self.variable_type_scopes):
@@ -491,6 +502,7 @@ class HipToCrossGLConverter:
         if not self.device_attribute_source_scopes:
             self.device_attribute_source_scopes.append({})
         self.device_attribute_source_scopes[-1][name] = (attribute_name, device_id)
+        self.clear_device_query_source(name)
 
     def clear_device_attribute_source(self, name):
         if not name:
@@ -505,18 +517,42 @@ class HipToCrossGLConverter:
                 return scope[name]
         return None
 
+    def register_device_query_source(self, name, query_name, device_id):
+        if not name or query_name is None or device_id is None:
+            return
+        if not self.device_query_source_scopes:
+            self.device_query_source_scopes.append({})
+        self.device_query_source_scopes[-1][name] = (query_name, device_id)
+        self.clear_device_attribute_source(name)
+
+    def clear_device_query_source(self, name):
+        if not name:
+            return
+        if not self.device_query_source_scopes:
+            self.device_query_source_scopes.append({})
+        self.device_query_source_scopes[-1][name] = None
+
+    def lookup_device_query_source(self, name):
+        for scope in reversed(self.device_query_source_scopes):
+            if name in scope:
+                return scope[name]
+        return None
+
     def clear_device_metadata_source(self, name):
         self.clear_device_property_source(name)
         self.clear_device_attribute_source(name)
+        self.clear_device_query_source(name)
 
     def visit_lvalue_expression(self, node):
         self.suppress_device_property_member_access += 1
         self.suppress_device_attribute_value_access += 1
+        self.suppress_device_query_value_access += 1
         try:
             return self.visit(node)
         finally:
             self.suppress_device_property_member_access -= 1
             self.suppress_device_attribute_value_access -= 1
+            self.suppress_device_query_value_access -= 1
 
     def emit_statement(self, stmt):
         """Render and append one converted statement."""
@@ -1602,6 +1638,9 @@ class HipToCrossGLConverter:
         elif name == "hipDeviceTotalMem":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(output_name, "totalMem", args[1])
                 return [
                     f"// HIP get device total memory: output: {output}, "
                     f"device: {args[1]}"
@@ -1610,6 +1649,16 @@ class HipToCrossGLConverter:
             if len(args) >= 3:
                 major_output = self.format_runtime_pointer_target(node.args[0])
                 minor_output = self.format_runtime_pointer_target(node.args[1])
+                major_output_name = self.get_runtime_pointer_target_name(node.args[0])
+                minor_output_name = self.get_runtime_pointer_target_name(node.args[1])
+                if major_output_name is not None:
+                    self.register_device_query_source(
+                        major_output_name, "computeCapability.major", args[2]
+                    )
+                if minor_output_name is not None:
+                    self.register_device_query_source(
+                        minor_output_name, "computeCapability.minor", args[2]
+                    )
                 return [
                     f"// HIP get device compute capability: "
                     f"major output: {major_output}, minor output: {minor_output}, "
@@ -4308,6 +4357,17 @@ class HipToCrossGLConverter:
         return (
             f"(/* HIP device attribute: {attribute_name}, " f"device: {device_id} */ 0)"
         )
+
+    def format_hip_device_query_read(self, name):
+        if self.suppress_device_query_value_access != 0:
+            return None
+
+        source = self.lookup_device_query_source(name)
+        if source is None:
+            return None
+
+        query_name, device_id = source
+        return f"(/* HIP device query: {query_name}, device: {device_id} */ 0)"
 
     def visit_ArrayAccessNode(self, node):
         array = self.visit(node.array)

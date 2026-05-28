@@ -5403,6 +5403,71 @@ class TestHipCodeGen:
         assert "var manual: i32 = (/* HIP device attribute:" not in result
         assert "var cleared: i32 = (/* HIP device attribute:" not in result
 
+    def test_hip_device_scalar_query_reads_emit_metadata_expressions(self):
+        """Test scalar HIP device-query outputs lower to explicit metadata."""
+        code = """
+        void host(int device, size_t* out) {
+            size_t total = 0;
+            size_t statusTotal = 0;
+            int major = 0;
+            int minor = 0;
+            hipDeviceTotalMem(&total, device);
+            out[0] = total;
+            total = 1024;
+            size_t manualTotal = total;
+            hipDeviceComputeCapability(&major, &minor, device + 1);
+            int packed = major * 10 + minor;
+            major = 9;
+            int manualMajor = major;
+            minor++;
+            int manualMinor = minor;
+            hipError_t err = hipDeviceTotalMem(&statusTotal, device + 2);
+            size_t fromStatus = statusTotal;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP get device total memory: output: total, device: device" in result
+        assert (
+            "out[0] = (/* HIP device query: totalMem, device: device */ 0);" in result
+        )
+        assert "total = 1024;" in result
+        assert "var manualTotal: u32 = total;" in result
+        assert (
+            "// HIP get device compute capability: major output: major, "
+            "minor output: minor, device: (device + 1)"
+        ) in result
+        assert (
+            "var packed: i32 = (((/* HIP device query: "
+            "computeCapability.major, device: (device + 1) */ 0) * 10) + "
+            "(/* HIP device query: computeCapability.minor, "
+            "device: (device + 1) */ 0));"
+        ) in result
+        assert "major = 9;" in result
+        assert "var manualMajor: i32 = major;" in result
+        assert "(minor++);" in result
+        assert "var manualMinor: i32 = minor;" in result
+        assert (
+            "// HIP get device total memory: output: statusTotal, "
+            "device: (device + 2)"
+        ) in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert (
+            "var fromStatus: u32 = (/* HIP device query: totalMem, "
+            "device: (device + 2) */ 0);"
+        ) in result
+        assert "out[0] = total;" not in result
+        assert "var packed: i32 = ((major * 10) + minor);" not in result
+        assert "var manualTotal: u32 = (/* HIP device query:" not in result
+        assert "var manualMajor: i32 = (/* HIP device query:" not in result
+        assert "var manualMinor: i32 = (/* HIP device query:" not in result
+        assert "var fromStatus: u32 = statusTotal;" not in result
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """

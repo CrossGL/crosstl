@@ -12751,6 +12751,51 @@ def test_braced_struct_constructor_assignment_diagnostics(source, pattern):
         generate_code(parse_code(tokenize_code(source)))
 
 
+@pytest.mark.parametrize(
+    "source, pattern",
+    [
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            void invalidUnknownField() {
+                let badValue = ScalarBox { missing: 1.0 };
+            }
+            """,
+            r"unknown field ScalarBox\.missing.*declaration badValue"
+            r".*expected one of: value",
+        ),
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            void invalidExtraPositional() {
+                let badValue = ScalarBox { 1.0, 2.0 };
+            }
+            """,
+            r"too many positional fields.*declaration badValue" r".*field 2.*ScalarBox",
+        ),
+        (
+            """
+            struct PairBox {
+                float value;
+                float alt;
+            };
+            void invalidDuplicateField() {
+                let badValue = PairBox { 1.0, value: 2.0 };
+            }
+            """,
+            r"duplicate field PairBox\.value.*declaration badValue",
+        ),
+    ],
+)
+def test_braced_struct_constructor_field_diagnostics(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def _constructor_helper_match_and_ternary_source():
     return """
     vec2 makeUv() {

@@ -9541,13 +9541,16 @@ def test_wave_and_rayquery_intrinsics_codegen():
                 uint quadY = QuadReadAcrossY(value);
                 uint quadDiagonal = QuadReadAcrossDiagonal(value);
                 uint quadLane = QuadReadLaneAt(value, lane);
+                bool quadAny = QuadAny(predicate);
+                bool quadAll = QuadAll(predicate);
                 return laneCount + laneIndex + sum + product + andValue + orValue
                     + xorValue + minValue + maxValue + laneValue + firstValue
                     + prefixSum + prefixProduct + matchMask.x + multiSum
                     + multiCount + multiProduct + multiAnd + multiOr + multiXor
                     + quadX + quadY + quadDiagonal + quadLane + ballot.x
                     + (firstLane ? 1u : 0u) + (allTrue ? 1u : 0u)
-                    + (anyTrue ? 1u : 0u);
+                    + (anyTrue ? 1u : 0u) + (quadAny ? 1u : 0u)
+                    + (quadAll ? 1u : 0u);
             }
 
             void main() {
@@ -9591,6 +9594,8 @@ def test_wave_and_rayquery_intrinsics_codegen():
         "QuadReadAcrossY(value)",
         "QuadReadAcrossDiagonal(value)",
         "QuadReadLaneAt(value, lane)",
+        "QuadAny(predicate)",
+        "QuadAll(predicate)",
     ]:
         assert intrinsic in generated
     assert "rq.Proceed" in generated
@@ -9619,6 +9624,13 @@ def test_directx_wave_intrinsics_reject_wrong_arity():
         match="DirectX wave intrinsic 'WaveGetLaneIndex' requires 0 argument",
     ):
         generate_code(parse_code(tokenize_code(no_arg_code)))
+
+    quad_no_arg_code = code.replace("WaveReadLaneAt(value)", "QuadAny()")
+    with pytest.raises(
+        ValueError,
+        match="DirectX wave intrinsic 'QuadAny' requires 1 argument",
+    ):
+        generate_code(parse_code(tokenize_code(quad_no_arg_code)))
 
 
 def test_directx_wave_intrinsics_validate_argument_types():
@@ -9666,6 +9678,21 @@ def test_directx_wave_intrinsics_validate_argument_types():
         match="QuadReadLaneAt.*quad lane index.*0.*3",
     ):
         generate_code(parse_code(tokenize_code(bad_quad_lane_index_code)))
+
+    bad_quad_vote_predicate_code = """
+    shader BadQuadVotePredicate {
+        compute {
+            bool main(uint value) {
+                return QuadAny(value);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="QuadAny.*predicate.*scalar bool",
+    ):
+        generate_code(parse_code(tokenize_code(bad_quad_vote_predicate_code)))
 
     bad_multi_prefix_mask_code = """
     shader BadWaveMultiPrefixMask {
@@ -9720,9 +9747,12 @@ def test_directx_wave_intrinsics_validate_argument_types():
                 uint prefix = WavePrefixCountBits(true);
                 uint laneValue = WaveReadLaneAt(value, lane);
                 uint quadValue = QuadReadLaneAt(value, 3u);
+                bool quadAny = QuadAny(predicate);
+                bool quadAll = QuadAll(predicate);
                 uint multi = WaveMultiPrefixSum(value, mask);
                 uint multiCount = WaveMultiPrefixCountBits(predicate, mask);
-                return count + prefix + laneValue + quadValue + multi + multiCount;
+                return count + prefix + laneValue + quadValue + multi + multiCount
+                    + (quadAny ? 1u : 0u) + (quadAll ? 1u : 0u);
             }
         }
     }
@@ -9733,6 +9763,8 @@ def test_directx_wave_intrinsics_validate_argument_types():
     assert "WavePrefixCountBits(true)" in generated
     assert "WaveReadLaneAt(value, lane)" in generated
     assert "QuadReadLaneAt(value, 3u)" in generated
+    assert "QuadAny(predicate)" in generated
+    assert "QuadAll(predicate)" in generated
     assert "WaveMultiPrefixSum(value, mask)" in generated
     assert "WaveMultiPrefixCountBits(predicate, mask)" in generated
 
@@ -9760,12 +9792,15 @@ def test_directx_wave_intrinsics_infer_let_result_types():
                 let multiValue = WaveMultiPrefixSum(value, mask);
                 let multiCount = WaveMultiPrefixCountBits(predicate, mask);
                 let quadPair = QuadReadAcrossX(pair);
+                let quadAny = QuadAny(predicate);
+                let quadAll = QuadAll(predicate);
 
                 return laneCount + laneIndex + count + prefixCount + ballot.x
                     + matchMask.x + reduced + uint(bitAnd) + laneValue
                     + firstValue + prefixValue + multiValue + multiCount
                     + uint(quadPair.x) + (firstLane ? 1u : 0u) + (allTrue ? 1u : 0u)
-                    + (anyTrue ? 1u : 0u) + (allEqual ? 1u : 0u);
+                    + (anyTrue ? 1u : 0u) + (allEqual ? 1u : 0u)
+                    + (quadAny ? 1u : 0u) + (quadAll ? 1u : 0u);
             }
         }
     }
@@ -9791,6 +9826,8 @@ def test_directx_wave_intrinsics_infer_let_result_types():
         "uint multiValue = WaveMultiPrefixSum(value, mask);",
         "uint multiCount = WaveMultiPrefixCountBits(predicate, mask);",
         "float2 quadPair = QuadReadAcrossX(pair);",
+        "bool quadAny = QuadAny(predicate);",
+        "bool quadAll = QuadAll(predicate);",
     ]:
         assert declaration in generated
 

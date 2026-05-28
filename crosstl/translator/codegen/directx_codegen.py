@@ -334,6 +334,8 @@ class HLSLCodeGen:
         "QuadReadAcrossY": 1,
         "QuadReadAcrossDiagonal": 1,
         "QuadReadLaneAt": 2,
+        "QuadAny": 1,
+        "QuadAll": 1,
     }
     HLSL_WAVE_BOOL_ARGUMENT_INTRINSICS = {
         "WaveActiveAllTrue",
@@ -342,6 +344,8 @@ class HLSLCodeGen:
         "WaveActiveCountBits",
         "WavePrefixCountBits",
         "WaveMultiPrefixCountBits",
+        "QuadAny",
+        "QuadAll",
     }
     HLSL_WAVE_NUMERIC_VALUE_INTRINSICS = {
         "WaveActiveSum",
@@ -373,6 +377,8 @@ class HLSLCodeGen:
         "WaveActiveAllTrue",
         "WaveActiveAnyTrue",
         "WaveActiveAllEqual",
+        "QuadAny",
+        "QuadAll",
     }
     HLSL_WAVE_UINT4_RESULT_INTRINSICS = {
         "WaveActiveBallot",

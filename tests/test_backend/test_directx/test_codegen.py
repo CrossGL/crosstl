@@ -376,12 +376,15 @@ WAVE_OPS_HLSL = textwrap.dedent("""
         uint quadY = QuadReadAcrossY(value);
         uint quadDiag = QuadReadAcrossDiagonal(value);
         uint quadLane = QuadReadLaneAt(value, 2u);
+        bool quadAny = QuadAny(predicate);
+        bool quadAll = QuadAll(predicate);
         return lane + laneCount + sum + product + minimum + maximum + laneValue
             + firstValue + prefixSum + prefixProduct + matchMask.x + multiSum
             + multiCount + multiProduct + multiAnd + multiOr + multiXor
             + quadX + quadY + quadDiag + quadLane + ballot.x + countBits
             + prefixCount + (first ? 1u : 0u) + (allTrue ? 1u : 0u)
-            + (anyTrue ? 1u : 0u) + (allEqual ? 1u : 0u);
+            + (anyTrue ? 1u : 0u) + (allEqual ? 1u : 0u)
+            + (quadAny ? 1u : 0u) + (quadAll ? 1u : 0u);
     }
     """).strip()
 
@@ -868,6 +871,8 @@ def test_codegen_wave_ops_passthrough():
         "QuadReadAcrossY(value)",
         "QuadReadAcrossDiagonal(value)",
         "QuadReadLaneAt(value, 2)",
+        "QuadAny(predicate)",
+        "QuadAll(predicate)",
     ]:
         assert intrinsic in output
     assert "uvec4 ballot = WaveActiveBallot(predicate);" in output
