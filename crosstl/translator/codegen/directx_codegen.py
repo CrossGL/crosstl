@@ -5934,6 +5934,23 @@ class HLSLCodeGen:
                 parameters, shader_type, semantic, "uint3", "uint3"
             )
 
+    def validate_hlsl_mesh_view_id_system_value(self, parameters, shader_type):
+        if not any(
+            self.hlsl_parameter_has_semantic(parameter, "SV_ViewID")
+            for parameter in parameters
+        ):
+            return
+
+        if shader_type in {"task", "amplification", "object"}:
+            raise ValueError(
+                f"DirectX {shader_type} stage cannot use SV_ViewID; "
+                "SV_ViewID is only valid as a mesh stage input"
+            )
+
+        self.validate_hlsl_exact_semantic_type(
+            parameters, shader_type, "SV_ViewID", "uint", "scalar uint"
+        )
+
     def validate_hlsl_compute_system_value_types(self, parameters):
         self.validate_hlsl_thread_system_value_types(parameters, "compute")
 
@@ -6818,6 +6835,7 @@ class HLSLCodeGen:
 
         if shader_type in {"mesh", "task", "amplification", "object"}:
             self.validate_hlsl_thread_system_value_types(parameters, shader_type)
+            self.validate_hlsl_mesh_view_id_system_value(parameters, shader_type)
 
     def validate_hlsl_geometry_stream_output_semantics(self, parameters):
         stream_types = {"PointStream", "LineStream", "TriangleStream"}

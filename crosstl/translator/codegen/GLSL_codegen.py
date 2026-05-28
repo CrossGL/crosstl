@@ -5364,6 +5364,12 @@ class GLSLCodeGen:
             "bvec4",
         }
 
+    def is_matrix_value_type(self, vtype):
+        vtype = self.type_name_string(vtype)
+        if not vtype:
+            return False
+        return self.map_type(vtype).startswith(("mat", "dmat"))
+
     def vector_component_type(self, vtype):
         mapped_type = self.map_type(vtype)
         if mapped_type.startswith("dvec"):
@@ -9039,6 +9045,15 @@ class GLSLCodeGen:
         )
 
     def validate_image_store_value_type(self, texture_type, image_format, value_arg):
+        value_type = self.expression_result_type(value_arg)
+        if self.is_matrix_value_type(value_type):
+            format_label = image_format or self.resource_base_type(texture_type)
+            mapped_type = self.map_type(self.type_name_string(value_type))
+            raise ValueError(
+                "OpenGL image store operation 'imageStore' requires scalar or "
+                f"vector value for {format_label} images: "
+                f"{expression_debug_name(value_arg)} has type {mapped_type}"
+            )
         self.validate_image_store_value_shape(texture_type, image_format, value_arg)
         expected_kind = self.image_store_expected_value_type(texture_type, image_format)
         value_kind = image_store_value_kind_mismatch(
@@ -9058,6 +9073,14 @@ class GLSLCodeGen:
         )
 
     def validate_image_load_result_type(self, texture_type, image_format):
+        if self.is_matrix_value_type(self.current_expression_expected_type):
+            format_label = image_format or self.resource_base_type(texture_type)
+            expected_type = self.map_type(self.current_expression_expected_type)
+            raise ValueError(
+                "OpenGL image load operation 'imageLoad' requires scalar or "
+                f"vector result context for {format_label} images: "
+                f"got {expected_type}"
+            )
         expected_kind = self.expected_component_kind()
         component_kind = self.image_load_component_kind(texture_type, image_format)
         format_label = image_format or self.resource_base_type(texture_type)

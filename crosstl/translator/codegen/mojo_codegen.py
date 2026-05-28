@@ -3427,12 +3427,7 @@ class MojoCodeGen:
         self.validate_expression_target_shape(
             node.right, left_type, "assignment target"
         )
-        if isinstance(node.right, ArrayLiteralNode) and self.is_array_type_name(
-            left_type
-        ):
-            right = self.generate_array_literal_expression(node.right, left_type)
-        else:
-            right = self.generate_expression(node.right)
+        right = self.generate_expression(node.right, left_type, "assignment target")
         op = self.map_operator(node.operator)
         return f"{left} {op} {right}"
 

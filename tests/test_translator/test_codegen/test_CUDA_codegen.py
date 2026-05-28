@@ -4895,14 +4895,25 @@ class TestCudaCodeGen:
             Texture2D<float4> typedColor;
             sampler querySampler;
 
-            void gatherShapes(float u, vec2 uv, vec3 uvw) {
+            void gatherShapes(float u, vec2 uv, vec3 uvw, int selector) {
                 vec4 valid = textureGather(colorMap, uv);
                 vec4 validSampler = textureGather(colorMap, querySampler, uv, 1);
                 vec4 validTyped = textureGather(typedColor, uv, 2);
+                vec4 validDynamic = textureGather(colorMap, uv, selector);
                 vec4 badScalar = textureGather(colorMap, u);
                 vec4 badSamplerScalar = textureGather(colorMap, querySampler, u, 1);
                 vec4 badVec3 = textureGather(colorMap, uvw, 2);
                 vec4 badTypedVec3 = textureGather(typedColor, uvw, 3);
+                vec4 badHighComponent = textureGather(colorMap, uv, 4);
+                vec4 badLowComponent = textureGather(colorMap, uv, -1);
+                vec4 badFloatComponent = textureGather(colorMap, uv, 1.5);
+                vec4 badStringComponent = textureGather(colorMap, uv, "1");
+                vec4 badSamplerHighComponent = textureGather(
+                    colorMap,
+                    querySampler,
+                    uv,
+                    7
+                );
             }
 
             compute {
@@ -4926,6 +4937,10 @@ class TestCudaCodeGen:
             "float4 validTyped = "
             "tex2Dgather<float4>(typedColor, uv.x, uv.y, 2);" in cuda_code
         )
+        assert (
+            "float4 validDynamic = "
+            "tex2Dgather<float4>(colorMap, uv.x, uv.y, selector);" in cuda_code
+        )
         for name in (
             "badScalar",
             "badSamplerScalar",
@@ -4937,9 +4952,25 @@ class TestCudaCodeGen:
                 "textureGather coordinate rank on sampler2D */ "
                 "make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
             ) in cuda_code
+        for name in (
+            "badHighComponent",
+            "badLowComponent",
+            "badFloatComponent",
+            "badStringComponent",
+            "badSamplerHighComponent",
+        ):
+            assert (
+                f"float4 {name} = /* unsupported CUDA sampled resource call: "
+                "textureGather component literal must be 0, 1, 2, or 3 "
+                "on sampler2D */ make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
+            ) in cuda_code
         assert "tex2Dgather<float4>(colorMap, u.x, u.y)" not in cuda_code
         assert "tex2Dgather<float4>(colorMap, uvw.x, uvw.y, 2)" not in cuda_code
         assert "tex2Dgather<float4>(typedColor, uvw.x, uvw.y, 3)" not in cuda_code
+        assert "tex2Dgather<float4>(colorMap, uv.x, uv.y, 4)" not in cuda_code
+        assert "tex2Dgather<float4>(colorMap, uv.x, uv.y, -1)" not in cuda_code
+        assert "tex2Dgather<float4>(colorMap, uv.x, uv.y, 1.5)" not in cuda_code
+        assert "tex2Dgather<float4>(colorMap, uv.x, uv.y, 7)" not in cuda_code
         assert "textureGather(" not in cuda_code
 
     def test_typed_hlsl_unsupported_sampled_calls_emit_cuda_diagnostics(self, tmp_path):

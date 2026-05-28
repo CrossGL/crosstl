@@ -630,6 +630,7 @@ class HipParser:
         if self.match("IDENTIFIER"):
             name = self.current_token.value
             self.advance()
+            self.type_aliases.add(name)
 
         members = []
         if self.match("LBRACE"):
@@ -655,6 +656,7 @@ class HipParser:
         self.consume("CLASS")
 
         name = self.consume("IDENTIFIER").value
+        self.type_aliases.add(name)
 
         members = []
         if self.match("LBRACE"):
@@ -2318,6 +2320,7 @@ class HipParser:
             or has_qualified_suffix
             or type_value == "auto"
             or type_value in self.type_aliases
+            or self.is_hip_opaque_handle_type(type_value)
         )
         while (
             can_have_pointer_suffix
@@ -2333,6 +2336,13 @@ class HipParser:
             index = self.skip_postfix_type_qualifiers_at_pos(index)
 
         return self.skip_array_suffix_at_pos(index)
+
+    def is_hip_opaque_handle_type(self, type_name):
+        return (
+            isinstance(type_name, str)
+            and type_name.startswith("hip")
+            and type_name.endswith("_t")
+        )
 
     def skip_postfix_type_qualifiers_at_pos(self, index):
         while (

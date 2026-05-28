@@ -21542,6 +21542,90 @@ def test_glsl_multisample_storage_images_lower_load_store_and_atomics():
     )
 
 
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageLoadMatrixResultInvalid {
+                image2D image @rg32f;
+
+                compute {
+                    void main() {
+                        mat2 value = imageLoad(image, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "requires scalar or vector result context.*got mat2",
+        ),
+        (
+            """
+            shader StorageImageLoadMatrixReturnInvalid {
+                image2D image;
+
+                mat4 readPixel() {
+                    return imageLoad(image, ivec2(0, 0));
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires scalar or vector result context.*got mat4",
+        ),
+    ],
+)
+def test_glsl_storage_image_load_rejects_matrix_result_contexts(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageStoreMatrixConstructorInvalid {
+                image2D image @rg32f;
+
+                compute {
+                    void main() {
+                        imageStore(image, ivec2(0, 0), mat2(1.0));
+                    }
+                }
+            }
+            """,
+            "requires scalar or vector value.*has type mat2",
+        ),
+        (
+            """
+            shader StorageImageStoreMatrixVariableInvalid {
+                image2D image;
+
+                compute {
+                    void main() {
+                        mat4 value = mat4(1.0);
+                        imageStore(image, ivec2(0, 0), value);
+                    }
+                }
+            }
+            """,
+            "requires scalar or vector value.*has type mat4",
+        ),
+    ],
+)
+def test_glsl_storage_image_store_rejects_matrix_values(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
 def test_glsl_storage_image_access_attributes_emit_parameter_qualifiers():
     shader = """
     shader StorageImageAccess {

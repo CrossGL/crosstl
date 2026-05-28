@@ -3951,6 +3951,116 @@ def test_gpu_resource_method_calls_convert_on_generic_impl_method_returned_recei
     assert ".buffer_store" not in result
 
 
+def test_gpu_resource_method_calls_convert_on_chained_self_impl_method_members():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Holder<T> {
+        resource: T,
+    }
+
+    impl<T> Holder<T> {
+        fn clone_holder(&self) -> Self {
+            return self;
+        }
+    }
+
+    fn chained_self_impl_member_resource_methods(
+        holder: Holder<ColorTexture>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+    ) -> Vec4<f32> {
+        return holder.clone_holder().resource.sample_sampler(sampler_state, uv);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Holder<T> Holder_clone_holder(Holder<T> self)" in result
+    assert (
+        "return texture(Holder_clone_holder(holder).resource, sampler_state, uv);"
+        in result
+    )
+    assert ".sample_sampler" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_method_generic_impl_returns():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Provider {
+    }
+
+    impl Provider {
+        fn pick<T>(&self, value: T) -> T {
+            return value;
+        }
+    }
+
+    fn method_generic_impl_returned_resource_methods(
+        provider: Provider,
+        tex: ColorTexture,
+        values: RwBuffer<i32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let local_tex = provider.pick(tex);
+        let local_values = provider.pick(values);
+        let base = local_tex.sample_sampler(sampler_state, uv);
+        let direct_base = provider.pick(tex).sample_sampler(sampler_state, uv);
+        let value = local_values.buffer_load(index);
+        local_values.buffer_store(index, value);
+        return base + direct_base;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "T Provider_pick(Provider self, T value)" in result
+    assert "let local_tex = Provider_pick(provider, tex);" in result
+    assert "let local_values = Provider_pick(provider, values);" in result
+    assert "base = texture(local_tex, sampler_state, uv);" in result
+    assert (
+        "direct_base = texture(Provider_pick(provider, tex), sampler_state, uv);"
+        in result
+    )
+    assert "value = buffer_load(local_values, index);" in result
+    assert "buffer_store(local_values, index, value);" in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_unresolved_method_generic_impl_returns_stay_unlowered():
+    code = """
+    struct Provider {
+    }
+
+    impl Provider {
+        fn default_value<T>(&self) -> T {
+            return make_default();
+        }
+    }
+
+    fn unresolved_method_generic_impl_returned_resource(
+        provider: Provider,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+    ) -> Vec4<f32> {
+        let local_tex = provider.default_value();
+        return local_tex.sample_sampler(sampler_state, uv);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "T Provider_default_value(Provider self)" in result
+    assert "let local_tex = Provider_default_value(provider);" in result
+    assert "return local_tex.sample_sampler(sampler_state, uv);" in result
+    assert "texture(local_tex" not in result
+
+
 def test_unresolved_generic_impl_method_returned_receivers_stay_unlowered():
     code = """
     struct Holder<T> {

@@ -701,6 +701,36 @@ def test_codegen_mesh_dispatch_mesh_id_semantic_roundtrip():
     assert "gl_LocalInvocationIndex" not in hlsl
 
 
+def test_codegen_mesh_view_id_semantic_roundtrip():
+    code = textwrap.dedent("""
+        struct VertexOut {
+            float4 position : SV_Position;
+        };
+
+        [shader("mesh")]
+        [numthreads(32, 1, 1)]
+        [outputtopology("triangle")]
+        void MSMain(
+            uint viewId : SV_ViewID,
+            out vertices VertexOut verts[3],
+            out indices uint3 tris[1]
+        ) {
+            SetMeshOutputCounts(3, 1);
+            verts[0].position = float4(float(viewId), 0.0, 0.0, 1.0);
+            tris[0] = uint3(0, 1, 2);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "uint viewId @ gl_ViewID" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "uint viewId : SV_ViewID" in hlsl
+    assert "gl_ViewID" not in hlsl
+
+
 def test_codegen_raytracing_stage():
     output = generate_crossgl(RAYTRACING_HLSL)
     assert "ray_generation" in output.lower()

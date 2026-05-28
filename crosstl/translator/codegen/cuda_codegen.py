@@ -8,6 +8,7 @@ from ..ast import (
     ForNode,
     IfNode,
     LiteralPatternNode,
+    LiteralNode,
     RangeNode,
     ReturnNode,
     StructNode,
@@ -3679,6 +3680,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         coordinate_index = 1
         component = None
+        component_arg = None
         if len(args) == 2:
             pass
         elif len(args) == 3:
@@ -3686,9 +3688,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 coordinate_index = 2
             else:
                 component = args[2]
+                component_arg = raw_args[2]
         elif len(args) == 4 and self.is_sampler_state_argument(raw_args[1]):
             coordinate_index = 2
             component = args[3]
+            component_arg = raw_args[3]
         else:
             return None
 
@@ -3700,6 +3704,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if coordinate_diagnostic is not None:
             return coordinate_diagnostic
 
+        component_diagnostic = self.texture_gather_component_diagnostic(
+            texture_type, component_arg
+        )
+        if component_diagnostic is not None:
+            return component_diagnostic
+
         texture_name = args[0]
         coord = args[coordinate_index]
         gather_args = (
@@ -3710,6 +3720,59 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if component is not None:
             return f"tex2Dgather<float4>({gather_args}, {component})"
         return f"tex2Dgather<float4>({gather_args})"
+
+    def texture_gather_component_diagnostic(self, texture_type, component_arg):
+        if not self.is_texture_gather_literal_component(component_arg):
+            return None
+        component_value = self.literal_int_value(component_arg)
+        if component_value in {0, 1, 2, 3}:
+            return None
+        return self.unsupported_sampled_resource_call(
+            "textureGather component literal must be 0, 1, 2, or 3",
+            texture_type,
+            [],
+        )
+
+    def is_texture_gather_literal_component(self, node):
+        if isinstance(node, LiteralNode):
+            return True
+        if isinstance(node, UnaryOpNode) and not getattr(node, "is_postfix", False):
+            operator = getattr(node, "operator", getattr(node, "op", None))
+            if operator in {"+", "-"}:
+                return self.is_texture_gather_literal_component(node.operand)
+        return False
+
+    def literal_int_value(self, node):
+        if isinstance(node, LiteralNode):
+            value = node.value
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                literal_type = getattr(
+                    getattr(node, "literal_type", None), "name", None
+                )
+                if literal_type in {"char", "string"}:
+                    return None
+                try:
+                    return int(value, 0)
+                except ValueError:
+                    return None
+            return None
+
+        if isinstance(node, UnaryOpNode) and not getattr(node, "is_postfix", False):
+            operator = getattr(node, "operator", getattr(node, "op", None))
+            if operator not in {"+", "-"}:
+                return None
+            value = self.literal_int_value(node.operand)
+            if value is None:
+                return None
+            if operator == "-":
+                return -value
+            return value
+
+        return None
 
     def is_sampler_state_argument(self, raw_arg):
         return self.resource_base_type(self.get_expression_type(raw_arg)) == "sampler"

@@ -9378,6 +9378,66 @@ def test_directx_mesh_dispatch_mesh_id_semantic_lowers_and_validates():
     assert "mesh_DispatchMeshID" not in generated
 
 
+def test_directx_mesh_view_id_semantic_lowers_and_validates():
+    wrong_type_code = """
+    shader BadMeshViewIDType {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                vec2 viewId @ gl_ViewID,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_ViewID.*scalar uint"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(wrong_type_code), "mesh")
+
+    wrong_stage_code = """
+    shader BadTaskViewID {
+        task {
+            void main(uint viewId @ gl_ViewID) @numthreads(1, 1, 1) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="task.*SV_ViewID.*mesh"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(wrong_stage_code), "task")
+
+    valid_code = """
+    shader MeshViewID {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint viewId @ gl_ViewID,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(float(viewId), 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "mesh"
+    )
+
+    assert "uint viewId : SV_ViewID" in generated
+    assert "gl_ViewID" not in generated
+
+
 def test_wave_and_rayquery_intrinsics_codegen():
     code = """
     shader WaveIntrinsicCoverage {

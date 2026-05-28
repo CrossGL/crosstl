@@ -4387,6 +4387,125 @@ def test_slang_ray_tracing_helper_pointer_holder_aliases_emit_native_calls():
     assert "RayTracingOpNode" not in generated_code
 
 
+def test_slang_nested_ray_interface_relay_helpers_preserve_lvalues():
+    code = """
+    shader SlangRayNestedRelayHelpers {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        struct RayPayloadHolder {
+            RayPayload primary;
+            RayPayload payloads[2];
+        };
+
+        struct CallableDataHolder {
+            CallableData primary;
+            CallableData items[2];
+        };
+
+        void traceLeaf(
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray,
+            inout RayPayload payload
+        ) {
+            TraceRay(accelerationStructure, 0, 0xFF, 0, 1, 0, ray, payload);
+        }
+
+        void traceReferenceRelay(
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray,
+            RayPayloadHolder& rays
+        ) {
+            traceLeaf(accelerationStructure, ray, rays.payloads[1]);
+        }
+
+        void tracePointerRelay(
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray,
+            RayPayloadHolder* rays
+        ) {
+            traceLeaf(accelerationStructure, ray, rays->primary);
+        }
+
+        void callableLeaf(uint shaderIndex, inout CallableData data) {
+            CallShader(shaderIndex, data);
+        }
+
+        void callableReferenceRelay(uint shaderIndex, CallableData& data) {
+            callableLeaf(shaderIndex, data);
+        }
+
+        void callablePointerRelay(
+            uint shaderIndex,
+            CallableDataHolder* callables
+        ) {
+            callableLeaf(shaderIndex + 1u, callables->items[0]);
+        }
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayloadHolder rays;
+                RayPayloadHolder& rayRef = rays;
+                RayPayloadHolder* rayPtr = &rays;
+                CallableData data;
+                CallableData& dataRef = data;
+                CallableDataHolder callables;
+                CallableDataHolder* callablePtr = &callables;
+                traceReferenceRelay(scene, ray, rayRef);
+                tracePointerRelay(scene, ray, rayPtr);
+                callableReferenceRelay(0, dataRef);
+                callablePointerRelay(1, callablePtr);
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) { }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) { }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void traceReferenceRelay("
+        "RaytracingAccelerationStructure accelerationStructure, "
+        "RayDesc ray, RayPayloadHolder& rays)" in generated_code
+    )
+    assert "traceLeaf(accelerationStructure, ray, rays.payloads[1]);" in generated_code
+    assert (
+        "void tracePointerRelay("
+        "RaytracingAccelerationStructure accelerationStructure, "
+        "RayDesc ray, RayPayloadHolder* rays)" in generated_code
+    )
+    assert "traceLeaf(accelerationStructure, ray, rays->primary);" in generated_code
+    assert (
+        "void callableReferenceRelay(uint shaderIndex, CallableData& data)"
+        in generated_code
+    )
+    assert "callableLeaf(shaderIndex, data);" in generated_code
+    assert (
+        "void callablePointerRelay(uint shaderIndex, CallableDataHolder* callables)"
+        in generated_code
+    )
+    assert "callableLeaf(shaderIndex + 1u, callables->items[0]);" in generated_code
+    assert "traceReferenceRelay(scene, ray, rayRef);" in generated_code
+    assert "tracePointerRelay(scene, ray, rayPtr);" in generated_code
+    assert "callableReferenceRelay(0, dataRef);" in generated_code
+    assert "callablePointerRelay(1, callablePtr);" in generated_code
+    assert "RayTracingOpNode" not in generated_code
+
+
 def test_slang_ray_query_methods_emit_native_calls_and_infer_results():
     code = """
     shader SlangRayQuery {
@@ -4895,6 +5014,107 @@ def test_slang_ray_hit_control_helpers_validate_through_deep_calls():
         ),
         (
             """
+            RayPayload makePayload() {
+                RayPayload payload;
+                return payload;
+            }
+
+            void traceLeaf(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+
+            void traceReferenceRelay(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                RayPayload& payload
+            ) {
+                traceLeaf(scene, ray, payload);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    traceReferenceRelay(scene, ray, makePayload());
+                }
+            }
+            """,
+            "traceReferenceRelay payload argument.*lvalue",
+        ),
+        (
+            """
+            void traceLeaf(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+
+            void traceReferenceRelay(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                RayPayload& payload
+            ) {
+                traceLeaf(scene, ray, payload);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    traceReferenceRelay(
+                        scene,
+                        ray,
+                        RayPayload(vec3(0.0, 0.0, 0.0))
+                    );
+                }
+            }
+            """,
+            "traceReferenceRelay payload argument.*lvalue",
+        ),
+        (
+            """
+            RayPayloadHolder makeHolder() {
+                RayPayloadHolder holder;
+                return holder;
+            }
+
+            void traceLeaf(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+
+            void traceHolderRelay(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayloadHolder rays
+            ) {
+                traceLeaf(scene, ray, rays.primary);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    traceHolderRelay(scene, ray, makeHolder());
+                }
+            }
+            """,
+            "traceHolderRelay payload argument.*lvalue",
+        ),
+        (
+            """
             void invokeCallable(uint shaderIndex, inout CallableData data) {
                 CallShader(shaderIndex, data);
             }
@@ -4946,6 +5166,55 @@ def test_slang_ray_hit_control_helpers_validate_through_deep_calls():
             }
             """,
             "invokeCallable callable data argument.*lvalue",
+        ),
+        (
+            """
+            CallableData makeCallableData() {
+                CallableData data;
+                return data;
+            }
+
+            void callableLeaf(uint shaderIndex, inout CallableData data) {
+                CallShader(shaderIndex, data);
+            }
+
+            void callableReferenceRelay(
+                uint shaderIndex,
+                CallableData& data
+            ) {
+                callableLeaf(shaderIndex, data);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    callableReferenceRelay(0, makeCallableData());
+                }
+            }
+            """,
+            "callableReferenceRelay callable data argument.*lvalue",
+        ),
+        (
+            """
+            void callableLeaf(uint shaderIndex, inout CallableData data) {
+                CallShader(shaderIndex, data);
+            }
+
+            void callableReferenceRelay(
+                uint shaderIndex,
+                CallableData& data
+            ) {
+                callableLeaf(shaderIndex, data);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    callableReferenceRelay(0, CallableData(1u));
+                }
+            }
+            """,
+            "callableReferenceRelay callable data argument.*lvalue",
         ),
         (
             """

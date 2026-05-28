@@ -4310,8 +4310,11 @@ class SlangCodeGen:
             expected_type = self.slang_parameter_type_name(parameter)
             if not expected_type:
                 continue
+            expected_compare_type = (
+                self.reference_referent_type_name(expected_type) or expected_type
+            )
             expected_base, expected_suffix = split_array_type_suffix(
-                self.convert_type(expected_type)
+                self.convert_type(expected_compare_type)
             )
             actual_base, actual_suffix = (
                 self.slang_expression_mapped_base_and_array_suffix(args[index])
@@ -4328,7 +4331,7 @@ class SlangCodeGen:
                     )
                 continue
             actual_type = f"{actual_base}{actual_suffix}"
-            expected_label = f"{expected_base}{expected_suffix}"
+            expected_label = self.convert_type(expected_type)
             raise ValueError(
                 f"Slang {shader_type} {helper_name} {role} "
                 f"argument type {actual_type} must match parameter type "

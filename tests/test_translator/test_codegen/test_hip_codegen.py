@@ -7461,6 +7461,87 @@ class TestHipCodeGen:
         assert "imageAtomicCompSwap(" not in hip_code
         assert "imageAtomicMax(" not in hip_code
 
+    def test_cubemap_image_atomic_builtins_emit_hip_diagnostics(self):
+        """Test HIP cubemap storage image atomics emit typed diagnostics."""
+        source_code = """
+        shader ImageAtomicCubeShapes {
+            iimageCube signedCube;
+            uimageCube counterCube;
+            iimageCubeArray signedCubeLayers;
+            uimageCubeArray counterCubeLayers;
+
+            void atomicCubeShapes(
+                int x,
+                ivec2 pixel,
+                ivec3 cubeCoord,
+                ivec4 cubeLayerCoord
+            ) {
+                int signedAdd = imageAtomicAdd(signedCube, cubeCoord, 1);
+                uint counterExchange =
+                    imageAtomicExchange(counterCube, cubeCoord, 2);
+                int signedLayerComp =
+                    imageAtomicCompSwap(signedCubeLayers, cubeLayerCoord, 3, 4);
+                uint counterLayerMax =
+                    imageAtomicMax(counterCubeLayers, cubeLayerCoord, 5);
+                int badSignedCube = imageAtomicMin(signedCube, pixel, 6);
+                uint badCounterLayer =
+                    imageAtomicOr(counterCubeLayers, cubeCoord, 7);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "hipSurfaceObject_t signedCube;" in hip_code
+        assert "hipSurfaceObject_t counterCube;" in hip_code
+        assert "hipSurfaceObject_t signedCubeLayers;" in hip_code
+        assert "hipSurfaceObject_t counterCubeLayers;" in hip_code
+        assert (
+            "int signedAdd = /* unsupported HIP image atomic resource call: "
+            "imageAtomicAdd on iimageCube */ 0;" in hip_code
+        )
+        assert (
+            "unsigned int counterExchange = "
+            "/* unsupported HIP image atomic resource call: "
+            "imageAtomicExchange on uimageCube */ 0u;" in hip_code
+        )
+        assert (
+            "int signedLayerComp = "
+            "/* unsupported HIP image atomic resource call: "
+            "imageAtomicCompSwap on iimageCubeArray */ 0;" in hip_code
+        )
+        assert (
+            "unsigned int counterLayerMax = "
+            "/* unsupported HIP image atomic resource call: "
+            "imageAtomicMax on uimageCubeArray */ 0u;" in hip_code
+        )
+        assert (
+            "int badSignedCube = /* unsupported HIP image atomic resource call: "
+            "imageAtomicMin coordinate rank on iimageCube */ 0;" in hip_code
+        )
+        assert (
+            "unsigned int badCounterLayer = "
+            "/* unsupported HIP image atomic resource call: "
+            "imageAtomicOr coordinate rank on uimageCubeArray */ 0u;" in hip_code
+        )
+        for function_name in [
+            "imageAtomicAdd",
+            "imageAtomicExchange",
+            "imageAtomicCompSwap",
+            "imageAtomicMax",
+            "imageAtomicMin",
+            "imageAtomicOr",
+        ]:
+            assert f"{function_name}(" not in hip_code
+
     def test_resource_query_builtins_emit_hip_metadata_helpers(self):
         """Test HIP lowers resource queries through explicit metadata sidecars."""
         source_code = """

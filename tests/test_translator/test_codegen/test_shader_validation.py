@@ -2787,6 +2787,17 @@ shader MetalMeshObjectValidation {
 """
 
 
+METAL_MESH_DISPATCH_INVALID_GRID_SHADER = """
+shader MetalMeshDispatchInvalidGridValidation {
+    object {
+        void main() @max_total_threads_per_threadgroup(32) {
+            DispatchMesh(2);
+        }
+    }
+}
+"""
+
+
 METAL_MESH_OUTPUT_SIGNATURE_SHADER = """
 shader MetalMeshOutputSignatureValidation {
     struct MeshVertex {
@@ -5895,6 +5906,47 @@ def test_generated_metal_mesh_object_stages_compile_with_metal3(tmp_path):
     source = tmp_path / "mesh_object.metal"
     output = tmp_path / "mesh_object.air"
     code = MetalCodeGen().generate(crosstl.translator.parse(METAL_MESH_OBJECT_SHADER))
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_mesh_dispatch_invalid_grid_compiles_with_metal3(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "mesh_dispatch_invalid_grid.metal"
+    output = tmp_path / "mesh_dispatch_invalid_grid.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_MESH_DISPATCH_INVALID_GRID_SHADER)
+    )
+    assert (
+        "unsupported Metal mesh dispatch: DispatchMesh grid argument must be "
+        "a uint3-compatible vector"
+    ) in code
+    assert "set_threadgroups_per_grid(2)" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

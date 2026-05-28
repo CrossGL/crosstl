@@ -3119,6 +3119,153 @@ class TestVulkanSPIRVCodeGen:
         assert " Pow " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_fma_builtin_uses_typed_spirv_extinsts(self, tmp_path):
+        source_code = """
+        shader FmaBuiltins {
+            compute {
+                void main() {
+                    float x;
+                    float y;
+                    float z;
+                    float sf = fma(x, y, z);
+                    vec3 vx = vec3(1.0, 2.0, 3.0);
+                    vec3 vy = vec3(2.0, 3.0, 4.0);
+                    vec3 vz = vec3(3.0, 4.0, 5.0);
+                    vec3 vv = fma(vx, vy, vz);
+                    vec3 vs = fma(vx, 2.0, 1.0);
+
+                    double dx;
+                    double dy;
+                    double dz;
+                    double ds = fma(dx, dy, dz);
+                    dvec2 dvx;
+                    dvec2 dvy;
+                    dvec2 dvz;
+                    dvec2 dvv = fma(dvx, dvy, dvz);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        dvec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(double_type.group(1))} 2",
+            spv_code,
+        )
+        assert vec3_type is not None
+        assert dvec2_type is not None
+
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ "
+            r"Fma %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(double_type.group(1))} %\d+ "
+            r"Fma %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ Fma",
+                    spv_code,
+                )
+            )
+            == 2
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(dvec2_type.group(1))} %\d+ "
+            r"Fma %\d+ %\d+ %\d+",
+            spv_code,
+        )
+
+        scalar_splats = re.findall(
+            rf"(%\d+) = OpCompositeConstruct {re.escape(vec3_type.group(1))} "
+            r"(%\d+) \2 \2",
+            spv_code,
+        )
+        assert len(scalar_splats) >= 2
+        assert re.search(
+            rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ Fma %\d+ "
+            rf"{re.escape(scalar_splats[0][0])} "
+            rf"{re.escape(scalar_splats[1][0])}",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_invalid_fma_operand_shapes_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidFmaBuiltins {
+            compute {
+                void main() {
+                    int i;
+                    int j;
+                    int k;
+                    int intFma = fma(i, j, k);
+                    bool flag;
+                    bool boolFma = fma(flag, false, true);
+                    vec2 widthFma = fma(
+                        vec2(1.0, 2.0),
+                        vec3(2.0, 3.0, 4.0),
+                        vec2(3.0, 4.0)
+                    );
+                    float scalarVectorFma = fma(1.0, vec2(2.0, 3.0), 4.0);
+                    mat2 a = mat2(1.0, 0.0, 0.0, 1.0);
+                    mat2 b = mat2(2.0, 0.0, 0.0, 2.0);
+                    mat2 c = mat2(3.0, 0.0, 0.0, 3.0);
+                    mat2 matrixFma = fma(a, b, c);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count(
+                "; WARNING: fma requires compatible floating-point scalar "
+                "or vector operands"
+            )
+            == 5
+        )
+        assert " Fma " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_malformed_fma_builtin_emits_diagnostics(self, tmp_path):
+        source_code = """
+        shader MalformedFmaBuiltins {
+            compute {
+                void main() {
+                    float missingFma = fma(1.0, 2.0);
+                    float extraFma = fma(1.0, 2.0, 3.0, 4.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("; WARNING: fma requires 3 operands") == 2
+        assert " Fma " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_step_smoothstep_builtins_use_typed_spirv_extinsts(self, tmp_path):
         source_code = """
         shader StepSmoothstepBuiltins {

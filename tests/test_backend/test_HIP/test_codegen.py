@@ -6974,6 +6974,70 @@ class TestHipCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
+    def test_hip_runtime_callback_activity_nested_expressions_convert(self):
+        """Test HIP callback/activity helpers convert in nested expressions."""
+        code = """
+        const char* chooseName(const char* a, const char* b, bool useA) {
+            return useA ? a : b;
+        }
+
+        int addOne(int value) {
+            return value + 1;
+        }
+
+        void inspectNested(
+            hipFunction_t function,
+            hipStream_t stream,
+            void* hostFunction,
+            bool preferApi,
+            int apiId,
+            int expectedDevice
+        ) {
+            const char* selected =
+                preferApi ? hipApiName(apiId) : hipKernelNameRef(function);
+            const char* forwarded =
+                chooseName(
+                    hipKernelNameRef(function),
+                    hipKernelNameRefByPtr(hostFunction, stream),
+                    preferApi
+                );
+            bool streamMatches = hipGetStreamDeviceId(stream) == expectedDevice;
+            int streamPlusOne = addOne(hipGetStreamDeviceId(stream));
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "var selected: ptr<i8> = (preferApi ? /* HIP API name: apiId */ "
+            '"" : /* HIP kernel name for function: function */ "");'
+        ) in result
+        assert (
+            "var forwarded: ptr<i8> = chooseName(/* HIP kernel name for "
+            'function: function */ "", /* HIP kernel name for host function: '
+            'hostFunction, stream: stream */ "", preferApi);'
+        ) in result
+        assert (
+            "var streamMatches: bool = (/* HIP stream device id: stream */ "
+            "0 == expectedDevice);"
+        ) in result
+        assert (
+            "var streamPlusOne: i32 = addOne(/* HIP stream device id: stream */ 0);"
+            in result
+        )
+
+        for function_name in [
+            "hipApiName",
+            "hipKernelNameRef",
+            "hipKernelNameRefByPtr",
+            "hipGetStreamDeviceId",
+        ]:
+            assert f"{function_name}(" not in result
+
     def test_hip_runtime_driver_context_api_conversion(self):
         """Test HIP initialization, context, and peer APIs emit metadata comments."""
         code = """

@@ -6494,6 +6494,7 @@ class VulkanSPIRVCodeGen:
             "clamp": 3,
             "mix": 3,
             "pow": 2,
+            "fma": 3,
             "step": 2,
             "smoothstep": 3,
         }
@@ -6547,6 +6548,18 @@ class VulkanSPIRVCodeGen:
             self.emit(
                 "; WARNING: pow requires compatible 32-bit floating-point "
                 "scalar or vector operands"
+            )
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
+
+        if function_name == "fma" and len(args) == 3:
+            fused = self.call_fma_function(args)
+            if fused is not None:
+                return fused
+            self.emit(
+                "; WARNING: fma requires compatible floating-point scalar "
+                "or vector operands"
             )
             return self.default_value_for_type(
                 self.ensure_registered_type(args[0].type)
@@ -7200,6 +7213,28 @@ class VulkanSPIRVCodeGen:
         self.emit(
             f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
             f"Pow {arg_list}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_fma_function(self, args: List[SpirvId]) -> Optional[SpirvId]:
+        """Lower fma to GLSL.std.450 with validator-compatible operand types."""
+        result_type = self.ensure_registered_type(args[0].type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        if component_type not in {"float", "double"}:
+            return None
+
+        operands = self.match_extinst_operands_to_result_type(result_type, args)
+        if operands is None:
+            return None
+
+        id_value = self.get_id()
+        arg_list = " ".join(f"%{arg.id}" for arg in operands)
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"Fma {arg_list}"
         )
 
         spirv_id = SpirvId(id_value, result_type.type)

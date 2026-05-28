@@ -7503,6 +7503,46 @@ def test_metal_object_stage_dispatch_mesh_accepts_vector_grid():
     assert "DispatchMesh" not in generated
 
 
+def test_metal_object_stage_dispatch_mesh_rejects_malformed_grid_arguments():
+    scalar_code = """
+    shader meshpipe {
+        object {
+            void main() @max_total_threads_per_threadgroup(32) {
+                DispatchMesh(2);
+            }
+        }
+    }
+    """
+    scalar_generated = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(scalar_code)), "object"
+    )
+
+    assert (
+        "unsupported Metal mesh dispatch: DispatchMesh grid argument "
+        "must be a uint3-compatible vector"
+    ) in scalar_generated
+    assert "set_threadgroups_per_grid(2)" not in scalar_generated
+
+    vector_component_code = """
+    shader meshpipe {
+        object {
+            void main() @max_total_threads_per_threadgroup(32) {
+                DispatchMesh(uvec3(2, 3, 4), 1, 1);
+            }
+        }
+    }
+    """
+    vector_component_generated = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(vector_component_code)), "object"
+    )
+
+    assert (
+        "unsupported Metal mesh dispatch: DispatchMesh grid component "
+        "argument 1 must be a scalar integer"
+    ) in vector_component_generated
+    assert "set_threadgroups_per_grid(uint3(uint3" not in vector_component_generated
+
+
 def test_metal_rejects_unsupported_geometry_and_tessellation_stages():
     geometry_code = """
     shader geometry_stage {

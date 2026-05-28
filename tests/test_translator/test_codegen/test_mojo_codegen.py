@@ -12147,6 +12147,196 @@ def test_aggregate_buffer_reinterpret_target_shape_diagnostics(source, pattern):
         generate_code(parse_code(tokenize_code(source)))
 
 
+def _function_style_struct_assignment_target_source():
+    return """
+    struct MixedBox {
+        float2 loaded;
+        float2 imageValue;
+        float2 rawValue;
+    };
+
+    StructuredBuffer<float2> pairs;
+    ConsumeStructuredBuffer<float2> consumed;
+    RWByteAddressBuffer raw;
+    RWTexture2D<float2> image;
+
+    uint index() {
+        return 0u;
+    }
+
+    int2 pixel() {
+        return int2(0, 0);
+    }
+
+    void acceptMixed(MixedBox value) {
+    }
+
+    void useBoxes(int mode, bool choose) {
+        let inferred = MixedBox(
+            choose ? pairs.Load(index()) : consumed.Consume(),
+            image.Load(pixel()),
+            match mode {
+                0 => asfloat(raw.Load2(index())),
+                _ => pairs.Load(index())
+            }
+        );
+        MixedBox explicitValue = MixedBox(
+            consumed.Consume(),
+            choose ? image.Load(pixel()) : pairs.Load(index()),
+            asfloat(raw.Load2(index()))
+        );
+        MixedBox assigned;
+        assigned = MixedBox(
+            match mode {
+                0 => pairs.Load(index()),
+                _ => consumed.Consume()
+            },
+            image.Load(pixel()),
+            choose ? asfloat(raw.Load2(index())) : pairs.Load(index())
+        );
+        inferred = MixedBox(
+            consumed.Consume(),
+            image.Load(pixel()),
+            asfloat(raw.Load2(index()))
+        );
+        acceptMixed(MixedBox(
+            pairs.Load(index()),
+            image.Load(pixel()),
+            asfloat(raw.Load2(index()))
+        ));
+    }
+    """
+
+
+def test_function_style_struct_constructors_preserve_assignment_target_contexts():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_function_style_struct_assignment_target_source()))
+    )
+
+    assert "fn useBoxes(mode: Int32, choose: Bool) -> None:" in generated_code
+    assert "var __cgl_match_value_0: SIMD[DType.float32, 2]" in generated_code
+    assert "__cgl_match_value_0 = asfloat(buffer_load2(raw, index()))" in (
+        generated_code
+    )
+    assert "__cgl_match_value_0 = buffer_load(pairs, index())" in generated_code
+    assert (
+        "var inferred = MixedBox((buffer_load(pairs, index()) if choose else "
+        "buffer_consume(consumed)), image_load(image, pixel()), __cgl_match_value_0)"
+    ) in generated_code
+    assert (
+        "var explicitValue: MixedBox = MixedBox(buffer_consume(consumed), "
+        "(image_load(image, pixel()) if choose else buffer_load(pairs, index())), "
+        "asfloat(buffer_load2(raw, index())))"
+    ) in generated_code
+    assert "var assigned = MixedBox(" in generated_code
+    assert "var __cgl_match_value_1: SIMD[DType.float32, 2]" in generated_code
+    assert "__cgl_match_value_1 = buffer_load(pairs, index())" in generated_code
+    assert "__cgl_match_value_1 = buffer_consume(consumed)" in generated_code
+    assert (
+        "assigned = MixedBox(__cgl_match_value_1, image_load(image, pixel()), "
+        "(asfloat(buffer_load2(raw, index())) if choose else "
+        "buffer_load(pairs, index())))"
+    ) in generated_code
+    assert (
+        "inferred = MixedBox(buffer_consume(consumed), image_load(image, pixel()), "
+        "asfloat(buffer_load2(raw, index())))"
+    ) in generated_code
+    assert (
+        "acceptMixed(MixedBox(buffer_load(pairs, index()), image_load(image, "
+        "pixel()), asfloat(buffer_load2(raw, index()))))"
+    ) in generated_code
+
+
+def test_function_style_struct_assignment_contexts_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_function_style_struct_assignment_target_source()))
+    )
+    generated_code += """
+fn main():
+    useBoxes(0, True)
+"""
+
+    source_path = tmp_path / "function_style_struct_assignment_contexts.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "source, pattern",
+    [
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            StructuredBuffer<float2> pairs;
+            uint index() { return 0u; }
+            void invalidInferred() {
+                let badValue = ScalarBox(pairs.Load(index()));
+            }
+            """,
+            r"buffer_load target.*declaration badValue field ScalarBox\.value"
+            r".*expects float2.*got float",
+        ),
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            RWTexture2D<float2> image;
+            int2 pixel() { return int2(0, 0); }
+            void invalidExplicit() {
+                ScalarBox badValue = ScalarBox(image.Load(pixel()));
+            }
+            """,
+            r"image_load target.*declaration badValue field ScalarBox\.value"
+            r".*expects vec2.*got float",
+        ),
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            RWByteAddressBuffer raw;
+            uint index() { return 0u; }
+            void invalidAssignment() {
+                ScalarBox assigned;
+                assigned = ScalarBox(asfloat(raw.Load2(index())));
+            }
+            """,
+            r"asfloat target.*assignment target field ScalarBox\.value"
+            r".*expects vec2.*got float",
+        ),
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            ConsumeStructuredBuffer<float2> consumed;
+            void invalidInferredAssignment() {
+                let assigned = ScalarBox(1.0);
+                assigned = ScalarBox(consumed.Consume());
+            }
+            """,
+            r"buffer_consume target.*assignment target field ScalarBox\.value"
+            r".*expects float2.*got float",
+        ),
+    ],
+)
+def test_function_style_struct_constructor_assignment_diagnostics(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def _constructor_helper_match_and_ternary_source():
     return """
     vec2 makeUv() {

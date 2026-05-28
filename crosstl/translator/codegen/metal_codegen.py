@@ -5818,15 +5818,15 @@ class MetalCodeGen:
             and self.current_metal_mesh_grid_properties_parameter
             and len(expr.arguments) == 4
         ):
+            grid_assignment = self.metal_dispatch_mesh_grid_assignment(
+                expr.arguments[:3]
+            )
+            if grid_assignment is None:
+                return self.unsupported_metal_mesh_dispatch(
+                    self.metal_dispatch_mesh_grid_argument_reason(expr.arguments[:3])
+                )
             payload_assignment = self.metal_dispatch_mesh_payload_assignment(
                 expr.arguments[3]
-            )
-            grid = ", ".join(
-                self.generate_expression(argument) for argument in expr.arguments[:3]
-            )
-            grid_assignment = (
-                f"{self.current_metal_mesh_grid_properties_parameter}"
-                f".set_threadgroups_per_grid(uint3({grid}))"
             )
             return "\n".join([payload_assignment, grid_assignment])
         if (
@@ -5834,24 +5834,64 @@ class MetalCodeGen:
             and self.current_metal_mesh_grid_properties_parameter
             and len(expr.arguments) == 3
         ):
-            grid = ", ".join(
-                self.generate_expression(argument) for argument in expr.arguments
-            )
-            return (
-                f"{self.current_metal_mesh_grid_properties_parameter}"
-                f".set_threadgroups_per_grid(uint3({grid}))"
-            )
+            grid_assignment = self.metal_dispatch_mesh_grid_assignment(expr.arguments)
+            if grid_assignment is None:
+                return self.unsupported_metal_mesh_dispatch(
+                    self.metal_dispatch_mesh_grid_argument_reason(expr.arguments)
+                )
+            return grid_assignment
         if (
             expr.operation == "DispatchMesh"
             and self.current_metal_mesh_grid_properties_parameter
             and len(expr.arguments) == 1
         ):
-            grid = self.generate_expression(expr.arguments[0])
+            grid_assignment = self.metal_dispatch_mesh_grid_assignment(expr.arguments)
+            if grid_assignment is None:
+                return self.unsupported_metal_mesh_dispatch(
+                    self.metal_dispatch_mesh_grid_argument_reason(expr.arguments)
+                )
+            return grid_assignment
+        return None
+
+    def metal_dispatch_mesh_grid_assignment(self, grid_args):
+        reason = self.metal_dispatch_mesh_grid_argument_reason(grid_args)
+        if reason is not None:
+            return None
+        if len(grid_args) == 1:
+            grid = self.generate_expression(grid_args[0])
+        else:
+            grid = "uint3({})".format(
+                ", ".join(self.generate_expression(argument) for argument in grid_args)
+            )
+        return (
+            f"{self.current_metal_mesh_grid_properties_parameter}"
+            f".set_threadgroups_per_grid({grid})"
+        )
+
+    def metal_dispatch_mesh_grid_argument_reason(self, grid_args):
+        if len(grid_args) == 1:
+            grid_type = self.expression_result_type(grid_args[0])
+            if self.map_type(grid_type) == "uint3":
+                return None
+            type_label = self.type_name_string(grid_type) or "unknown"
             return (
-                f"{self.current_metal_mesh_grid_properties_parameter}"
-                f".set_threadgroups_per_grid({grid})"
+                "DispatchMesh grid argument must be a uint3-compatible vector"
+                f"; got '{type_label}'"
+            )
+
+        for index, argument in enumerate(grid_args, start=1):
+            argument_type = self.expression_result_type(argument)
+            if self.is_scalar_integer_type(argument_type):
+                continue
+            type_label = self.type_name_string(argument_type) or "unknown"
+            return (
+                f"DispatchMesh grid component argument {index} must be a "
+                f"scalar integer; got '{type_label}'"
             )
         return None
+
+    def unsupported_metal_mesh_dispatch(self, reason):
+        return f"/* unsupported Metal mesh dispatch: {reason} */"
 
     def metal_dispatch_mesh_payload_assignment(self, payload_expr):
         if self.current_metal_mesh_payload_parameter is None:
