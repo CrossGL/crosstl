@@ -12554,6 +12554,26 @@ def test_function_style_struct_constructor_assignment_diagnostics(source, patter
         generate_code(parse_code(tokenize_code(source)))
 
 
+def test_function_style_struct_constructor_field_diagnostics():
+    source = """
+    struct PairBox {
+        float value;
+        float alt;
+    };
+    void invalidExtraPositional() {
+        let badValue = PairBox(1.0, 2.0, 3.0);
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"too many positional fields.*declaration badValue" r".*field 3.*PairBox"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def _braced_struct_assignment_target_source():
     return """
     struct MixedBox {

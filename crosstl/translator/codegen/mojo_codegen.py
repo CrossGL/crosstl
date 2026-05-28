@@ -4164,7 +4164,13 @@ class MojoCodeGen:
         return f"{mapped_type}({', '.join([*positional_args, *named_args])})"
 
     def validate_struct_constructor_field_bindings(
-        self, struct_type, field_items, positional_count, named_arguments, base_context
+        self,
+        struct_type,
+        field_items,
+        positional_count,
+        named_arguments,
+        base_context,
+        constructor_style="braced",
     ):
         fields = dict(field_items)
         expected = ", ".join(fields) or "no fields"
@@ -4172,7 +4178,8 @@ class MojoCodeGen:
         for index in range(positional_count):
             if index >= len(field_items):
                 raise ValueError(
-                    "Invalid braced struct constructor for Mojo codegen; "
+                    f"Invalid {constructor_style} struct constructor for Mojo "
+                    "codegen; "
                     f"too many positional fields in {base_context}: field "
                     f"{index + 1} has no matching field in {struct_type}"
                 )
@@ -4182,13 +4189,15 @@ class MojoCodeGen:
         for field_name in named_arguments:
             if field_name not in fields:
                 raise ValueError(
-                    "Invalid braced struct constructor for Mojo codegen; "
+                    f"Invalid {constructor_style} struct constructor for Mojo "
+                    "codegen; "
                     f"unknown field {struct_type}.{field_name} in {base_context}; "
                     f"expected one of: {expected}"
                 )
             if field_name in initialized_fields:
                 raise ValueError(
-                    "Invalid braced struct constructor for Mojo codegen; "
+                    f"Invalid {constructor_style} struct constructor for Mojo "
+                    "codegen; "
                     f"duplicate field {struct_type}.{field_name} in {base_context}"
                 )
             initialized_fields.add(field_name)
@@ -4197,6 +4206,14 @@ class MojoCodeGen:
         mapped_type = self.map_type(type_name)
         field_items = list(self.struct_types.get(type_name, {}).items())
         base_context = context or f"constructor {type_name}"
+        self.validate_struct_constructor_field_bindings(
+            type_name,
+            field_items,
+            len(expr.args),
+            {},
+            base_context,
+            "function-style",
+        )
         positional_args = []
         for index, argument in enumerate(expr.args):
             field_type = None
