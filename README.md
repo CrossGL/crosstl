@@ -10,7 +10,7 @@
         <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/docs/assets/web_icon.png">
     </a>
     <img class="dark-light" width="5%" >
-    <a href="https://crossgl.github.io/crossgl-docs/pages/graphica/language">
+    <a href="https://docs.crossgl.net/products/crossgl-translator/index.html">
         <img class="dark-light" height="5%" width="5%" src="https://github.com/CrossGL/crossgl-docs/blob/main/docs/assets/docs.png">
     </a>
     <img class="dark-light" width="5%" >
