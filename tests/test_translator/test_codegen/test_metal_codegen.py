@@ -7189,6 +7189,88 @@ def test_metal_mesh_output_helper_calls_validate_order_and_literal_bounds():
         )
 
 
+def test_metal_mesh_set_index_validates_flattened_bounds():
+    write_before_count_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(3)
+                @max_primitives(1)
+                @outputtopology(triangle)
+            {
+                SetIndex(0, 0);
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetIndex.*after SetMeshOutputCounts"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(write_before_count_code)), "mesh"
+        )
+
+    declared_flattened_bound_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(3)
+                @max_primitives(1)
+                @outputtopology(triangle)
+            {
+                SetMeshOutputCounts(3, 1);
+                SetIndex(3, 0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetIndex.*declared flattened index count"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(declared_flattened_bound_code)), "mesh"
+        )
+
+    active_flattened_bound_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(6)
+                @max_primitives(2)
+                @outputtopology(triangle)
+            {
+                SetMeshOutputCounts(3, 1);
+                SetIndex(3, 0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetIndex.*numPrimitives"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(active_flattened_bound_code)), "mesh"
+        )
+
+    vector_span_bound_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(3)
+                @max_primitives(1)
+                @outputtopology(triangle)
+            {
+                SetMeshOutputCounts(3, 1);
+                SetIndex(1, uvec3(0u, 1u, 2u));
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetIndex.*declared flattened index count"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(vector_span_bound_code)), "mesh"
+        )
+
+
 def test_metal_mesh_set_output_counts_validates_literal_bounds():
     code = """
     shader meshpipe {

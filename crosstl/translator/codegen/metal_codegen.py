@@ -8352,6 +8352,12 @@ class MetalCodeGen:
         self, call, set_counts_seen, set_counts
     ):
         func_name = self.function_call_name(call)
+        if func_name == "SetIndex":
+            self.validate_metal_mesh_set_index_helper_call_usage(
+                call, set_counts_seen, set_counts
+            )
+            return
+
         helper_roles = {
             "SetVertex": ("vertices", "max_vertices", "numVertices"),
             "SetPrimitive": ("primitives", "max_primitives", "numPrimitives"),
@@ -8395,6 +8401,76 @@ class MetalCodeGen:
                 f"Metal mesh output helper '{func_name}' index ({index_value}) "
                 f"must be less than SetMeshOutputCounts {active_label} "
                 f"({active_bound})"
+            )
+
+    def validate_metal_mesh_set_index_helper_call_usage(
+        self, call, set_counts_seen, set_counts
+    ):
+        func_name = self.function_call_name(call)
+        args = getattr(call, "arguments", getattr(call, "args", []))
+        if len(args) != 2:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' requires exactly 2 arguments"
+            )
+
+        if not set_counts_seen:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' must be called only after "
+                "SetMeshOutputCounts"
+            )
+
+        index_value = self.literal_int_value(args[0], self.literal_int_constants)
+        if index_value is None:
+            return
+
+        write_width = self.metal_mesh_index_vector_width(args[1]) or 1
+        mesh_output = self.current_metal_mesh_output_config or {}
+        topology_width = self.metal_mesh_topology_index_width(
+            mesh_output.get("topology")
+        )
+        if topology_width is None:
+            return
+
+        declared_primitives = self.metal_literal_int_text_value(
+            mesh_output.get("max_primitives")
+        )
+        if declared_primitives is not None:
+            declared_index_count = declared_primitives * topology_width
+            self.validate_metal_mesh_set_index_span(
+                func_name,
+                index_value,
+                write_width,
+                declared_index_count,
+                "declared flattened index count",
+            )
+
+        active_primitives = None
+        if set_counts is not None:
+            active_primitives = set_counts.get("primitives")
+        if active_primitives is not None:
+            active_index_count = active_primitives * topology_width
+            self.validate_metal_mesh_set_index_span(
+                func_name,
+                index_value,
+                write_width,
+                active_index_count,
+                "SetMeshOutputCounts numPrimitives flattened index count",
+            )
+
+    def validate_metal_mesh_set_index_span(
+        self, func_name, index_value, write_width, flattened_bound, bound_label
+    ):
+        last_index = index_value + write_width - 1
+        if index_value < 0:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' index ({index_value}) "
+                "must be non-negative"
+            )
+        if last_index >= flattened_bound:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' index range "
+                f"[{index_value}, {last_index}] must be less than "
+                f"{bound_label} ({flattened_bound})"
             )
 
     def metal_mesh_nested_statements(self, stmt):
@@ -8806,6 +8882,9 @@ class MetalCodeGen:
                 f"Metal mesh output topology cannot be lowered: {topology}"
             )
         return mapped
+
+    def metal_mesh_topology_index_width(self, topology):
+        return {"point": 1, "line": 2, "triangle": 3}.get(topology)
 
     def generate_metal_mesh_vertex_output_struct(self, mesh_output):
         return (

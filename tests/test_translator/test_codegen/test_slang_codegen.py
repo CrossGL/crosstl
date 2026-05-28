@@ -4387,6 +4387,107 @@ def test_slang_ray_tracing_helper_pointer_holder_aliases_emit_native_calls():
     assert "RayTracingOpNode" not in generated_code
 
 
+def test_slang_ray_tracing_helper_address_of_pointer_relays_emit_native_calls():
+    code = """
+    shader SlangRayAddressOfPointerRelays {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct RayPayloadHolder {
+            RayPayload primary;
+        };
+
+        struct CallableDataHolder {
+            CallableData primary;
+        };
+
+        struct HitAttributeHolder {
+            HitAttributes primary;
+        };
+
+        void traceLeaf(
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray,
+            inout RayPayload payload
+        ) {
+            TraceRay(accelerationStructure, 0, 0xFF, 0, 1, 0, ray, payload);
+        }
+
+        void tracePointerRelay(
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray,
+            RayPayloadHolder* rays
+        ) {
+            traceLeaf(accelerationStructure, ray, rays->primary);
+        }
+
+        void callableLeaf(uint shaderIndex, inout CallableData data) {
+            CallShader(shaderIndex, data);
+        }
+
+        void callablePointerRelay(
+            uint shaderIndex,
+            CallableDataHolder* callables
+        ) {
+            callableLeaf(shaderIndex, callables->primary);
+        }
+
+        bool reportPointerRelay(HitAttributeHolder* hits) {
+            return ReportHit(1.0, 0, hits->primary);
+        }
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayloadHolder rays;
+                CallableDataHolder callables;
+                tracePointerRelay(scene, ray, &rays);
+                callablePointerRelay(2, &callables);
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributeHolder hits;
+                bool accepted = reportPointerRelay(&hits);
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) { }
+        }
+
+        ray_closest_hit {
+            void main(RayPayload payload @ payload, HitAttributes attributes @ hit_attribute) { }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) { }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "tracePointerRelay(scene, ray, &rays);" in generated_code
+    assert "callablePointerRelay(2, &callables);" in generated_code
+    assert "bool accepted = reportPointerRelay(&hits);" in generated_code
+    assert "traceLeaf(accelerationStructure, ray, rays->primary);" in generated_code
+    assert "callableLeaf(shaderIndex, callables->primary);" in generated_code
+    assert "return ReportHit(1.0, 0, hits->primary);" in generated_code
+    assert "RayTracingOpNode" not in generated_code
+
+
 def test_slang_nested_ray_interface_relay_helpers_preserve_lvalues():
     code = """
     shader SlangRayNestedRelayHelpers {
@@ -5496,6 +5597,87 @@ def test_slang_ray_hit_control_helpers_validate_through_deep_calls():
                 "reportHolder hit attribute argument type OtherHitAttributeHolder\\* "
                 "must match parameter type HitAttributeHolder\\*"
             ),
+        ),
+        (
+            """
+            RayPayloadHolder makeHolder() {
+                RayPayloadHolder holder;
+                return holder;
+            }
+
+            void tracePayload(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+
+            void tracePointerRelay(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                RayPayloadHolder* rays
+            ) {
+                tracePayload(scene, ray, rays->primary);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    tracePointerRelay(scene, ray, &makeHolder());
+                }
+            }
+            """,
+            "tracePointerRelay payload argument.*address of an lvalue",
+        ),
+        (
+            """
+            CallableDataHolder makeCallableHolder() {
+                CallableDataHolder holder;
+                return holder;
+            }
+
+            void callableLeaf(uint shaderIndex, inout CallableData data) {
+                CallShader(shaderIndex, data);
+            }
+
+            void callablePointerRelay(
+                uint shaderIndex,
+                CallableDataHolder* callables
+            ) {
+                callableLeaf(shaderIndex, callables->items[0]);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    callablePointerRelay(0, &makeCallableHolder());
+                }
+            }
+            """,
+            "callablePointerRelay callable data argument.*address of an lvalue",
+        ),
+        (
+            """
+            HitAttributeHolder makeHitHolder() {
+                HitAttributeHolder holder;
+                return holder;
+            }
+
+            bool reportPointerRelay(HitAttributeHolder* hits) {
+                return ReportHit(1.0, 0, hits->items[1]);
+            }
+            """,
+            """
+            ray_intersection {
+                void main() {
+                    bool accepted = reportPointerRelay(&makeHitHolder());
+                }
+            }
+            """,
+            "reportPointerRelay hit attribute argument.*address of an lvalue",
         ),
     ],
 )

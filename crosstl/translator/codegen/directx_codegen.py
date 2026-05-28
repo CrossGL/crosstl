@@ -388,6 +388,7 @@ class HLSLCodeGen:
         self.current_hlsl_mesh_payload_types = set()
         self.current_hlsl_dispatch_mesh_payload_types = set()
         self.current_hlsl_has_amplification_stage = False
+        self.fragment_entry_input_struct_names = set()
         self.hlsl_temp_variable_index = 0
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
@@ -660,6 +661,7 @@ class HLSLCodeGen:
         self.current_hlsl_mesh_payload_types = set()
         self.current_hlsl_dispatch_mesh_payload_types = set()
         self.current_hlsl_has_amplification_stage = False
+        self.fragment_entry_input_struct_names = set()
         self.hlsl_temp_variable_index = 0
         self.current_glsl_buffer_block_parameters = {}
         self.unsupported_glsl_buffer_block_variables = set()
@@ -728,6 +730,9 @@ class HLSLCodeGen:
         self.current_global_resource_declaration_nodes = global_vars
         self.global_variable_types = self.collect_global_variable_types(global_vars)
         functions = self.collect_functions(ast)
+        self.fragment_entry_input_struct_names = (
+            self.collect_hlsl_fragment_entry_input_struct_names(ast, target_stage)
+        )
         self.function_return_types = {
             func.name: self.type_name_string(getattr(func, "return_type", "void"))
             for func in functions
@@ -884,6 +889,9 @@ class HLSLCodeGen:
                     continue
                 code += f"struct {node.name} {{\n"
                 members = getattr(node, "members", [])
+                default_member_semantics = (
+                    self.hlsl_default_fragment_input_member_semantics(node)
+                )
                 for member in members:
                     if isinstance(member, ArrayNode):
                         element_type = getattr(
@@ -897,7 +905,9 @@ class HLSLCodeGen:
                         else:
                             # Dynamic arrays in HLSL
                             declaration_type = f"{member_type}[]"
-                        semantic = self.semantic_from_array_node(member)
+                        semantic = self.hlsl_struct_member_declared_semantic(member)
+                        if semantic is None:
+                            semantic = default_member_semantics.get(member.name)
                         self.validate_hlsl_struct_member_semantic_type(
                             node.name, member.name, declaration_type, semantic
                         )
@@ -942,19 +952,9 @@ class HLSLCodeGen:
                             member_type = "float"
                             array_syntax = ""
 
-                        semantic = self.semantic_from_node(member)
-                        if semantic is None and getattr(member, "name", "") in [
-                            "view",
-                            "layer",
-                            "viewport",
-                        ]:
-                            # Fallback to name-based mapping for common multiview outputs
-                            name_semantics = {
-                                "view": "gl_ViewID",
-                                "layer": "gl_Layer",
-                                "viewport": "gl_ViewportIndex",
-                            }
-                            semantic = name_semantics.get(member.name)
+                        semantic = self.hlsl_struct_member_declared_semantic(member)
+                        if semantic is None:
+                            semantic = default_member_semantics.get(member.name)
 
                         self.validate_hlsl_struct_member_semantic_type(
                             node.name, member.name, member_type, semantic
@@ -8038,6 +8038,72 @@ class HLSLCodeGen:
                 f"InputPatch control point count ({hull_control_points})"
             )
 
+    def hlsl_semantic_key(self, semantic):
+        mapped_semantic = self.semantic_map.get(semantic, semantic)
+        return str(mapped_semantic).lower()
+
+    def hlsl_struct_member_declared_semantic(self, member):
+        semantic = self.semantic_from_struct_member(member)
+        if semantic is not None:
+            return semantic
+
+        name_semantics = {
+            "view": "gl_ViewID",
+            "layer": "gl_Layer",
+            "viewport": "gl_ViewportIndex",
+        }
+        return name_semantics.get(getattr(member, "name", ""))
+
+    def hlsl_can_default_fragment_input_semantic(self, member_type):
+        type_name = self.type_name_string(member_type)
+        if not type_name:
+            return False
+
+        base_type, _array_size = parse_array_type(str(type_name))
+        mapped_type = self.map_type(base_type)
+        if mapped_type in self.structs_by_name:
+            return False
+
+        return not (
+            self.is_resource_parameter_type(mapped_type)
+            or self.is_hlsl_readonly_buffer_type(mapped_type)
+            or self.is_hlsl_uav_buffer_type(mapped_type)
+        )
+
+    def hlsl_default_fragment_input_member_semantics(self, struct_node):
+        if (
+            getattr(struct_node, "name", None)
+            not in self.fragment_entry_input_struct_names
+        ):
+            return {}
+
+        used_semantics = set()
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.hlsl_struct_member_declared_semantic(member)
+            if semantic is not None:
+                used_semantics.add(self.hlsl_semantic_key(semantic))
+
+        defaults = {}
+        next_texcoord = 0
+        for member in getattr(struct_node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            if not member_name:
+                continue
+            if self.hlsl_struct_member_declared_semantic(member) is not None:
+                continue
+            if not self.hlsl_can_default_fragment_input_semantic(
+                self.hlsl_struct_member_type_name(member)
+            ):
+                continue
+
+            while self.hlsl_semantic_key(f"TEXCOORD{next_texcoord}") in used_semantics:
+                next_texcoord += 1
+            semantic = f"TEXCOORD{next_texcoord}"
+            defaults[member_name] = semantic
+            used_semantics.add(self.hlsl_semantic_key(semantic))
+            next_texcoord += 1
+        return defaults
+
     def hlsl_return_struct(self, func):
         return_type = self.type_name_string(
             getattr(func, "return_type", getattr(func, "vtype", None))
@@ -8386,6 +8452,20 @@ class HLSLCodeGen:
             if entry_point is not None:
                 functions.append(entry_point)
         return functions
+
+    def collect_hlsl_fragment_entry_input_struct_names(self, ast, target_stage=None):
+        if not stage_matches(target_stage, "fragment"):
+            return set()
+
+        struct_names = set()
+        for func in self.hlsl_stage_entry_functions(ast, "fragment"):
+            for parameter in (
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            ):
+                struct_name = self.hlsl_parameter_user_struct_type(parameter)
+                if struct_name is not None:
+                    struct_names.add(struct_name)
+        return struct_names
 
     def hlsl_program_hull_output_control_points(self, ast):
         counts = {

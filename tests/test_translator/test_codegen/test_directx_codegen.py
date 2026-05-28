@@ -3370,6 +3370,42 @@ def test_hlsl_struct_array_member_semantics_are_preserved():
     assert "float weights[4]: TEXCOORD0;" in generated
 
 
+def test_hlsl_fragment_entry_input_structs_get_missing_member_semantics():
+    code = """
+    shader FragmentInputDefaultSemantics {
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float lod;
+            vec3 normal @ TEXCOORD2;
+            float depth;
+        };
+
+        struct HelperInput {
+            float value;
+        };
+
+        float helper(HelperInput input) {
+            return input.value;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return vec4(input.uv, input.lod + input.depth + helper(HelperInput(1.0)), 1.0);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "float2 uv: TEXCOORD0;" in generated
+    assert "float lod: TEXCOORD1;" in generated
+    assert "float3 normal: TEXCOORD2;" in generated
+    assert "float depth: TEXCOORD3;" in generated
+    assert "float value;" in generated
+    assert "float4 PSMain(FSInput input): SV_TARGET" in generated
+
+
 def test_hlsl_legacy_array_node_struct_member_semantics_are_preserved():
     ast = create_legacy_shader_node(
         structs=[

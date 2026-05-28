@@ -3375,6 +3375,27 @@ class HipToCrossGLConverter:
         else:
             self.emit(f"var {node.name}: {var_type};")
 
+    def visit_SharedMemoryNode(self, node):
+        var_type = self.convert_hip_variable_type_to_crossgl(node.vtype, node.name)
+        self.register_variable_type(node.name, var_type)
+        if node.size is not None:
+            size = self.visit(node.size)
+            self.emit(f"var<workgroup> {node.name}: array<{var_type}, {size}>;")
+        else:
+            self.emit(f"var<workgroup> {node.name}: {var_type};")
+
+    def visit_ConstantMemoryNode(self, node):
+        var_type = self.convert_hip_variable_type_to_crossgl(node.vtype, node.name)
+        self.register_variable_type(node.name, var_type)
+        if node.value is not None:
+            value = self.visit(node.value)
+            self.emit(
+                f"@group(0) @binding(0) var<uniform> {node.name}: "
+                f"{var_type} = {value};"
+            )
+        else:
+            self.emit(f"@group(0) @binding(0) var<uniform> {node.name}: {var_type};")
+
     def visit_KernelLaunchNode(self, node):
         kernel_name = self.visit(node.kernel_name)
         config = [self.visit(node.blocks), self.visit(node.threads)]

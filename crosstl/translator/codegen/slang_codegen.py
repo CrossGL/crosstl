@@ -4064,6 +4064,15 @@ class SlangCodeGen:
     def slang_expression_is_lvalue(self, expr):
         if isinstance(expr, (VariableNode, IdentifierNode)):
             return True
+        if isinstance(expr, UnaryOpNode):
+            if getattr(expr, "op", None) == "*":
+                return (
+                    self.pointer_pointee_type_name(
+                        self.expression_result_type(getattr(expr, "operand", None))
+                    )
+                    is not None
+                )
+            return False
         if isinstance(expr, ArrayAccessNode):
             return self.slang_expression_is_lvalue(
                 getattr(expr, "array", getattr(expr, "array_expr", None))
@@ -4090,6 +4099,30 @@ class SlangCodeGen:
         raise ValueError(
             f"Slang {shader_type} {operation} {role} argument must be "
             f"an lvalue, got {actual_type}"
+        )
+
+    def validate_slang_ray_address_of_lvalue_argument(
+        self, argument, shader_type, operation, role
+    ):
+        if not (
+            isinstance(argument, UnaryOpNode)
+            and getattr(argument, "op", None) == "&"
+            and not getattr(argument, "is_postfix", False)
+        ):
+            return
+
+        operand = getattr(argument, "operand", None)
+        base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
+            operand
+        )
+        if base_type is None:
+            return
+        if self.slang_expression_is_lvalue(operand):
+            return
+        actual_type = f"{base_type}{array_suffix}"
+        raise ValueError(
+            f"Slang {shader_type} {operation} {role} argument must take the "
+            f"address of an lvalue, got {actual_type}"
         )
 
     def slang_parameter_requires_lvalue_argument(self, parameter):
@@ -4322,6 +4355,9 @@ class SlangCodeGen:
             if actual_base is None:
                 continue
             if actual_base == expected_base and actual_suffix == expected_suffix:
+                self.validate_slang_ray_address_of_lvalue_argument(
+                    args[index], shader_type, helper_name, role
+                )
                 if role in {
                     "payload",
                     "callable data",
@@ -5397,7 +5433,15 @@ class SlangCodeGen:
                 return "float"
             return left_type or right_type
         if isinstance(expr, UnaryOpNode):
-            return self.expression_result_type(expr.operand)
+            operand_type = self.expression_result_type(expr.operand)
+            if expr.op == "&" and operand_type is not None:
+                operand_type = (
+                    self.reference_referent_type_name(operand_type) or operand_type
+                )
+                return f"{operand_type}*"
+            if expr.op == "*" and operand_type is not None:
+                return self.pointer_pointee_type_name(operand_type) or operand_type
+            return operand_type
         if isinstance(expr, AssignmentNode):
             return self.expression_result_type(getattr(expr, "left", None))
         if isinstance(expr, MatchNode):
