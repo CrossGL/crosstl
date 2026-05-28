@@ -4212,6 +4212,46 @@ def test_gpu_resource_method_calls_convert_on_static_method_generic_returns():
     assert ".buffer_store" not in result
 
 
+def test_gpu_resource_method_calls_convert_on_explicit_static_method_generic_returns():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Provider {
+    }
+
+    impl Provider {
+        fn pick<T>(value: T) -> T {
+            return value;
+        }
+    }
+
+    fn explicit_static_method_generic_resource_methods(
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let direct = Provider::pick::<ColorTexture>(make_texture()).sample_sampler(
+            sampler_state,
+            uv,
+        );
+        let value = Provider::pick::<RwBuffer<i32>>(make_values()).buffer_load(index);
+        return direct + Vec4::<f32>::new(value as f32, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "T Provider_pick(T value)" in result
+    assert (
+        "direct = texture(Provider_pick(make_texture()), sampler_state, uv);" in result
+    )
+    assert "value = buffer_load(Provider_pick(make_values()), index);" in result
+    assert "Provider::pick<ColorTexture>" not in result
+    assert "Provider::pick<RwBuffer<i32>>" not in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+
+
 def test_unresolved_method_generic_impl_returns_stay_unlowered():
     code = """
     struct Provider {

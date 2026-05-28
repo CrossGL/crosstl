@@ -898,18 +898,19 @@ class RustToCrossGLConverter:
         if isinstance(expression.name, MemberAccessNode):
             return self.infer_impl_method_call_return_type(expression)
 
-        function_name, explicit_type_args = self.split_function_type_arguments(
-            self.function_call_name(expression.name)
-        )
-        if function_name is None:
+        raw_function_name = self.function_call_name(expression.name)
+        if raw_function_name is None:
             return None
         associated_return_type = self.infer_impl_associated_function_call_return_type(
-            function_name,
+            raw_function_name,
             expression.args,
         )
         if associated_return_type is not None:
             return associated_return_type
 
+        function_name, explicit_type_args = self.split_function_type_arguments(
+            raw_function_name
+        )
         signature = self.lookup_user_function_signature(function_name)
         if signature is not None:
             return self.infer_user_function_call_return_type(
@@ -994,11 +995,23 @@ class RustToCrossGLConverter:
         return_type = self.normalize_receiver_type(return_type, match["receiver_type"])
         substitutions = dict(match.get("substitutions") or {})
         generic_names = list(match.get("generic_names") or [])
+        method_generic_names = method.get("generic_names") or []
         for generic_name in method.get("generic_names") or []:
             if generic_name not in generic_names:
                 generic_names.append(generic_name)
 
         conflicts = set()
+        for generic_name, type_arg in zip(
+            method_generic_names,
+            match.get("method_type_args") or [],
+        ):
+            self.bind_generic_type_substitution(
+                generic_name,
+                type_arg,
+                substitutions,
+                conflicts,
+            )
+
         for (_, param_type), arg in zip(
             self.method_value_params(method),
             arg_values,
@@ -3456,7 +3469,7 @@ class RustToCrossGLConverter:
         if parsed is None:
             return None
 
-        type_name, method_name = parsed
+        type_name, method_name, method_type_args = parsed
         for signature in self.impl_method_signatures.values():
             method = signature["methods"].get(method_name)
             if method is None:
@@ -3476,6 +3489,7 @@ class RustToCrossGLConverter:
                 "receiver_type": receiver_type,
                 "call_prefix": signature["call_prefix"],
                 "method_name": method_name,
+                "method_type_args": method_type_args,
                 "generic_names": signature["generic_names"],
                 "method": method,
                 "substitutions": substitutions,
@@ -3487,11 +3501,12 @@ class RustToCrossGLConverter:
         if not isinstance(function_name, str) or "::" not in function_name:
             return None
 
+        function_name = self.normalize_associated_type_path(function_name)
         type_name, method_name = function_name.rsplit("::", 1)
-        type_name = self.normalize_associated_type_path(type_name)
+        method_name, method_type_args = self.split_function_type_arguments(method_name)
         if not type_name or not method_name:
             return None
-        return type_name, method_name
+        return type_name, method_name, method_type_args
 
     def normalize_associated_type_path(self, type_name):
         if not isinstance(type_name, str):
