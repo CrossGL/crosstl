@@ -1580,7 +1580,25 @@ class RustCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
-        if type_node.__class__.__name__ == "ArrayType":
+        type_class = type_node.__class__.__name__
+        if type_class == "ReferenceType":
+            referenced_type = self.convert_type_node_to_string(
+                type_node.referenced_type
+            )
+            mutability = "mut " if type_node.is_mutable else ""
+            return f"&{mutability}{referenced_type}"
+        if type_class == "PointerType":
+            pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
+            mutability = "mut" if type_node.is_mutable else "const"
+            return f"*{mutability} {pointee_type}"
+        if type_class == "FunctionType":
+            params = ", ".join(
+                self.convert_type_node_to_string(param_type)
+                for param_type in type_node.param_types
+            )
+            return_type = self.convert_type_node_to_string(type_node.return_type)
+            return f"fn({params}) -> {return_type}"
+        if type_class == "ArrayType":
             element_type = self.convert_type_node_to_string(type_node.element_type)
             size = self.format_array_size(type_node.size)
             return (
@@ -8465,12 +8483,28 @@ class RustCodeGen:
         else:
             vtype_str = str(vtype)
 
-        if self.split_callable_return_type(vtype_str) is not None:
+        reference_parts = self.reference_type_parts(vtype_str)
+        if reference_parts is not None:
+            is_mutable, referenced_type = reference_parts
+            mutability = "mut " if is_mutable else ""
+            return f"&{mutability}{self.map_reference_pointee_type(referenced_type)}"
+
+        pointer_parts = self.pointer_type_parts(vtype_str)
+        if pointer_parts is not None:
+            is_mutable, pointee_type = pointer_parts
+            mutability = "mut" if is_mutable else "const"
+            return f"*{mutability} {self.map_reference_pointee_type(pointee_type)}"
+
+        function_pointer = self.map_function_pointer_type(vtype_str)
+        if function_pointer is not None:
+            return function_pointer
+
+        if self.callable_signature_parts(vtype_str) is not None:
             return vtype_str
 
         if "[" in vtype_str and "]" in vtype_str:
             base_type, sizes = self.c_array_type_parts(vtype_str)
-            base_mapped = self.type_mapping.get(base_type, base_type)
+            base_mapped = self.map_type(base_type)
             rust_type = self.qualify_colliding_runtime_type(base_mapped)
             for size in reversed(sizes):
                 if size is None:
@@ -8488,6 +8522,55 @@ class RustCodeGen:
             return generic_type
 
         return vtype_str
+
+    def reference_type_parts(self, type_name):
+        type_name = str(type_name).strip()
+        if type_name.startswith("&mut "):
+            return True, type_name[len("&mut ") :].strip()
+        if type_name.startswith("&") and not type_name.startswith("&'"):
+            return False, type_name[1:].strip()
+        return None
+
+    def pointer_type_parts(self, type_name):
+        type_name = str(type_name).strip()
+        if type_name.startswith("*mut "):
+            return True, type_name[len("*mut ") :].strip()
+        if type_name.startswith("*const "):
+            return False, type_name[len("*const ") :].strip()
+        return None
+
+    def map_reference_pointee_type(self, type_name):
+        type_name = str(type_name).strip()
+        if type_name in {"str", "string"}:
+            return "str"
+        return self.map_type(type_name)
+
+    def map_function_pointer_type(self, type_name):
+        type_name = str(type_name).strip()
+        if not type_name.startswith("fn"):
+            return None
+
+        open_index = type_name.find("(")
+        if type_name[:open_index].strip() != "fn":
+            return None
+        close_index = self.find_matching_delimiter(type_name, open_index, "(", ")")
+        if close_index is None:
+            return None
+
+        params_text = type_name[open_index + 1 : close_index].strip()
+        suffix = type_name[close_index + 1 :].strip()
+        if not suffix.startswith("->"):
+            return None
+
+        return_type = suffix[2:].strip()
+        params = []
+        if params_text:
+            params = [
+                self.map_type(param_type.strip())
+                for param_type in self.split_top_level_list(params_text)
+                if param_type.strip()
+            ]
+        return f"fn({', '.join(params)}) -> {self.map_type(return_type)}"
 
     def qualify_colliding_runtime_type(self, rust_type):
         """Disambiguate built-in math types when user declarations reuse their names."""

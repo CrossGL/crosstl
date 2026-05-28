@@ -1303,8 +1303,6 @@ class GLSLCodeGen:
     def uses_ray_query(self, ast, target_stage=None):
         for root in self.ray_query_search_roots(ast, target_stage):
             for node in self.walk_ast(root):
-                if isinstance(node, RayQueryOpNode):
-                    return True
                 if any(
                     self.is_ray_query_type(type_node)
                     for type_node in self.ray_extension_type_nodes(node)
@@ -1313,19 +1311,30 @@ class GLSLCodeGen:
         return False
 
     def uses_ray_tracing_position_fetch(self, ast, target_stage=None):
+        global_query_receivers = self.ray_query_declared_receiver_names(
+            getattr(ast, "global_variables", []) or []
+        )
         for root in self.ray_query_search_roots(ast, target_stage):
+            query_receivers = (
+                global_query_receivers | self.ray_query_declared_receiver_names(root)
+            )
             for node in self.walk_ast(root):
                 if isinstance(node, RayQueryOpNode) and (
                     node.operation in self.RAY_QUERY_POSITION_FETCH_METHODS
                 ):
-                    return True
+                    if self.ray_query_receiver_name(node.query_expr) in query_receivers:
+                        return True
                 if isinstance(node, FunctionCallNode):
                     func_expr = getattr(node, "function", getattr(node, "name", None))
                     if (
                         isinstance(func_expr, MemberAccessNode)
                         and func_expr.member in self.RAY_QUERY_POSITION_FETCH_METHODS
                     ):
-                        return True
+                        if (
+                            self.ray_query_receiver_name(func_expr.object)
+                            in query_receivers
+                        ):
+                            return True
                     if (
                         self.function_call_name(node)
                         == "rayQueryGetIntersectionTriangleVertexPositionsEXT"
@@ -1352,6 +1361,26 @@ class GLSLCodeGen:
             getattr(node, "param_type", None),
             getattr(node, "return_type", None),
         )
+
+    def ray_query_declared_receiver_names(self, root):
+        roots = root if isinstance(root, (list, tuple)) else [root]
+        names = set()
+        for search_root in roots:
+            for node in self.walk_ast(search_root):
+                if any(
+                    self.is_ray_query_type(type_node)
+                    for type_node in self.ray_extension_type_nodes(node)
+                ):
+                    name = getattr(node, "name", None)
+                    if isinstance(name, str):
+                        names.add(name)
+        return names
+
+    def ray_query_receiver_name(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.ray_query_receiver_name(expr.array)
+        name = getattr(expr, "name", None)
+        return name if isinstance(name, str) else None
 
     def ray_query_search_roots(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
@@ -3476,6 +3505,9 @@ class GLSLCodeGen:
         if mapping is None:
             generated_args = [self.generate_expression(arg) for arg in args]
             return f"{query_expr}.{operation}({', '.join(generated_args)})"
+        if not self.can_lower_ray_query_receiver(operation, query):
+            generated_args = [self.generate_expression(arg) for arg in args]
+            return f"{query_expr}.{operation}({', '.join(generated_args)})"
 
         self.validate_ray_query_intrinsic_arguments(operation, args)
         function_name, committed = mapping
@@ -3486,6 +3518,17 @@ class GLSLCodeGen:
         args = [self.generate_expression(arg) for arg in args]
         call_args.extend(args)
         return f"{function_name}({', '.join(call_args)})"
+
+    def can_lower_ray_query_receiver(self, operation, query):
+        receiver_type = self.expression_result_type(query)
+        if self.is_ray_query_type(receiver_type):
+            return True
+        if receiver_type is None:
+            return False
+        raise ValueError(
+            f"GLSL ray query {operation} requires a RayQuery receiver, "
+            f"got {self.type_name_string(receiver_type)}"
+        )
 
     def validate_ray_query_intrinsic_arguments(self, operation, args):
         allowed_arities = self.RAY_QUERY_METHOD_ARITIES.get(operation)
@@ -7081,6 +7124,8 @@ class GLSLCodeGen:
 
     def ray_query_member_function_call(self, func_expr, args):
         if not isinstance(func_expr, MemberAccessNode):
+            return None
+        if func_expr.member not in self.RAY_QUERY_METHOD_MAP:
             return None
         return self.map_ray_query_intrinsic(func_expr.member, func_expr.object, args)
 

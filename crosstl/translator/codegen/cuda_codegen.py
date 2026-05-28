@@ -3152,6 +3152,43 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
         return None
 
+    def texture_offset_argument_index(self, func_name):
+        return {
+            "textureOffset": 2,
+            "textureLodOffset": 3,
+            "textureGradOffset": 4,
+            "textureProjOffset": 2,
+            "textureProjLodOffset": 3,
+            "textureProjGradOffset": 4,
+            "texelFetchOffset": 3,
+        }.get(func_name)
+
+    def expected_texture_offset_coordinate_count(self, texture_type):
+        return {
+            "sampler1D": 1,
+            "sampler1DArray": 1,
+            "sampler2D": 2,
+            "sampler2DArray": 2,
+            "sampler3D": 3,
+        }.get(texture_type)
+
+    def texture_offset_rank_diagnostic(self, func_name, texture_type, raw_offset):
+        expected_offset_count = self.expected_texture_offset_coordinate_count(
+            texture_type
+        )
+        actual_offset_count = self.texel_fetch_coordinate_count(raw_offset)
+        if (
+            expected_offset_count is not None
+            and actual_offset_count is not None
+            and actual_offset_count != expected_offset_count
+        ):
+            return self.unsupported_sampled_resource_call(
+                f"{func_name} offset rank",
+                texture_type,
+                [],
+            )
+        return None
+
     def expected_texture_gradient_coordinate_counts(self, texture_type):
         return {
             "sampler1D": {1},
@@ -3376,6 +3413,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     return self.unsupported_multisample_resource_call(
                         func_name, texture_type, args
                     )
+                offset_arg_index = self.texture_offset_argument_index(func_name)
+                if offset_arg_index is not None and len(raw_args) > offset_arg_index:
+                    offset_diagnostic = self.texture_offset_rank_diagnostic(
+                        func_name,
+                        texture_type,
+                        raw_args[offset_arg_index],
+                    )
+                    if offset_diagnostic is not None:
+                        return offset_diagnostic
                 return self.unsupported_sampled_resource_call(
                     func_name, texture_type, args
                 )

@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 816
+        "test_count": 817
       },
       "translator_codegen": {
         "exists": true,
@@ -461,7 +461,7 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 71,
+        "unsupported_marker_count": 72,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -551,7 +551,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 353
+        "test_count": 354
       },
       "translator_codegen": {
         "exists": true,
@@ -665,7 +665,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 381
+        "test_count": 383
       },
       "translator_codegen": {
         "exists": true,
@@ -893,7 +893,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 562
+        "test_count": 563
       },
       "translator_codegen": {
         "exists": true,

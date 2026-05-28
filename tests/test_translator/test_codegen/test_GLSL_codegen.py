@@ -6850,6 +6850,45 @@ def test_glsl_ray_query_member_calls_reject_invalid_arities():
             GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
 
 
+def test_glsl_ray_query_member_calls_require_ray_query_receiver():
+    invalid_receiver_shader = """
+    shader RayQueryInvalidReceiver {
+        compute {
+            void main() {
+                float notQuery = 0.0;
+                bool stillActive = notQuery.Proceed();
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"GLSL ray query Proceed requires a RayQuery receiver, got float",
+    ):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(invalid_receiver_shader), "compute"
+        )
+
+    unknown_receiver_shader = """
+    shader RayQueryUnknownReceiver {
+        compute {
+            void main() {
+                bool stillActive = externalQuery.Proceed();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(unknown_receiver_shader), "compute"
+    )
+
+    assert "#extension GL_EXT_ray_query : require" not in generated_code
+    assert "rayQueryProceedEXT" not in generated_code
+    assert "bool stillActive = externalQuery.Proceed();" in generated_code
+
+
 def test_glsl_shader_record_buffer_rejects_binding_layout():
     shader = """
     shader InvalidShaderRecordBinding {

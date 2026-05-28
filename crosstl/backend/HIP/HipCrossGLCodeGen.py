@@ -3413,6 +3413,25 @@ class HipToCrossGLConverter:
         else:
             self.emit(f"@group(0) @binding(0) var<uniform> {node.name}: {var_type};")
 
+    def visit_HipErrorHandlingNode(self, node):
+        error_type = self.visit(node.error_type)
+        error_expr = self.visit(node.error_expr)
+        runtime_expression = self.format_hip_runtime_expression_call(
+            FunctionCallNode(error_type, [node.error_expr]), [error_expr]
+        )
+        if runtime_expression is not None:
+            return runtime_expression
+        return (
+            f"(/* HIP error status: {error_type}, expr: {error_expr} */ {error_expr})"
+        )
+
+    def visit_HipDevicePropertyNode(self, node):
+        property_name = self.visit(node.property_name)
+        if node.device_id is None:
+            return f"(/* HIP device property: {property_name} */ 0)"
+        device_id = self.visit(node.device_id)
+        return f"(/* HIP device property: {property_name}, device: {device_id} */ 0)"
+
     def visit_KernelLaunchNode(self, node):
         kernel_name = self.visit(node.kernel_name)
         config = [self.visit(node.blocks), self.visit(node.threads)]

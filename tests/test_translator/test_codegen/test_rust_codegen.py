@@ -20,6 +20,7 @@ from crosstl.translator.ast import (
     ExpressionStatementNode,
     FunctionCallNode,
     FunctionNode,
+    FunctionType,
     GenericParameterNode,
     GenericType,
     IdentifierNode,
@@ -33,7 +34,9 @@ from crosstl.translator.ast import (
     MemberAccessNode,
     NamedType,
     ParameterNode,
+    PointerType,
     PrimitiveType,
+    ReferenceType,
     ReturnNode,
     ShaderNode,
     StructMemberNode,
@@ -3520,6 +3523,82 @@ def test_struct_and_enum_derives_track_nested_non_copy_members_and_compile(tmp_p
         "#[derive(Debug, Clone, Copy, Default)]\npub enum Command" not in generated_code
     )
     assert "Submit(Wrapper)," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_reference_pointer_and_function_type_nodes_smoke_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    int_type = PrimitiveType("int")
+
+    ast = ShaderNode(
+        "RustTypeNodeSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode("count", int_type),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "read_payload",
+                int_type,
+                [ParameterNode("value", ReferenceType(payload_type))],
+                [ReturnNode(MemberAccessNode(IdentifierNode("value"), "count"))],
+            ),
+            FunctionNode(
+                "bump_payload",
+                int_type,
+                [ParameterNode("value", ReferenceType(payload_type, is_mutable=True))],
+                [
+                    AssignmentNode(
+                        MemberAccessNode(IdentifierNode("value"), "count"),
+                        BinaryOpNode(
+                            MemberAccessNode(IdentifierNode("value"), "count"),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                    ),
+                    ReturnNode(MemberAccessNode(IdentifierNode("value"), "count")),
+                ],
+            ),
+            FunctionNode(
+                "raw_identity",
+                PointerType(payload_type, is_mutable=True),
+                [ParameterNode("value", PointerType(payload_type, is_mutable=True))],
+                [ReturnNode(IdentifierNode("value"))],
+            ),
+            FunctionNode(
+                "apply_int",
+                int_type,
+                [
+                    ParameterNode("input", int_type),
+                    ParameterNode("op", FunctionType(int_type, [int_type])),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("op"),
+                            [IdentifierNode("input")],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "pub fn read_payload(value: &Payload) -> i32" in generated_code
+    assert "pub fn bump_payload(mut value: &mut Payload) -> i32" in generated_code
+    assert "value.count = (value.count + 1);" in generated_code
+    assert "pub fn raw_identity(value: *mut Payload) -> *mut Payload" in generated_code
+    assert "pub fn apply_int(input: i32, op: fn(i32) -> i32) -> i32" in generated_code
+    assert "ReferenceType(" not in generated_code
+    assert "PointerType(" not in generated_code
+    assert "FunctionType(" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

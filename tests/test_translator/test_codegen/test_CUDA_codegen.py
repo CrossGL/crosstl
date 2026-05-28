@@ -4973,6 +4973,89 @@ class TestCudaCodeGen:
         assert "tex2Dgather<float4>(colorMap, uv.x, uv.y, 7)" not in cuda_code
         assert "textureGather(" not in cuda_code
 
+    def test_texture_offset_argument_shapes_emit_cuda_diagnostics(self):
+        """Test CUDA texture offset diagnostics distinguish bad offset ranks."""
+        source_code = """
+        shader OffsetCoordinateShapes {
+            sampler1d lineTex;
+            sampler2d colorMap;
+            sampler2darray layerMap;
+            sampler3d volumeMap;
+            Texture2D<float4> typedColor;
+
+            void offsetShapes(
+                float u,
+                vec2 uv,
+                vec3 uvw,
+                int scalarOffset,
+                ivec2 offset2,
+                ivec3 offset3
+            ) {
+                vec4 badLineVec = textureOffset(lineTex, u, offset2);
+                vec4 badColorScalar = textureOffset(colorMap, uv, scalarOffset);
+                vec4 badLayerVec3 = textureLodOffset(
+                    layerMap,
+                    uvw,
+                    1.0,
+                    offset3
+                );
+                vec4 badVolumeVec2 = textureGradOffset(
+                    volumeMap,
+                    uvw,
+                    uvw,
+                    uvw,
+                    offset2
+                );
+                vec4 badProjectedScalar = textureProjOffset(
+                    colorMap,
+                    uvw,
+                    scalarOffset
+                );
+                vec4 badFetchScalar = texelFetchOffset(
+                    typedColor,
+                    offset2,
+                    0,
+                    scalarOffset
+                );
+                vec4 validButUnsupported = textureOffset(colorMap, uv, offset2);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        for name, func_name, texture_type in (
+            ("badLineVec", "textureOffset", "sampler1D"),
+            ("badColorScalar", "textureOffset", "sampler2D"),
+            ("badLayerVec3", "textureLodOffset", "sampler2DArray"),
+            ("badVolumeVec2", "textureGradOffset", "sampler3D"),
+            ("badProjectedScalar", "textureProjOffset", "sampler2D"),
+            ("badFetchScalar", "texelFetchOffset", "sampler2D"),
+        ):
+            assert (
+                f"float4 {name} = /* unsupported CUDA sampled resource call: "
+                f"{func_name} offset rank on {texture_type} */ "
+                "make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
+            ) in cuda_code
+        assert (
+            "float4 validButUnsupported = /* unsupported CUDA sampled resource call: "
+            "textureOffset on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert "textureOffset(" not in cuda_code
+        assert "textureLodOffset(" not in cuda_code
+        assert "textureGradOffset(" not in cuda_code
+        assert "textureProjOffset(" not in cuda_code
+        assert "texelFetchOffset(" not in cuda_code
+
     def test_typed_hlsl_unsupported_sampled_calls_emit_cuda_diagnostics(self, tmp_path):
         """Test CUDA diagnostics normalize typed HLSL sampled Texture aliases."""
         source_code = """
