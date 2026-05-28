@@ -2097,6 +2097,11 @@ class HLSLCodeGen:
             self.validate_hlsl_stage_return_semantics(
                 func, effective_shader_type, return_semantic
             )
+        waveops_helper_lanes_attribute = (
+            self.generate_hlsl_waveops_include_helper_lanes_attribute(
+                func, effective_shader_type
+            )
+        )
 
         if effective_shader_type in shader_map:
             return_semantic_attr = self.map_semantic(return_semantic)
@@ -2106,6 +2111,7 @@ class HLSLCodeGen:
                     func, effective_shader_type
                 )
                 code += self.generate_compute_numthreads(execution_config)
+            code += waveops_helper_lanes_attribute
             function_name = entry_name or shader_map[effective_shader_type]
             code += f"{return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
         else:
@@ -2115,6 +2121,7 @@ class HLSLCodeGen:
                 func, effective_shader_type, execution_config
             )
             code += self.generate_hlsl_stage_attributes(func, effective_shader_type)
+            code += waveops_helper_lanes_attribute
             if shader_attr:
                 code += f'[shader("{shader_attr}")]\n'
             function_name = entry_name or func.name
@@ -5572,6 +5579,35 @@ class HLSLCodeGen:
                 continue
             return getattr(attr, "arguments", []) or []
         return []
+
+    def hlsl_waveops_include_helper_lanes_attribute(self, attr):
+        attr_name = str(getattr(attr, "name", ""))
+        normalized = attr_name.lower()
+        if normalized.startswith("hlsl_"):
+            normalized = normalized[len("hlsl_") :]
+        return normalized == "waveopsincludehelperlanes"
+
+    def generate_hlsl_waveops_include_helper_lanes_attribute(self, func, shader_type):
+        found = False
+        for attr in getattr(func, "attributes", []) or []:
+            if not self.hlsl_waveops_include_helper_lanes_attribute(attr):
+                continue
+            found = True
+            arguments = getattr(attr, "arguments", []) or []
+            if arguments:
+                raise ValueError(
+                    "DirectX WaveOpsIncludeHelperLanes attribute does not "
+                    "accept argument(s)"
+                )
+
+        if not found:
+            return ""
+        if shader_type != "fragment":
+            raise ValueError(
+                "DirectX WaveOpsIncludeHelperLanes attribute is only valid on "
+                "fragment/pixel shader entry points"
+            )
+        return "[WaveOpsIncludeHelperLanes]\n"
 
     def normalized_hlsl_stage_attribute_argument(self, func, expected_name):
         value = self.hlsl_stage_attribute_argument(func, expected_name)
@@ -12925,6 +12961,8 @@ class HLSLCodeGen:
             return None
         for attr in func.attributes:
             if self.hlsl_stage_attribute_name(attr):
+                continue
+            if self.hlsl_waveops_include_helper_lanes_attribute(attr):
                 continue
             if (
                 is_image_format_attribute(attr)

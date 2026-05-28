@@ -9293,6 +9293,59 @@ def test_compute_stage_uses_execution_config_numthreads():
     assert "[numthreads(8, 4, 2)]" in compute_code
 
 
+def test_fragment_stage_emits_waveops_include_helper_lanes_attribute():
+    shader = """
+    shader FragmentWaveOpsHelperLanes {
+        fragment {
+            vec4 main(bool predicate @ TEXCOORD0)
+                @ SV_Target
+                @ WaveOpsIncludeHelperLanes {
+                return QuadAny(predicate) ? vec4(1.0) : vec4(0.0);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "[WaveOpsIncludeHelperLanes]\nfloat4 PSMain" in generated
+    assert "QuadAny(predicate)" in generated
+
+
+def test_waveops_include_helper_lanes_rejects_arguments_and_non_fragment_stages():
+    argument_code = """
+    shader BadWaveOpsHelperLanesArgument {
+        fragment {
+            vec4 main() @ SV_Target @ WaveOpsIncludeHelperLanes(true) {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveOpsIncludeHelperLanes.*does not accept argument",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(argument_code), "fragment"
+        )
+
+    compute_code = """
+    shader BadWaveOpsHelperLanesStage {
+        compute {
+            void main() @ WaveOpsIncludeHelperLanes { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveOpsIncludeHelperLanes.*fragment",
+    ):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(compute_code), "compute")
+
+
 def test_compute_stage_validates_system_value_parameter_types():
     float_group_index_code = """
     shader BadComputeGroupIndex {

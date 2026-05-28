@@ -517,12 +517,13 @@ class HipToCrossGLConverter:
                 return scope[name]
         return None
 
-    def register_device_query_source(self, name, query_name, device_id):
-        if not name or query_name is None or device_id is None:
+    def register_device_query_source(self, name, query_name, device_id=None):
+        if not name or query_name is None:
             return
         if not self.device_query_source_scopes:
             self.device_query_source_scopes.append({})
         self.device_query_source_scopes[-1][name] = (query_name, device_id)
+        self.clear_device_property_source(name)
         self.clear_device_attribute_source(name)
 
     def clear_device_query_source(self, name):
@@ -544,6 +545,17 @@ class HipToCrossGLConverter:
         self.clear_device_query_source(name)
 
     def visit_lvalue_expression(self, node):
+        self.suppress_device_property_member_access += 1
+        self.suppress_device_attribute_value_access += 1
+        self.suppress_device_query_value_access += 1
+        try:
+            return self.visit(node)
+        finally:
+            self.suppress_device_property_member_access -= 1
+            self.suppress_device_attribute_value_access -= 1
+            self.suppress_device_query_value_access -= 1
+
+    def visit_runtime_argument_expression(self, node):
         self.suppress_device_property_member_access += 1
         self.suppress_device_attribute_value_access += 1
         self.suppress_device_query_value_access += 1
@@ -601,7 +613,7 @@ class HipToCrossGLConverter:
         return comments, success_value
 
     def format_hip_runtime_call(self, node):
-        args = [self.visit(arg) for arg in node.args]
+        args = [self.visit_runtime_argument_expression(arg) for arg in node.args]
         name = node.name
 
         if name in {"hipMalloc", "hipMallocManaged"}:
@@ -1595,10 +1607,16 @@ class HipToCrossGLConverter:
         elif name == "hipGetDevice":
             if args:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(output_name, "currentDevice")
                 return [f"// HIP get current device: output: {output}"]
         elif name == "hipGetDeviceCount":
             if args:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(output_name, "deviceCount")
                 return [f"// HIP get device count: output: {output}"]
         elif name == "hipSetDevice":
             if args:
@@ -4367,6 +4385,8 @@ class HipToCrossGLConverter:
             return None
 
         query_name, device_id = source
+        if device_id is None:
+            return f"(/* HIP device query: {query_name} */ 0)"
         return f"(/* HIP device query: {query_name}, device: {device_id} */ 0)"
 
     def visit_ArrayAccessNode(self, node):

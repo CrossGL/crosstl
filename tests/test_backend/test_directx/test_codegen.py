@@ -802,6 +802,20 @@ def test_codegen_extra_attributes_emitted():
     assert "@ allow_uav_condition" in lowered
 
 
+def test_codegen_waveops_include_helper_lanes_attribute_passthrough():
+    hlsl = textwrap.dedent("""
+        [WaveOpsIncludeHelperLanes]
+        float4 main(bool predicate : TEXCOORD0) : SV_Target0 {
+            return QuadAny(predicate) ? 1.0.xxxx : 0.0.xxxx;
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ WaveOpsIncludeHelperLanes" in output
+    assert "QuadAny(predicate)" in output
+
+
 def test_codegen_interlocked_mapping():
     output = generate_crossgl(INTERLOCKED_HLSL)
     assert "atomicAdd" in output

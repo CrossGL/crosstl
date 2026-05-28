@@ -7190,11 +7190,12 @@ class TestVulkanSPIRVCodeGen:
         assert "OpRayQueryProceedKHR" not in spv_code
         assert "OpRayQueryGetIntersectionTKHR" not in spv_code
 
-    def test_integer_image_atomics_emit_spirv_atomic_operations(self):
+    def test_integer_image_atomics_emit_spirv_atomic_operations(self, tmp_path):
         source_code = """
         shader ImageAtomics {
             uimage2D counters @r32ui;
             iimage2D signedCounters @r32i;
+            uimage2DMS sampleCounters @r32ui;
 
             uint touchUnsigned(
                 uimage2D image @r32ui,
@@ -7232,11 +7233,24 @@ class TestVulkanSPIRVCodeGen:
                 return minValue + maxValue + swapped;
             }
 
+            uint touchSampled(
+                uimage2DMS image @r32ui,
+                ivec2 pixel,
+                uint sample,
+                uint value
+            ) {
+                uint added = imageAtomicAdd(image, pixel, sample, value);
+                uint swapped =
+                    imageAtomicCompSwap(image, pixel, sample, added, value);
+                return added + swapped;
+            }
+
             compute {
                 void main() {
                     ivec2 pixel = ivec2(1, 2);
                     uint a = touchUnsigned(counters, pixel, 3u, 4u);
                     int b = touchSigned(signedCounters, pixel, -3, 4);
+                    uint c = touchSampled(sampleCounters, pixel, 0u, 5u);
                 }
             }
         }
@@ -7247,7 +7261,7 @@ class TestVulkanSPIRVCodeGen:
         )
 
         assert "OpTypePointer Image" in spv_code
-        assert spv_code.count("OpImageTexelPointer") == 11
+        assert spv_code.count("OpImageTexelPointer") == 13
         for operation in (
             "OpAtomicIAdd",
             "OpAtomicUMin",
@@ -7263,6 +7277,7 @@ class TestVulkanSPIRVCodeGen:
             assert operation in spv_code
         assert "imageAtomic" not in spv_code
         assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_vector_member_access_extracts_spirv_component(self):
         source_code = """

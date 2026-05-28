@@ -2545,7 +2545,7 @@ def test_native_hip_device_error_runtime_parses_and_compiles_if_available(
     assert "var peek: hipError_t = hipSuccess;" in crossgl
     assert 'var name: ptr<i8> = /* HIP error name: last */ "";' in crossgl
     assert 'var message: ptr<i8> = /* HIP error string: peek */ "";' in crossgl
-    assert "count_out[0] = count;" in crossgl
+    assert "count_out[0] = (/* HIP device query: deviceCount */ 0);" in crossgl
 
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 

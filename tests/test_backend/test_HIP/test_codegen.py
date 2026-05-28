@@ -5468,6 +5468,62 @@ class TestHipCodeGen:
         assert "var manualMinor: i32 = (/* HIP device query:" not in result
         assert "var fromStatus: u32 = statusTotal;" not in result
 
+    def test_hip_device_current_and_count_reads_emit_metadata_expressions(self):
+        """Test hipGetDevice and hipGetDeviceCount outputs lower to metadata."""
+        code = """
+        void host(int* out) {
+            int current = -1;
+            int count = 0;
+            int statusCurrent = -1;
+            int statusCount = 0;
+            hipGetDevice(&current);
+            out[0] = current;
+            hipSetDevice(current);
+            current = 3;
+            int manualCurrent = current;
+            hipGetDeviceCount(&count);
+            int total = count;
+            count++;
+            int manualCount = count;
+            hipError_t errDevice = hipGetDevice(&statusCurrent);
+            int fromStatusCurrent = statusCurrent;
+            hipError_t errCount = hipGetDeviceCount(&statusCount);
+            int fromStatusCount = statusCount;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP get current device: output: current" in result
+        assert "out[0] = (/* HIP device query: currentDevice */ 0);" in result
+        assert "// HIP set device: current" in result
+        assert "current = 3;" in result
+        assert "var manualCurrent: i32 = current;" in result
+        assert "// HIP get device count: output: count" in result
+        assert "var total: i32 = (/* HIP device query: deviceCount */ 0);" in result
+        assert "(count++);" in result
+        assert "var manualCount: i32 = count;" in result
+        assert "// HIP get current device: output: statusCurrent" in result
+        assert "var errDevice: hipError_t = hipSuccess;" in result
+        assert (
+            "var fromStatusCurrent: i32 = " "(/* HIP device query: currentDevice */ 0);"
+        ) in result
+        assert "// HIP get device count: output: statusCount" in result
+        assert "var errCount: hipError_t = hipSuccess;" in result
+        assert (
+            "var fromStatusCount: i32 = " "(/* HIP device query: deviceCount */ 0);"
+        ) in result
+        assert "out[0] = current;" not in result
+        assert "var total: i32 = count;" not in result
+        assert "var manualCurrent: i32 = (/* HIP device query:" not in result
+        assert "var manualCount: i32 = (/* HIP device query:" not in result
+        assert "var fromStatusCurrent: i32 = statusCurrent;" not in result
+        assert "var fromStatusCount: i32 = statusCount;" not in result
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """
