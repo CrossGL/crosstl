@@ -3063,11 +3063,19 @@ class GLSLCodeGen:
         names = set(names)
         for attr in getattr(func, "attributes", []) or []:
             attr_name = self.glsl_stage_control_attribute_name(attr)
-            if attr_name in names and not getattr(attr, "arguments", []):
+            if attr_name in names:
+                if getattr(attr, "arguments", []):
+                    raise ValueError(
+                        f"GLSL stage attribute {attr_name} does not accept arguments"
+                    )
                 return attr_name
         for attr in self.glsl_stage_layout_entries(stage_layout_qualifiers, direction):
             attr_name = self.glsl_stage_control_attribute_name(attr)
-            if attr_name in names and not getattr(attr, "arguments", []):
+            if attr_name in names:
+                if getattr(attr, "arguments", []):
+                    raise ValueError(
+                        f"GLSL stage attribute {attr_name} does not accept arguments"
+                    )
                 return attr_name
         return None
 

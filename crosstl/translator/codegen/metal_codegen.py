@@ -2946,6 +2946,13 @@ class MetalCodeGen:
         indent_str = "    " * indent
         if isinstance(stmt, VariableNode):
             var_type = self.local_variable_declared_type(stmt)
+            texture_alias_type = self.local_variable_texture_alias_resource_type(
+                stmt, var_type
+            )
+            if texture_alias_type is not None:
+                var_type = texture_alias_type
+                self.current_texture_parameters[stmt.name] = texture_alias_type
+                self.record_local_image_alias_metadata(stmt)
             self.local_variable_types[stmt.name] = var_type
             self.current_address_space_variables[stmt.name] = (
                 self.local_variable_address_space(stmt)
@@ -3111,6 +3118,35 @@ class MetalCodeGen:
         if var_type is None:
             var_type = self.expression_result_type(getattr(stmt, "initial_value", None))
         return self.type_name_string(var_type) or "float"
+
+    def local_variable_texture_alias_resource_type(self, node, declared_type):
+        declared_type_name = self.type_name_string(declared_type)
+        if not self.is_texture_or_image_resource_type(declared_type_name):
+            return None
+
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is None:
+            return None
+
+        initial_type = self.texture_argument_resource_type(initial_value)
+        if initial_type is None or not self.is_storage_image_resource(initial_type):
+            return None
+
+        if (
+            explicit_image_access(node, self.attribute_value_to_string) is None
+            and explicit_image_format(node, self.attribute_value_to_string) is None
+        ):
+            return initial_type
+        return self.map_resource_type_with_format(declared_type_name, node)
+
+    def record_local_image_alias_metadata(self, node):
+        image_format = explicit_image_format(node, self.attribute_value_to_string)
+        if image_format is None:
+            image_format = self.image_resource_format(
+                getattr(node, "initial_value", None)
+            )
+        if image_format is not None:
+            self.current_image_format_parameters[node.name] = image_format
 
     def local_variable_type_node(self, stmt):
         return getattr(stmt, "var_type", None) or getattr(stmt, "vtype", None)

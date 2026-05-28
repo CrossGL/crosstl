@@ -24315,6 +24315,55 @@ def test_metal_storage_image_access_rejects_invalid_operations(shader, match):
         MetalCodeGen().generate(ast)
 
 
+@pytest.mark.parametrize(
+    ("statement", "match"),
+    [
+        (
+            """
+            image2D alias = target;
+            float value = imageLoad(alias, ivec2(0, 0));
+            """,
+            "requires read-capable storage image access for alias: got access::write",
+        ),
+        (
+            """
+            image2D alias = source;
+            imageStore(alias, ivec2(0, 0), vec4(1.0));
+            """,
+            "requires write-capable storage image access for alias: got access::read",
+        ),
+        (
+            """
+            uimage2D alias = readCounter;
+            uint value = imageAtomicAdd(alias, ivec2(0, 0), 1u);
+            """,
+            "requires read_write storage image access for alias: got access::read",
+        ),
+    ],
+)
+def test_metal_storage_image_local_aliases_preserve_access_for_validation(
+    statement, match
+):
+    shader = f"""
+    shader StorageImageLocalAliasAccess {{
+        image2D source @readonly;
+        image2D target @writeonly;
+        uimage2D readCounter @r32ui @readonly;
+
+        compute {{
+            void main() {{
+                {statement}
+            }}
+        }}
+    }}
+    """
+
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        MetalCodeGen().generate(ast)
+
+
 def test_metal_storage_image_access_allows_compatible_helper_calls():
     shader = """
     shader StorageImageAccessHelperValid {

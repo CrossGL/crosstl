@@ -325,6 +325,7 @@ class HLSLCodeGen:
         "WavePrefixCountBits": 1,
         "WaveMatch": 1,
         "WaveMultiPrefixSum": 2,
+        "WaveMultiPrefixCountBits": 2,
         "WaveMultiPrefixProduct": 2,
         "WaveMultiPrefixBitAnd": 2,
         "WaveMultiPrefixBitOr": 2,
@@ -340,6 +341,7 @@ class HLSLCodeGen:
         "WaveActiveBallot",
         "WaveActiveCountBits",
         "WavePrefixCountBits",
+        "WaveMultiPrefixCountBits",
     }
     HLSL_WAVE_NUMERIC_VALUE_INTRINSICS = {
         "WaveActiveSum",
@@ -364,6 +366,7 @@ class HLSLCodeGen:
         "WaveGetLaneIndex",
         "WaveActiveCountBits",
         "WavePrefixCountBits",
+        "WaveMultiPrefixCountBits",
     }
     HLSL_WAVE_BOOL_RESULT_INTRINSICS = {
         "WaveIsFirstLane",

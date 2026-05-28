@@ -9532,6 +9532,7 @@ def test_wave_and_rayquery_intrinsics_codegen():
                 uint prefixProduct = WavePrefixProduct(value);
                 uvec4 matchMask = WaveMatch(value);
                 uint multiSum = WaveMultiPrefixSum(value, mask);
+                uint multiCount = WaveMultiPrefixCountBits(predicate, mask);
                 uint multiProduct = WaveMultiPrefixProduct(value, mask);
                 uint multiAnd = WaveMultiPrefixBitAnd(value, mask);
                 uint multiOr = WaveMultiPrefixBitOr(value, mask);
@@ -9543,8 +9544,8 @@ def test_wave_and_rayquery_intrinsics_codegen():
                 return laneCount + laneIndex + sum + product + andValue + orValue
                     + xorValue + minValue + maxValue + laneValue + firstValue
                     + prefixSum + prefixProduct + matchMask.x + multiSum
-                    + multiProduct + multiAnd + multiOr + multiXor + quadX
-                    + quadY + quadDiagonal + quadLane + ballot.x
+                    + multiCount + multiProduct + multiAnd + multiOr + multiXor
+                    + quadX + quadY + quadDiagonal + quadLane + ballot.x
                     + (firstLane ? 1u : 0u) + (allTrue ? 1u : 0u)
                     + (anyTrue ? 1u : 0u);
             }
@@ -9581,6 +9582,7 @@ def test_wave_and_rayquery_intrinsics_codegen():
         "WavePrefixProduct(value)",
         "WaveMatch(value)",
         "WaveMultiPrefixSum(value, mask)",
+        "WaveMultiPrefixCountBits(predicate, mask)",
         "WaveMultiPrefixProduct(value, mask)",
         "WaveMultiPrefixBitAnd(value, mask)",
         "WaveMultiPrefixBitOr(value, mask)",
@@ -9665,6 +9667,21 @@ def test_directx_wave_intrinsics_validate_argument_types():
     ):
         generate_code(parse_code(tokenize_code(bad_multi_prefix_mask_code)))
 
+    bad_multi_prefix_count_predicate_code = """
+    shader BadWaveMultiPrefixCountBitsPredicate {
+        compute {
+            uint main(uint value, uvec4 mask) {
+                return WaveMultiPrefixCountBits(value, mask);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveMultiPrefixCountBits.*predicate.*scalar bool",
+    ):
+        generate_code(parse_code(tokenize_code(bad_multi_prefix_count_predicate_code)))
+
     bad_bitwise_value_code = """
     shader BadWaveBitwiseValue {
         compute {
@@ -9688,7 +9705,8 @@ def test_directx_wave_intrinsics_validate_argument_types():
                 uint prefix = WavePrefixCountBits(true);
                 uint laneValue = WaveReadLaneAt(value, lane);
                 uint multi = WaveMultiPrefixSum(value, mask);
-                return count + prefix + laneValue + multi;
+                uint multiCount = WaveMultiPrefixCountBits(predicate, mask);
+                return count + prefix + laneValue + multi + multiCount;
             }
         }
     }
@@ -9699,6 +9717,7 @@ def test_directx_wave_intrinsics_validate_argument_types():
     assert "WavePrefixCountBits(true)" in generated
     assert "WaveReadLaneAt(value, lane)" in generated
     assert "WaveMultiPrefixSum(value, mask)" in generated
+    assert "WaveMultiPrefixCountBits(predicate, mask)" in generated
 
 
 def test_directx_wave_intrinsics_infer_let_result_types():
@@ -9722,12 +9741,13 @@ def test_directx_wave_intrinsics_infer_let_result_types():
                 let firstValue = WaveReadLaneFirst(value);
                 let prefixValue = WavePrefixSum(value);
                 let multiValue = WaveMultiPrefixSum(value, mask);
+                let multiCount = WaveMultiPrefixCountBits(predicate, mask);
                 let quadPair = QuadReadAcrossX(pair);
 
                 return laneCount + laneIndex + count + prefixCount + ballot.x
                     + matchMask.x + reduced + uint(bitAnd) + laneValue
-                    + firstValue + prefixValue + multiValue + uint(quadPair.x)
-                    + (firstLane ? 1u : 0u) + (allTrue ? 1u : 0u)
+                    + firstValue + prefixValue + multiValue + multiCount
+                    + uint(quadPair.x) + (firstLane ? 1u : 0u) + (allTrue ? 1u : 0u)
                     + (anyTrue ? 1u : 0u) + (allEqual ? 1u : 0u);
             }
         }
@@ -9752,6 +9772,7 @@ def test_directx_wave_intrinsics_infer_let_result_types():
         "uint firstValue = WaveReadLaneFirst(value);",
         "uint prefixValue = WavePrefixSum(value);",
         "uint multiValue = WaveMultiPrefixSum(value, mask);",
+        "uint multiCount = WaveMultiPrefixCountBits(predicate, mask);",
         "float2 quadPair = QuadReadAcrossX(pair);",
     ]:
         assert declaration in generated

@@ -6087,13 +6087,17 @@ class SlangCodeGen:
         return " or ".join(payload_types)
 
     def slang_mesh_argument_rejection_reason(self, operation, args):
-        if operation != "SetMeshOutputCounts":
-            return None
+        if operation == "SetMeshOutputCounts":
+            for index, label in enumerate(("vertex count", "primitive count")):
+                count_type = self.slang_mesh_argument_mapped_type(args[index])
+                if count_type is not None and count_type not in {"int", "uint"}:
+                    return f"{label} must be scalar int or uint, got {count_type}"
 
-        for index, label in enumerate(("vertex count", "primitive count")):
-            count_type = self.slang_mesh_argument_mapped_type(args[index])
-            if count_type is not None and count_type not in {"int", "uint"}:
-                return f"{label} must be scalar int or uint, got {count_type}"
+        if operation == "DispatchMesh":
+            for index, label in enumerate(("x count", "y count", "z count")):
+                count_type = self.slang_mesh_argument_mapped_type(args[index])
+                if count_type is not None and count_type not in {"int", "uint"}:
+                    return f"{label} must be scalar int or uint, got {count_type}"
         return None
 
     def slang_mesh_argument_mapped_type(self, arg):

@@ -2136,6 +2136,46 @@ def test_glsl_geometry_layout_rejects_invalid_count_constants(attribute_line, me
 
 
 @pytest.mark.parametrize(
+    ("stage", "metadata", "message"),
+    [
+        (
+            "geometry",
+            "@triangles(1)\n                @outputtopology(line)\n                @maxvertexcount(2)",
+            "GLSL stage attribute triangles does not accept arguments",
+        ),
+        (
+            "geometry",
+            "@inputtopology(line)\n                @line_strip(1)\n                @maxvertexcount(2)",
+            "GLSL stage attribute line_strip does not accept arguments",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n                @partitioning(equal)\n                @cw(1)",
+            "GLSL stage attribute cw does not accept arguments",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n                @equal_spacing(1)",
+            "GLSL stage attribute equal_spacing does not accept arguments",
+        ),
+    ],
+)
+def test_glsl_stage_bare_layout_attributes_reject_arguments(stage, metadata, message):
+    code = f"""
+    shader BadBareStageLayoutOperand {{
+        {stage} {{
+            void main()
+                {metadata}
+            {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+@pytest.mark.parametrize(
     ("topology", "expected_layout"),
     [
         ("triangle_cw", "layout(triangles, equal_spacing, cw) in;"),

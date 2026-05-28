@@ -367,6 +367,7 @@ WAVE_OPS_HLSL = textwrap.dedent("""
         uint prefixCount = WavePrefixCountBits(predicate);
         uint4 matchMask = WaveMatch(value);
         uint multiSum = WaveMultiPrefixSum(value, ballot);
+        uint multiCount = WaveMultiPrefixCountBits(predicate, ballot);
         uint multiProduct = WaveMultiPrefixProduct(value, ballot);
         uint multiAnd = WaveMultiPrefixBitAnd(value, ballot);
         uint multiOr = WaveMultiPrefixBitOr(value, ballot);
@@ -377,9 +378,9 @@ WAVE_OPS_HLSL = textwrap.dedent("""
         uint quadLane = QuadReadLaneAt(value, 2u);
         return lane + laneCount + sum + product + minimum + maximum + laneValue
             + firstValue + prefixSum + prefixProduct + matchMask.x + multiSum
-            + multiProduct + multiAnd + multiOr + multiXor + quadX + quadY
-            + quadDiag + quadLane + ballot.x + countBits + prefixCount
-            + (first ? 1u : 0u) + (allTrue ? 1u : 0u)
+            + multiCount + multiProduct + multiAnd + multiOr + multiXor
+            + quadX + quadY + quadDiag + quadLane + ballot.x + countBits
+            + prefixCount + (first ? 1u : 0u) + (allTrue ? 1u : 0u)
             + (anyTrue ? 1u : 0u) + (allEqual ? 1u : 0u);
     }
     """).strip()
@@ -858,6 +859,7 @@ def test_codegen_wave_ops_passthrough():
         "WavePrefixCountBits(predicate)",
         "WaveMatch(value)",
         "WaveMultiPrefixSum(value, ballot)",
+        "WaveMultiPrefixCountBits(predicate, ballot)",
         "WaveMultiPrefixProduct(value, ballot)",
         "WaveMultiPrefixBitAnd(value, ballot)",
         "WaveMultiPrefixBitOr(value, ballot)",

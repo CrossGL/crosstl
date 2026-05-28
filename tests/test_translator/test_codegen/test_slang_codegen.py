@@ -3576,6 +3576,45 @@ def test_set_mesh_output_counts_validates_count_argument_types():
     assert "MeshOpNode" not in generated_code
 
 
+def test_dispatch_mesh_validates_thread_count_argument_types():
+    code = """
+    shader InvalidSlangDispatchMeshCountTypes {
+        task {
+            void main() {
+                uint dispatchX = 2u;
+                bool enabled = true;
+                float yCount = 1.5;
+                vec2 zCounts = vec2(1.0, 2.0);
+                DispatchMesh(dispatchX, 1u, 1u);
+                DispatchMesh(enabled, 1u, 1u);
+                DispatchMesh(1u, yCount, 1u);
+                DispatchMesh(1u, 1u, zCounts);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "DispatchMesh(dispatchX, 1u, 1u);" in generated_code
+    assert (
+        "/* unsupported Slang mesh intrinsic: DispatchMesh x count "
+        "must be scalar int or uint, got bool */ 0;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang mesh intrinsic: DispatchMesh y count "
+        "must be scalar int or uint, got float */ 0;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang mesh intrinsic: DispatchMesh z count "
+        "must be scalar int or uint, got float2 */ 0;" in generated_code
+    )
+    assert "DispatchMesh(enabled, 1u, 1u)" not in generated_code
+    assert "DispatchMesh(1u, yCount, 1u)" not in generated_code
+    assert "DispatchMesh(1u, 1u, zCounts)" not in generated_code
+    assert "MeshOpNode" not in generated_code
+
+
 @pytest.mark.parametrize(
     ("stage_source", "message"),
     [
