@@ -8175,7 +8175,20 @@ class HLSLCodeGen:
     ):
         return_struct = self.hlsl_return_struct(patch_function)
         if return_struct is None:
-            return
+            return_type = self.type_name_string(
+                getattr(
+                    patch_function,
+                    "return_type",
+                    getattr(patch_function, "vtype", None),
+                )
+            )
+            raise ValueError(
+                "DirectX tessellation_control stage patchconstantfunc "
+                f"'{patch_function_name}' must return a struct containing "
+                "SV_TessFactor member data; direct returns such as "
+                f"'{return_type or '<unknown>'}' cannot represent HLSL "
+                "tessellation factor arrays"
+            )
 
         semantics = self.hlsl_struct_semantics(return_struct)
         if "sv_tessfactor" not in semantics:

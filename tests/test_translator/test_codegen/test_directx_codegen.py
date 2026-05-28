@@ -7978,6 +7978,40 @@ def test_directx_tessellation_control_validates_parameterless_patch_constant_hel
         )
 
 
+def test_directx_tessellation_control_rejects_direct_patch_constant_factor_return():
+    code = """
+    shader direct_patch_constant_tess_factor_return {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_control {
+            vec3 HSConst(InputPatch<HSInput, 3> patch) @ SV_TessFactor {
+                return vec3(1.0);
+            }
+
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="patchconstantfunc.*return a struct"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
 def test_directx_tessellation_control_validates_patch_constant_semantics():
     missing_outer_code = """
     shader missing_tess_factor_semantic {

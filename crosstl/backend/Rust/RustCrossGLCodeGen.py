@@ -3415,7 +3415,11 @@ class RustToCrossGLConverter:
         if match is None:
             return None
 
-        return f"{match['call_prefix']}_{match['method_name']}({', '.join(args)})"
+        call = f"{match['call_prefix']}_{match['method_name']}({', '.join(args)})"
+        return_type = self.infer_impl_associated_function_return_type(match, args)
+        if return_type is not None:
+            self.add_value_type(call, return_type)
+        return call
 
     def lookup_impl_method_receiver_match(self, obj, method_name):
         receiver_type = self.lookup_value_type(obj)

@@ -4125,6 +4125,48 @@ def test_gpu_resource_method_calls_convert_on_associated_constructor_returns():
     assert ".buffer_load" not in result
 
 
+def test_gpu_resource_method_calls_convert_on_explicit_associated_constructor_types():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Holder<T> {
+        resource: T,
+    }
+
+    impl<T> Holder<T> {
+        fn new(resource: T) -> Self {
+            return Holder { resource: resource };
+        }
+    }
+
+    fn explicit_associated_constructor_resource_methods(
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let direct = Holder::<ColorTexture>::new(make_texture()).resource.sample_sampler(
+            sampler_state,
+            uv,
+        );
+        let value = Holder::<RwBuffer<i32>>::new(make_values()).resource.buffer_load(index);
+        return direct + Vec4::<f32>::new(value as f32, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Holder<T> Holder_new(T resource)" in result
+    assert (
+        "direct = texture(Holder_new(make_texture()).resource, sampler_state, uv);"
+        in result
+    )
+    assert "value = buffer_load(Holder_new(make_values()).resource, index);" in result
+    assert "Holder::<ColorTexture>::new" not in result
+    assert "Holder::<RwBuffer<i32>>::new" not in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+
+
 def test_gpu_resource_method_calls_convert_on_static_method_generic_returns():
     code = """
     type ColorTexture = Texture2D<f32>;

@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 622
+        "test_count": 623
       },
       "translator_codegen": {
         "exists": true,
@@ -893,7 +893,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 560
+        "test_count": 561
       },
       "translator_codegen": {
         "exists": true,
