@@ -6012,17 +6012,26 @@ class SlangCodeGen:
             )
 
         actual_arity = len(node.arguments)
+        rejection_reason = None
         if actual_arity not in expected_arities:
             expected = " or ".join(str(arity) for arity in sorted(expected_arities))
-            return self.unsupported_slang_mesh_op_expression(
-                node.operation,
-                f"expects {expected} arguments, got {actual_arity}",
+            rejection_reason = f"expects {expected} arguments, got {actual_arity}"
+        else:
+            self.validate_slang_mesh_op_stage(node.operation)
+            rejection_reason = self.slang_mesh_argument_rejection_reason(
+                node.operation, node.arguments
             )
+            if rejection_reason is None:
+                self.validate_slang_dispatch_mesh_payload_argument(node)
+                args = ", ".join(
+                    self.generate_expression(arg) for arg in node.arguments
+                )
+                return f"{node.operation}({args})"
 
-        self.validate_slang_mesh_op_stage(node.operation)
-        self.validate_slang_dispatch_mesh_payload_argument(node)
-        args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
-        return f"{node.operation}({args})"
+        if rejection_reason is not None:
+            return self.unsupported_slang_mesh_op_expression(
+                node.operation, rejection_reason
+            )
 
     def validate_slang_mesh_op_stage(self, operation):
         if not self.current_shader_type:
@@ -6076,6 +6085,22 @@ class SlangCodeGen:
         if len(payload_types) == 1:
             return payload_types[0]
         return " or ".join(payload_types)
+
+    def slang_mesh_argument_rejection_reason(self, operation, args):
+        if operation != "SetMeshOutputCounts":
+            return None
+
+        for index, label in enumerate(("vertex count", "primitive count")):
+            count_type = self.slang_mesh_argument_mapped_type(args[index])
+            if count_type is not None and count_type not in {"int", "uint"}:
+                return f"{label} must be scalar int or uint, got {count_type}"
+        return None
+
+    def slang_mesh_argument_mapped_type(self, arg):
+        arg_type = self.expression_result_type(arg)
+        if arg_type is None:
+            return None
+        return self.convert_type(arg_type)
 
     def unsupported_slang_mesh_op_expression(self, operation, reason):
         return f"/* unsupported Slang mesh intrinsic: {operation} {reason} */ 0"

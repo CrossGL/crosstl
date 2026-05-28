@@ -6497,6 +6497,10 @@ class VulkanSPIRVCodeGen:
             "fma": 3,
             "faceforward": 3,
             "refract": 3,
+            "length": 1,
+            "distance": 2,
+            "normalize": 1,
+            "reflect": 2,
             "step": 2,
             "smoothstep": 3,
         }
@@ -6508,7 +6512,9 @@ class VulkanSPIRVCodeGen:
                 f"{expected_operand_count} {operand_label}"
             )
             fallback_type = self.register_primitive_type("float")
-            if args:
+            if function_name in {"length", "distance"}:
+                fallback_type = self.metric_result_type(args)
+            elif args:
                 fallback_type = self.ensure_registered_type(args[0].type)
             return self.default_value_for_type(fallback_type)
 
@@ -6586,6 +6592,48 @@ class VulkanSPIRVCodeGen:
             self.emit(
                 "; WARNING: refract requires matching floating-point incident "
                 "and normal operands plus scalar eta"
+            )
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
+
+        if function_name == "length" and len(args) == 1:
+            measured = self.call_length_function(args[0])
+            if measured is not None:
+                return measured
+            self.emit(
+                "; WARNING: length requires floating-point scalar or vector operand"
+            )
+            return self.default_value_for_type(self.metric_result_type(args))
+
+        if function_name == "distance" and len(args) == 2:
+            measured = self.call_distance_function(args)
+            if measured is not None:
+                return measured
+            self.emit(
+                "; WARNING: distance requires matching floating-point scalar "
+                "or vector operands"
+            )
+            return self.default_value_for_type(self.metric_result_type(args))
+
+        if function_name == "normalize" and len(args) == 1:
+            normalized = self.call_normalize_function(args[0])
+            if normalized is not None:
+                return normalized
+            self.emit(
+                "; WARNING: normalize requires floating-point scalar or vector operand"
+            )
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
+
+        if function_name == "reflect" and len(args) == 2:
+            reflected = self.call_reflect_function(args)
+            if reflected is not None:
+                return reflected
+            self.emit(
+                "; WARNING: reflect requires matching floating-point scalar "
+                "or vector operands"
             )
             return self.default_value_for_type(
                 self.ensure_registered_type(args[0].type)
@@ -7319,6 +7367,81 @@ class VulkanSPIRVCodeGen:
         self.emit(
             f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
             f"Refract %{args[0].id} %{args[1].id} %{eta.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_length_function(self, value: SpirvId) -> Optional[SpirvId]:
+        """Lower length to GLSL.std.450 with scalar component result type."""
+        if not self.metric_operand_is_valid(value):
+            return None
+
+        result_type = self.metric_result_type([value])
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"Length %{value.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_distance_function(self, args: List[SpirvId]) -> Optional[SpirvId]:
+        """Lower distance to GLSL.std.450 with matching scalar/vector operands."""
+        operand_shape = self.matching_floating_scalar_or_vector_operands(
+            args[0], args[1]
+        )
+        if operand_shape is None:
+            return None
+
+        component_type, _ = operand_shape
+        result_type = self.register_primitive_type(component_type)
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"Distance %{args[0].id} %{args[1].id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_normalize_function(self, value: SpirvId) -> Optional[SpirvId]:
+        """Lower normalize to GLSL.std.450 with the operand result type."""
+        if not self.metric_operand_is_valid(value):
+            return None
+
+        result_type = self.ensure_registered_type(value.type)
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"Normalize %{value.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_reflect_function(self, args: List[SpirvId]) -> Optional[SpirvId]:
+        """Lower reflect to GLSL.std.450 with matching scalar/vector operands."""
+        operand_shape = self.matching_floating_scalar_or_vector_operands(
+            args[0], args[1]
+        )
+        if operand_shape is None:
+            return None
+
+        result_type = self.ensure_registered_type(args[0].type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        if component_type not in {"float", "double"}:
+            return None
+
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"Reflect %{args[0].id} %{args[1].id}"
         )
 
         spirv_id = SpirvId(id_value, result_type.type)

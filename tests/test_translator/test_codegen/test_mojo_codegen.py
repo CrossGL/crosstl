@@ -9,6 +9,7 @@ from crosstl.translator.lexer import Lexer
 from crosstl.translator.ast import (
     AtomicOpNode,
     ArrayLiteralNode,
+    AssignmentNode,
     BlockNode,
     BufferOpNode,
     BuiltinVariableNode,
@@ -7941,6 +7942,125 @@ def test_for_update_match_assignment_diagnostics_preserve_target_context():
         ),
     ):
         generate_code(parse_code(tokenize_code(code)))
+
+
+def _expression_statement_assignment_wrapper_ast():
+    source = """
+    int wrappedAssign(int mode) {
+        int values[2] = {0, 0};
+        return values[0] + values[1];
+    }
+    """
+    ast = parse_code(tokenize_code(source))
+
+    int_type = PrimitiveType("int")
+
+    def int_literal(value):
+        return LiteralNode(value, int_type)
+
+    match_expr = MatchNode(
+        IdentifierNode("mode"),
+        [
+            MatchArmNode(
+                LiteralPatternNode(int_literal(0)),
+                None,
+                int_literal(1),
+            ),
+            MatchArmNode(WildcardPatternNode(), None, int_literal(2)),
+        ],
+    )
+    assignment = AssignmentNode(
+        IdentifierNode("values"),
+        ArrayLiteralNode([match_expr, int_literal(3)]),
+    )
+    ast.functions[-1].body.statements.insert(
+        1,
+        ExpressionStatementNode(assignment, is_tail_expression=False),
+    )
+    return ast
+
+
+def test_expression_statement_assignment_wrapper_uses_mojo_statement_preludes():
+    generated_code = generate_code(_expression_statement_assignment_wrapper_ast())
+
+    assert "var __cgl_match_value_0: Int32 = 0" in generated_code
+    assert "__cgl_match_value_0 = 1" in generated_code
+    assert "__cgl_match_value_0 = 2" in generated_code
+    assert "values = InlineArray[Int32, 2](__cgl_match_value_0, 3)" in generated_code
+    assert "ExpressionStatementNode" not in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_expression_statement_assignment_wrapper_compile_smoke_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(_expression_statement_assignment_wrapper_ast())
+    generated_code += """
+fn main():
+    print(wrappedAssign(0))
+"""
+
+    source_path = tmp_path / "expression_statement_assignment_wrapper.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "4" in result.stdout
+
+
+def test_expression_statement_compound_assignment_diagnostics_preserve_target_context():
+    source = """
+    Texture2D<float4> tex;
+
+    float invalidWrappedCompoundAssignment(int mode) {
+        float scalar = 0.0;
+        return scalar;
+    }
+    """
+    ast = parse_code(tokenize_code(source))
+    int_type = PrimitiveType("int")
+
+    def int_literal(value):
+        return LiteralNode(value, int_type)
+
+    texture_size = FunctionCallNode(
+        IdentifierNode("textureSize"),
+        [IdentifierNode("tex"), int_literal(0)],
+    )
+    match_expr = MatchNode(
+        IdentifierNode("mode"),
+        [
+            MatchArmNode(
+                LiteralPatternNode(int_literal(0)),
+                None,
+                texture_size,
+            ),
+            MatchArmNode(
+                WildcardPatternNode(), None, LiteralNode(1.0, PrimitiveType("float"))
+            ),
+        ],
+    )
+    ast.functions[-1].body.statements.insert(
+        1,
+        ExpressionStatementNode(
+            AssignmentNode(IdentifierNode("scalar"), match_expr, "+="),
+            is_tail_expression=False,
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"texture_size target.*assignment target match arm 1"
+            r".*expects ivec2.*got float"
+        ),
+    ):
+        generate_code(ast)
 
 
 def test_for_in_statement_lowers_to_mojo_ranges_and_scopes_loop_contexts():

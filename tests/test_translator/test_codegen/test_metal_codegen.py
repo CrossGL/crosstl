@@ -4017,6 +4017,67 @@ def test_metal_trace_ray_full_signature_lowers_to_intersector_query():
     assert "TraceRay" not in generated
 
 
+@pytest.mark.parametrize(
+    ("parameter_decl", "parameter_name", "resource_kind"),
+    [
+        (
+            "accelerationStructureEXT& topLevelAS @device @binding(0)",
+            "topLevelAS",
+            "acceleration_structure",
+        ),
+        (
+            "accelerationStructureEXT* topLevelAS @device @binding(0)",
+            "topLevelAS",
+            "acceleration_structure",
+        ),
+        (
+            "visible_function_table<CallableData>& callables @device @binding(1)",
+            "callables",
+            "visible_function_table",
+        ),
+        (
+            "visible_function_table<CallableData>* callables @device @binding(1)",
+            "callables",
+            "visible_function_table",
+        ),
+        (
+            "intersection_function_table<instancing>& intersectionFunctions @device @binding(2)",
+            "intersectionFunctions",
+            "intersection_function_table",
+        ),
+        (
+            "intersection_function_table<instancing>* intersectionFunctions @device @binding(2)",
+            "intersectionFunctions",
+            "intersection_function_table",
+        ),
+    ],
+)
+def test_metal_ray_resource_parameters_reject_pointer_or_reference_spelling(
+    parameter_decl, parameter_name, resource_kind
+):
+    code = f"""
+    shader rt {{
+        struct CallableData {{
+            vec4 color;
+        }};
+
+        ray_generation {{
+            void main({parameter_decl}) {{
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"Metal ray tracing resource parameter '{parameter_name}'.*"
+            rf"{resource_kind}.*must be passed by value"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_metal_trace_ray_rejects_non_acceleration_structure_argument():
     code = """
     shader rt {

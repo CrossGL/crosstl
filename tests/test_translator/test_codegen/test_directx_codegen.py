@@ -9701,6 +9701,62 @@ def test_directx_wave_intrinsics_validate_argument_types():
     assert "WaveMultiPrefixSum(value, mask)" in generated
 
 
+def test_directx_wave_intrinsics_infer_let_result_types():
+    code = """
+    shader WaveIntrinsicLetTypes {
+        compute {
+            uint main(uint value, int bits, bool predicate, uint lane, uvec4 mask, vec2 pair) {
+                let laneCount = WaveGetLaneCount();
+                let laneIndex = WaveGetLaneIndex();
+                let firstLane = WaveIsFirstLane();
+                let allTrue = WaveActiveAllTrue(predicate);
+                let anyTrue = WaveActiveAnyTrue(predicate);
+                let allEqual = WaveActiveAllEqual(value);
+                let count = WaveActiveCountBits(predicate);
+                let prefixCount = WavePrefixCountBits(predicate);
+                let ballot = WaveActiveBallot(predicate);
+                let matchMask = WaveMatch(value);
+                let reduced = WaveActiveSum(value);
+                let bitAnd = WaveActiveBitAnd(bits);
+                let laneValue = WaveReadLaneAt(value, lane);
+                let firstValue = WaveReadLaneFirst(value);
+                let prefixValue = WavePrefixSum(value);
+                let multiValue = WaveMultiPrefixSum(value, mask);
+                let quadPair = QuadReadAcrossX(pair);
+
+                return laneCount + laneIndex + count + prefixCount + ballot.x
+                    + matchMask.x + reduced + uint(bitAnd) + laneValue
+                    + firstValue + prefixValue + multiValue + uint(quadPair.x)
+                    + (firstLane ? 1u : 0u) + (allTrue ? 1u : 0u)
+                    + (anyTrue ? 1u : 0u) + (allEqual ? 1u : 0u);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    for declaration in [
+        "uint laneCount = WaveGetLaneCount();",
+        "uint laneIndex = WaveGetLaneIndex();",
+        "bool firstLane = WaveIsFirstLane();",
+        "bool allTrue = WaveActiveAllTrue(predicate);",
+        "bool anyTrue = WaveActiveAnyTrue(predicate);",
+        "bool allEqual = WaveActiveAllEqual(value);",
+        "uint count = WaveActiveCountBits(predicate);",
+        "uint prefixCount = WavePrefixCountBits(predicate);",
+        "uint4 ballot = WaveActiveBallot(predicate);",
+        "uint4 matchMask = WaveMatch(value);",
+        "uint reduced = WaveActiveSum(value);",
+        "int bitAnd = WaveActiveBitAnd(bits);",
+        "uint laneValue = WaveReadLaneAt(value, lane);",
+        "uint firstValue = WaveReadLaneFirst(value);",
+        "uint prefixValue = WavePrefixSum(value);",
+        "uint multiValue = WaveMultiPrefixSum(value, mask);",
+        "float2 quadPair = QuadReadAcrossX(pair);",
+    ]:
+        assert declaration in generated
+
+
 def test_directx_ray_query_methods_validate_trace_and_infer_results():
     code = """
     shader RayQueryInlineTrace {

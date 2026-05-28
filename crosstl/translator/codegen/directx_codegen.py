@@ -359,6 +359,34 @@ class HLSLCodeGen:
         "WaveMultiPrefixBitOr",
         "WaveMultiPrefixBitXor",
     }
+    HLSL_WAVE_UINT_RESULT_INTRINSICS = {
+        "WaveGetLaneCount",
+        "WaveGetLaneIndex",
+        "WaveActiveCountBits",
+        "WavePrefixCountBits",
+    }
+    HLSL_WAVE_BOOL_RESULT_INTRINSICS = {
+        "WaveIsFirstLane",
+        "WaveActiveAllTrue",
+        "WaveActiveAnyTrue",
+        "WaveActiveAllEqual",
+    }
+    HLSL_WAVE_UINT4_RESULT_INTRINSICS = {
+        "WaveActiveBallot",
+        "WaveMatch",
+    }
+    HLSL_WAVE_VALUE_RESULT_INTRINSICS = (
+        HLSL_WAVE_NUMERIC_VALUE_INTRINSICS
+        | HLSL_WAVE_INTEGER_VALUE_INTRINSICS
+        | {
+            "WaveReadLaneAt",
+            "WaveReadLaneFirst",
+            "QuadReadAcrossX",
+            "QuadReadAcrossY",
+            "QuadReadAcrossDiagonal",
+            "QuadReadLaneAt",
+        }
+    )
     HLSL_WAVE_NUMERIC_COMPONENT_TYPES = {
         "float",
         "half",
@@ -2646,6 +2674,8 @@ class HLSLCodeGen:
             return infer_match_expression_result_type(self, expr)
         if isinstance(expr, RayQueryOpNode):
             return self.hlsl_ray_query_method_return_type(expr.operation)
+        if isinstance(expr, WaveOpNode):
+            return self.hlsl_wave_intrinsic_return_type(expr.operation, expr.arguments)
         if isinstance(expr, FunctionCallNode):
             ray_query_call = self.hlsl_ray_query_call_parts(expr)
             if ray_query_call is not None:
@@ -2655,6 +2685,8 @@ class HLSLCodeGen:
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if func_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
+                return self.hlsl_wave_intrinsic_return_type(func_name, args)
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
                 return numeric_result_type
@@ -3582,6 +3614,17 @@ class HLSLCodeGen:
         self.validate_hlsl_wave_intrinsic_arguments(operation, args)
         args_str = ", ".join(self.generate_expression(arg) for arg in args)
         return f"{operation}({args_str})"
+
+    def hlsl_wave_intrinsic_return_type(self, operation, args):
+        if operation in self.HLSL_WAVE_UINT_RESULT_INTRINSICS:
+            return "uint"
+        if operation in self.HLSL_WAVE_BOOL_RESULT_INTRINSICS:
+            return "bool"
+        if operation in self.HLSL_WAVE_UINT4_RESULT_INTRINSICS:
+            return "uint4"
+        if operation in self.HLSL_WAVE_VALUE_RESULT_INTRINSICS and args:
+            return self.expression_result_type(args[0])
+        return None
 
     def hlsl_wave_argument_base_type(self, argument):
         argument_type = self.expression_result_type(argument)

@@ -3538,6 +3538,44 @@ def test_mesh_intrinsic_invalid_arities_emit_slang_diagnostics():
     assert "MeshOpNode" not in generated_code
 
 
+def test_set_mesh_output_counts_validates_count_argument_types():
+    code = """
+    shader InvalidSlangMeshOutputCountTypes {
+        mesh {
+            void main() @outputtopology(triangle) {
+                uint vertexCount = 3u;
+                bool useMeshlet = true;
+                vec2 primitiveCounts = vec2(1.0, 2.0);
+                SetMeshOutputCounts(vertexCount, 1u);
+                SetMeshOutputCounts(useMeshlet, 1u);
+                SetMeshOutputCounts(3u, primitiveCounts);
+                SetMeshOutputCounts(1.5, 1u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "SetMeshOutputCounts(vertexCount, 1u);" in generated_code
+    assert (
+        "/* unsupported Slang mesh intrinsic: SetMeshOutputCounts vertex count "
+        "must be scalar int or uint, got bool */ 0;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang mesh intrinsic: SetMeshOutputCounts primitive count "
+        "must be scalar int or uint, got float2 */ 0;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang mesh intrinsic: SetMeshOutputCounts vertex count "
+        "must be scalar int or uint, got float */ 0;" in generated_code
+    )
+    assert "SetMeshOutputCounts(useMeshlet, 1u)" not in generated_code
+    assert "SetMeshOutputCounts(3u, primitiveCounts)" not in generated_code
+    assert "SetMeshOutputCounts(1.5, 1u)" not in generated_code
+    assert "MeshOpNode" not in generated_code
+
+
 @pytest.mark.parametrize(
     ("stage_source", "message"),
     [

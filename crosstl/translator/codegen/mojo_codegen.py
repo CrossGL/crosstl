@@ -3066,6 +3066,15 @@ class MojoCodeGen:
             # ArrayAccessNode should not appear as a statement by itself - it's likely a misclassified array declaration
             # Try to handle it gracefully
             return f"{indent_str}# Unhandled ArrayAccessNode: {stmt}\n"
+        elif isinstance(stmt, ExpressionStatementNode):
+            expr = getattr(stmt, "expression", None)
+            if isinstance(expr, AssignmentNode):
+                return self.generate_assignment_statement(expr, indent)
+
+            prelude, expr_result = self.generate_expression_with_prelude(expr, indent)
+            if expr_result.strip():
+                return f"{prelude}{indent_str}{expr_result}\n"
+            return f"{indent_str}# Unhandled statement: {type(stmt).__name__}\n"
         else:
             # Handle expressions that may be used as statements
             prelude, expr_result = self.generate_expression_with_prelude(stmt, indent)

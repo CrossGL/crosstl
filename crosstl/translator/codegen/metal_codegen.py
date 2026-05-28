@@ -6675,6 +6675,8 @@ class MetalCodeGen:
     def format_parameter_declaration(
         self, raw_param_type, mapped_type, name, node=None, shader_type=None
     ):
+        self.validate_metal_ray_resource_parameter_value_type(raw_param_type, name)
+
         ray_payload_declaration = self.metal_ray_payload_parameter_declaration(
             mapped_type, name, node, shader_type
         )
@@ -6718,6 +6720,43 @@ class MetalCodeGen:
             resource_type, array_size = array_type
             return self.format_resource_parameter(resource_type, name, array_size)
         return format_c_style_array_declaration(mapped_type, name)
+
+    def validate_metal_ray_resource_parameter_value_type(self, raw_param_type, name):
+        resource_kind = self.metal_ray_resource_pointer_or_reference_kind(
+            raw_param_type
+        )
+        if resource_kind is None:
+            return
+
+        type_name = self.type_name_string(raw_param_type) or str(raw_param_type)
+        raise ValueError(
+            f"Metal ray tracing resource parameter '{name}' has pointer or "
+            f"reference type '{type_name}' for {resource_kind}; Metal ray "
+            "tracing resources must be passed by value without address-space "
+            "qualifiers"
+        )
+
+    def metal_ray_resource_pointer_or_reference_kind(self, raw_param_type):
+        if isinstance(raw_param_type, PointerType):
+            base_type = raw_param_type.pointee_type
+        elif isinstance(raw_param_type, ReferenceType):
+            base_type = raw_param_type.referenced_type
+        else:
+            type_name = self.type_name_string(raw_param_type)
+            if not type_name:
+                return None
+            type_name = str(type_name).strip()
+            if not (type_name.endswith("*") or type_name.endswith("&")):
+                return None
+            base_type = type_name[:-1].strip()
+
+        if self.is_acceleration_structure_type(base_type):
+            return "acceleration_structure"
+        if self.is_visible_function_table_type(base_type):
+            return "visible_function_table"
+        if self.is_intersection_function_table_type(base_type):
+            return "intersection_function_table"
+        return None
 
     def format_address_space_parameter_declaration(
         self, raw_param_type, mapped_type, name, node=None, shader_type=None

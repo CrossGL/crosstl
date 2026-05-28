@@ -2168,6 +2168,7 @@ class TestVulkanSPIRVCodeGen:
                         vec3(1.0),
                         vec2(0.0, 1.0)
                     );
+                    vec3 reflectScalarNormal = reflect(vec3(1.0), 1.0);
                     ivec3 reflectInt = reflect(
                         ivec3(1, 2, 3),
                         ivec3(0, 1, 0)
@@ -2191,6 +2192,7 @@ class TestVulkanSPIRVCodeGen:
 
                     mat2 ma = mat2(1.0);
                     mat2 mb = mat2(1.0);
+                    mat2 reflectMatrix = reflect(ma, mb);
                     mat2 refractMatrix = refract(ma, mb, 0.5);
                 }
             }
@@ -2219,7 +2221,7 @@ class TestVulkanSPIRVCodeGen:
                 "; WARNING: reflect requires matching floating-point scalar "
                 "or vector operands"
             )
-            == 2
+            == 4
         )
         assert (
             spv_code.count(
@@ -2248,6 +2250,7 @@ class TestVulkanSPIRVCodeGen:
                     dvec3 da = dvec3(1.0, 0.0, 0.0);
                     dvec3 db = dvec3(0.0, 1.0, 0.0);
                     dvec3 dc = cross(da, db);
+                    dvec3 dr = reflect(da, db);
                 }
             }
         }
@@ -2290,6 +2293,11 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(
             rf"%\d+ = OpExtInst {re.escape(dvec3_type.group(1))} %\d+ "
             r"Cross %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(dvec3_type.group(1))} %\d+ "
+            r"Reflect %\d+ %\d+",
             spv_code,
         )
         assert "WARNING" not in spv_code
@@ -2368,11 +2376,20 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     float lengthInt = length(ivec2(1, 2));
                     ivec3 normalizeInt = normalize(ivec3(1, 2, 3));
+                    mat2 ma = mat2(1.0);
+                    mat2 mb = mat2(1.0);
+                    float lengthMatrix = length(ma);
+                    mat2 normalizeMatrix = normalize(ma);
                     float distanceWidth = distance(
                         vec2(0.0, 1.0),
                         vec3(0.0, 1.0, 2.0)
                     );
                     float distanceInt = distance(ivec2(1, 2), ivec2(3, 4));
+                    float distanceScalarVector = distance(
+                        1.0,
+                        vec2(0.0, 1.0)
+                    );
+                    float distanceMatrix = distance(ma, mb);
                 }
             }
         }
@@ -2383,23 +2400,81 @@ class TestVulkanSPIRVCodeGen:
         )
 
         assert (
-            "; WARNING: length requires floating-point scalar or vector operand"
-            in spv_code
+            spv_code.count(
+                "; WARNING: length requires floating-point scalar or vector operand"
+            )
+            == 2
         )
         assert (
-            "; WARNING: normalize requires floating-point scalar or vector operand"
-            in spv_code
+            spv_code.count(
+                "; WARNING: normalize requires floating-point scalar or vector operand"
+            )
+            == 2
         )
         assert (
             spv_code.count(
                 "; WARNING: distance requires matching floating-point scalar "
                 "or vector operands"
             )
-            == 2
+            == 4
         )
         assert " Length " not in spv_code
         assert " Distance " not in spv_code
         assert " Normalize " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_scalar_metric_and_reflect_builtins_lower_valid_operand_shapes(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ValidScalarMetricAndReflectBuiltinShapes {
+            compute {
+                void main() {
+                    float fx;
+                    float fy;
+                    float lf = length(fx);
+                    float df = distance(fx, fy);
+                    float nf = normalize(fx);
+                    float rf = reflect(fx, fy);
+
+                    double dx;
+                    double dy;
+                    double ld = length(dx);
+                    double dd = distance(dx, dy);
+                    double nd = normalize(dx);
+                    double rd = reflect(dx, dy);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        for type_id in (float_type.group(1), double_type.group(1)):
+            assert re.search(
+                rf"%\d+ = OpExtInst {re.escape(type_id)} %\d+ " r"Length %\d+",
+                spv_code,
+            )
+            assert re.search(
+                rf"%\d+ = OpExtInst {re.escape(type_id)} %\d+ " r"Distance %\d+ %\d+",
+                spv_code,
+            )
+            assert re.search(
+                rf"%\d+ = OpExtInst {re.escape(type_id)} %\d+ " r"Normalize %\d+",
+                spv_code,
+            )
+            assert re.search(
+                rf"%\d+ = OpExtInst {re.escape(type_id)} %\d+ " r"Reflect %\d+ %\d+",
+                spv_code,
+            )
+
+        assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_metric_math_builtins_lower_valid_operand_shapes(self, tmp_path):
